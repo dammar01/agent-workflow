@@ -134,6 +134,132 @@ For refactor:
 /.refactor <scope> -> auto /.verify
 ```
 
+## OpenCode Subprocess Invocation Protocol
+
+Gunakan protocol ini saat perlu menjalankan OpenCode dari script/tool/subprocess eksternal.
+
+### Basic Run
+
+OpenCode bisa menjalankan prompt via command:
+
+```text
+opencode run "<prompt>"
+```
+
+Contoh:
+
+```text
+opencode run "apa teks yang saya kirimkan tadi di awal sesi?"
+```
+
+### Session Creation
+
+Setiap command `opencode run "<prompt>"` membuat session baru jika tidak diberi session id.
+
+Untuk mengambil session id, first run harus memakai `--print-logs`:
+
+```text
+opencode run "<prompt>" --print-logs
+```
+
+Ambil session id dari log dengan pattern:
+
+```text
+session.id=<session_id>
+```
+
+Regex:
+
+```regex
+session\.id=(ses_[A-Za-z0-9]+)
+```
+
+Simpan sebagai `[OPENCODE_SESSION_ID]` untuk reuse selama workflow/session.
+
+### Resume Existing Session
+
+Untuk melanjutkan session existing, pass `-s` di luar prompt:
+
+```text
+opencode run "<prompt>" -s <session_id>
+```
+
+### Model Selection
+
+Default model mengikuti model yang aktif/terpilih saat OpenCode dibuka.
+
+Untuk custom model, gunakan `-m` dengan format `<provider>/<model_key>`:
+
+```text
+opencode run "<prompt>" -m "<provider>/<model_key>"
+```
+
+Jika environment memakai long flag `--m`, gunakan hanya bila `opencode run --help` mengonfirmasi flag itu valid. Default rekomendasi: `-m`.
+
+### Final Command Forms
+
+First run, default model:
+
+```text
+opencode run "<prompt>" --print-logs
+```
+
+First run, custom model:
+
+```text
+opencode run "<prompt>" -m "<provider>/<model_key>" --print-logs
+```
+
+Resume, default model:
+
+```text
+opencode run "<prompt>" -s <session_id>
+```
+
+Resume, custom model:
+
+```text
+opencode run "<prompt>" -m "<provider>/<model_key>" -s <session_id>
+```
+
+Semua flags (`-m`, `--print-logs`, `-s`) harus berada di luar prompt string.
+
+### Output Cleanup
+
+Saat `--print-logs` dipakai, output berisi log OpenCode. Bersihkan sebelum dipakai sebagai jawaban user.
+
+Drop lines yang match:
+
+```regex
+^(TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\s+\d{4}-\d{2}-\d{2}T
+```
+
+Drop model/banner line:
+
+```regex
+^>\s+
+```
+
+Keep assistant content, termasuk code blocks.
+
+### PowerShell Safe Invocation
+
+Saat menjalankan dari Python/subprocess, gunakan arg-list, bukan shell string, supaya quote aman.
+
+Equivalent Python args:
+
+```python
+args = ["opencode", "run", prompt]
+if model:
+    args.extend(["-m", model])
+if session_id:
+    args.extend(["-s", session_id])
+else:
+    args.append("--print-logs")
+```
+
+Jangan membangun command dengan menyisipkan flags ke dalam prompt string.
+
 ## Structured Output Rule
 
 Plan atau analysis formal sebaiknya mengandung:

@@ -120,7 +120,7 @@ def clean_structured_output(text: str) -> str:
 
 
 def extract_opencode_session_id(text: str) -> str | None:
-    match = re.search(r"session\.id=(ses_[A-Za-z0-9]+)", ensure_text(text))
+    match = re.search(r"(?:session\.id=|service=session\s+id=)(ses_[A-Za-z0-9]+)", ensure_text(text))
     return match.group(1) if match else None
 
 
