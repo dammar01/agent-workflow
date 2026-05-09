@@ -17,8 +17,10 @@ Sebelum mulai, output instruksi berikut:
     Jika OpenCode memakai nama file global instruction berbeda di environment ini,
     tetap buat semua file di path tersebut dan laporkan di final report.
 
-    Workflow command valid memakai prefix "/.":
+    Workflow command opsional memakai prefix "/.":
       /.explore /.plan /.execute /.verify /.refactor /.analyze /.memory /.help
+
+    Prompt natural tetap valid. Skill dipakai saat cocok, bukan wajib untuk semua task.
 
 ---
 
@@ -46,16 +48,17 @@ Tulis ulang file dengan konten berikut:
 # Skills:   ~/.config/opencode/skills/
 # Commands: ~/.config/opencode/commands/
 # Memory:   ~/.config/opencode/memory/
-# Mode:     standalone OpenCode, graphify-first workflow
+# Mode:     standalone OpenCode, flexible workflow, graphify-assisted when useful
 
 ## Core Behavior
 
 - Concise. Direct. No over-explanation.
 - Single user. Optimize for workflow only.
-- Never assume. Never expand scope silently.
+- Clarify only when ambiguity affects safety, architecture, or irreversible work.
+- Do not expand scope silently.
 - Default output: ringkas, faktual, terstruktur.
-- WAJIB sertakan confidence + uncertainties di setiap plan/analysis.
-- Jangan ubah file tanpa instruksi eksplisit.
+- Sertakan confidence + uncertainties untuk plan/analysis formal atau saat risk tinggi.
+- Boleh edit file saat user jelas meminta perubahan. Untuk aksi sensitif, wajib izin eksplisit.
 
 ## Output Style
 
@@ -68,15 +71,16 @@ Tulis ulang file dengan konten berikut:
 ## Startup Protocol
 
 Setiap session untuk code task:
-1. Cek apakah `graphify-out/` ada di project aktif.
-2. Jika ada → gunakan sebagai primary source untuk explore/analyze/plan evidence.
-3. Jika tidak ada → buat `.graphifyignore` sesuai framework, output instruksi `graphify update`, lalu STOP eksplorasi.
-4. Baca `~/.config/opencode/memory/PERSONAL_MEMORY.md` jika ada dan tidak kosong.
-5. Generate `[SESSION_ID]` saat command workflow pertama dipakai: `<project>-<YYYYMMDD_HHMMss>`.
+1. Gunakan konteks repo langsung jika task sederhana atau user memakai prompt natural.
+2. Cek `graphify-out/` saat task eksplorasi/analisis besar, arsitektur, atau flow kompleks.
+3. Jika ada → pakai sebagai evidence tambahan, bukan satu-satunya sumber wajib.
+4. Jika tidak ada → lanjut dengan file/search fallback, kecuali user eksplisit meminta graphify-first.
+5. Baca `~/.config/opencode/memory/PERSONAL_MEMORY.md` jika relevan dan tidak kosong.
+6. Generate `[SESSION_ID]` hanya saat command workflow formal pertama dipakai: `<project>-<YYYYMMDD_HHMMss>`.
 
 ## Command Registry V2
 
-Valid:
+Workflow commands:
 - `/.explore <hint>`
 - `/.plan <task>`
 - `/.execute -y`
@@ -86,11 +90,14 @@ Valid:
 - `/.memory <note>`
 - `/.help`
 
-Invalid:
-- command tanpa prefix `/.`
-- slash command biasa seperti `/plan`, `/execute`, `/analyze`
+Natural prompt:
+- Prompt biasa seperti "cek logic login", "buat fitur X", "review file Y" tetap valid.
+- Agent boleh memilih cara kerja paling efisien tanpa memaksa skill command.
 
-Jika command invalid, output EXACT:
+Invalid command form:
+- slash command biasa seperti `/plan`, `/execute`, `/analyze` jika dimaksudkan sebagai workflow command.
+
+Jika user memakai slash command invalid, output EXACT:
 
 ```text
 [INVALID COMMAND]
@@ -98,6 +105,8 @@ Gunakan prefix "/."
 Contoh: /.plan
 STOP.
 ```
+
+Jangan pakai pesan invalid untuk prompt natural tanpa slash.
 
 ## NL Map
 
@@ -109,11 +118,11 @@ STOP.
 - catat → `/.memory`
 - help → `/.help`
 
-NEVER suggest `/` commands tanpa titik.
+Jangan suggest `/` commands tanpa titik. Boleh suggest prompt natural atau `/.` command.
 
 ## Workflow
 
-Default safe flow:
+Default safe flow untuk task besar atau berisiko:
 
 ```text
 /.explore -> /.plan -> /.execute -y -> /.verify
@@ -127,7 +136,7 @@ For refactor:
 
 ## Structured Output Rule
 
-Setiap plan atau analysis HARUS mengandung:
+Plan atau analysis formal sebaiknya mengandung:
 
 ```yaml
 confidence:
@@ -139,19 +148,19 @@ uncertainties:
   - <hal yang tidak bisa dikonfirmasi>
 ```
 
-Output tanpa `confidence` dan `uncertainties` = INCOMPLETE.
+Untuk jawaban cepat, bug kecil, atau task sederhana, format ini opsional.
 
 ## Graphify Rules
 
-- `graphify-out/` adalah primary source untuk codebase exploration.
+- `graphify-out/` adalah source prioritas saat tersedia dan relevan untuk exploration/analysis besar.
 - NEVER run: `graphify init`, `graphify build`, `graphify watch`.
-- Auto-run `graphify update` setelah setiap code change.
+- Jangan auto-run `graphify update` kecuali user meminta atau perubahan butuh update graph.
 - Error mengandung `too large for HTML viz` atau `Graph has too many nodes` → IGNORE, jangan retry.
 - Error lain → retry once, jika tetap gagal → inform singkat, lanjut tanpa blocking.
 
 ## Graphify Missing Protocol
 
-Jika `graphify-out/` tidak ada:
+Jika user meminta workflow graphify-first dan `graphify-out/` tidak ada:
 1. Detect framework dari sinyal minimal:
    - Laravel: `artisan`, `composer.json`
    - Python/FastAPI: `requirements.txt`, `pyproject.toml`
@@ -172,7 +181,7 @@ Run this in your terminal:
 graphify update
 ```
 
-4. STOP. Jangan lanjut task.
+4. STOP hanya untuk mode graphify-first eksplisit. Untuk task biasa, lanjut dengan fallback search/read.
 
 ## Execution Safety
 
@@ -183,6 +192,40 @@ graphify update
 - Jangan destructive git command kecuali user eksplisit.
 - Jangan commit kecuali user eksplisit minta commit.
 - Memory write wajib confirmation user.
+
+## Permission Gate
+
+Untuk aksi sensitif, wajib minta izin eksplisit sebelum menjalankan command atau edit.
+
+Format izin:
+
+```text
+[PERMISSION REQUIRED]
+action: <aksi>
+target: <file/folder/remote/package>
+risk:   <risiko singkat>
+command_or_change: <command atau perubahan>
+
+Balas "approve" untuk lanjut.
+```
+
+Sensitive actions:
+- Delete folder atau file banyak: `rm -rf`, `Remove-Item -Recurse`, clean build directory, bulk delete.
+- Git remote mutation: `git push`, `git push --force`, tag push, branch delete remote.
+- Git history/worktree destructive: `git reset --hard`, `git clean`, `git checkout -- <file>`, `git restore`, rebase, amend.
+- Git ignore changes: edit `.gitignore`, `.git/info/exclude`, global gitignore.
+- Dependency/install changes: `npm install`, `pnpm install`, `composer install/update`, `pip install`, lockfile regeneration.
+- Config/env/secret changes: `.env*`, credentials, API keys, auth tokens, CI secrets, deployment config.
+- Network or external side effects: deploy, publish, release, migration against remote DB, curl/wget POST/PUT/DELETE.
+- Permission/security changes: chmod, ownership, firewall, SSH keys, certificates.
+- Large generated changes: format entire repo, codegen touching many files, graph rebuild if expensive.
+
+Read-only safe actions tidak perlu izin:
+- Search/list/read files.
+- `git status`, `git diff`, `git log`.
+- Running local tests/checks when they do not mutate external systems.
+
+Jika user sudah memberi instruksi eksplisit untuk aksi sensitif di pesan yang sama, izin dianggap cukup kecuali aksi irreversible/high-risk seperti force push, hard reset, bulk delete, secret overwrite.
 
 ## Verify Rules
 
@@ -200,12 +243,13 @@ graphify update
 ## Global Forbidden
 
 - Modifikasi file di luar `[EXECUTION SCOPE]`.
-- Proceed `/.execute` tanpa `-y`.
-- Output plan/analysis tanpa confidence + uncertainties.
-- Interpret command tanpa prefix `/.`.
+- Proceed `/.execute` tanpa `-y` jika memakai workflow command formal.
+- Output plan/analysis formal tanpa confidence + uncertainties.
+- Interpret slash command workflow tanpa prefix `/.`.
 - Auto-expand scope.
 - Run `graphify init`, `graphify build`, `graphify watch`.
 - Claim success sebelum verify selesai.
+- Jalankan aksi sensitif tanpa permission gate.
 ```
 
 ---
@@ -222,6 +266,8 @@ Untuk setiap skill file: overwrite isi file. Skill adalah template, bukan data u
 # Skill: explore
 description: Graphify-first codebase exploration dengan bounded scope
 
+Skill ini optional. Gunakan saat user memakai `/.explore` atau intent eksplorasi besar/flow kompleks. Untuk prompt natural sederhana, boleh pakai search/read langsung.
+
 ## Trigger
 
 `/.explore <hint>`
@@ -229,8 +275,9 @@ description: Graphify-first codebase exploration dengan bounded scope
 ## Execution
 
 STEP 1 — Pre-check:
-- Cek `graphify-out/` di project aktif.
-- Jika tidak ada → jalankan Graphify Missing Protocol dari global config, lalu STOP.
+- Cek `graphify-out/` di project aktif jika relevan.
+- Jika tidak ada dan user meminta graphify-first eksplisit → jalankan Graphify Missing Protocol dari global config, lalu STOP.
+- Jika tidak ada untuk prompt natural biasa → lanjut dengan direct file/search fallback.
 
 STEP 2 — Intent check:
 Jika hint luas atau ambigu, output:
@@ -293,6 +340,8 @@ End with: `Lanjut plan, atau cukup informasinya?`
 # Skill: plan
 description: Structured planning dengan confidence model dan decision gate
 
+Skill ini optional. Gunakan saat user meminta plan, task besar, banyak file, arsitektur, atau risk tinggi. Untuk perubahan kecil, boleh langsung eksekusi jika user jelas meminta.
+
 ## Trigger
 
 `/.plan <task>`
@@ -300,8 +349,8 @@ description: Structured planning dengan confidence model dan decision gate
 ## Execution
 
 STEP 1 — Collect evidence:
-- Primary: `graphify-out/`.
-- Jika graph tidak cukup, baca file relevan langsung dan catat alasan.
+- Primary jika relevan: `graphify-out/`.
+- Jika graph tidak ada/tidak cukup, baca file relevan langsung dan catat alasan bila penting.
 - Jika domain tidak jelas, suggest `/.explore <hint>`.
 
 STEP 2 — Output plan:
@@ -339,7 +388,7 @@ uncertainties:
 decision: proceed | clarify | re-explore
 ```
 
-STEP 3 — Stop. Tunggu approval user. Jangan auto-execute.
+STEP 3 — Untuk `/.plan`, stop dan tunggu approval user. Untuk prompt natural, boleh lanjut eksekusi jika user sudah meminta perubahan dan risk rendah.
 
 End with: `Setuju? Jalankan /.execute -y`
 ```
@@ -351,6 +400,8 @@ End with: `Setuju? Jalankan /.execute -y`
 ```markdown
 # Skill: execute
 description: Controlled implementation dengan explicit approval gate
+
+Skill ini optional untuk workflow formal. Prompt natural seperti "ubah X" sudah cukup sebagai izin eksekusi untuk perubahan low-risk. Aksi sensitif tetap wajib Permission Gate dari global config.
 
 ## Trigger
 
@@ -372,15 +423,19 @@ Tambahkan -y untuk konfirmasi eksekusi.
 
 STOP.
 
-Dengan `-y` → proceed.
+Dengan `-y` → proceed. Dengan prompt natural eksplisit → proceed jika low-risk dan scope jelas.
 
 ## Execution
 
 STEP 1 — Output `[EXECUTION SCOPE]` sebelum edit.
 
+Untuk perubahan kecil low-risk dari prompt natural, scope boleh disampaikan ringkas tanpa blok formal.
+
 STEP 2 — Edit hanya file allowed.
 
 STEP 3 — Jika butuh file forbidden, STOP dan minta instruksi eksplisit.
+
+STEP 3b — Jika aksi masuk Sensitive actions, STOP dan tampilkan `[PERMISSION REQUIRED]`.
 
 STEP 4 — Jalankan verification relevan.
 
@@ -400,7 +455,7 @@ uncertainties:
 status: done | partial | blocked
 ```
 
-STEP 6 — Auto-trigger `/.verify`.
+STEP 6 — Auto-trigger verify yang relevan setelah edit. Tidak perlu command literal `/.verify` jika prompt natural.
 ```
 
 ---
@@ -410,6 +465,8 @@ STEP 6 — Auto-trigger `/.verify`.
 ```markdown
 # Skill: verify
 description: Verification after execute/refactor
+
+Skill ini optional. Gunakan setelah perubahan code, atau saat user meminta verify. Pilih check relevan, jangan jalankan check sensitif tanpa izin.
 
 ## Trigger
 
@@ -456,6 +513,8 @@ uncertainties:
 # Skill: refactor
 description: Safe scoped refactor with automatic verification
 
+Skill ini optional. Prompt natural seperti "rapikan fungsi X" boleh diperlakukan sebagai refactor jika scope jelas.
+
 ## Trigger
 
 `/.refactor <scope>`
@@ -465,6 +524,8 @@ description: Safe scoped refactor with automatic verification
 STEP 1 — Restate scope.
 
 STEP 2 — Output `[EXECUTION SCOPE]`.
+
+Untuk refactor kecil, boleh scope ringkas.
 
 STEP 3 — Apply minimal behavior-preserving changes.
 
@@ -482,6 +543,8 @@ STEP 6 — Output confidence + uncertainties.
 ```markdown
 # Skill: analyze
 description: Deep analysis, zero code changes, structured findings
+
+Skill ini optional. Gunakan saat user meminta analisis/review/diagnosis tanpa perubahan, atau saat risk tinggi.
 
 ## Trigger
 
@@ -525,6 +588,8 @@ uncertainties:
 # Skill: memory
 description: Propose memory update to personal knowledge files
 
+Skill ini hanya untuk memory jangka panjang. Natural prompt yang berisi catatan tetap butuh confirmation sebelum write.
+
 ## Trigger
 
 `/.memory <note>`
@@ -561,6 +626,8 @@ STEP 4 — Only write after `yes` or explicit edited content.
 # Skill: help
 description: Command reference OpenCode personal workflow V2
 
+Commands adalah shortcut opsional. Prompt natural tetap didukung.
+
 ## Trigger
 
 `/.help`
@@ -569,6 +636,8 @@ description: Command reference OpenCode personal workflow V2
 
 ```text
 [COMMAND GUIDE — OPENCODE GLOBAL WORKFLOW V2]
+
+Natural prompts are valid. Use commands only when you want structured workflow.
 
 /.explore <hint>
 → explore codebase via graphify-first flow
@@ -594,8 +663,8 @@ description: Command reference OpenCode personal workflow V2
 /.help
 → show this guide
 
-Workflow: /.explore -> /.plan -> /.execute -y -> /.verify
-Prefix "/." wajib. Commands without dot are invalid.
+Workflow for large/risky tasks: /.explore -> /.plan -> /.execute -y -> /.verify
+Prefix "/." wajib only for workflow commands. Natural prompts need no prefix.
 ```
 ```
 
@@ -609,70 +678,70 @@ Buat direktori `~/.config/opencode/commands/` jika belum ada. Untuk setiap comma
 
 ```markdown
 ---
-description: Explore codebase with graphify-first bounded workflow. Usage: /.explore <hint>
+description: Optional shortcut for bounded codebase exploration. Usage: /.explore <hint>
 ---
 
-Read `~/.config/opencode/skills/explore.md` and follow it exactly. Reject `/explore`; valid command is `/.explore`.
+Read `~/.config/opencode/skills/explore.md` and follow it. Reject `/explore` only when used as slash command; natural prompts remain valid.
 ```
 
 ### FILE: `~/.config/opencode/commands/plan.md`
 
 ```markdown
 ---
-description: Create structured plan with confidence, uncertainties, and decision gate. Usage: /.plan <task>
+description: Optional shortcut for structured plan with confidence, uncertainties, and decision gate. Usage: /.plan <task>
 ---
 
-Read `~/.config/opencode/skills/plan.md` and follow it exactly. Reject `/plan`; valid command is `/.plan`.
+Read `~/.config/opencode/skills/plan.md` and follow it. Reject `/plan` only when used as slash command; natural prompts remain valid.
 ```
 
 ### FILE: `~/.config/opencode/commands/execute.md`
 
 ```markdown
 ---
-description: Execute approved implementation scope. Requires -y. Usage: /.execute -y
+description: Optional shortcut for approved implementation scope. Requires -y for formal workflow. Usage: /.execute -y
 ---
 
-Read `~/.config/opencode/skills/execute.md` and follow it exactly. Reject execution without `-y`.
+Read `~/.config/opencode/skills/execute.md` and follow it. Reject formal `/.execute` without `-y`; natural prompts can execute low-risk clear requests. Sensitive actions require Permission Gate.
 ```
 
 ### FILE: `~/.config/opencode/commands/verify.md`
 
 ```markdown
 ---
-description: Verify current changes with relevant checks. Usage: /.verify
+description: Optional shortcut to verify current changes with relevant checks. Usage: /.verify
 ---
 
-Read `~/.config/opencode/skills/verify.md` and follow it exactly.
+Read `~/.config/opencode/skills/verify.md` and follow it. Avoid sensitive checks without permission.
 ```
 
 ### FILE: `~/.config/opencode/commands/refactor.md`
 
 ```markdown
 ---
-description: Run safe scoped refactor and verify. Usage: /.refactor <scope>
+description: Optional shortcut for safe scoped refactor and verify. Usage: /.refactor <scope>
 ---
 
-Read `~/.config/opencode/skills/refactor.md` and follow it exactly.
+Read `~/.config/opencode/skills/refactor.md` and follow it. Natural refactor prompts remain valid.
 ```
 
 ### FILE: `~/.config/opencode/commands/analyze.md`
 
 ```markdown
 ---
-description: Analyze topic with zero code changes. Usage: /.analyze <topic>
+description: Optional shortcut to analyze topic with zero code changes. Usage: /.analyze <topic>
 ---
 
-Read `~/.config/opencode/skills/analyze.md` and follow it exactly.
+Read `~/.config/opencode/skills/analyze.md` and follow it. Natural analysis/review prompts remain valid.
 ```
 
 ### FILE: `~/.config/opencode/commands/memory.md`
 
 ```markdown
 ---
-description: Propose memory update, requiring confirmation. Usage: /.memory <note>
+description: Optional shortcut to propose memory update, requiring confirmation. Usage: /.memory <note>
 ---
 
-Read `~/.config/opencode/skills/memory.md` and follow it exactly. Never write memory without confirmation.
+Read `~/.config/opencode/skills/memory.md` and follow it. Never write memory without confirmation.
 ```
 
 ### FILE: `~/.config/opencode/commands/help.md`
@@ -682,7 +751,7 @@ Read `~/.config/opencode/skills/memory.md` and follow it exactly. Never write me
 description: Show OpenCode global workflow command guide. Usage: /.help
 ---
 
-Read `~/.config/opencode/skills/help.md` and output the command guide.
+Read `~/.config/opencode/skills/help.md` and output the command guide. Mention natural prompts are valid.
 ```
 
 ---
@@ -793,5 +862,6 @@ Memory:
 
 Status: READY
 Workflow: /.explore -> /.plan -> /.execute -y -> /.verify
-Invalid: /explore /plan /execute /verify /analyze — REJECTED
+Invalid slash commands: /explore /plan /execute /verify /analyze — REJECTED
+Natural prompts: VALID
 ```
