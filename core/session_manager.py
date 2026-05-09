@@ -23,7 +23,7 @@ class SessionManager:
         now = self._now()
         session = {
             "session_id": session_id,
-            "kimi_session_id": None,
+            "opencode_session_id": None,
             "history": {
                 "created_at": now,
                 "updated_at": now,
@@ -33,8 +33,8 @@ class SessionManager:
         self._save(session)
         return session
 
-    def update_kimi_session_id(self, session: dict, kimi_id: str) -> None:
-        session["kimi_session_id"] = kimi_id
+    def update_opencode_session_id(self, session: dict, opencode_session_id: str) -> None:
+        session["opencode_session_id"] = opencode_session_id
         self._save(session)
 
     def record_run(self, session: dict, command: str, cache_hit: bool = False) -> None:

@@ -1,0 +1,27 @@
+{
+  "opencode_command": "opencode",
+  "default_model": null,
+  "timeout_seconds": 300,
+  "routes": {
+    "explore": {
+      "role": "exploration",
+      "model": null
+    },
+    "plan": {
+      "role": "reasoning",
+      "model": null
+    },
+    "analyze": {
+      "role": "reasoning",
+      "model": null
+    },
+    "execute": {
+      "role": "execution",
+      "model": null
+    },
+    "verify": {
+      "role": "verification",
+      "model": null
+    }
+  }
+}

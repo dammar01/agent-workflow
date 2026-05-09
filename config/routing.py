@@ -1,9 +1,9 @@
-from config.roles import MODEL_CLAUDE, MODEL_KIMI
+from config.roles import ROLE_EXECUTION, ROLE_EXPLORATION, ROLE_REASONING, ROLE_VERIFICATION
 
 COMMAND_ROUTES = {
-    "explore": (MODEL_KIMI,),
-    "plan":    (MODEL_KIMI,),
-    "analyze": (MODEL_KIMI,),
-    "execute": (MODEL_CLAUDE,),
-    "verify":  (MODEL_CLAUDE,),
+    "explore": {"role": ROLE_EXPLORATION, "model": None},
+    "plan": {"role": ROLE_REASONING, "model": None},
+    "analyze": {"role": ROLE_REASONING, "model": None},
+    "execute": {"role": ROLE_EXECUTION, "model": None},
+    "verify": {"role": ROLE_VERIFICATION, "model": None},
 }

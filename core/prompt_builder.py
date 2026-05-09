@@ -30,4 +30,7 @@ def build_prompt(*, role: str, task: str, session_id: str, evidence: str | None 
     if role == ROLE_REASONING:
         parts.extend(["", "Return the reasoning result only."])
 
+    if role not in {ROLE_EXPLORATION, ROLE_REASONING}:
+        parts.extend(["", "Return the requested result only."])
+
     return "\n".join(parts)

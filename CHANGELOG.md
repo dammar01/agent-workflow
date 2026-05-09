@@ -6,6 +6,17 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Changed
+- Refactor V2 ke OpenCode-only backend.
+- Hapus adapter Kimi/Claude dan route model hardcoded.
+- Tambah config user JSON di `config/opencode.json`.
+- Tambah session resume OpenCode via parsed `session.id=ses_...` dan `-s <session_id>`.
+- Tambah cleanup output log OpenCode/Nest-like.
+
+### Added
+- `adapters/opencode_adapter.py`.
+- CLI `--model/-m` untuk override model OpenCode.
+
 ---
 
 ## [0.2.0] — 2026-05-07

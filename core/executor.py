@@ -1,6 +1,4 @@
-from adapters.claude_adapter import ClaudeAdapter
-from adapters.kimi_adapter import KimiAdapter
-from config.roles import MODEL_CLAUDE, MODEL_KIMI, ROLE_EXPLORATION, ROLE_REASONING
+from adapters.opencode_adapter import OpenCodeAdapter
 from core.contract import normalize_output
 from core.prompt_builder import build_prompt
 from core.router import Router
@@ -10,104 +8,72 @@ class Executor:
     def __init__(
         self,
         router: Router | None = None,
-        kimi: KimiAdapter | None = None,
-        claude: ClaudeAdapter | None = None,
+        opencode: OpenCodeAdapter | None = None,
         session_manager=None,
     ) -> None:
         self.router = router or Router()
-        self.kimi = kimi or KimiAdapter()
-        self.claude = claude or ClaudeAdapter()
+        self.opencode = opencode or OpenCodeAdapter()
         self.session_manager = session_manager
 
-    def execute(self, command: str, task: str, session: dict, work_dir: str | None = None) -> dict:
+    def execute(self, command: str, task: str, session: dict, work_dir: str | None = None, model: str | None = None) -> dict:
         normalized_command = command.strip().lower()
         session_id = session["session_id"]
 
         try:
-            route = self.router.route(normalized_command)
+            route = self.router.route(normalized_command, model_override=model)
         except ValueError as exc:
             return normalize_output(
                 status="error",
-                model=MODEL_CLAUDE,
-                role=ROLE_REASONING,
+                adapter="opencode",
+                model=model,
+                role="reasoning",
                 session_id=session_id,
+                opencode_session_id=session.get("opencode_session_id"),
                 content=str(exc),
                 confidence="low",
                 notes="routing_error",
             )
 
-        if route == (MODEL_KIMI,):
-            return self._run_kimi(task, session, work_dir)
-
-        if route == (MODEL_CLAUDE,):
-            return self._run_claude(task, session)
-
-        return normalize_output(
-            status="error",
-            model=MODEL_CLAUDE,
-            role=ROLE_REASONING,
-            session_id=session_id,
-            content=f"unsupported route: {route}",
-            confidence="low",
-            notes="routing_error",
-        )
-
-    def _maybe_link_kimi_session(self, session: dict, work_dir: str | None = None) -> None:
-        if session.get("kimi_session_id") is not None:
-            return
-        if self.session_manager is None:
-            return
-        kimi_id = self.kimi.read_last_session_id(work_dir)
-        if kimi_id:
-            self.session_manager.update_kimi_session_id(session, kimi_id)
-
-    def _run_kimi(self, task: str, session: dict, work_dir: str | None = None) -> dict:
         prompt = build_prompt(
-            role=ROLE_EXPLORATION,
+            role=route["role"],
             task=task,
             session_id=session["session_id"],
         )
-        result = self.kimi.run(prompt, session, work_dir)
-        if result.get("ok"):
-            self._maybe_link_kimi_session(session, work_dir)
+        self.opencode.command = route.get("opencode_command", getattr(self.opencode, "command", "opencode"))
+        self.opencode.timeout_seconds = route.get("timeout_seconds", getattr(self.opencode, "timeout_seconds", 300))
+        result = self.opencode.run(prompt, session, route.get("model"))
+        opencode_session_id = result.get("meta", {}).get("opencode_session_id") or session.get("opencode_session_id")
+        if result.get("ok") and opencode_session_id and not session.get("opencode_session_id") and self.session_manager:
+            self.session_manager.update_opencode_session_id(session, opencode_session_id)
         return self._contract_from_adapter(
             result=result,
-            model=MODEL_KIMI,
-            role=ROLE_EXPLORATION,
+            model=route.get("model"),
+            role=route["role"],
             session_id=session["session_id"],
-        )
-
-    def _run_claude(self, task: str, session: dict) -> dict:
-        prompt = build_prompt(
-            role=ROLE_REASONING,
-            task=task,
-            session_id=session["session_id"],
-        )
-        result = self.claude.run(prompt, session)
-        return self._contract_from_adapter(
-            result=result,
-            model=MODEL_CLAUDE,
-            role=ROLE_REASONING,
-            session_id=session["session_id"],
+            opencode_session_id=opencode_session_id,
         )
 
     @staticmethod
     def _contract_from_adapter(
         *,
         result: dict,
-        model: str,
+        model: str | None,
         role: str,
         session_id: str,
+        opencode_session_id: str | None,
         notes: str = "",
     ) -> dict:
         ok = bool(result.get("ok"))
         adapter_notes = result.get("meta", {})
         return normalize_output(
             status="success" if ok else "error",
+            adapter="opencode",
             model=model,
             role=role,
             session_id=session_id,
+            opencode_session_id=opencode_session_id,
             content=result.get("content", ""),
             confidence="medium" if ok else "low",
             notes=notes or str(adapter_notes),
+            extra_meta=adapter_notes,
         )

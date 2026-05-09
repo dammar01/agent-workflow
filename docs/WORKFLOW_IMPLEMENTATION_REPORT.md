@@ -1,14 +1,14 @@
-# Laporan Implementasi: Claude Code + Kimi Workflow
+# Laporan Implementasi: ai-proxy Workflow
 
 **Project:** kiara-proxy (ai-proxy)  
 **Tanggal:** 2026-05-09  
-**Status Codebase:** v0.2.0 (2026-05-07)
+**Status Codebase:** v2 OpenCode-only (2026-05-09)
 
 ---
 
 ## Ringkasan Eksekutif
 
-Dokumen ini merekam evolusi sistem workflow engineering pribadi yang menggabungkan Claude Code (sebagai reasoning agent) dan Kimi (sebagai exploration agent). Sistem berkembang dari pendekatan single-agent berbasis graphify (v0) ke arsitektur proxy dua-agent dengan manajemen sesi dan invokasi background (v1.1 — kondisi saat ini).
+Dokumen ini merekam evolusi sistem workflow engineering pribadi. Kondisi saat ini: v2 OpenCode-only, config user via JSON, session OpenCode dipersist, output logs dibersihkan.
 
 Tiga versi utama:
 
@@ -17,6 +17,48 @@ Tiga versi utama:
 | v0    | Single agent, graphify-first, no proxy                    | `WORKFLOW_V0.md`                                 | Pre-2026-04-28 |
 | v1    | Claude Code + Kimi via subprocess, session per project    | proxy code v0.1.0                                | 2026-05-06     |
 | v1.1  | Multi-layer env check, 1:1 session, background invocation | proxy code v0.2.0 + `CLAUDE_CODE_CONFIG_V1.1.md` | 2026-05-07     |
+| v2    | OpenCode-only, JSON config, session resume via `-s`       | `adapters/opencode_adapter.py`, `config/opencode.json` | 2026-05-09     |
+
+---
+
+## v2 — OpenCode-Only Proxy
+
+### Deskripsi
+
+V2 menghapus adapter Kimi/Claude. Semua command workflow dijalankan lewat `opencode run`.
+
+### File Implementasi
+
+- `config/opencode.json` — route command, default model, timeout, command binary
+- `adapters/opencode_adapter.py` — subprocess wrapper OpenCode
+- `core/executor.py` — prompt build + OpenCode dispatch + session capture
+- `utils/parser.py` — parse `session.id=ses_...` dan cleanup log OpenCode
+
+### Session
+
+Run pertama:
+
+```text
+opencode run <prompt> --print-logs
+```
+
+Run berikutnya:
+
+```text
+opencode run <prompt> -s <session_id>
+```
+
+### Model
+
+`model: null` memakai default OpenCode aktif. Override model via CLI:
+
+```text
+python main.py -c analyze -p "cek logic" -s "session" -m "provider/model_key"
+```
+
+### Status Legacy
+
+Bagian v0 sampai v1.1 di bawah bersifat historis.
 
 ---
 

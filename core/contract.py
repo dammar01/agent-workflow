@@ -1,25 +1,28 @@
 from copy import deepcopy
 
-from config.roles import VALID_MODELS, VALID_ROLES
+from config.roles import VALID_ROLES
 
 
 def normalize_output(
     *,
     status: str,
-    model: str,
+    adapter: str,
+    model: str | None,
     role: str,
     session_id: str,
+    opencode_session_id: str | None = None,
     content: str,
     confidence: str = "medium",
     notes: str = "",
+    extra_meta: dict | None = None,
 ) -> dict:
     if status not in {"success", "error"}:
         status = "error"
         notes = _join_notes(notes, "invalid status normalized to error")
 
-    if model not in VALID_MODELS:
+    if adapter != "opencode":
         status = "error"
-        notes = _join_notes(notes, f"invalid model: {model}")
+        notes = _join_notes(notes, f"invalid adapter: {adapter}")
 
     if role not in VALID_ROLES:
         status = "error"
@@ -29,16 +32,22 @@ def normalize_output(
         confidence = "low"
         notes = _join_notes(notes, "invalid confidence normalized to low")
 
+    meta = {
+        "confidence": confidence,
+        "notes": notes,
+    }
+    if extra_meta:
+        meta.update(extra_meta)
+
     return {
         "status": status,
+        "adapter": adapter,
         "model": model,
         "role": role,
         "session_id": session_id,
+        "opencode_session_id": opencode_session_id,
         "content": str(content or ""),
-        "meta": {
-            "confidence": confidence,
-            "notes": notes,
-        },
+        "meta": meta,
     }
 
 

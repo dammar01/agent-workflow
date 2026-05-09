@@ -12,12 +12,13 @@ class SimpleCache:
         self.ttl_seconds = ttl_seconds
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
-    def make_key(self, command: str, task: str, work_dir: str | None = None) -> str:
+    def make_key(self, command: str, task: str, work_dir: str | None = None, model: str | None = None) -> str:
         task_hash = hashlib.sha256(task.encode("utf-8")).hexdigest()
+        model_part = model or "default"
         if work_dir:
             dir_hash = hashlib.sha256(work_dir.encode("utf-8")).hexdigest()[:12]
-            return f"{command.strip().lower()}:{dir_hash}:{task_hash}"
-        return f"{command.strip().lower()}:{task_hash}"
+            return f"{command.strip().lower()}:{model_part}:{dir_hash}:{task_hash}"
+        return f"{command.strip().lower()}:{model_part}:{task_hash}"
 
     def get(self, key: str) -> dict | None:
         data = self._read()
