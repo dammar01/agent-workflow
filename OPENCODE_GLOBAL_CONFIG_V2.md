@@ -245,12 +245,12 @@ Jika user minta verbose/detail: switch ke `/caveman lite`, lalu balik `/caveman 
 Setiap session untuk code task:
 
 1. Aktifkan caveman ultra jika belum auto-active: `/caveman ultra`.
-2. Cek `graphify-out/` di project root — default primary source untuk codebase understanding.
-3. Jika ada → pakai sebagai primary evidence. Supplement dengan direct file read jika perlu.
-4. Jika tidak ada → jalankan Graphify Missing Protocol untuk task eksplorasi/analisis; untuk task sederhana lanjut file/search langsung.
-5. Gunakan Context7 MCP saat butuh dokumentasi library/framework terkini sebelum menjawab pertanyaan API.
-6. Baca `~/.config/opencode/memory/PERSONAL_MEMORY.md` jika relevan dan tidak kosong.
-7. Generate `[SESSION_ID]` hanya saat command workflow formal pertama dipakai: `<project>-<YYYYMMDD_HHMMss>`.
+2. **WAJIB cek `graphify-out/` di project root sebelum eksplorasi apa pun.**
+   - Jika ada → baca `GRAPH_REPORT.md` dan/atau `graph.json` sebagai primary evidence. Supplement dengan direct file read hanya jika graph data tidak cukup spesifik.
+   - Jika tidak ada → jalankan Graphify Missing Protocol untuk task eksplorasi/analisis; untuk task sederhana lanjut file/search langsung.
+3. Gunakan Context7 MCP saat butuh dokumentasi library/framework terkini sebelum menjawab pertanyaan API.
+4. Baca `~/.config/opencode/memory/PERSONAL_MEMORY.md` jika relevan dan tidak kosong.
+5. Generate `[SESSION_ID]` hanya saat command workflow formal pertama dipakai: `<project>-<YYYYMMDD_HHMMss>`.
 
 ## Command Registry V2
 
@@ -454,7 +454,7 @@ Cara setup ada di README project `agent-workflow` — bukan tugas config ini.
 Dari PowerShell:
 
 ```powershell
-python $env:AGENT_PATH -c <command> -p "<prompt>" -s "<session>" -w "<work_dir>"
+python $env:AGENT_PATH -c <command> -p "<prompt>" -s "<session>" -w "<work_dir>" --pretty
 ```
 
 Dari Python subprocess (jika perlu invoke programatik):
@@ -463,7 +463,7 @@ Dari Python subprocess (jika perlu invoke programatik):
 import os, subprocess
 
 script = os.environ.get("AGENT_PATH")
-args = ["python", script, "-c", command, "-p", prompt, "-s", session, "-w", work_dir]
+args = ["python", script, "-c", command, "-p", prompt, "-s", session, "-w", work_dir, "--pretty"]
 result = subprocess.run(args, capture_output=True, text=True)
 ```
 
@@ -684,14 +684,15 @@ Untuk jawaban cepat, bug kecil, atau task sederhana, format ini opsional.
 
 ## Graphify Rules
 
-`graphify-out/` adalah default primary source untuk codebase understanding. Selalu cek lebih dulu.
+`graphify-out/` adalah default primary source untuk codebase understanding. **WAJIB cek lebih dulu sebelum setiap eksplorasi.**
 
 ### Default Behavior
 
-- Setiap task eksplorasi, analisis, atau planning → cek `graphify-out/` pertama.
+- **Setiap task eksplorasi, analisis, atau planning → cek `graphify-out/` pertama.** Tidak boleh skip.
 - Baca `graphify-out/GRAPH_REPORT.md` untuk summary; `graphify-out/graph.json` untuk detail node/edge.
 - Supplement dengan direct file read hanya jika graph data tidak cukup spesifik.
 - Jika tidak ada → jalankan Graphify Missing Protocol untuk task eksplorasi/analisis; fallback file/search untuk task sederhana.
+- **JANGAN pernah asumsikan `graphify-out/` tidak ada tanpa verifikasi langsung (read directory atau glob).**
 
 ### Official Commands
 
@@ -830,6 +831,7 @@ Jika user sudah memberi instruksi eksplisit untuk aksi sensitif di pesan yang sa
 - Jalankan aksi sensitif tanpa permission gate.
 - Output verbose/bertele-tele secara default — caveman ultra selalu aktif kecuali user minta detail.
 - Jawab pertanyaan API library spesifik dengan hallucinated signature tanpa cek Context7 terlebih dahulu.
+- Skip/lewati cek `graphify-out/` sebelum eksplorasi codebase.
 
 ````
 

@@ -1,10 +1,7 @@
-from core.contract import mark_cache_hit
 from core.executor import Executor
 from core.session_manager import SessionManager
-from utils.cache import SimpleCache
 
 SESSION_MANAGER = SessionManager()
-CACHE = SimpleCache()
 EXECUTOR = Executor(session_manager=SESSION_MANAGER)
 
 
@@ -16,18 +13,8 @@ def run(
     model: str | None = None,
 ) -> dict:
     session = SESSION_MANAGER.load_or_create(session_id)
-    cache_key = CACHE.make_key(command, task, work_dir, model)
-
-    cached = CACHE.get(cache_key)
-    if cached:
-        SESSION_MANAGER.record_run(session, command, cache_hit=True)
-        return mark_cache_hit(cached, session_id)
-
     output = EXECUTOR.execute(command, task, session, work_dir, model)
-    if output["status"] == "success":
-        CACHE.set(cache_key, output)
-
-    SESSION_MANAGER.record_run(session, command, cache_hit=False)
+    SESSION_MANAGER.record_run(session, command)
     return output
 
 

@@ -37,13 +37,12 @@ class SessionManager:
         session["opencode_session_id"] = opencode_session_id
         self._save(session)
 
-    def record_run(self, session: dict, command: str, cache_hit: bool = False) -> None:
+    def record_run(self, session: dict, command: str) -> None:
         history = session.setdefault("history", {})
         runs = history.setdefault("runs", [])
         runs.append(
             {
                 "command": command,
-                "cache_hit": cache_hit,
                 "timestamp": self._now(),
             }
         )
