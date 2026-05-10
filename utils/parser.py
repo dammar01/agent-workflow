@@ -1,4 +1,11 @@
 import re
+from datetime import datetime, timezone
+
+
+def generate_main_session_id() -> str:
+    """Generate a timestamp-based session ID for the main agent session."""
+    now = datetime.now(timezone.utc)
+    return f"main_{now.strftime('%Y%m%d_%H%M%S')}"
 
 
 def ensure_text(value) -> str:

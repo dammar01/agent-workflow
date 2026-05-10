@@ -26,7 +26,10 @@ class OpenCodeAdapter:
         self.no_timeout = timeout_seconds is None or timeout_seconds <= 0
 
     def init_session(
-        self, model: str | None = None, work_dir: str | None = None
+        self,
+        model: str | None = None,
+        work_dir: str | None = None,
+        workflow_session_id: str | None = None,
     ) -> tuple[str | None, dict]:
         """Capture a new OpenCode session id by running bootstrap and waiting for completion."""
         command = self._resolve_command()
@@ -41,6 +44,8 @@ class OpenCodeAdapter:
 
         cwd = self._resolve_work_dir(work_dir)
         meta: dict = {"args": args, "cwd": cwd}
+        if workflow_session_id:
+            meta["workflow_session_id"] = workflow_session_id
 
         try:
             proc = subprocess.Popen(
@@ -112,7 +117,9 @@ class OpenCodeAdapter:
         bootstrap_meta = None
 
         if not opencode_session_id:
-            opencode_session_id, bootstrap_meta = self.init_session(model, work_dir)
+            opencode_session_id, bootstrap_meta = self.init_session(
+                model, work_dir, workflow_session_id=session.get("session_id")
+            )
 
         if not opencode_session_id:
             return self._error(

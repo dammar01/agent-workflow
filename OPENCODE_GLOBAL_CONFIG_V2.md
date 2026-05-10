@@ -258,7 +258,24 @@ Setiap session untuk code task:
    - Jika tidak ada → jalankan Graphify Missing Protocol untuk task eksplorasi/analisis; untuk task sederhana lanjut file/search langsung.
 3. Gunakan Context7 MCP saat butuh dokumentasi library/framework terkini sebelum menjawab pertanyaan API.
 4. Baca `~/.config/opencode/memory/PERSONAL_MEMORY.md` jika relevan dan tidak kosong.
-5. Generate `[SESSION_ID]` hanya saat command workflow formal pertama dipakai: `<project>-<YYYYMMDD_HHMMss>`.
+5. **WAJIB generate `MAIN_SESSION_ID` di awal setiap sesi chat agent utama**: `main_YYYYMMDD_HHMMSS`.
+   - Simpan `MAIN_SESSION_ID` di context/memory sesi chat agent utama.
+   - **Dalam 1 sesi chat agent utama, hanya boleh ada 1 `MAIN_SESSION_ID`.**
+   - Jangan regenerate session ID di tengah sesi kecuali user eksplisit minta reset.
+   - Semua invoke ke workflow agent dalam sesi yang sama WAJIB pakai `MAIN_SESSION_ID` yang identik.
+   - Hubungan: **1 sesi chat agent utama = 1 session workflow agent.**
+
+## Session Handling Rule (WAJIB)
+
+**1 sesi chat agent utama = 1 session workflow agent.**
+
+- Di awal setiap sesi chat, agent utama WAJIB generate `MAIN_SESSION_ID` (`main_YYYYMMDD_HHMMSS`) dan simpan di context/memory.
+- Sebelum setiap invoke ke workflow agent, WAJIB cek apakah `MAIN_SESSION_ID` sudah ada di context.
+  - Jika sudah ada → reuse ID tersebut.
+  - Jika belum ada → generate baru, simpan, dan pakai.
+- **Jangan pernah generate session ID baru di tengah sesi chat agent utama.**
+- Session baru workflow agent hanya dibuat kalau agent utama memulai chat baru.
+- Semua skill commands (`/.explore`, `/.plan`, `/.execute`, `/.verify`, `/.analyze`) dalam satu sesi chat WAJIB pakai `MAIN_SESSION_ID` yang identik.
 
 ## Command Registry V2
 
@@ -894,10 +911,11 @@ STEP 1 — Multi-layer check AGENT_PATH:
 
 Jalankan 5-layer check per protocol global config sebelum invoke. Jika gagal, output error sesuai layer dan STOP.
 
-STEP 2 — Tentukan session:
+STEP 2 — Tentukan session (WAJIB pengecekan dahulu):
 
-- Jika `[SESSION_ID]` sudah ada → reuse.
-- Jika belum → generate `<project>-<YYYYMMDD_HHMMss>`.
+- **Cek context/memory sesi chat saat ini.** Jika `MAIN_SESSION_ID` sudah ada → **WAJIB reuse**.
+- Jika belum ada → generate `main_YYYYMMDD_HHMMSS`, simpan ke context/memory, dan pakai untuk semua invoke workflow agent dalam sesi ini.
+- **Jangan pernah generate session ID baru di tengah sesi chat agent utama.**
 
 STEP 3 — Invoke agent-workflow:
 
@@ -945,10 +963,11 @@ STEP 1 — Multi-layer check AGENT_PATH:
 
 Jalankan 5-layer check per protocol global config sebelum invoke. Jika gagal, output error sesuai layer dan STOP.
 
-STEP 2 — Tentukan session:
+STEP 2 — Tentukan session (WAJIB pengecekan dahulu):
 
-- Jika `[SESSION_ID]` sudah ada → reuse.
-- Jika belum → generate `<project>-<YYYYMMDD_HHMMss>`.
+- **Cek context/memory sesi chat saat ini.** Jika `MAIN_SESSION_ID` sudah ada → **WAJIB reuse**.
+- Jika belum ada → generate `main_YYYYMMDD_HHMMSS`, simpan ke context/memory, dan pakai untuk semua invoke workflow agent dalam sesi ini.
+- **Jangan pernah generate session ID baru di tengah sesi chat agent utama.**
 
 STEP 3 — Invoke agent-workflow:
 
@@ -1044,10 +1063,11 @@ STEP 1 — Multi-layer check AGENT_PATH:
 
 Jalankan 5-layer check per protocol global config sebelum invoke. Jika gagal, output error sesuai layer dan STOP.
 
-STEP 2 — Tentukan session:
+STEP 2 — Tentukan session (WAJIB pengecekan dahulu):
 
-- Jika `[SESSION_ID]` sudah ada → reuse.
-- Jika belum → generate `<project>-<YYYYMMDD_HHMMss>`.
+- **Cek context/memory sesi chat saat ini.** Jika `MAIN_SESSION_ID` sudah ada → **WAJIB reuse**.
+- Jika belum ada → generate `main_YYYYMMDD_HHMMSS`, simpan ke context/memory, dan pakai untuk semua invoke workflow agent dalam sesi ini.
+- **Jangan pernah generate session ID baru di tengah sesi chat agent utama.**
 
 STEP 3 — Invoke agent-workflow:
 
@@ -1096,10 +1116,11 @@ STEP 1 — Multi-layer check AGENT_PATH:
 
 Jalankan 5-layer check per protocol global config sebelum invoke. Jika gagal, output error sesuai layer dan STOP.
 
-STEP 2 — Tentukan session:
+STEP 2 — Tentukan session (WAJIB pengecekan dahulu):
 
-- Jika `[SESSION_ID]` sudah ada → reuse.
-- Jika belum → generate `<project>-<YYYYMMDD_HHMMss>`.
+- **Cek context/memory sesi chat saat ini.** Jika `MAIN_SESSION_ID` sudah ada → **WAJIB reuse**.
+- Jika belum ada → generate `main_YYYYMMDD_HHMMSS`, simpan ke context/memory, dan pakai untuk semua invoke workflow agent dalam sesi ini.
+- **Jangan pernah generate session ID baru di tengah sesi chat agent utama.**
 
 STEP 3 — Invoke agent-workflow:
 
@@ -1184,10 +1205,11 @@ STEP 1 — Multi-layer check AGENT_PATH:
 
 Jalankan 5-layer check per protocol global config sebelum invoke. Jika gagal, output error sesuai layer dan STOP.
 
-STEP 2 — Tentukan session:
+STEP 2 — Tentukan session (WAJIB pengecekan dahulu):
 
-- Jika `[SESSION_ID]` sudah ada → reuse.
-- Jika belum → generate `<project>-<YYYYMMDD_HHMMss>`.
+- **Cek context/memory sesi chat saat ini.** Jika `MAIN_SESSION_ID` sudah ada → **WAJIB reuse**.
+- Jika belum ada → generate `main_YYYYMMDD_HHMMSS`, simpan ke context/memory, dan pakai untuk semua invoke workflow agent dalam sesi ini.
+- **Jangan pernah generate session ID baru di tengah sesi chat agent utama.**
 
 STEP 3 — Invoke agent-workflow:
 

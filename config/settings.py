@@ -22,6 +22,35 @@ def default_opencode_config() -> dict:
     }
 
 
+def get_cached_main_session_id() -> str | None:
+    """Read the cached main agent session ID from cache file."""
+    try:
+        with Path(CACHE_FILE).open("r", encoding="utf-8") as file:
+            cache = json.load(file)
+        if isinstance(cache, dict):
+            return cache.get("main_session_id")
+    except (OSError, json.JSONDecodeError):
+        pass
+    return None
+
+
+def set_cached_main_session_id(session_id: str) -> None:
+    """Write the main agent session ID to cache file."""
+    cache: dict = {}
+    try:
+        with Path(CACHE_FILE).open("r", encoding="utf-8") as file:
+            cache = json.load(file)
+        if not isinstance(cache, dict):
+            cache = {}
+    except (OSError, json.JSONDecodeError):
+        cache = {}
+
+    cache["main_session_id"] = session_id
+    CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with Path(CACHE_FILE).open("w", encoding="utf-8") as file:
+        json.dump(cache, file, indent=2)
+
+
 def load_opencode_config(path: Path = OPENCODE_CONFIG_FILE) -> dict:
     config = default_opencode_config()
     try:

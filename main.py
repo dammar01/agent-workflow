@@ -1,8 +1,23 @@
 from core.executor import Executor
 from core.session_manager import SessionManager
+from config.settings import get_cached_main_session_id, set_cached_main_session_id
+from utils.parser import generate_main_session_id
 
 SESSION_MANAGER = SessionManager()
 EXECUTOR = Executor(session_manager=SESSION_MANAGER)
+
+
+def resolve_session_id(session_id: str, fresh: bool = False) -> str:
+    """Resolve the effective session ID, using cache or generating a new one."""
+    if session_id != "default":
+        return session_id
+    if not fresh:
+        cached = get_cached_main_session_id()
+        if cached:
+            return cached
+    new_id = generate_main_session_id()
+    set_cached_main_session_id(new_id)
+    return new_id
 
 
 def run(
@@ -15,6 +30,7 @@ def run(
     session = SESSION_MANAGER.load_or_create(session_id)
     output = EXECUTOR.execute(command, task, session, work_dir, model)
     SESSION_MANAGER.record_run(session, command)
+    output["session_id"] = session_id
     return output
 
 
@@ -34,6 +50,11 @@ if __name__ == "__main__":
     parser.add_argument("--prompt", "-p", required=True)
     parser.add_argument("--session", "-s", default="default")
     parser.add_argument(
+        "--fresh-session",
+        action="store_true",
+        help="force a new main session ID, bypassing cache",
+    )
+    parser.add_argument(
         "--work-dir",
         "-w",
         default=None,
@@ -49,5 +70,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     work_dir = str(Path(args.work_dir).resolve()) if args.work_dir else str(Path.cwd())
-    result = run(args.command, args.prompt, args.session, work_dir, args.model)
+    effective_session = resolve_session_id(args.session, fresh=args.fresh_session)
+    result = run(args.command, args.prompt, effective_session, work_dir, args.model)
     print(json.dumps(result, indent=2) if args.pretty else json.dumps(result))
