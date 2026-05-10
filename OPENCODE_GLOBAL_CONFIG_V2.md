@@ -341,6 +341,7 @@ For refactor:
 ## Skill Command Enforcement
 
 **WAJIB invoke agent-workflow untuk setiap skill command (`/.explore`, `/.plan`, `/.analyze`, `/.execute -y`, `/.verify`, `/.refactor`).**
+
 Detection flow:
 
 1. Detect apakah user prompt adalah skill command → cek prefix `/.` + match command registry.
@@ -351,17 +352,62 @@ Detection flow:
    - Parse response JSON, extract `content`, tampilkan ke user.
 3. Jika bukan skill command (prompt natural tanpa `/.`):
    - Boleh pilih antara invoke agent-workflow atau langsung lokal sesuai efisiensi.
-     Command mapping:
-     | User Command | Agent `-c` arg |
-     | --------------- | -------------- |
-     | `/.explore` | `explore` |
-     | `/.plan` | `plan` |
-     | `/.analyze` | `analyze` |
-     | `/.execute -y` | `execute` |
-     | `/.verify` | `verify` |
-     | `/.refactor` | (map to `plan` + `execute` sequence) |
-     Error bila user pakai skill command tapi agent-workflow unavailable (L1-L5 gagal) → inform user, STOP.
-     Natural prompt tanpa `/.` → optional invoke agent-workflow (agent judgment).
+
+Command mapping:
+
+| User Command    | Agent `-c` arg                       |
+| --------------- | ------------------------------------ |
+| `/.explore`     | `explore`                            |
+| `/.plan`        | `plan`                               |
+| `/.analyze`     | `analyze`                            |
+| `/.execute -y`  | `execute`                            |
+| `/.verify`      | `verify`                             |
+| `/.refactor`    | (map to `plan` + `execute` sequence) |
+
+Error bila user pakai skill command tapi agent-workflow unavailable (L1-L5 gagal) → inform user, STOP.
+
+Natural prompt tanpa `/.` → optional invoke agent-workflow (agent judgment).
+
+## Evidence-Only vs Reasoning Rule
+
+**Evidence-only constraint hanya berlaku saat ada `[WORKFLOW_AGENT]` tag dalam prompt.**
+
+### When `[WORKFLOW_AGENT]` present (invoke agent-workflow):
+
+- Agent-workflow dibatasi: evidence-only, no reasoning beyond evidence.
+- Output dari agent-workflow berformat evidence block (`[EVIDENCE]` dengan `findings`, `implications`, `uncertainties`).
+- Agent utama (OpenCode) yang membaca response wajib:
+  - Parse evidence block dari `content` field JSON response.
+  - **Lakukan reasoning layer sendiri** berdasarkan evidence yang diterima.
+  - Syntesis plan konkret (untuk `/.plan`) atau analisis mendalam (untuk `/.analyze`) dengan reasoning narrative.
+  - Output final ke user: evidence + reasoning + plan/analysis.
+
+### When no `[WORKFLOW_AGENT]` (standalone/local execution):
+
+- Agent bebas melakukan reasoning penuh.
+- Tidak ada batasan evidence-only.
+- Boleh langsung syntesis plan, analisis, atau solusi dengan reasoning mendalam tanpa perlu evidence block terpisah.
+
+### Example Workflow:
+
+**Skill command `/.plan`:**
+
+1. OpenCode invoke agent-workflow dengan `[WORKFLOW_AGENT]` tag.
+2. Agent-workflow return evidence block (findings + implications + uncertainties) tanpa reasoning narrative.
+3. **OpenCode lakukan reasoning layer**: analisis evidence, trade-off, bottleneck, risk assessment.
+4. OpenCode syntesis plan konkret dengan reasoning narrative yang jelas.
+5. Output final: `[PLAN]` block dengan reasoning + steps + confidence + uncertainties.
+
+**Natural prompt "buat fitur X":**
+
+1. OpenCode boleh pilih: invoke agent-workflow atau langsung lokal.
+2. Jika lokal → reasoning penuh tanpa batasan evidence-only.
+3. Jika invoke agent-workflow → ikuti workflow di atas (evidence → reasoning → plan).
+
+### Enforcement:
+
+- Jangan constraint reasoning di agent utama saat memproses evidence dari agent-workflow.
+- Evidence-only hanya untuk agent-workflow yang dipanggil, bukan untuk agent utama yang membaca responsenya.
 
 ## OpenCode Subprocess Invocation Protocol
 
@@ -985,7 +1031,17 @@ Extract field:
 - `confidence`: low | medium | high
 - `opencode_session_id`: simpan untuk call berikutnya
 
-STEP 5 — Syntesis plan dari evidence:
+STEP 5 — **Reasoning Layer** (WAJIB):
+
+Agent utama WAJIB lakukan reasoning berdasarkan evidence yang diterima:
+
+- Analisis findings: kenapa X adalah bottleneck? Apa root cause Y?
+- Trade-off analysis: approach A vs B, keuntungan/kerugian masing-masing.
+- Bottleneck assessment: dimana titik kritis yang bisa jadi masalah?
+- Risk evaluation: risiko regresi, side effects, dependencies.
+- Syntesis solusi konkret: step-by-step implementation plan.
+
+STEP 6 — Output Plan:
 
 Bangun plan block dengan format:
 
@@ -995,13 +1051,14 @@ task:            <restatement>
 session:         <session_id>
 evidence_source: agent-workflow
 
-assumptions:
-- <dari evidence findings>
+[REASONING]
+<narrative reasoning berdasarkan evidence:
+ - kenapa findings X penting
+ - trade-off approach A vs B
+ - kenapa solusi Y dipilih
+ - risiko dan mitigasi>
 
-open_questions:
-- <dari evidence uncertainties>
-
-steps:
+[STEPS]
 1. <concrete step>
 2. <concrete step>
 
@@ -1009,7 +1066,7 @@ files_affected:
 - <list>
 
 risks:
-- <dari evidence implications>
+- <dari reasoning + evidence implications>
 
 confidence: <dari JSON>
 
@@ -1019,7 +1076,7 @@ uncertainties:
 decision: proceed | clarify | re-explore
 ```
 
-STEP 6 — Untuk `/.plan`, stop dan tunggu approval user. Untuk prompt natural, boleh lanjut eksekusi jika user sudah meminta perubahan dan risk rendah.
+STEP 7 — Untuk `/.plan`, stop dan tunggu approval user. Untuk prompt natural, boleh lanjut eksekusi jika user sudah meminta perubahan dan risk rendah.
 
 End with: `Setuju? Jalankan /.execute -y`
 
@@ -1226,18 +1283,34 @@ Extract field:
 - `confidence`: low | medium | high
 - `opencode_session_id`: simpan untuk call berikutnya
 
-STEP 5 — Output analysis:
+STEP 5 — **Reasoning Layer** (WAJIB):
+
+Agent utama WAJIB lakukan reasoning berdasarkan evidence yang diterima:
+
+- Analisis findings: kenapa X adalah root cause? Apa implikasi Y?
+- Pattern identification: apakah ada pattern berulang, anti-pattern, code smell?
+- Impact assessment: subsystem mana yang terdampak? Seberapa besar impact?
+- Recommendation synthesis: solusi konkret berdasarkan analisis.
+
+STEP 6 — Output analysis:
 
 ```text
 [ANALYSIS]
 topic: <topic>
 source: agent-workflow
 
+[REASONING]
+<narrative reasoning berdasarkan evidence:
+ - kenapa findings X adalah root cause
+ - pattern yang ditemukan
+ - impact ke subsystem Y
+ - rekomendasi konkret>
+
 findings:
 <dari content>
 
 implications:
-<dari content>
+<dari content + reasoning>
 
 confidence: <dari JSON>
 

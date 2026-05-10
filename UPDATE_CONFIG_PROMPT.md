@@ -1,55 +1,153 @@
-# Update Config Prompt — Agent-Workflow → OpenCode Config Sync
+# Update Config Prompt — Evidence-Only vs Reasoning Rule
 
-Gunakan file ini untuk sinkronisasi perubahan di project `agent-workflow` ke konfigurasi OpenCode (`OPENCODE_GLOBAL_CONFIG_V2.md` dan skill files).
+**Tanggal:** 2026-05-10  
+**Perubahan:** Klarifikasi evidence-only constraint hanya berlaku saat ada `[WORKFLOW_AGENT]` tag.
 
-## Kapan Update Diperlukan
+---
 
-Update konfigurasi OpenCode setiap kali ada perubahan di:
+## Ringkasan Perubahan
 
-- `main.py` — CLI args, session handling, output format
-- `config/settings.py` — config structure, cache behavior, env vars
-- `adapters/opencode_adapter.py` — OpenCode invocation protocol, session init
-- `core/` — execution flow, router, prompt builder changes
-- `utils/parser.py` — output parsing, session ID generation
+**Sebelum:**
 
-## Session Handling Changes (Latest)
+- Evidence-only constraint diterapkan terlalu luas, termasuk saat agent utama memproses response dari agent-workflow.
+- Agent utama tidak melakukan reasoning layer setelah menerima evidence dari agent-workflow.
+- Output planning hanya berisi evidence block (findings + implications) tanpa reasoning narrative atau plan konkret.
 
-Perubahan di agent-workflow:
+**Sesudah:**
 
-- `utils/parser.py` — `generate_main_session_id()` → format `main_YYYYMMDD_HHMMSS`
-- `config/settings.py` — `get_cached_main_session_id()` / `set_cached_main_session_id()` menggunakan `storage/cache.json`
-- `main.py` — auto-generate session ID kalau `--session default`, dengan cache reuse. Flag `--fresh-session` untuk force new session.
-- `adapters/opencode_adapter.py` — `init_session()` menerima `workflow_session_id` untuk traceability.
+- **Evidence-only constraint hanya berlaku untuk agent-workflow** (yang dipanggil dengan `[WORKFLOW_AGENT]` tag).
+- **Agent utama (OpenCode) WAJIB melakukan reasoning layer** setelah menerima evidence dari agent-workflow.
+- Output final ke user: **evidence + reasoning + plan/analysis konkret**.
 
-Update yang diperlukan di `OPENCODE_GLOBAL_CONFIG_V2.md`:
+---
 
-1. **Startup Protocol** — tambahkan poin 5 tentang generate `MAIN_SESSION_ID` di awal sesi chat.
-2. **Session Handling Rule (WAJIB)** — tambahkan section eksplisit: 1 sesi chat = 1 workflow session, WAJIB cek cache/context sebelum generate, jangan regenerate di tengah sesi.
-3. **Semua skill files** (explore, plan, execute, verify, analyze) — ubah STEP 2 "Tentukan session" untuk mencakup:
-   - Cek `MAIN_SESSION_ID` di context/memory sesi chat.
-   - Reuse kalau sudah ada; generate baru kalau belum.
-   - Semua invoke pakai `-s <MAIN_SESSION_ID>`.
+## Aturan Baru
 
-## Checklist Update Config
+### 1. Evidence-Only Scope
 
-- [ ] Baca `OPENCODE_GLOBAL_CONFIG_V2.md` versi saat ini
-- [ ] Identifikasi section yang terdampak perubahan code
-- [ ] Update Startup Protocol jika ada perubahan initialization/session
-- [ ] Update Session Handling Rule jika ada perubahan session lifecycle
-- [ ] Update semua skill "Tentukan session" sections (explore, plan, execute, verify, analyze)
-- [ ] Update invocation commands kalau ada perubahan CLI args
-- [ ] Update response format parsing kalau ada perubahan output JSON
-- [ ] Verifikasi konsistensi antar section
-- [ ] Pastikan tidak ada broken references
+**Evidence-only hanya berlaku saat ada `[WORKFLOW_AGENT]` tag dalam prompt.**
 
-## Mapping: Code Change → Doc Section
+- Jika prompt mengandung `[WORKFLOW_AGENT]` → agent-workflow dibatasi: evidence-only, no reasoning beyond evidence.
+- Jika prompt TIDAK mengandung `[WORKFLOW_AGENT]` → agent bebas reasoning penuh.
 
-| Code File | Doc Section | Notes |
-|-----------|-------------|-------|
-| `main.py` CLI args | Skill invocation commands | Update `-s`, `-c`, `-p`, `-w`, `-m`, `--pretty` |
-| `main.py` session logic | Startup Protocol, Session Handling Rule, Skill STEP 2 | Session generation, caching, reuse |
-| `adapters/opencode_adapter.py` | OpenCode Subprocess Invocation Protocol | `init_session`, `run_agent`, output parsing |
-| `config/settings.py` | Config defaults, env vars | `AI_PROXY_TIMEOUT_SECONDS`, `OPENCODE_COMMAND` |
-| `core/executor.py` | Response Format | JSON fields: `status`, `content`, `session_id`, `opencode_session_id` |
-| `core/router.py` | Command Mapping | `-c` arg mapping ke workflow command |
-| `utils/parser.py` | Output Cleanup, Session ID Extraction | Regex patterns, log filtering |
+### 2. Agent Utama (OpenCode) Responsibility
+
+Saat agent utama invoke agent-workflow:
+
+1. **Invoke** agent-workflow dengan `[WORKFLOW_AGENT]` tag.
+2. **Terima** response JSON dengan evidence block.
+3. **Parse** evidence dari `content` field.
+4. **Lakukan reasoning layer sendiri**:
+   - Analisis evidence.
+   - Trade-off analysis.
+   - Bottleneck assessment.
+   - Risk evaluation.
+   - Syntesis plan konkret atau analisis mendalam.
+5. **Output** final ke user: evidence + reasoning + plan/analysis.
+
+### 3. Workflow Skill Command (Contoh: `/.plan`)
+
+**Step-by-step:**
+
+1. User: `/.plan buat fitur adaptive escalation`
+2. OpenCode invoke agent-workflow:
+   - Command: `python $env:AGENT_PATH -c plan -p "..." -s "..." --pretty`
+   - Prompt mengandung `[WORKFLOW_AGENT]` tag.
+3. Agent-workflow return:
+   - Evidence block: findings, implications, uncertainties.
+   - NO reasoning narrative.
+4. OpenCode terima response:
+   - Parse evidence.
+   - **Lakukan reasoning layer:**
+     - Kenapa findings X adalah bottleneck?
+     - Trade-off antara approach A vs B?
+     - Risiko regresi jika refactor Y?
+     - Solusi konkret step-by-step.
+5. OpenCode output final:
+   ```text
+   [PLAN]
+   
+   [REASONING]
+   Evidence menunjukkan ChatService 4.029 baris monolithic.
+   Refactor langsung = risiko regresi tinggi karena pipeline stages tracked di Redis.
+   Trade-off: decorator pattern (low intrusion) vs extract service (clean separation).
+   Pilihan: decorator pattern untuk adaptive escalation, extract HistoryPruner untuk context optimization.
+   
+   [STEPS]
+   1. Buat ModelRouter decorator yang wrap resolveModel()
+   2. Inject latency tracking ke Redis markStage()
+   3. Buat HistoryPruner service untuk dynamic history pruning
+   ...
+   
+   confidence: high
+   uncertainties:
+   - Belum dilihat apakah BangAIService microservice expose latency metadata
+   ```
+
+### 4. Natural Prompt (No Skill Command)
+
+**Contoh:** User: "cek logic login"
+
+- OpenCode boleh pilih:
+  - **Invoke agent-workflow** → ikuti workflow di atas (evidence → reasoning → output).
+  - **Langsung lokal** → reasoning penuh tanpa batasan evidence-only.
+
+---
+
+## Implementasi di Config
+
+Tambahkan section baru di `~/.config/opencode/AGENTS.md`:
+
+```markdown
+## Evidence-Only vs Reasoning Rule
+
+**Evidence-only constraint hanya berlaku saat ada `[WORKFLOW_AGENT]` tag dalam prompt.**
+
+### When `[WORKFLOW_AGENT]` present (invoke agent-workflow):
+
+- Agent-workflow dibatasi: evidence-only, no reasoning beyond evidence.
+- Output dari agent-workflow berformat evidence block.
+- Agent utama (OpenCode) yang membaca response wajib:
+  - Parse evidence block dari `content` field JSON response.
+  - **Lakukan reasoning layer sendiri** berdasarkan evidence yang diterima.
+  - Syntesis plan konkret atau analisis mendalam dengan reasoning narrative.
+  - Output final ke user: evidence + reasoning + plan/analysis.
+
+### When no `[WORKFLOW_AGENT]` (standalone/local execution):
+
+- Agent bebas melakukan reasoning penuh.
+- Tidak ada batasan evidence-only.
+- Boleh langsung syntesis plan, analisis, atau solusi dengan reasoning mendalam.
+```
+
+---
+
+## Checklist Verification
+
+Setelah update config:
+
+- [ ] `~/.config/opencode/AGENTS.md` mengandung section "Evidence-Only vs Reasoning Rule"
+- [ ] Section menjelaskan evidence-only hanya untuk `[WORKFLOW_AGENT]`
+- [ ] Section menjelaskan agent utama wajib reasoning layer setelah terima evidence
+- [ ] Skill files (`plan.md`, `analyze.md`) updated dengan STEP reasoning layer
+- [ ] Test `/.plan` command → output harus ada reasoning narrative + plan konkret
+
+---
+
+## Migration Note
+
+**Untuk session yang sudah jalan:**
+
+- Tidak perlu regenerate session ID.
+- Config baru berlaku untuk invoke berikutnya dalam session yang sama.
+- Agent utama langsung apply reasoning layer saat baca evidence dari agent-workflow.
+
+**Untuk setup baru:**
+
+- Jalankan `OPENCODE_GLOBAL_CONFIG_V2.md` setup dengan file ini sebagai reference.
+- Verify section "Evidence-Only vs Reasoning Rule" ada di `AGENTS.md`.
+
+---
+
+**Status:** READY  
+**Action Required:** Update `~/.config/opencode/AGENTS.md` dengan section baru di atas.
