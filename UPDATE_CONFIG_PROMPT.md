@@ -29,16 +29,10 @@ Caveman adalah token-compression plugin untuk 30+ AI agents termasuk OpenCode.
 Source: https://github.com/JuliusBrussee/caveman
 Modes: `lite` | `full` | `ultra` | `wenyan`
 
-**Install via one-liner (auto-detects agent):**
+**Install untuk OpenCode:**
 
-Windows PowerShell:
-```powershell
-irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | iex
-```
-
-macOS/Linux/WSL:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash
+npx skills add JuliusBrussee/caveman -a opencode
 ```
 
 Setelah install, verifikasi dengan menjalankan `/caveman ultra` di session berikutnya.

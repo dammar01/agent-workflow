@@ -22,6 +22,26 @@ verify    -> role verification
 - `opencode` tersedia di `PATH`
 - Tidak ada dependency third-party
 
+## OpenCode Skills — Caveman
+
+Caveman adalah skill token-compression untuk OpenCode. Install sekali secara global oleh user:
+
+```bash
+npx skills add JuliusBrussee/caveman -a opencode
+```
+
+Saat prompt muncul, pilih scope **global**.
+
+Setelah install, aktifkan ultra mode di session OpenCode:
+
+```text
+/caveman ultra
+```
+
+Referensi: https://github.com/JuliusBrussee/caveman
+
+---
+
 ## Setup setelah clone
 
 ### 1. Set env variable `AGENT_PATH`
