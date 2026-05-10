@@ -50,6 +50,7 @@ npx skills add JuliusBrussee/caveman -a opencode
 Setelah install, verifikasi dengan menjalankan `/caveman ultra` di session berikutnya.
 
 Jika install gagal → output warning dan lanjut (bukan fatal):
+
 ```text
 [PREREQ 0A] Caveman → FAILED to install.
 Action: install manually dari https://github.com/JuliusBrussee/caveman
@@ -57,6 +58,7 @@ Status: lanjut tanpa plugin, output style dikonfigurasi via AGENTS.md saja.
 ```
 
 Jika berhasil:
+
 ```text
 [PREREQ 0A] Caveman → installed. Aktifkan ultra mode: /caveman ultra
 ```
@@ -70,11 +72,13 @@ Source: https://github.com/safishamsi/graphify
 Requires: Python 3.10+
 
 Cek ketersediaan:
+
 ```bash
 graphify --version
 ```
 
 Jika tersedia → output:
+
 ```text
 [PREREQ 0B] Graphify → found: <version>
 ```
@@ -93,6 +97,7 @@ pip install graphifyy && graphify install
 ```
 
 Jika tidak ada Python runtime → output warning dan lanjut (bukan fatal):
+
 ```text
 [PREREQ 0B] Graphify → NOT installed. Python/uv/pipx unavailable.
 Action: install manually → pip install graphifyy && graphify install
@@ -101,6 +106,7 @@ Status: skipped, lanjut setup tanpa graphify.
 ```
 
 Jika install berhasil → verifikasi `graphify --version` dan output:
+
 ```text
 [PREREQ 0B] Graphify → installed: <version>
 ```
@@ -226,11 +232,13 @@ Tulis ulang file dengan konten berikut:
 Powered by caveman plugin (github.com/JuliusBrussee/caveman). Mode: ultra.
 
 Aktifkan di awal session jika belum auto-active:
+
 ```
 /caveman ultra
 ```
 
 Switch mode jika perlu:
+
 - `/caveman lite` — professional tapi concise
 - `/caveman full` — default caveman
 - `/caveman ultra` — maximum compression (~65–75% token reduction)
@@ -312,6 +320,31 @@ For refactor:
 ```text
 /.refactor <scope> -> auto /.verify
 ```
+
+## Skill Command Enforcement
+
+**WAJIB invoke agent-workflow untuk setiap skill command (`/.explore`, `/.plan`, `/.analyze`, `/.execute -y`, `/.verify`, `/.refactor`).**
+Detection flow:
+
+1. Detect apakah user prompt adalah skill command → cek prefix `/.` + match command registry.
+2. Jika match skill command:
+   - **TIDAK BOLEH** langsung jalankan logic lokal (search/read/edit).
+   - **WAJIB** invoke agent-workflow via `AGENT_PATH` dengan command mapping.
+   - Jalankan multi-layer check (L1-L5) sebelum invoke.
+   - Parse response JSON, extract `content`, tampilkan ke user.
+3. Jika bukan skill command (prompt natural tanpa `/.`):
+   - Boleh pilih antara invoke agent-workflow atau langsung lokal sesuai efisiensi.
+     Command mapping:
+     | User Command | Agent `-c` arg |
+     | --------------- | -------------- |
+     | `/.explore` | `explore` |
+     | `/.plan` | `plan` |
+     | `/.analyze` | `analyze` |
+     | `/.execute -y` | `execute` |
+     | `/.verify` | `verify` |
+     | `/.refactor` | (map to `plan` + `execute` sequence) |
+     Error bila user pakai skill command tapi agent-workflow unavailable (L1-L5 gagal) → inform user, STOP.
+     Natural prompt tanpa `/.` → optional invoke agent-workflow (agent judgment).
 
 ## OpenCode Subprocess Invocation Protocol
 
@@ -497,15 +530,15 @@ python $env:AGENT_PATH -c plan -p "buat fitur payment" -s "finance" -m "anthropi
 
 Contract JSON yang dikembalikan agent-workflow:
 
-| Field | Type | Value |
-| ----- | ---- | ----- |
-| `status` | string | `success` \| `error` |
-| `content` | string | Response content |
-| `role` | string | Role yang dieksekusi |
-| `model` | string \| null | Model yang dipakai |
-| `session_id` | string | Main session ID |
+| Field                 | Type           | Value                                                    |
+| --------------------- | -------------- | -------------------------------------------------------- |
+| `status`              | string         | `success` \| `error`                                     |
+| `content`             | string         | Response content                                         |
+| `role`                | string         | Role yang dieksekusi                                     |
+| `model`               | string \| null | Model yang dipakai                                       |
+| `session_id`          | string         | Main session ID                                          |
 | `opencode_session_id` | string \| null | OpenCode session ID — simpan dan pass ke call berikutnya |
-| `confidence` | string | `low` \| `medium` \| `high` |
+| `confidence`          | string         | `low` \| `medium` \| `high`                              |
 
 **Evidence commands** (`explore`, `plan`, `analyze`) menginstruksikan workflow agent untuk mengumpulkan evidence tanpa reasoning. `content` berformat:
 
@@ -895,8 +928,9 @@ End with: `Lanjut plan, atau cukup informasinya?`
 
 ### FILE: `~/.config/opencode/skills/plan.md`
 
-```markdown
+````markdown
 # Skill: plan
+
 description: Agent-workflow powered planning dengan confidence model dan decision gate
 
 Skill ini optional. Gunakan saat user meminta plan, task besar, banyak file, arsitektur, atau risk tinggi. Untuk perubahan kecil, boleh langsung eksekusi jika user jelas meminta.
@@ -921,10 +955,12 @@ STEP 3 — Invoke agent-workflow:
 ```powershell
 python $env:AGENT_PATH -c plan -p "<task>" -s "<session_id>" -w "<workspace_root>" --pretty
 ```
+````
 
 STEP 4 — Parse response JSON:
 
 Extract field:
+
 - `status`: success | error
 - `content`: evidence block (findings + implications + uncertainties)
 - `confidence`: low | medium | high
@@ -967,6 +1003,7 @@ decision: proceed | clarify | re-explore
 STEP 6 — Untuk `/.plan`, stop dan tunggu approval user. Untuk prompt natural, boleh lanjut eksekusi jika user sudah meminta perubahan dan risk rendah.
 
 End with: `Setuju? Jalankan /.execute -y`
+
 ````
 
 ---
@@ -1021,6 +1058,7 @@ python $env:AGENT_PATH -c execute -p "lakukan perubahan sesuai plan yang sudah d
 STEP 4 — Parse response JSON:
 
 Extract field:
+
 - `status`: success | error
 - `content`: free-form execution result
 - `opencode_session_id`: simpan untuk call berikutnya
@@ -1035,6 +1073,7 @@ status: <dari JSON status>
 ```
 
 STEP 6 — Auto-trigger verify yang relevan setelah execution. Tidak perlu command literal `/.verify` jika prompt natural.
+
 ````
 
 ---
@@ -1091,6 +1130,7 @@ status: <dari JSON status>
 
 ```markdown
 # Skill: refactor
+
 description: Safe scoped refactor with automatic verification
 
 Skill ini optional. Prompt natural seperti "rapikan fungsi X" boleh diperlakukan sebagai refactor jika scope jelas.
@@ -1114,7 +1154,7 @@ STEP 4 — Run relevant verification.
 STEP 5 — Auto-trigger `/.verify`.
 
 STEP 6 — Output confidence + uncertainties.
-````
+```
 
 ---
 
@@ -1158,6 +1198,7 @@ python $env:AGENT_PATH -c analyze -p "<topic>" -s "<session_id>" -w "<workspace_
 STEP 4 — Parse response JSON:
 
 Extract field:
+
 - `status`: success | error
 - `content`: evidence block (findings + implications + uncertainties)
 - `confidence`: low | medium | high
@@ -1187,8 +1228,9 @@ uncertainties:
 
 ### FILE: `~/.config/opencode/skills/memory.md`
 
-```markdown
+````markdown
 # Skill: memory
+
 description: Propose memory update to personal knowledge files
 
 Skill ini hanya untuk memory jangka panjang. Natural prompt yang berisi catatan tetap butuh confirmation sebelum write.
@@ -1200,6 +1242,7 @@ Skill ini hanya untuk memory jangka panjang. Natural prompt yang berisi catatan 
 ## Execution
 
 STEP 1 — Evaluate note:
+
 - Does it affect future decisions?
 - Architecture/ownership/landmine?
 - Recurring issue?
@@ -1214,6 +1257,7 @@ content:
 <proposed content>
 
 Confirm? (yes / no / edit)
+```
 ````
 
 STEP 3 — Wait for user confirmation.

@@ -23,6 +23,7 @@ class OpenCodeAdapter:
     ) -> None:
         self.command = command
         self.timeout_seconds = timeout_seconds
+        self.no_timeout = timeout_seconds is None or timeout_seconds <= 0
 
     def init_session(
         self, model: str | None = None, work_dir: str | None = None
@@ -52,7 +53,7 @@ class OpenCodeAdapter:
                 env=env,
                 cwd=cwd,
             )
-            stdout, stderr = proc.communicate(timeout=30)
+            stdout, stderr = proc.communicate(timeout=None if self.no_timeout else 30)
         except (OSError, FileNotFoundError) as exc:
             meta.update(
                 {"error": str(exc), "returncode": 1, "opencode_session_id": None}
@@ -142,7 +143,7 @@ class OpenCodeAdapter:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=self.timeout_seconds,
+                timeout=self.timeout_seconds if not self.no_timeout else None,
                 check=False,
                 env=env,
                 cwd=cwd,

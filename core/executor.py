@@ -33,7 +33,8 @@ class Executor:
             session_id=session["session_id"],
         )
         self.opencode.command = route.get("opencode_command", getattr(self.opencode, "command", "opencode"))
-        self.opencode.timeout_seconds = route.get("timeout_seconds", getattr(self.opencode, "timeout_seconds", 300))
+        self.opencode.timeout_seconds = route.get("timeout_seconds", getattr(self.opencode, "timeout_seconds", 0))
+        self.opencode.no_timeout = self.opencode.timeout_seconds is None or self.opencode.timeout_seconds <= 0
         result = self.opencode.run(prompt, session, route.get("model"), work_dir)
         opencode_session_id = result.get("meta", {}).get("opencode_session_id") or session.get("opencode_session_id")
         if result.get("ok") and opencode_session_id and not session.get("opencode_session_id") and self.session_manager:

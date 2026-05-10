@@ -9,7 +9,7 @@ SESSION_DIR = BASE_DIR / "storage" / "sessions"
 CACHE_FILE = BASE_DIR / "storage" / "cache.json"
 OPENCODE_CONFIG_FILE = BASE_DIR / "config" / "opencode.json"
 
-DEFAULT_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_TIMEOUT_SECONDS", "300"))
+DEFAULT_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_TIMEOUT_SECONDS", "0"))
 OPENCODE_COMMAND = os.getenv("OPENCODE_COMMAND", "opencode")
 
 
