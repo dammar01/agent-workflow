@@ -43,12 +43,16 @@ Jangan hapus file existing di direktori tersebut.
 
 Tulis ulang file dengan konten berikut:
 
-```markdown
+````markdown
 # OpenCode — Personal Global Config V2
-# Skills:   ~/.config/opencode/skills/
+
+# Skills: ~/.config/opencode/skills/
+
 # Commands: ~/.config/opencode/commands/
-# Memory:   ~/.config/opencode/memory/
-# Mode:     standalone OpenCode, flexible workflow, graphify-assisted when useful
+
+# Memory: ~/.config/opencode/memory/
+
+# Mode: standalone OpenCode, flexible workflow, graphify-assisted when useful
 
 ## Core Behavior
 
@@ -71,6 +75,7 @@ Tulis ulang file dengan konten berikut:
 ## Startup Protocol
 
 Setiap session untuk code task:
+
 1. Gunakan konteks repo langsung jika task sederhana atau user memakai prompt natural.
 2. Cek `graphify-out/` saat task eksplorasi/analisis besar, arsitektur, atau flow kompleks.
 3. Jika ada → pakai sebagai evidence tambahan, bukan satu-satunya sumber wajib.
@@ -81,6 +86,7 @@ Setiap session untuk code task:
 ## Command Registry V2
 
 Workflow commands:
+
 - `/.explore <hint>`
 - `/.plan <task>`
 - `/.execute -y`
@@ -91,10 +97,12 @@ Workflow commands:
 - `/.help`
 
 Natural prompt:
+
 - Prompt biasa seperti "cek logic login", "buat fitur X", "review file Y" tetap valid.
 - Agent boleh memilih cara kerja paling efisien tanpa memaksa skill command.
 
 Invalid command form:
+
 - slash command biasa seperti `/plan`, `/execute`, `/analyze` jika dimaksudkan sebagai workflow command.
 
 Jika user memakai slash command invalid, output EXACT:
@@ -105,6 +113,7 @@ Gunakan prefix "/."
 Contoh: /.plan
 STOP.
 ```
+````
 
 Jangan pakai pesan invalid untuk prompt natural tanpa slash.
 
@@ -260,6 +269,177 @@ else:
 
 Jangan membangun command dengan menyisipkan flags ke dalam prompt string.
 
+## Agent-Workflow Invocation via Env Variable
+
+`AGENT_PATH` adalah env variable yang di-set user setelah clone project `agent-workflow`.
+Config ini hanya menggunakannya — tidak pernah men-setup atau mengubah nilainya.
+
+### Precondition
+
+`AGENT_PATH` harus sudah di-set oleh user sebelum OpenCode dipakai.
+Cara setup ada di README project `agent-workflow` — bukan tugas config ini.
+
+### Invocation Pattern
+
+Dari PowerShell:
+
+```powershell
+python $env:AGENT_PATH -c <command> -p "<prompt>" -s "<session>" -w "<work_dir>"
+```
+
+Dari Python subprocess (jika perlu invoke programatik):
+
+```python
+import os, subprocess
+
+script = os.environ.get("AGENT_PATH")
+args = ["python", script, "-c", command, "-p", prompt, "-s", session, "-w", work_dir]
+result = subprocess.run(args, capture_output=True, text=True)
+```
+
+### Command Mapping
+
+| Workflow Command | `-c` arg ke AGENT_PATH |
+| ---------------- | ---------------------- |
+| `/.explore`      | `explore`              |
+| `/.plan`         | `plan`                 |
+| `/.analyze`      | `analyze`              |
+| `/.execute -y`   | `execute`              |
+| `/.verify`       | `verify`               |
+
+### Contoh Invocation
+
+```powershell
+python $env:AGENT_PATH -c explore -p "cari entry point auth" -s "finance-auth" -w "E:\Work\project\target-app" --pretty
+python $env:AGENT_PATH -c analyze -p "cek logic auth" -s "finance-auth" --pretty
+```
+
+Override model:
+
+```powershell
+python $env:AGENT_PATH -c plan -p "buat fitur payment" -s "finance" -m "anthropic/claude-sonnet-4-5" --pretty
+```
+
+### Multi-Layer Check
+
+Jalankan semua layer secara berurutan sebelum invoke. Stop di layer pertama yang gagal.
+
+**Layer 1 — Env variable exists**
+
+```powershell
+if (-not $env:AGENT_PATH) { ... }
+```
+
+```python
+script = os.environ.get("AGENT_PATH")
+if not script:
+    ...
+```
+
+Gagal → output:
+
+```text
+[CHECK FAILED — L1: ENV NOT SET]
+AGENT_PATH belum di-set.
+Ikuti setup di README project agent-workflow, lalu restart terminal / OpenCode.
+STOP.
+```
+
+**Layer 2 — Path exists on disk**
+
+```powershell
+if (-not (Test-Path $env:AGENT_PATH)) { ... }
+```
+
+```python
+if not os.path.isfile(script):
+    ...
+```
+
+Gagal → output:
+
+```text
+[CHECK FAILED — L2: FILE NOT FOUND]
+AGENT_PATH disetel ke: <nilai>
+File tidak ditemukan di path tersebut.
+Periksa path atau clone ulang project agent-workflow.
+STOP.
+```
+
+**Layer 3 — File adalah Python script**
+
+```powershell
+if (-not $env:AGENT_PATH.EndsWith(".py")) { ... }
+```
+
+```python
+if not script.endswith(".py"):
+    ...
+```
+
+Gagal → output:
+
+```text
+[CHECK FAILED — L3: INVALID FILE TYPE]
+AGENT_PATH harus menunjuk ke file .py.
+Nilai saat ini: <nilai>
+STOP.
+```
+
+**Layer 4 — Python runtime tersedia**
+
+```powershell
+python --version 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) { ... }
+```
+
+```python
+result = subprocess.run(["python", "--version"], capture_output=True)
+if result.returncode != 0:
+    ...
+```
+
+Gagal → output:
+
+```text
+[CHECK FAILED — L4: PYTHON NOT FOUND]
+`python` tidak tersedia di PATH.
+Pastikan Python 3.10+ terinstall dan tersedia di PATH.
+STOP.
+```
+
+**Layer 5 — Script callable (smoke test)**
+
+```powershell
+python $env:AGENT_PATH --help 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) { ... }
+```
+
+```python
+result = subprocess.run(["python", script, "--help"], capture_output=True)
+if result.returncode != 0:
+    ...
+```
+
+Gagal → output:
+
+```text
+[CHECK FAILED — L5: SCRIPT NOT CALLABLE]
+python <path> --help gagal.
+Script mungkin corrupt atau dependensi hilang.
+Coba: python <path> --help secara manual untuk detail error.
+STOP.
+```
+
+Semua layer pass → lanjut invocation.
+
+### Rules
+
+- Jalankan semua 5 layer check sebelum setiap invocation pertama dalam session. Untuk invocation berikutnya dalam session yang sama, cukup Layer 1–2.
+- Jangan hardcode path script. Selalu baca dari `$env:AGENT_PATH` / `os.environ.get("AGENT_PATH")`.
+- Jangan modify env variable dari dalam skill atau command.
+- Invocation yang mengirim data ke external API tetap wajib Permission Gate.
+
 ## Structured Output Rule
 
 Plan atau analysis formal sebaiknya mengandung:
@@ -287,6 +467,7 @@ Untuk jawaban cepat, bug kecil, atau task sederhana, format ini opsional.
 ## Graphify Missing Protocol
 
 Jika user meminta workflow graphify-first dan `graphify-out/` tidak ada:
+
 1. Detect framework dari sinyal minimal:
    - Laravel: `artisan`, `composer.json`
    - Python/FastAPI: `requirements.txt`, `pyproject.toml`
@@ -336,6 +517,7 @@ Balas "approve" untuk lanjut.
 ```
 
 Sensitive actions:
+
 - Delete folder atau file banyak: `rm -rf`, `Remove-Item -Recurse`, clean build directory, bulk delete.
 - Git remote mutation: `git push`, `git push --force`, tag push, branch delete remote.
 - Git history/worktree destructive: `git reset --hard`, `git clean`, `git checkout -- <file>`, `git restore`, rebase, amend.
@@ -347,6 +529,7 @@ Sensitive actions:
 - Large generated changes: format entire repo, codegen touching many files, graph rebuild if expensive.
 
 Read-only safe actions tidak perlu izin:
+
 - Search/list/read files.
 - `git status`, `git diff`, `git log`.
 - Running local tests/checks when they do not mutate external systems.
@@ -376,7 +559,8 @@ Jika user sudah memberi instruksi eksplisit untuk aksi sensitif di pesan yang sa
 - Run `graphify init`, `graphify build`, `graphify watch`.
 - Claim success sebelum verify selesai.
 - Jalankan aksi sensitif tanpa permission gate.
-```
+
+````
 
 ---
 
@@ -413,9 +597,10 @@ Jika hint luas atau ambigu, output:
 Hint     : <user hint>
 Inferred : <intent yang disimpulkan>
 Scope    : <scope sempit>
-```
+````
 
 STEP 3 — Tentukan session:
+
 - Jika `[SESSION_ID]` sudah ada → reuse.
 - Jika belum → generate `<project>-<YYYYMMDD_HHMMss>`.
 
@@ -430,6 +615,7 @@ max_scope:      max 5 file, max 2 flow path
 ```
 
 STEP 5 — Explore:
+
 - Baca `graphify-out/GRAPH_REPORT.md` dan/atau `graphify-out/graph.json`.
 - Buka file source hanya jika graph data tidak cukup.
 - Stop saat stop_condition terpenuhi.
@@ -456,7 +642,8 @@ uncertainties:
 ```
 
 End with: `Lanjut plan, atau cukup informasinya?`
-```
+
+````
 
 ---
 
@@ -512,12 +699,13 @@ uncertainties:
 - <hal yang tidak bisa dikonfirmasi>
 
 decision: proceed | clarify | re-explore
-```
+````
 
 STEP 3 — Untuk `/.plan`, stop dan tunggu approval user. Untuk prompt natural, boleh lanjut eksekusi jika user sudah meminta perubahan dan risk rendah.
 
 End with: `Setuju? Jalankan /.execute -y`
-```
+
+````
 
 ---
 
@@ -545,7 +733,7 @@ forbidden: <files tidak boleh disentuh>
 reason:    <alasan scope>
 
 Tambahkan -y untuk konfirmasi eksekusi.
-```
+````
 
 STOP.
 
@@ -582,7 +770,8 @@ status: done | partial | blocked
 ```
 
 STEP 6 — Auto-trigger verify yang relevan setelah edit. Tidak perlu command literal `/.verify` jika prompt natural.
-```
+
+````
 
 ---
 
@@ -628,8 +817,9 @@ confidence:
 
 uncertainties:
 - <hal yang tidak bisa dikonfirmasi>
-```
-```
+````
+
+````
 
 ---
 
@@ -660,14 +850,15 @@ STEP 4 — Run relevant verification.
 STEP 5 — Auto-trigger `/.verify`.
 
 STEP 6 — Output confidence + uncertainties.
-```
+````
 
 ---
 
 ### FILE: `~/.config/opencode/skills/analyze.md`
 
-```markdown
+````markdown
 # Skill: analyze
+
 description: Deep analysis, zero code changes, structured findings
 
 Skill ini optional. Gunakan saat user meminta analisis/review/diagnosis tanpa perubahan, atau saat risk tinggi.
@@ -704,7 +895,9 @@ confidence:
 uncertainties:
 - <hal yang tidak bisa dikonfirmasi>
 ```
-```
+````
+
+````
 
 ---
 
@@ -737,12 +930,13 @@ content:
 <proposed content>
 
 Confirm? (yes / no / edit)
-```
+````
 
 STEP 3 — Wait for user confirmation.
 
 STEP 4 — Only write after `yes` or explicit edited content.
-```
+
+````
 
 ---
 
@@ -791,8 +985,9 @@ Natural prompts are valid. Use commands only when you want structured workflow.
 
 Workflow for large/risky tasks: /.explore -> /.plan -> /.execute -y -> /.verify
 Prefix "/." wajib only for workflow commands. Natural prompts need no prefix.
-```
-```
+````
+
+````
 
 ---
 
@@ -808,7 +1003,7 @@ description: Optional shortcut for bounded codebase exploration. Usage: /.explor
 ---
 
 Read `~/.config/opencode/skills/explore.md` and follow it. Reject `/explore` only when used as slash command; natural prompts remain valid.
-```
+````
 
 ### FILE: `~/.config/opencode/commands/plan.md`
 
@@ -890,20 +1085,25 @@ Jangan overwrite memory file jika sudah ada, kecuali `MEMORY.md` index perlu app
 
 ```markdown
 # Personal Memory — OpenCode
+
 Last updated: 2026-05-09
 
 ## Architecture Decisions
+
 - (belum ada)
 
 ## Module Ownership
+
 | Module | Team | Notes |
-|--------|------|-------|
+| ------ | ---- | ----- |
 | -      | -    | -     |
 
 ## Known Landmines
+
 - (belum ada)
 
 ## Things I Always Forget
+
 - (belum ada)
 ```
 
@@ -911,14 +1111,17 @@ Last updated: 2026-05-09
 
 ```markdown
 # Domain Map — OpenCode
+
 Last updated: 2026-05-09
 
 ## Entry Points
+
 | Domain | Entry File | Key Function |
-|--------|------------|--------------|
+| ------ | ---------- | ------------ |
 | -      | -          | -            |
 
 ## Cross-Team Boundaries
+
 - (belum ada)
 ```
 
