@@ -847,7 +847,7 @@ Untuk setiap skill file: overwrite isi file. Skill adalah template, bukan data u
 
 ```markdown
 # Skill: explore
-description: Graphify-first codebase exploration dengan bounded scope
+description: Agent-workflow powered exploration untuk arsitektur kompleks
 
 Skill ini optional. Gunakan saat user memakai `/.explore` atau intent eksplorasi besar/flow kompleks. Untuk prompt natural sederhana, boleh pakai search/read langsung.
 
@@ -857,65 +857,38 @@ Skill ini optional. Gunakan saat user memakai `/.explore` atau intent eksplorasi
 
 ## Execution
 
-STEP 1 — Pre-check:
-- Cek `graphify-out/` di project aktif jika relevan.
-- Jika tidak ada dan user meminta graphify-first eksplisit → jalankan Graphify Missing Protocol dari global config, lalu STOP.
-- Jika tidak ada untuk prompt natural biasa → lanjut dengan direct file/search fallback.
+STEP 1 — Multi-layer check AGENT_PATH:
 
-STEP 2 — Intent check:
-Jika hint luas atau ambigu, output:
+Jalankan 5-layer check per protocol global config sebelum invoke. Jika gagal, output error sesuai layer dan STOP.
 
-```text
-[ASUMSI INTENT]
-Hint     : <user hint>
-Inferred : <intent yang disimpulkan>
-Scope    : <scope sempit>
-````
-
-STEP 3 — Tentukan session:
+STEP 2 — Tentukan session:
 
 - Jika `[SESSION_ID]` sudah ada → reuse.
 - Jika belum → generate `<project>-<YYYYMMDD_HHMMss>`.
 
-STEP 4 — Output exploration plan:
+STEP 3 — Invoke agent-workflow:
 
-```text
-[EXPLORATION PLAN]
-session:        <session_id>
-target:         <derived from hint>
-stop_condition: <kapan eksplorasi berhenti>
-max_scope:      max 5 file, max 2 flow path
+```powershell
+python $env:AGENT_PATH -c explore -p "<hint>" -s "<session_id>" -w "<workspace_root>" --pretty
 ```
 
-STEP 5 — Explore:
+STEP 4 — Parse response JSON:
 
-- Baca `graphify-out/GRAPH_REPORT.md` dan/atau `graphify-out/graph.json`.
-- Buka file source hanya jika graph data tidak cukup.
-- Stop saat stop_condition terpenuhi.
+Extract field:
+- `status`: success | error
+- `content`: evidence block
+- `confidence`: low | medium | high
+- `opencode_session_id`: simpan untuk call berikutnya
 
-STEP 6 — Output:
+STEP 5 — Output evidence:
+
+Tampilkan `content` langsung (sudah format evidence block). Tambahkan:
 
 ```text
-[EXPLORATION RESULT]
-session:       <session_id>
-source:        graphify | direct file fallback
-confidence:    low | medium | high
-
-entry_points:
-- <list>
-
-related_modules:
-- <list>
-
-flow_summary:
-<max 3 kalimat>
-
-uncertainties:
-- <hal yang tidak bisa dikonfirmasi>
+confidence: <from JSON>
 ```
 
 End with: `Lanjut plan, atau cukup informasinya?`
-
 ````
 
 ---
@@ -924,7 +897,7 @@ End with: `Lanjut plan, atau cukup informasinya?`
 
 ```markdown
 # Skill: plan
-description: Structured planning dengan confidence model dan decision gate
+description: Agent-workflow powered planning dengan confidence model dan decision gate
 
 Skill ini optional. Gunakan saat user meminta plan, task besar, banyak file, arsitektur, atau risk tinggi. Untuk perubahan kecil, boleh langsung eksekusi jika user jelas meminta.
 
@@ -934,24 +907,44 @@ Skill ini optional. Gunakan saat user meminta plan, task besar, banyak file, ars
 
 ## Execution
 
-STEP 1 — Collect evidence:
-- Primary jika relevan: `graphify-out/`.
-- Jika graph tidak ada/tidak cukup, baca file relevan langsung dan catat alasan bila penting.
-- Jika domain tidak jelas, suggest `/.explore <hint>`.
+STEP 1 — Multi-layer check AGENT_PATH:
 
-STEP 2 — Output plan:
+Jalankan 5-layer check per protocol global config sebelum invoke. Jika gagal, output error sesuai layer dan STOP.
+
+STEP 2 — Tentukan session:
+
+- Jika `[SESSION_ID]` sudah ada → reuse.
+- Jika belum → generate `<project>-<YYYYMMDD_HHMMss>`.
+
+STEP 3 — Invoke agent-workflow:
+
+```powershell
+python $env:AGENT_PATH -c plan -p "<task>" -s "<session_id>" -w "<workspace_root>" --pretty
+```
+
+STEP 4 — Parse response JSON:
+
+Extract field:
+- `status`: success | error
+- `content`: evidence block (findings + implications + uncertainties)
+- `confidence`: low | medium | high
+- `opencode_session_id`: simpan untuk call berikutnya
+
+STEP 5 — Syntesis plan dari evidence:
+
+Bangun plan block dengan format:
 
 ```text
 [PLAN]
 task:            <restatement>
 session:         <session_id>
-evidence_source: graphify | direct file fallback | context only
+evidence_source: agent-workflow
 
 assumptions:
-- <statement, bukan pertanyaan>
+- <dari evidence findings>
 
 open_questions:
-- <max 5, harus impact implementation/architecture>
+- <dari evidence uncertainties>
 
 steps:
 1. <concrete step>
@@ -961,23 +954,19 @@ files_affected:
 - <list>
 
 risks:
-- <list>
+- <dari evidence implications>
 
-confidence:
-  problem_understanding: low | medium | high
-  root_cause: low | medium | high
-  solution_path: low | medium | high
+confidence: <dari JSON>
 
 uncertainties:
-- <hal yang tidak bisa dikonfirmasi>
+- <dari evidence>
 
 decision: proceed | clarify | re-explore
-````
+```
 
-STEP 3 — Untuk `/.plan`, stop dan tunggu approval user. Untuk prompt natural, boleh lanjut eksekusi jika user sudah meminta perubahan dan risk rendah.
+STEP 6 — Untuk `/.plan`, stop dan tunggu approval user. Untuk prompt natural, boleh lanjut eksekusi jika user sudah meminta perubahan dan risk rendah.
 
 End with: `Setuju? Jalankan /.execute -y`
-
 ````
 
 ---
@@ -986,7 +975,7 @@ End with: `Setuju? Jalankan /.execute -y`
 
 ```markdown
 # Skill: execute
-description: Controlled implementation dengan explicit approval gate
+description: Agent-workflow powered execution dengan explicit approval gate
 
 Skill ini optional untuk workflow formal. Prompt natural seperti "ubah X" sudah cukup sebagai izin eksekusi untuk perubahan low-risk. Aksi sensitif tetap wajib Permission Gate dari global config.
 
@@ -1014,36 +1003,38 @@ Dengan `-y` → proceed. Dengan prompt natural eksplisit → proceed jika low-ri
 
 ## Execution
 
-STEP 1 — Output `[EXECUTION SCOPE]` sebelum edit.
+STEP 1 — Multi-layer check AGENT_PATH:
 
-Untuk perubahan kecil low-risk dari prompt natural, scope boleh disampaikan ringkas tanpa blok formal.
+Jalankan 5-layer check per protocol global config sebelum invoke. Jika gagal, output error sesuai layer dan STOP.
 
-STEP 2 — Edit hanya file allowed.
+STEP 2 — Tentukan session:
 
-STEP 3 — Jika butuh file forbidden, STOP dan minta instruksi eksplisit.
+- Jika `[SESSION_ID]` sudah ada → reuse.
+- Jika belum → generate `<project>-<YYYYMMDD_HHMMss>`.
 
-STEP 3b — Jika aksi masuk Sensitive actions, STOP dan tampilkan `[PERMISSION REQUIRED]`.
+STEP 3 — Invoke agent-workflow:
 
-STEP 4 — Jalankan verification relevan.
+```powershell
+python $env:AGENT_PATH -c execute -p "lakukan perubahan sesuai plan yang sudah disetujui" -s "<session_id>" -w "<workspace_root>" --pretty
+```
+
+STEP 4 — Parse response JSON:
+
+Extract field:
+- `status`: success | error
+- `content`: free-form execution result
+- `opencode_session_id`: simpan untuk call berikutnya
 
 STEP 5 — Output:
 
 ```text
 [EXECUTION RESULT]
-files_changed:
-- <list>
+<content dari agent-workflow>
 
-verification:
-- <command/result>
-
-confidence: low | medium | high
-uncertainties:
-- <list>
-status: done | partial | blocked
+status: <dari JSON status>
 ```
 
-STEP 6 — Auto-trigger verify yang relevan setelah edit. Tidak perlu command literal `/.verify` jika prompt natural.
-
+STEP 6 — Auto-trigger verify yang relevan setelah execution. Tidak perlu command literal `/.verify` jika prompt natural.
 ````
 
 ---
@@ -1052,7 +1043,7 @@ STEP 6 — Auto-trigger verify yang relevan setelah edit. Tidak perlu command li
 
 ```markdown
 # Skill: verify
-description: Verification after execute/refactor
+description: Agent-workflow powered verification after execute/refactor
 
 Skill ini optional. Gunakan setelah perubahan code, atau saat user meminta verify. Pilih check relevan, jangan jalankan check sensitif tanpa izin.
 
@@ -1062,36 +1053,36 @@ Skill ini optional. Gunakan setelah perubahan code, atau saat user meminta verif
 
 ## Execution
 
-STEP 1 — Identify relevant checks:
-- tests
-- lint
-- typecheck
-- build
-- CLI smoke test
+STEP 1 — Multi-layer check AGENT_PATH:
 
-STEP 2 — Run feasible checks.
+Jalankan 5-layer check per protocol global config sebelum invoke. Jika gagal, output error sesuai layer dan STOP.
 
-STEP 3 — Output:
+STEP 2 — Tentukan session:
+
+- Jika `[SESSION_ID]` sudah ada → reuse.
+- Jika belum → generate `<project>-<YYYYMMDD_HHMMss>`.
+
+STEP 3 — Invoke agent-workflow:
+
+```powershell
+python $env:AGENT_PATH -c verify -p "verifikasi perubahan terakhir dengan test/lint/build yang relevan" -s "<session_id>" -w "<workspace_root>" --pretty
+```
+
+STEP 4 — Parse response JSON:
+
+Extract field:
+- `status`: success | error
+- `content`: free-form verification result
+- `opencode_session_id`: simpan untuk call berikutnya
+
+STEP 5 — Output:
 
 ```text
 [VERIFY RESULT]
-status: pass | fail | partial
+<content dari agent-workflow>
 
-checks:
-- <command>: <result>
-
-failures:
-- <file/line/error if any>
-
-confidence:
-  problem_understanding: low | medium | high
-  root_cause: low | medium | high
-  solution_path: low | medium | high
-
-uncertainties:
-- <hal yang tidak bisa dikonfirmasi>
-````
-
+status: <dari JSON status>
+```
 ````
 
 ---
@@ -1132,7 +1123,7 @@ STEP 6 — Output confidence + uncertainties.
 ````markdown
 # Skill: analyze
 
-description: Deep analysis, zero code changes, structured findings
+description: Agent-workflow powered analysis, zero code changes, structured findings
 
 Skill ini optional. Gunakan saat user meminta analisis/review/diagnosis tanpa perubahan, atau saat risk tinggi.
 
@@ -1147,29 +1138,49 @@ Skill ini optional. Gunakan saat user meminta analisis/review/diagnosis tanpa pe
 - Findings first.
 - Include confidence + uncertainties.
 
-## Output
+## Execution
+
+STEP 1 — Multi-layer check AGENT_PATH:
+
+Jalankan 5-layer check per protocol global config sebelum invoke. Jika gagal, output error sesuai layer dan STOP.
+
+STEP 2 — Tentukan session:
+
+- Jika `[SESSION_ID]` sudah ada → reuse.
+- Jika belum → generate `<project>-<YYYYMMDD_HHMMss>`.
+
+STEP 3 — Invoke agent-workflow:
+
+```powershell
+python $env:AGENT_PATH -c analyze -p "<topic>" -s "<session_id>" -w "<workspace_root>" --pretty
+```
+
+STEP 4 — Parse response JSON:
+
+Extract field:
+- `status`: success | error
+- `content`: evidence block (findings + implications + uncertainties)
+- `confidence`: low | medium | high
+- `opencode_session_id`: simpan untuk call berikutnya
+
+STEP 5 — Output analysis:
 
 ```text
 [ANALYSIS]
 topic: <topic>
-source: graphify | direct file fallback | context only
+source: agent-workflow
 
 findings:
-- <ordered by severity/importance>
+<dari content>
 
 implications:
-- <impact>
+<dari content>
 
-confidence:
-  problem_understanding: low | medium | high
-  root_cause: low | medium | high
-  solution_path: low | medium | high
+confidence: <dari JSON>
 
 uncertainties:
-- <hal yang tidak bisa dikonfirmasi>
+<dari content>
 ```
-````
-
 ````
 
 ---
@@ -1277,7 +1288,7 @@ Buat direktori `~/.config/opencode/commands/` jika belum ada. Untuk setiap comma
 
 ```markdown
 ---
-description: Optional shortcut for bounded codebase exploration. Usage: /.explore <hint>
+description: Agent-workflow powered codebase exploration. Usage: /.explore <hint>
 ---
 
 Read `~/.config/opencode/skills/explore.md` and follow it. Reject `/explore` only when used as slash command; natural prompts remain valid.
@@ -1287,7 +1298,7 @@ Read `~/.config/opencode/skills/explore.md` and follow it. Reject `/explore` onl
 
 ```markdown
 ---
-description: Optional shortcut for structured plan with confidence, uncertainties, and decision gate. Usage: /.plan <task>
+description: Agent-workflow powered structured plan with confidence, uncertainties, and decision gate. Usage: /.plan <task>
 ---
 
 Read `~/.config/opencode/skills/plan.md` and follow it. Reject `/plan` only when used as slash command; natural prompts remain valid.
@@ -1297,7 +1308,7 @@ Read `~/.config/opencode/skills/plan.md` and follow it. Reject `/plan` only when
 
 ```markdown
 ---
-description: Optional shortcut for approved implementation scope. Requires -y for formal workflow. Usage: /.execute -y
+description: Agent-workflow powered implementation. Requires -y for formal workflow. Usage: /.execute -y
 ---
 
 Read `~/.config/opencode/skills/execute.md` and follow it. Reject formal `/.execute` without `-y`; natural prompts can execute low-risk clear requests. Sensitive actions require Permission Gate.
@@ -1307,7 +1318,7 @@ Read `~/.config/opencode/skills/execute.md` and follow it. Reject formal `/.exec
 
 ```markdown
 ---
-description: Optional shortcut to verify current changes with relevant checks. Usage: /.verify
+description: Agent-workflow powered verification with relevant checks. Usage: /.verify
 ---
 
 Read `~/.config/opencode/skills/verify.md` and follow it. Avoid sensitive checks without permission.
@@ -1327,7 +1338,7 @@ Read `~/.config/opencode/skills/refactor.md` and follow it. Natural refactor pro
 
 ```markdown
 ---
-description: Optional shortcut to analyze topic with zero code changes. Usage: /.analyze <topic>
+description: Agent-workflow powered analysis with zero code changes. Usage: /.analyze <topic>
 ---
 
 Read `~/.config/opencode/skills/analyze.md` and follow it. Natural analysis/review prompts remain valid.

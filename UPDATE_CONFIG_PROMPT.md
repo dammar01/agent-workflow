@@ -1,93 +1,78 @@
-# UPDATE_CONFIG_PROMPT.md
+# Update OpenCode Global Config — Agent-Workflow Integration
 
-Template 1-shot prompt untuk update konfigurasi global OpenCode setelah setiap perubahan behavior.
+Update konfigurasi global OpenCode di `~/.config/opencode/` untuk mengintegrasikan agent-workflow Python script via `AGENT_PATH` env variable pada workflow commands: `/.explore`, `/.plan`, `/.analyze`, `/.execute -y`, dan `/.verify`.
 
-## Usage
+## Precondition
 
-Copy block di bawah, isi `[CHANGELOG_ENTRY]`, lalu kirim ke OpenCode.
+- `AGENT_PATH` env variable sudah di-set dan menunjuk ke `agent-workflow/main.py`
+- Python 3.10+ tersedia di PATH
+- OpenCode global config sudah ada di `~/.config/opencode/`
 
----
+## Changes Summary
 
-```text
-[CONFIG UPDATE REQUEST]
+Skills yang di-update untuk invoke agent-workflow:
+- `~/.config/opencode/skills/explore.md` → invoke `-c explore`
+- `~/.config/opencode/skills/plan.md` → invoke `-c plan`
+- `~/.config/opencode/skills/analyze.md` → invoke `-c analyze`
+- `~/.config/opencode/skills/execute.md` → invoke `-c execute`
+- `~/.config/opencode/skills/verify.md` → invoke `-c verify`
 
-Target file: E:\Work\project\agent-workflow\OPENCODE_GLOBAL_CONFIG_V2.md
+Commands yang di-update description:
+- `~/.config/opencode/commands/explore.md` → "Agent-workflow powered..."
+- `~/.config/opencode/commands/plan.md` → "Agent-workflow powered..."
+- `~/.config/opencode/commands/analyze.md` → "Agent-workflow powered..."
+- `~/.config/opencode/commands/execute.md` → "Agent-workflow powered..."
+- `~/.config/opencode/commands/verify.md` → "Agent-workflow powered..."
 
-Changelog entry:
-[CHANGELOG_ENTRY]
+Skills yang TIDAK diubah (tidak ada route di agent-workflow):
+- `refactor.md`
+- `memory.md`
+- `help.md`
 
-Instruksi:
-1. Baca OPENCODE_GLOBAL_CONFIG_V2.md secara keseluruhan.
-2. Terapkan perubahan dari changelog entry di atas.
-3. Pastikan konsistensi dengan section lain (Startup Protocol, Graphify Rules, Global Forbidden, dll).
-4. Jika ada section baru, taruh di tempat yang logis.
-5. Jika ada section lama yang conflict, resolve dengan preferensi changelog entry.
-6. Setelah edit selesai, tampilkan diff ringkas (section yang berubah saja).
-7. Jangan tanya konfirmasi — langsung eksekusi.
+## Execution
 
-Format output akhir:
-```text
-[CONFIG UPDATED]
-file: OPENCODE_GLOBAL_CONFIG_V2.md
-changes:
-- <section>: <what changed>
-- <section>: <what changed>
+Update semua files sesuai content dari `E:\Work\project\agent-workflow\OPENCODE_GLOBAL_CONFIG_V2.md` bagian STEP 3 (skills) dan STEP 4 (commands).
 
-confidence: low | medium | high
-```
-```
+Untuk setiap skill yang match dengan routes di `agent-workflow/config/opencode.json`:
 
----
+1. Ganti execution logic dengan pattern:
+   - STEP 1: Multi-layer check AGENT_PATH (5 layers)
+   - STEP 2: Tentukan session ID
+   - STEP 3: Invoke agent-workflow via `python $env:AGENT_PATH -c <command> -p "<prompt>" -s "<session>" -w "<workspace>" --pretty`
+   - STEP 4: Parse JSON response
+   - STEP 5: Output evidence/result
 
-## Contoh Changelog Entry
+2. Update description di command file dari "Optional shortcut" menjadi "Agent-workflow powered"
 
-### Contoh 1: Menambahkan rule baru
+Setelah selesai, verifikasi:
+- Skills contain "Multi-layer check AGENT_PATH"
+- Skills contain "python $env:AGENT_PATH -c"
+- Commands description contain "Agent-workflow powered"
 
-```text
-[CHANGELOG_ENTRY]
-Tambahkan rule di Global Forbidden:
-"Jalankan query ke production database tanpa WHERE clause atau tanpa backup."
-
-Tambahkan di Permission Gate:
-"Database query di environment production: wajib EXPLAIN + backup snapshot."
-```
-
-### Contoh 2: Mengubah Startup Protocol
+Output final report:
 
 ```text
-[CHANGELOG_ENTRY]
-Ubah Startup Protocol step 2:
-Dari: "Cek graphify-out/ di project root"
-Jadi: "WAJIB cek graphify-out/ di project root sebelum eksplorasi. Jika ada, baca GRAPH_REPORT.md dahulu. Jangan asumsikan tidak ada tanpa verifikasi."
+[CONFIG UPDATE COMPLETE]
+
+Skills updated (agent-workflow integration):
+  explore.md  ✓
+  plan.md     ✓
+  analyze.md  ✓
+  execute.md  ✓
+  verify.md   ✓
+
+Commands updated (description):
+  explore.md  ✓
+  plan.md     ✓
+  analyze.md  ✓
+  execute.md  ✓
+  verify.md   ✓
+
+Skills unchanged (no agent-workflow route):
+  refactor.md ✓
+  memory.md   ✓
+  help.md     ✓
+
+Status: READY
+Agent-workflow integration active for: /.explore /.plan /.analyze /.execute /.verify
 ```
-
-### Contoh 3: Menambahkan workflow command baru
-
-```text
-[CHANGELOG_ENTRY]
-Tambahkan workflow command `/.deploy <environment>` di Command Registry V2.
-Trigger: deploy ke staging/production.
-Rules: wajib permission gate, wajib verify tests pass, wajib backup DB.
-```
-
-### Contoh 4: Update model default
-
-```text
-[CHANGELOG_ENTRY]
-Update Agent-Workflow Model Override table:
-- explore: ganti dari kimi-k26 ke kimi-k2.6
-- plan: ganti dari cc-sonnet45 ke claude-sonnet-4-5
-```
-
----
-
-## Checklist Sebelum Kirim Prompt
-
-- [ ] Changelog entry spesifik (section, before, after).
-- [ ] Tidak ambigu — satu interpretasi saja.
-- [ ] Scope terbatas (max 3 section per update).
-- [ ] Tidak conflict dengan Global Forbidden.
-
----
-
-Last updated: 2026-05-10
