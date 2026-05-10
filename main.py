@@ -8,7 +8,13 @@ CACHE = SimpleCache()
 EXECUTOR = Executor(session_manager=SESSION_MANAGER)
 
 
-def run(command: str, task: str, session_id: str, work_dir: str | None = None, model: str | None = None) -> dict:
+def run(
+    command: str,
+    task: str,
+    session_id: str,
+    work_dir: str | None = None,
+    model: str | None = None,
+) -> dict:
     session = SESSION_MANAGER.load_or_create(session_id)
     cache_key = CACHE.make_key(command, task, work_dir, model)
 
@@ -31,12 +37,27 @@ if __name__ == "__main__":
 
     from pathlib import Path
 
-    parser = argparse.ArgumentParser(description="ai-proxy CLI")
-    parser.add_argument("--command", "-c", required=True, choices=["explore", "plan", "analyze", "execute", "verify"])
+    parser = argparse.ArgumentParser(description="agent-workflow CLI")
+    parser.add_argument(
+        "--command",
+        "-c",
+        required=True,
+        choices=["explore", "plan", "analyze", "execute", "verify"],
+    )
     parser.add_argument("--prompt", "-p", required=True)
     parser.add_argument("--session", "-s", default="default")
-    parser.add_argument("--work-dir", "-w", default=None, help="project directory context for cache keys (default: cwd)")
-    parser.add_argument("--model", "-m", default=None, help="OpenCode model override: provider/model_key")
+    parser.add_argument(
+        "--work-dir",
+        "-w",
+        default=None,
+        help="project directory context for cache keys (default: cwd)",
+    )
+    parser.add_argument(
+        "--model",
+        "-m",
+        default=None,
+        help="OpenCode model override: provider/model_key",
+    )
     parser.add_argument("--pretty", action="store_true", help="pretty print output")
     args = parser.parse_args()
 

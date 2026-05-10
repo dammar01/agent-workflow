@@ -1,8 +1,8 @@
-# Architecture — ai-proxy v2
+# Architecture — agent-workflow v2
 
 ## Overview
 
-`ai-proxy` v2 adalah OpenCode-only CLI proxy.
+`agent-workflow` v2 adalah OpenCode-only CLI proxy.
 
 ```text
 main.py

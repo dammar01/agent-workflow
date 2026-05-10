@@ -1,4 +1,4 @@
-# Development Guide — ai-proxy
+# Development Guide — agent-workflow
 
 ## Prasyarat
 
@@ -13,36 +13,39 @@
 ### 1. Clone & verify
 
 ```bash
-cd ai-proxy
+cd agent-workflow
 python main.py --help
 ```
 
 ### 2. Set env vars wajib
 
 **Windows PowerShell (session saja):**
+
 ```powershell
-$env:AI_PROXY = "E:\Work\project\ai-proxy\main.py"
+$env:AI_PROXY = "E:\Work\project\agent-workflow\main.py"
 ```
 
 **Windows PowerShell (permanen):**
+
 ```powershell
-[Environment]::SetEnvironmentVariable("AI_PROXY", "E:\Work\project\ai-proxy\main.py", "User")
+[Environment]::SetEnvironmentVariable("AI_PROXY", "E:\Work\project\agent-workflow\main.py", "User")
 ```
 
 **Bash/WSL:**
+
 ```bash
-export AI_PROXY="/mnt/e/Work/project/ai-proxy/main.py"
+export AI_PROXY="/mnt/e/Work/project/agent-workflow/main.py"
 ```
 
 ### 3. Env vars opsional
 
-| Var | Default | Kapan diset |
-|-----|---------|-------------|
-| `KIMI_COMMAND` | `kimi` | Kimi CLI bukan di PATH default |
-| `KIMI_SESSION_FLAG` | `--session` | Kimi CLI pakai flag berbeda |
-| `KIMI_WORK_DIR` | `cwd` | Default work dir untuk Kimi |
-| `CLAUDE_COMMAND` | `""` (kosong) | Pakai Claude CLI sungguhan (bukan placeholder) |
-| `AI_PROXY_TIMEOUT_SECONDS` | `300` | Naikkan jika Kimi sering timeout |
+| Var                        | Default       | Kapan diset                                    |
+| -------------------------- | ------------- | ---------------------------------------------- |
+| `KIMI_COMMAND`             | `kimi`        | Kimi CLI bukan di PATH default                 |
+| `KIMI_SESSION_FLAG`        | `--session`   | Kimi CLI pakai flag berbeda                    |
+| `KIMI_WORK_DIR`            | `cwd`         | Default work dir untuk Kimi                    |
+| `CLAUDE_COMMAND`           | `""` (kosong) | Pakai Claude CLI sungguhan (bukan placeholder) |
+| `AI_PROXY_TIMEOUT_SECONDS` | `300`         | Naikkan jika Kimi sering timeout               |
 
 ---
 
@@ -56,13 +59,13 @@ python main.py -c execute -p "buat plan refactor" -s "my-project"
 
 ### Arguments
 
-| Flag | Alias | Wajib | Deskripsi |
-|------|-------|-------|-----------|
-| `--command` | `-c` | Ya | `explore`, `plan`, `analyze`, `execute`, `verify` |
-| `--prompt` | `-p` | Ya | Task atau pertanyaan |
-| `--session` | `-s` | Tidak | Nama sesi (default: `"default"`) |
-| `--work-dir` | `-w` | Tidak | Path project target untuk Kimi |
-| `--pretty` | — | Tidak | Pretty-print JSON output |
+| Flag         | Alias | Wajib | Deskripsi                                         |
+| ------------ | ----- | ----- | ------------------------------------------------- |
+| `--command`  | `-c`  | Ya    | `explore`, `plan`, `analyze`, `execute`, `verify` |
+| `--prompt`   | `-p`  | Ya    | Task atau pertanyaan                              |
+| `--session`  | `-s`  | Tidak | Nama sesi (default: `"default"`)                  |
+| `--work-dir` | `-w`  | Tidak | Path project target untuk Kimi                    |
+| `--pretty`   | —     | Tidak | Pretty-print JSON output                          |
 
 ---
 
@@ -151,10 +154,10 @@ rm storage/cache.json
 
 ## Troubleshooting
 
-| Error | Penyebab | Solusi |
-|-------|----------|--------|
-| `command not found: kimi` | Kimi CLI tidak di PATH | Install Kimi CLI atau set `KIMI_COMMAND` |
-| Output Claude masih placeholder | `CLAUDE_COMMAND` kosong | Set `CLAUDE_COMMAND=claude` (atau path ke binary) |
-| Kimi baca project yang salah | `work_dir` tidak diset | Gunakan flag `-w /path/to/target` |
-| `TimeoutExpired` | Request terlalu lama | Naikkan `AI_PROXY_TIMEOUT_SECONDS` |
-| Output corrupt / JSON error | Encoding issue | Sudah ada PYTHONUTF8=1 di subprocess env; cek versi Kimi CLI |
+| Error                           | Penyebab                | Solusi                                                       |
+| ------------------------------- | ----------------------- | ------------------------------------------------------------ |
+| `command not found: kimi`       | Kimi CLI tidak di PATH  | Install Kimi CLI atau set `KIMI_COMMAND`                     |
+| Output Claude masih placeholder | `CLAUDE_COMMAND` kosong | Set `CLAUDE_COMMAND=claude` (atau path ke binary)            |
+| Kimi baca project yang salah    | `work_dir` tidak diset  | Gunakan flag `-w /path/to/target`                            |
+| `TimeoutExpired`                | Request terlalu lama    | Naikkan `AI_PROXY_TIMEOUT_SECONDS`                           |
+| Output corrupt / JSON error     | Encoding issue          | Sudah ada PYTHONUTF8=1 di subprocess env; cek versi Kimi CLI |

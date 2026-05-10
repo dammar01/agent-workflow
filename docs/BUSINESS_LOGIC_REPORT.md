@@ -1,18 +1,18 @@
-# Business Logic Report — ai-proxy v2
+# Business Logic Report — agent-workflow v2
 
 ## Tujuan
 
-`ai-proxy` v2 memusatkan workflow ke OpenCode. Proxy memberi lapisan session, cache, prompt template, config JSON, dan output cleanup di atas `opencode run`.
+`agent-workflow` v2 memusatkan workflow ke OpenCode. Proxy memberi lapisan session, cache, prompt template, config JSON, dan output cleanup di atas `opencode run`.
 
 ## Command Mapping
 
-| Command | Role |
-|---------|------|
-| `explore` | `exploration` |
-| `plan` | `reasoning` |
-| `analyze` | `reasoning` |
-| `execute` | `execution` |
-| `verify` | `verification` |
+| Command   | Role           |
+| --------- | -------------- |
+| `explore` | `exploration`  |
+| `plan`    | `reasoning`    |
+| `analyze` | `reasoning`    |
+| `execute` | `execution`    |
+| `verify`  | `verification` |
 
 Mapping ada di `config/opencode.json`.
 

@@ -1,1 +1,1 @@
-# ai-proxy — stdlib only, no third-party dependencies
+# agent-workflow — stdlib only, no third-party dependencies

@@ -1,4 +1,4 @@
-# Module Reference — ai-proxy v2
+# Module Reference — agent-workflow v2
 
 ## `main.py`
 

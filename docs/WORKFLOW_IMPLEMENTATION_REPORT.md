@@ -1,6 +1,6 @@
-# Laporan Implementasi: ai-proxy Workflow
+# Laporan Implementasi: agent-workflow Workflow
 
-**Project:** kiara-proxy (ai-proxy)  
+**Project:** kiara-proxy (agent-workflow)  
 **Tanggal:** 2026-05-09  
 **Status Codebase:** v2 OpenCode-only (2026-05-09)
 
@@ -12,11 +12,11 @@ Dokumen ini merekam evolusi sistem workflow engineering pribadi. Kondisi saat in
 
 Tiga versi utama:
 
-| Versi | Pendekatan                                                | File Utama                                       | Tanggal        |
-| ----- | --------------------------------------------------------- | ------------------------------------------------ | -------------- |
-| v0    | Single agent, graphify-first, no proxy                    | `WORKFLOW_V0.md`                                 | Pre-2026-04-28 |
-| v1    | Claude Code + Kimi via subprocess, session per project    | proxy code v0.1.0                                | 2026-05-06     |
-| v1.1  | Multi-layer env check, 1:1 session, background invocation | proxy code v0.2.0 + `CLAUDE_CODE_CONFIG_V1.1.md` | 2026-05-07     |
+| Versi | Pendekatan                                                | File Utama                                             | Tanggal        |
+| ----- | --------------------------------------------------------- | ------------------------------------------------------ | -------------- |
+| v0    | Single agent, graphify-first, no proxy                    | `WORKFLOW_V0.md`                                       | Pre-2026-04-28 |
+| v1    | Claude Code + Kimi via subprocess, session per project    | proxy code v0.1.0                                      | 2026-05-06     |
+| v1.1  | Multi-layer env check, 1:1 session, background invocation | proxy code v0.2.0 + `CLAUDE_CODE_CONFIG_V1.1.md`       | 2026-05-07     |
 | v2    | OpenCode-only, JSON config, session resume via `-s`       | `adapters/opencode_adapter.py`, `config/opencode.json` | 2026-05-09     |
 
 ---
@@ -264,7 +264,7 @@ Naik dari 120s (v0.1.0) ke 300s (v0.2.0) — menyesuaikan estimasi response Kimi
                        │ python $AI_PROXY -c <cmd> -p <prompt>
                        ▼
 ┌────────────────────────────────────────────────────┐
-│  PROXY (kiara-proxy / ai-proxy)                    │
+│  PROXY (kiara-proxy / agent-workflow)                    │
 │  main.py → SessionManager → Cache → Executor      │
 │            → Router → KimiAdapter / ClaudeAdapter  │
 └──────────────┬──────────────────────┬──────────────┘

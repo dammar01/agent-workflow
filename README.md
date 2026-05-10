@@ -1,10 +1,10 @@
-# ai-proxy v2
+# agent-workflow v2
 
 OpenCode-only proxy CLI untuk workflow personal.
 
 ## Ringkas
 
-`ai-proxy` menerima command workflow, membangun prompt terstruktur, menjalankan `opencode run`, menyimpan session OpenCode, membersihkan log, lalu mengembalikan JSON contract stabil.
+`agent-workflow` menerima command workflow, membangun prompt terstruktur, menjalankan `opencode run`, menyimpan session OpenCode, membersihkan log, lalu mengembalikan JSON contract stabil.
 
 Command utama:
 
