@@ -20,7 +20,170 @@ Sebelum mulai, output instruksi berikut:
     Workflow command opsional memakai prefix "/.":
       /.explore /.plan /.execute /.verify /.refactor /.analyze /.memory /.help
 
+    Default behavior yang dikonfigurasi:
+      - Output: caveman ultra (ultra-terse). Verbose hanya jika user request.
+      - Graphify: primary source default untuk codebase understanding.
+      - Context7: MCP tool untuk library/framework docs terkini.
+
     Prompt natural tetap valid. Skill dipakai saat cocok, bukan wajib untuk semua task.
+
+---
+
+## STEP 0 — Install & Configure Prerequisites
+
+Tiga komponen dikonfigurasi sebelum setup utama. Eksekusi berurutan. Stop di komponen pertama yang gagal fatal.
+
+---
+
+### 0A — Caveman (Plugin Install)
+
+Caveman adalah token-compression plugin untuk 30+ AI agents termasuk OpenCode.
+Source: https://github.com/JuliusBrussee/caveman
+Modes: `lite` | `full` | `ultra` | `wenyan`
+
+**Install via one-liner (auto-detects agent):**
+
+Windows PowerShell:
+```powershell
+irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.ps1 | iex
+```
+
+macOS/Linux/WSL:
+```bash
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/main/install.sh | bash
+```
+
+Setelah install, verifikasi dengan menjalankan `/caveman ultra` di session berikutnya.
+
+Jika install gagal → output warning dan lanjut (bukan fatal):
+```text
+[PREREQ 0A] Caveman → FAILED to install.
+Action: install manually dari https://github.com/JuliusBrussee/caveman
+Status: lanjut tanpa plugin, output style dikonfigurasi via AGENTS.md saja.
+```
+
+Jika berhasil:
+```text
+[PREREQ 0A] Caveman → installed. Aktifkan ultra mode: /caveman ultra
+```
+
+---
+
+### 0B — Graphify CLI
+
+**PENTING: PyPI package name adalah `graphifyy` (double-y). CLI command tetap `graphify`.**
+Source: https://github.com/safishamsi/graphify
+Requires: Python 3.10+
+
+Cek ketersediaan:
+```bash
+graphify --version
+```
+
+Jika tersedia → output:
+```text
+[PREREQ 0B] Graphify → found: <version>
+```
+
+Jika tidak tersedia → install. Pilih metode:
+
+```bash
+# Direkomendasikan (jika uv tersedia):
+uv tool install graphifyy && graphify install
+
+# Alternatif:
+pipx install graphifyy && graphify install
+
+# Fallback:
+pip install graphifyy && graphify install
+```
+
+Jika tidak ada Python runtime → output warning dan lanjut (bukan fatal):
+```text
+[PREREQ 0B] Graphify → NOT installed. Python/uv/pipx unavailable.
+Action: install manually → pip install graphifyy && graphify install
+Source: https://github.com/safishamsi/graphify
+Status: skipped, lanjut setup tanpa graphify.
+```
+
+Jika install berhasil → verifikasi `graphify --version` dan output:
+```text
+[PREREQ 0B] Graphify → installed: <version>
+```
+
+---
+
+### 0C — Context7 MCP
+
+Context7 dikonfigurasi sebagai MCP server di `~/.config/opencode/config.json`.
+
+**STEP 0C-1** — Cek file existing dan backup:
+
+- Jika `~/.config/opencode/config.json` ada → backup dulu, lalu baca isi dan lanjut ke merge:
+  ```bash
+  cp ~/.config/opencode/config.json ~/.config/opencode/config.json.bak
+  ```
+- Jika tidak ada → buat file baru dengan content minimal (skip backup).
+
+**STEP 0C-2** — Tambahkan atau merge entry Context7:
+
+Jika key `"mcp"` sudah ada di file → tambahkan `"context7"` ke dalam object `mcp` existing tanpa overwrite key lain.
+
+Jika key `"mcp"` belum ada → tambahkan object `"mcp"` baru ke root config.
+
+Entry yang ditambahkan:
+
+```json
+"context7": {
+  "type": "local",
+  "command": "npx",
+  "args": ["-y", "@upstash/context7-mcp@latest"]
+}
+```
+
+Contoh hasil file minimal jika sebelumnya kosong:
+
+```json
+{
+  "mcp": {
+    "context7": {
+      "type": "local",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp@latest"]
+    }
+  }
+}
+```
+
+**STEP 0C-3** — Validasi JSON setelah tulis. Jika JSON invalid → output error dan minta user fix manual:
+
+```text
+[PREREQ 0C] Context7 → FAILED: config.json tidak valid JSON setelah edit.
+Path: ~/.config/opencode/config.json
+Action: perbaiki manual, lalu jalankan ulang setup.
+STOP.
+```
+
+Jika valid → output:
+
+```text
+[PREREQ 0C] Context7 → configured in ~/.config/opencode/config.json
+```
+
+---
+
+### 0D — Prerequisites Summary
+
+Setelah 0A–0C selesai, output:
+
+```text
+[PREREQ SUMMARY]
+0A Caveman plugin : <installed — /caveman ultra | FAILED — install manually>
+0B Graphify CLI   : <found <ver> | installed <ver> | skipped — install manually>
+0C Context7 MCP   : <configured | FAILED>
+```
+
+Lanjut ke STEP 1 hanya jika 0C tidak FAILED.
 
 ---
 
@@ -64,24 +227,36 @@ Tulis ulang file dengan konten berikut:
 - Sertakan confidence + uncertainties untuk plan/analysis formal atau saat risk tinggi.
 - Boleh edit file saat user jelas meminta perubahan. Untuk aksi sensitif, wajib izin eksplisit.
 
-## Output Style
+## Output Style — Caveman Ultra (Default)
 
-- Gunakan caveman terse: drop articles, filler, pleasantries.
-- Fragments OK.
-- Technical terms exact.
-- Code blocks unchanged.
-- Satu kalimat per temuan jika memungkinkan.
+Powered by caveman plugin (github.com/JuliusBrussee/caveman). Mode: ultra.
+
+Aktifkan di awal session jika belum auto-active:
+```
+/caveman ultra
+```
+
+Switch mode jika perlu:
+- `/caveman lite` — professional tapi concise
+- `/caveman full` — default caveman
+- `/caveman ultra` — maximum compression (~65–75% token reduction)
+
+Saat ultra mode aktif: single fragment per item, drop filler, code as-is, error 1 line.
+Confidence block + uncertainties: hanya jika plan/analysis formal atau user eksplisit minta.
+
+Jika user minta verbose/detail: switch ke `/caveman lite`, lalu balik `/caveman ultra` setelah selesai.
 
 ## Startup Protocol
 
 Setiap session untuk code task:
 
-1. Gunakan konteks repo langsung jika task sederhana atau user memakai prompt natural.
-2. Cek `graphify-out/` saat task eksplorasi/analisis besar, arsitektur, atau flow kompleks.
-3. Jika ada → pakai sebagai evidence tambahan, bukan satu-satunya sumber wajib.
-4. Jika tidak ada → lanjut dengan file/search fallback, kecuali user eksplisit meminta graphify-first.
-5. Baca `~/.config/opencode/memory/PERSONAL_MEMORY.md` jika relevan dan tidak kosong.
-6. Generate `[SESSION_ID]` hanya saat command workflow formal pertama dipakai: `<project>-<YYYYMMDD_HHMMss>`.
+1. Aktifkan caveman ultra jika belum auto-active: `/caveman ultra`.
+2. Cek `graphify-out/` di project root — default primary source untuk codebase understanding.
+3. Jika ada → pakai sebagai primary evidence. Supplement dengan direct file read jika perlu.
+4. Jika tidak ada → jalankan Graphify Missing Protocol untuk task eksplorasi/analisis; untuk task sederhana lanjut file/search langsung.
+5. Gunakan Context7 MCP saat butuh dokumentasi library/framework terkini sebelum menjawab pertanyaan API.
+6. Baca `~/.config/opencode/memory/PERSONAL_MEMORY.md` jika relevan dan tidak kosong.
+7. Generate `[SESSION_ID]` hanya saat command workflow formal pertama dipakai: `<project>-<YYYYMMDD_HHMMss>`.
 
 ## Command Registry V2
 
@@ -125,6 +300,7 @@ Jangan pakai pesan invalid untuk prompt natural tanpa slash.
 - implement → `/.execute -y`
 - rapikan → `/.refactor`
 - catat → `/.memory`
+- docs library / versi terbaru → Context7 MCP
 - help → `/.help`
 
 Jangan suggest `/` commands tanpa titik. Boleh suggest prompt natural atau `/.` command.
@@ -458,11 +634,25 @@ Untuk jawaban cepat, bug kecil, atau task sederhana, format ini opsional.
 
 ## Graphify Rules
 
-- `graphify-out/` adalah source prioritas saat tersedia dan relevan untuk exploration/analysis besar.
+`graphify-out/` adalah default primary source untuk codebase understanding. Selalu cek lebih dulu.
+
+### Default Behavior
+
+- Setiap task eksplorasi, analisis, atau planning → cek `graphify-out/` pertama.
+- Baca `graphify-out/GRAPH_REPORT.md` untuk summary; `graphify-out/graph.json` untuk detail node/edge.
+- Supplement dengan direct file read hanya jika graph data tidak cukup spesifik.
+- Jika tidak ada → jalankan Graphify Missing Protocol untuk task eksplorasi/analisis; fallback file/search untuk task sederhana.
+
+### Official Commands
+
+- `graphify update` — build/refresh graph. Wajib permission gate sebelum run.
 - NEVER run: `graphify init`, `graphify build`, `graphify watch`.
-- Jangan auto-run `graphify update` kecuali user meminta atau perubahan butuh update graph.
-- Error mengandung `too large for HTML viz` atau `Graph has too many nodes` → IGNORE, jangan retry.
-- Error lain → retry once, jika tetap gagal → inform singkat, lanjut tanpa blocking.
+- Jangan auto-run `graphify update` kecuali user meminta atau task butuh fresh graph.
+
+### Error Handling
+
+- `too large for HTML viz` / `Graph has too many nodes` → IGNORE viz error, tetap baca JSON data.
+- Error lain → retry once. Masih gagal → inform 1 line, lanjut tanpa graph.
 
 ## Graphify Missing Protocol
 
@@ -489,6 +679,35 @@ graphify update
 ```
 
 4. STOP hanya untuk mode graphify-first eksplisit. Untuk task biasa, lanjut dengan fallback search/read.
+
+## Context7
+
+MCP tool untuk dokumentasi library/framework terkini. Default: gunakan sebelum menjawab pertanyaan API/method jika versi mungkin berbeda dari training knowledge.
+
+### When to Use
+
+- User tanya API, method, config, atau signature library spesifik.
+- Perlu verifikasi penggunaan library yang benar — terutama library yang sering update.
+- Contoh: React hooks, Next.js routing, FastAPI dependencies, Laravel Eloquent, dll.
+
+### MCP Tools
+
+- `resolve-library-id` — resolve nama library ke Context7 library ID.
+- `get-library-docs` — ambil docs untuk library ID + topic spesifik.
+
+### Usage Pattern
+
+```text
+1. resolve-library-id: "<library-name>"
+2. get-library-docs: library_id=<id>, topic="<topic>", tokens=<budget>
+```
+
+### Rules
+
+- Gunakan Context7 SEBELUM menjawab jika tidak yakin apakah API/method sudah berubah.
+- Jangan hallucinate method/signature — cek Context7 dulu untuk library yang aktif berkembang.
+- Context7 unavailable (MCP off / error) → inform 1 line, lanjut dari training knowledge.
+- Jangan block task untuk Context7 — always fallback ke knowledge jika MCP unavailable.
 
 ## Execution Safety
 
@@ -559,6 +778,8 @@ Jika user sudah memberi instruksi eksplisit untuk aksi sensitif di pesan yang sa
 - Run `graphify init`, `graphify build`, `graphify watch`.
 - Claim success sebelum verify selesai.
 - Jalankan aksi sensitif tanpa permission gate.
+- Output verbose/bertele-tele secara default — caveman ultra selalu aktif kecuali user minta detail.
+- Jawab pertanyaan API library spesifik dengan hallucinated signature tanpa cek Context7 terlebih dahulu.
 
 ````
 
@@ -957,10 +1178,14 @@ Commands adalah shortcut opsional. Prompt natural tetap didukung.
 ```text
 [COMMAND GUIDE — OPENCODE GLOBAL WORKFLOW V2]
 
+Output default: caveman ultra — single fragment per item, no filler.
+Graphify: default primary source untuk codebase understanding.
+Context7: default MCP untuk library/framework docs terkini.
+
 Natural prompts are valid. Use commands only when you want structured workflow.
 
 /.explore <hint>
-→ explore codebase via graphify-first flow
+→ explore codebase, graphify-first by default
 
 /.plan <task>
 → structured plan, decision gate, no auto-execute
@@ -985,6 +1210,7 @@ Natural prompts are valid. Use commands only when you want structured workflow.
 
 Workflow for large/risky tasks: /.explore -> /.plan -> /.execute -y -> /.verify
 Prefix "/." wajib only for workflow commands. Natural prompts need no prefix.
+Verbose mode: balas "verbose" atau "detail" untuk full explanation sesi itu saja.
 ````
 
 ````
@@ -1140,17 +1366,22 @@ Baca isi saat ini. Tambah entry berikut jika belum ada. Jangan duplikasi.
 
 Setelah semua file dibuat:
 
-1. List `~/.config/opencode/`.
-2. List `~/.config/opencode/skills/`.
-3. List `~/.config/opencode/commands/`.
-4. List `~/.config/opencode/memory/`.
-5. Tampilkan ukuran byte file penting:
+1. Konfirmasi prerequisites dari STEP 0:
+   - Caveman Ultra: `AGENTS.md` mengandung `Caveman Ultra (Default)`.
+   - Graphify: `graphify --version` tersedia atau sudah dicatat sebagai skipped.
+   - Context7: `~/.config/opencode/config.json` mengandung key `"context7"`.
+2. List `~/.config/opencode/`.
+3. List `~/.config/opencode/skills/`.
+4. List `~/.config/opencode/commands/`.
+5. List `~/.config/opencode/memory/`.
+6. Tampilkan ukuran byte file penting:
    - `AGENTS.md`
+   - `config.json`
    - semua skill files
    - semua command files
    - memory index
-6. Konfirmasi `AGENTS.md` mengandung `Command Registry V2`.
-7. Konfirmasi command files mengandung frontmatter `description`.
+7. Konfirmasi `AGENTS.md` mengandung `Command Registry V2`.
+8. Konfirmasi command files mengandung frontmatter `description`.
 
 ---
 
@@ -1161,8 +1392,14 @@ Tampilkan PERSIS:
 ```text
 [SETUP COMPLETE — OPENCODE GLOBAL WORKFLOW V2]
 
+Prerequisites:
+  Caveman plugin → <installed — activate: /caveman ultra | FAILED — install manually>
+  Graphify CLI   → <found <ver> | installed <ver> | skipped — install manually>
+  Context7 MCP   → ~/.config/opencode/config.json ✓
+
 Config:
-  ~/.config/opencode/AGENTS.md ✓
+  ~/.config/opencode/AGENTS.md      ✓
+  ~/.config/opencode/config.json    ✓
 
 Skills:
   ~/.config/opencode/skills/explore.md  ✓
@@ -1193,4 +1430,7 @@ Status: READY
 Workflow: /.explore -> /.plan -> /.execute -y -> /.verify
 Invalid slash commands: /explore /plan /execute /verify /analyze — REJECTED
 Natural prompts: VALID
+Output default: CAVEMAN ULTRA (verbose on user request only)
+Graphify: PRIMARY SOURCE (default setiap session)
+Context7: MCP DOCS TOOL (aktif untuk library/framework queries)
 ```
