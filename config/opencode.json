@@ -5,19 +5,19 @@
   "routes": {
     "explore": {
       "role": "exploration",
-      "model": null
+      "model": "9router-sabang/kimi-k26"
     },
     "plan": {
       "role": "reasoning",
-      "model": null
+      "model": "9router-sabang/kimi-k26"
     },
     "analyze": {
       "role": "reasoning",
-      "model": null
+      "model": "9router-sabang/kimi-k26"
     },
     "execute": {
       "role": "execution",
-      "model": null
+      "model": "9router-sabang/kimi-k26"
     },
     "verify": {
       "role": "verification",

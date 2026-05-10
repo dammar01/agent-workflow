@@ -469,26 +469,82 @@ result = subprocess.run(args, capture_output=True, text=True)
 
 ### Command Mapping
 
-| Workflow Command | `-c` arg ke AGENT_PATH |
-| ---------------- | ---------------------- |
-| `/.explore`      | `explore`              |
-| `/.plan`         | `plan`                 |
-| `/.analyze`      | `analyze`              |
-| `/.execute -y`   | `execute`              |
-| `/.verify`       | `verify`               |
+| Workflow Command | `-c` arg  | Response Type |
+| ---------------- | --------- | ------------- |
+| `/.explore`      | `explore` | evidence      |
+| `/.plan`         | `plan`    | evidence      |
+| `/.analyze`      | `analyze` | evidence      |
+| `/.execute -y`   | `execute` | action        |
+| `/.verify`       | `verify`  | action        |
 
 ### Contoh Invocation
+
+Model otomatis dibaca dari `config/opencode.json` per-route. Tidak perlu pass `-m` kecuali ingin override ad-hoc.
 
 ```powershell
 python $env:AGENT_PATH -c explore -p "cari entry point auth" -s "finance-auth" -w "E:\Work\project\target-app" --pretty
 python $env:AGENT_PATH -c analyze -p "cek logic auth" -s "finance-auth" --pretty
+python $env:AGENT_PATH -c plan -p "buat fitur payment" -s "finance" --pretty
 ```
 
-Override model:
+Override model (deviasi dari `config/opencode.json`):
 
 ```powershell
 python $env:AGENT_PATH -c plan -p "buat fitur payment" -s "finance" -m "anthropic/claude-sonnet-4-5" --pretty
 ```
+
+### Response Format
+
+Contract JSON yang dikembalikan agent-workflow:
+
+| Field | Type | Value |
+| ----- | ---- | ----- |
+| `status` | string | `success` \| `error` |
+| `content` | string | Response content |
+| `role` | string | Role yang dieksekusi |
+| `model` | string \| null | Model yang dipakai |
+| `session_id` | string | Main session ID |
+| `opencode_session_id` | string \| null | OpenCode session ID — simpan dan pass ke call berikutnya |
+| `confidence` | string | `low` \| `medium` \| `high` |
+
+**Evidence commands** (`explore`, `plan`, `analyze`) menginstruksikan workflow agent untuk mengumpulkan evidence tanpa reasoning. `content` berformat:
+
+Untuk `explore`:
+
+```text
+[EVIDENCE]
+confidence: low | medium | high
+
+entry_points:
+- <list>
+
+related_modules:
+- <list>
+
+ownership_hints:
+- <list>
+
+uncertainties:
+- <list>
+```
+
+Untuk `plan` / `analyze`:
+
+```text
+[EVIDENCE]
+confidence: low | medium | high
+
+findings:
+- <list>
+
+implications:
+- <list>
+
+uncertainties:
+- <list>
+```
+
+**Action commands** (`execute`, `verify`) — `content` free-form sesuai hasil eksekusi/verifikasi.
 
 ### Multi-Layer Check
 

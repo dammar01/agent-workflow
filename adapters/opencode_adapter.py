@@ -14,28 +14,41 @@ class OpenCodeAdapter:
         self.command = command
         self.timeout_seconds = timeout_seconds
 
-    def run(self, prompt: str, session: dict, model: str | None = None) -> dict:
+    def init_session(self, model: str | None = None) -> tuple[str | None, dict]:
+        """Bootstrap new opencode session. Returns (session_id, bootstrap_meta)."""
         command = self._resolve_command()
+        args = [command, "run", "Initialize session. Reply READY.", "--print-logs", "--log-level", "INFO"]
+        if model:
+            args.extend(["-m", model])
+        result = self._run_args(args)
+        return result["meta"].get("opencode_session_id"), result["meta"]
+
+    def run_agent(self, prompt: str, session_id: str, model: str | None = None) -> dict:
+        """Spawn workflow agent in existing session."""
+        command = self._resolve_command()
+        args = [command, "run", prompt]
+        if model:
+            args.extend(["-m", model])
+        args.extend(["-s", session_id])
+        return self._run_args(args)
+
+    def run(self, prompt: str, session: dict, model: str | None = None) -> dict:
         opencode_session_id = session.get("opencode_session_id")
         bootstrap_meta = None
 
         if not opencode_session_id:
-            bootstrap = self._run_args(
-                [command, "run", "Initialize session. Reply READY.", "--print-logs", "--log-level", "INFO"]
-            )
-            bootstrap_meta = bootstrap["meta"]
-            opencode_session_id = bootstrap_meta.get("opencode_session_id")
-
-        args = [command, "run", prompt]
-        if model:
-            args.extend(["-m", model])
+            opencode_session_id, bootstrap_meta = self.init_session(model)
 
         if opencode_session_id:
-            args.extend(["-s", opencode_session_id])
+            result = self.run_agent(prompt, opencode_session_id, model)
         else:
+            command = self._resolve_command()
+            args = [command, "run", prompt]
+            if model:
+                args.extend(["-m", model])
             args.extend(["--print-logs", "--log-level", "INFO"])
+            result = self._run_args(args)
 
-        result = self._run_args(args)
         if bootstrap_meta is not None:
             result["meta"]["bootstrap"] = bootstrap_meta
             result["meta"]["opencode_session_id"] = result["meta"].get("opencode_session_id") or opencode_session_id

@@ -6,152 +6,15 @@ Update konfigurasi global OpenCode yang sudah ada. Ini adalah delta update. Jang
 
 Sebelum mulai, output:
 
-    [OPENCODE CONFIG UPDATE — V2 DELTA]
-    Target: ~/.config/opencode/AGENTS.md + config.json
+    [OPENCODE CONFIG UPDATE — AGENT-WORKFLOW DELTA]
+    Target: ~/.config/opencode/AGENTS.md
 
     Perubahan yang akan diterapkan:
-      0. Install prerequisites: Caveman plugin + Graphify CLI + Context7 MCP
-      1. Output style → Caveman Ultra sebagai default
-      2. Graphify → primary source default (bukan opsional)
-      3. Context7 → MCP tool untuk library/framework docs
-      4. Startup Protocol → diupdate untuk graphify + context7
-      5. Global Forbidden → tambah 2 rule baru
+      1. Command Mapping → tambah kolom Response Type (evidence / action)
+      2. Contoh Invocation → klarifikasi model dari config/opencode.json, bukan dari -m
+      3. Response Format → tambah section baru (contract JSON + format evidence/action)
 
-    File lain (skills/, commands/, memory/) TIDAK disentuh.
-
----
-
-## STEP 0 — Install & Configure Prerequisites
-
-### 0A — Caveman (Plugin Install)
-
-Caveman adalah token-compression plugin untuk 30+ AI agents termasuk OpenCode.
-Source: https://github.com/JuliusBrussee/caveman
-Modes: `lite` | `full` | `ultra` | `wenyan`
-
-**Install untuk OpenCode:**
-
-```bash
-npx skills add JuliusBrussee/caveman -a opencode
-```
-
-Setelah install, verifikasi dengan menjalankan `/caveman ultra` di session berikutnya.
-
-Jika install gagal → output warning dan lanjut (bukan fatal):
-```text
-[PREREQ 0A] Caveman → FAILED to install.
-Action: install manually dari https://github.com/JuliusBrussee/caveman
-Status: lanjut tanpa plugin, output style dikonfigurasi via AGENTS.md saja.
-```
-
-Jika berhasil:
-```text
-[PREREQ 0A] Caveman → installed. Aktifkan ultra mode: /caveman ultra
-```
-
-### 0B — Graphify CLI
-
-**PENTING: PyPI package name adalah `graphifyy` (double-y). CLI command tetap `graphify`.**
-Source: https://github.com/safishamsi/graphify
-Requires: Python 3.10+
-
-Cek ketersediaan:
-```bash
-graphify --version
-```
-
-Jika tersedia → output:
-```text
-[PREREQ 0B] Graphify → found: <version>
-```
-
-Jika tidak tersedia → install. Pilih metode:
-```bash
-# Direkomendasikan (jika uv tersedia):
-uv tool install graphifyy && graphify install
-
-# Alternatif:
-pipx install graphifyy && graphify install
-
-# Fallback:
-pip install graphifyy && graphify install
-```
-
-Jika tidak ada Python runtime → output warning dan lanjut (bukan fatal):
-```text
-[PREREQ 0B] Graphify → NOT installed. Python/uv/pipx unavailable.
-Action: install manually → pip install graphifyy && graphify install
-Source: https://github.com/safishamsi/graphify
-Status: skipped, lanjut update tanpa graphify.
-```
-
-Jika install berhasil → verifikasi `graphify --version` dan output:
-```text
-[PREREQ 0B] Graphify → installed: <version>
-```
-
-### 0C — Context7 MCP
-
-Buat atau update `~/.config/opencode/config.json`.
-
-**Cek file existing dan backup:**
-- Jika ada → backup dulu, lalu baca isi dan lanjut ke merge:
-  ```bash
-  cp ~/.config/opencode/config.json ~/.config/opencode/config.json.bak
-  ```
-- Jika tidak ada → buat file baru dengan content minimal (skip backup).
-
-**Tambahkan atau merge entry Context7:**
-
-Jika key `"mcp"` sudah ada → tambahkan `"context7"` ke dalam object `mcp` existing tanpa overwrite key lain.
-
-Jika key `"mcp"` belum ada → tambahkan object `"mcp"` baru ke root config.
-
-Entry yang ditambahkan:
-```json
-"context7": {
-  "type": "local",
-  "command": "npx",
-  "args": ["-y", "@upstash/context7-mcp@latest"]
-}
-```
-
-Contoh file minimal jika sebelumnya kosong:
-```json
-{
-  "mcp": {
-    "context7": {
-      "type": "local",
-      "command": "npx",
-      "args": ["-y", "@upstash/context7-mcp@latest"]
-    }
-  }
-}
-```
-
-Validasi JSON setelah tulis. Jika invalid:
-```text
-[PREREQ 0C] Context7 → FAILED: config.json tidak valid JSON setelah edit.
-Path: ~/.config/opencode/config.json
-Action: perbaiki manual, lalu jalankan ulang update ini.
-STOP.
-```
-
-Jika valid:
-```text
-[PREREQ 0C] Context7 → configured in ~/.config/opencode/config.json
-```
-
-### 0D — Prerequisites Summary
-
-```text
-[PREREQ SUMMARY]
-0A Caveman plugin : <installed — /caveman ultra | FAILED — install manually>
-0B Graphify CLI   : <found <ver> | installed <ver> | skipped — install manually>
-0C Context7 MCP   : <configured | FAILED>
-```
-
-Lanjut ke STEP 1 hanya jika 0C tidak FAILED.
+    File lain (skills/ commands/ memory/) TIDAK disentuh.
 
 ---
 
@@ -163,199 +26,145 @@ Jika tidak ada:
 ```text
 [UPDATE FAILED]
 ~/.config/opencode/AGENTS.md tidak ditemukan.
-Jalankan setup awal terlebih dahulu, lalu ulangi update ini.
+Jalankan setup awal terlebih dahulu menggunakan OPENCODE_GLOBAL_CONFIG_V2.md, lalu ulangi update ini.
 STOP.
 ```
 
 ---
 
-## STEP 2 — Update: Output Style
+## STEP 2 — Update: Command Mapping
 
-Cari section `## Output Style` di AGENTS.md.
+Cari section `### Command Mapping` di dalam `## Agent-Workflow Invocation via Env Variable`.
 
-**Ganti seluruh section ini** (dari `## Output Style` sampai sebelum `## Startup Protocol`) dengan:
+**Ganti seluruh tabel** dengan:
 
 ```markdown
-## Output Style — Caveman Ultra (Default)
-
-Powered by caveman plugin (github.com/JuliusBrussee/caveman). Mode: ultra.
-
-Aktifkan di awal session jika belum auto-active:
-/caveman ultra
-
-Switch mode jika perlu:
-- /caveman lite  — professional tapi concise
-- /caveman full  — default caveman
-- /caveman ultra — maximum compression (~65–75% token reduction)
-
-Saat ultra mode aktif: single fragment per item, drop filler, code as-is, error 1 line.
-Confidence block + uncertainties: hanya jika plan/analysis formal atau user eksplisit minta.
-
-Jika user minta verbose/detail: switch ke /caveman lite, lalu balik /caveman ultra setelah selesai.
+| Workflow Command | `-c` arg  | Response Type |
+| ---------------- | --------- | ------------- |
+| `/.explore`      | `explore` | evidence      |
+| `/.plan`         | `plan`    | evidence      |
+| `/.analyze`      | `analyze` | evidence      |
+| `/.execute -y`   | `execute` | action        |
+| `/.verify`       | `verify`  | action        |
 ```
 
 ---
 
-## STEP 3 — Update: Startup Protocol
+## STEP 3 — Update: Contoh Invocation
 
-Cari section `## Startup Protocol` di AGENTS.md.
+Cari section `### Contoh Invocation` di dalam `## Agent-Workflow Invocation via Env Variable`.
 
-**Ganti isi numbered list** (poin 1–7) dengan:
+**Ganti seluruh section ini** (dari `### Contoh Invocation` sampai sebelum `### Multi-Layer Check`) dengan:
 
 ```markdown
-1. Aktifkan caveman ultra jika belum auto-active: /caveman ultra.
-2. Cek `graphify-out/` di project root — default primary source untuk codebase understanding.
-3. Jika ada → pakai sebagai primary evidence. Supplement dengan direct file read jika perlu.
-4. Jika tidak ada → jalankan Graphify Missing Protocol untuk task eksplorasi/analisis; untuk task sederhana lanjut file/search langsung.
-5. Gunakan Context7 MCP saat butuh dokumentasi library/framework terkini sebelum menjawab pertanyaan API.
-6. Baca `~/.config/opencode/memory/PERSONAL_MEMORY.md` jika relevan dan tidak kosong.
-7. Generate `[SESSION_ID]` hanya saat command workflow formal pertama dipakai: `<project>-<YYYYMMDD_HHMMss>`.
+### Contoh Invocation
+
+Model otomatis dibaca dari `config/opencode.json` per-route. Tidak perlu pass `-m` kecuali ingin override ad-hoc.
+
+```powershell
+python $env:AGENT_PATH -c explore -p "cari entry point auth" -s "finance-auth" -w "E:\Work\project\target-app" --pretty
+python $env:AGENT_PATH -c analyze -p "cek logic auth" -s "finance-auth" --pretty
+python $env:AGENT_PATH -c plan -p "buat fitur payment" -s "finance" --pretty
+```
+
+Override model (deviasi dari `config/opencode.json`):
+
+```powershell
+python $env:AGENT_PATH -c plan -p "buat fitur payment" -s "finance" -m "anthropic/claude-sonnet-4-5" --pretty
+```
 ```
 
 ---
 
-## STEP 4 — Update: Graphify Rules
+## STEP 4 — Tambah: Response Format
 
-Cari section `## Graphify Rules` di AGENTS.md.
+Cari section `### Multi-Layer Check` di dalam `## Agent-Workflow Invocation via Env Variable`.
 
-**Ganti seluruh section ini** (dari `## Graphify Rules` sampai sebelum `## Graphify Missing Protocol`) dengan:
-
-```markdown
-## Graphify Rules
-
-`graphify-out/` adalah default primary source untuk codebase understanding. Selalu cek lebih dulu.
-
-### Default Behavior
-
-- Setiap task eksplorasi, analisis, atau planning → cek `graphify-out/` pertama.
-- Baca `graphify-out/GRAPH_REPORT.md` untuk summary; `graphify-out/graph.json` untuk detail node/edge.
-- Supplement dengan direct file read hanya jika graph data tidak cukup spesifik.
-- Jika tidak ada → jalankan Graphify Missing Protocol untuk task eksplorasi/analisis; fallback file/search untuk task sederhana.
-
-### Official Commands
-
-- `graphify update` — build/refresh graph. Wajib permission gate sebelum run.
-- NEVER run: `graphify init`, `graphify build`, `graphify watch`.
-- Jangan auto-run `graphify update` kecuali user meminta atau task butuh fresh graph.
-
-### Error Handling
-
-- `too large for HTML viz` / `Graph has too many nodes` → IGNORE viz error, tetap baca JSON data.
-- Error lain → retry once. Masih gagal → inform 1 line, lanjut tanpa graph.
-```
-
----
-
-## STEP 5 — Tambah: Context7 section
-
-Cari section `## Execution Safety` di AGENTS.md.
-
-**Sisipkan section berikut TEPAT SEBELUM `## Execution Safety`:**
+**Sisipkan section berikut TEPAT SEBELUM `### Multi-Layer Check`:**
 
 ```markdown
-## Context7
+### Response Format
 
-MCP tool untuk dokumentasi library/framework terkini. Default: gunakan sebelum menjawab pertanyaan API/method jika versi mungkin berbeda dari training knowledge.
+Contract JSON yang dikembalikan agent-workflow:
 
-### When to Use
+| Field | Type | Value |
+| ----- | ---- | ----- |
+| `status` | string | `success` \| `error` |
+| `content` | string | Response content |
+| `role` | string | Role yang dieksekusi |
+| `model` | string \| null | Model yang dipakai |
+| `session_id` | string | Main session ID |
+| `opencode_session_id` | string \| null | OpenCode session ID — simpan dan pass ke call berikutnya |
+| `confidence` | string | `low` \| `medium` \| `high` |
 
-- User tanya API, method, config, atau signature library spesifik.
-- Perlu verifikasi penggunaan library yang benar — terutama library yang sering update.
-- Contoh: React hooks, Next.js routing, FastAPI dependencies, Laravel Eloquent, dll.
+**Evidence commands** (`explore`, `plan`, `analyze`) menginstruksikan workflow agent untuk mengumpulkan evidence tanpa reasoning. `content` berformat:
 
-### MCP Tools
-
-- `resolve-library-id` — resolve nama library ke Context7 library ID.
-- `get-library-docs` — ambil docs untuk library ID + topic spesifik.
-
-### Usage Pattern
+Untuk `explore`:
 
 ```text
-1. resolve-library-id: "<library-name>"
-2. get-library-docs: library_id=<id>, topic="<topic>", tokens=<budget>
+[EVIDENCE]
+confidence: low | medium | high
+
+entry_points:
+- <list>
+
+related_modules:
+- <list>
+
+ownership_hints:
+- <list>
+
+uncertainties:
+- <list>
 ```
 
-### Rules
+Untuk `plan` / `analyze`:
 
-- Gunakan Context7 SEBELUM menjawab jika tidak yakin apakah API/method sudah berubah.
-- Jangan hallucinate method/signature — cek Context7 dulu untuk library yang aktif berkembang.
-- Context7 unavailable (MCP off / error) → inform 1 line, lanjut dari training knowledge.
-- Jangan block task untuk Context7 — always fallback ke knowledge jika MCP unavailable.
+```text
+[EVIDENCE]
+confidence: low | medium | high
+
+findings:
+- <list>
+
+implications:
+- <list>
+
+uncertainties:
+- <list>
+```
+
+**Action commands** (`execute`, `verify`) — `content` free-form sesuai hasil eksekusi/verifikasi.
 ```
 
 ---
 
-## STEP 6 — Update: NL Map
+## STEP 5 — Verifikasi
 
-Cari section `## NL Map` di AGENTS.md.
-
-**Tambahkan 1 baris baru** sebelum `- help → \`/.help\``:
-
-```markdown
-- docs library / versi terbaru → Context7 MCP
-```
+1. Baca kembali `~/.config/opencode/AGENTS.md`.
+2. Konfirmasi:
+   - `### Command Mapping` memiliki kolom `Response Type`
+   - `### Contoh Invocation` mengandung kalimat "Model otomatis dibaca dari `config/opencode.json`"
+   - `### Response Format` ada di antara `### Contoh Invocation` dan `### Multi-Layer Check`
 
 ---
 
-## STEP 7 — Update: Global Forbidden
-
-Cari section `## Global Forbidden` di AGENTS.md.
-
-**Tambahkan 2 baris baru** di akhir list:
-
-```markdown
-- Output verbose/bertele-tele secara default — caveman ultra selalu aktif kecuali user minta detail.
-- Jawab pertanyaan API library spesifik dengan hallucinated signature tanpa cek Context7 terlebih dahulu.
-```
-
----
-
-## STEP 8 — Verifikasi
-
-1. Konfirmasi prerequisites:
-   - `~/.config/opencode/config.json` mengandung key `"context7"` → valid JSON.
-   - `graphify --version` tersedia atau sudah dicatat sebagai skipped.
-2. Baca kembali `~/.config/opencode/AGENTS.md`.
-3. Konfirmasi section berikut ada dan sudah diupdate:
-   - `## Output Style — Caveman Ultra (Default)`
-   - Startup Protocol poin 1 menyebut `/caveman ultra`
-   - Startup Protocol poin 2 menyebut `graphify-out/` sebagai "default primary source"
-   - Startup Protocol poin 5 menyebut Context7
-   - `## Graphify Rules` memiliki subsection `### Default Behavior`, `### Official Commands`, `### Error Handling`
-   - `## Context7` ada sebelum `## Execution Safety`
-   - `## NL Map` memiliki entry Context7
-   - `## Global Forbidden` memiliki 2 rule baru
-
----
-
-## STEP 9 — Final Report
+## STEP 6 — Final Report
 
 Tampilkan PERSIS:
 
 ```text
-[CONFIG UPDATE COMPLETE — OPENCODE GLOBAL WORKFLOW V2]
-
-Prerequisites installed:
-  Caveman plugin : <installed — /caveman ultra | FAILED — install manually>
-  Graphify CLI   : <found <ver> | installed <ver> | skipped — install manually>
-  Context7 MCP   : ~/.config/opencode/config.json ✓
+[CONFIG UPDATE COMPLETE — AGENT-WORKFLOW DELTA]
 
 Files updated:
-  ~/.config/opencode/AGENTS.md      ✓
-  ~/.config/opencode/config.json    ✓
+  ~/.config/opencode/AGENTS.md ✓
 
-Changes applied to AGENTS.md:
-  Output Style    → Caveman Ultra default ✓
-  Startup Protocol → graphify primary + Context7 step ✓
-  Graphify Rules  → promoted to default primary source ✓
-  Context7        → new section added ✓
-  NL Map          → Context7 entry added ✓
-  Global Forbidden → 2 new rules added ✓
+Changes applied:
+  Command Mapping  → Response Type column added ✓
+  Contoh Invocation → model auto dari config/opencode.json ✓
+  Response Format  → new section added ✓
 
 Files NOT touched: skills/ commands/ memory/
 
 Status: READY
-Output default: CAVEMAN ULTRA (verbose on user request only)
-Graphify: PRIMARY SOURCE (default setiap session)
-Context7: MCP DOCS TOOL (aktif untuk library/framework queries)
 ```
