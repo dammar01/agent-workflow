@@ -1,5 +1,6 @@
-Lakukan setup Personal Workflow Skills V0.3 secara lengkap.
+Lakukan setup Personal Workflow Skills V1.0 secara lengkap.
 Ikuti setiap step secara berurutan. Jangan skip. Jangan tanya — langsung eksekusi.
+Setelah setup selesai: aktifkan Caveman Ultra mode secara permanen untuk sesi ini.
 
 ---
 
@@ -8,41 +9,76 @@ Ikuti setiap step secara berurutan. Jangan skip. Jangan tanya — langsung eksek
 Deteksi agent yang sedang menjalankan dokumen ini berdasarkan sinyal yang tersedia.
 Jalankan pengecekan secara berurutan — stop di sinyal pertama yang valid.
 
-| Prioritas | Sinyal | Agent | AGENT_DIR | CONFIG_FILE |
-|-----------|--------|-------|-----------|-------------|
-| 1 | ~/.claude/ exists | Claude Code | ~/.claude/ | CLAUDE.md |
-| 2 | ~/.codex/ exists ATAU env CODEX_* set | Codex | ~/.codex/ | AGENTS.md |
-| 3 | ~/.cursor/ exists | Cursor | ~/.cursor/ | rules/workflow-skills.md |
-| 4 | ~/.windsurf/ exists | Windsurf | ~/.windsurf/ | rules/workflow-skills.md |
-| 5 | ~/.gemini/ exists | Gemini CLI | ~/.gemini/ | GEMINI.md |
-| 6 | ~/.github-copilot/ exists | GitHub Copilot | ~/.github-copilot/ | instructions.md |
-| 7 | ~/.cody/ exists | Cody | ~/.cody/ | WORKFLOW.md |
-| 8 | Tidak ada sinyal | Unknown | ~/.workflow/ | WORKFLOW.md |
+| Prioritas | Sinyal                                  | Agent          | AGENT_DIR           | CONFIG_FILE              |
+| --------- | --------------------------------------- | -------------- | ------------------- | ------------------------ |
+| 1         | ~/.claude/ exists                       | Claude Code    | ~/.claude/          | CLAUDE.md                |
+| 2         | ~/.codex/ exists ATAU env CODEX\_\* set | Codex          | ~/.codex/           | AGENTS.md                |
+| 3         | ~/.cursor/ exists                       | Cursor         | ~/.cursor/          | rules/workflow-skills.md |
+| 4         | ~/.windsurf/ exists                     | Windsurf       | ~/.windsurf/        | rules/workflow-skills.md |
+| 5         | ~/.gemini/ exists                       | Gemini CLI     | ~/.gemini/          | GEMINI.md                |
+| 6         | ~/.github-copilot/ exists               | GitHub Copilot | ~/.github-copilot/  | instructions.md          |
+| 7         | ~/.config/opencode/ exists              | Opencode       | ~/.config/opencode/ | AGENTS.md                |
+| 8         | Tidak ada sinyal                        | Unknown        | ~/.workflow/        | WORKFLOW.md              |
 
 Output SEBELUM lanjut:
 
     [AGENT DETECTED]
     agent:       <nama agent>
-    AGENT_DIR:   <path absolut>
-    CONFIG_FILE: <AGENT_DIR/CONFIG_FILE>
+    AGENT_DIR:   <path absolut — nilai eksak, bukan placeholder>
+    CONFIG_FILE: <AGENT_DIR/CONFIG_FILE — nilai eksak>
     confidence:  high | medium | low
+
+PENTING: Semua referensi {AGENT_DIR} dan {CONFIG_FILE} di seluruh dokumen ini
+HARUS di-resolve ke nilai nyata sebelum ditulis ke file manapun.
+Jangan pernah tulis literal "{AGENT_DIR}" ke dalam file — selalu substitusi dulu.
 
 Jika confidence = low (Unknown fallback):
 → Output: "Agent tidak terdeteksi. Pakai ~/.workflow/ sebagai fallback. Lanjut? (yes/no)"
-- yes → lanjut dengan AGENT_DIR = ~/.workflow/
-- no  → STOP. Output: "Set AGENT_DIR manual, lalu jalankan ulang."
 
-Semua referensi {AGENT_DIR} dan {CONFIG_FILE} di seluruh step berikutnya = nilai dari STEP 0.
+- yes → lanjut dengan AGENT_DIR = ~/.workflow/
+- no → STOP. Output: "Set AGENT_DIR manual, lalu jalankan ulang."
+
+---
+
+## STEP 0.5 — Cek dependency
+
+Cek ketersediaan tool yang dibutuhkan:
+
+    graphify: EXISTS jika `graphify-out/` ada di project aktif ATAU `graphify` ada di PATH
+    caveman:  ALWAYS AVAILABLE — built-in behavior, tidak perlu install
+
+Output:
+
+    [DEPENDENCY CHECK]
+    graphify:  active | missing (graphify-out/ not found)
+    caveman:   ready (ultra mode — built-in)
+
+Jika graphify missing:
+→ Output: "graphify-out/ tidak ditemukan. Deteksi framework untuk generate .graphifyignore..."
+→ Deteksi framework (lihat template di STEP 4 CONFIG_FILE)
+→ Generate .graphifyignore yang sesuai
+→ Output:
+
+````
+.graphifyignore dibuat:
+<content>
+
+    Jalankan di terminal:
+    graphify update
+    ```
+
+→ Catat status: graphify=missing — skill explore/plan/analyze akan fallback ke agent direct
 
 ---
 
 ## STEP 1 — Idempotency check
 
-Cek apakah setup sudah pernah dijalankan di agent ini:
+Cek apakah setup sudah pernah dijalankan:
 
 1. Apakah {AGENT_DIR}/skills/ EXISTS?
 2. List semua .md file di {AGENT_DIR}/skills/ (jika ada)
 3. Apakah {CONFIG_FILE} mengandung marker `<!-- WORKFLOW-SKILLS:START -->`?
+4. Apakah {AGENT_DIR}/skills/caveman.md EXISTS? (new in V1.0)
 
 Output:
 
@@ -50,11 +86,13 @@ Output:
     mode:          fresh | update
     skills_found:  <list file atau "none">
     config_marker: found | not found
+    caveman_skill: found | not found (new)
 
 IF mode = update:
-→ Output EXACT: "Setup sebelumnya ditemukan di {AGENT_DIR}. Mode: UPDATE — skill files diperbarui, memory dipertahankan, config di-merge. Lanjut? (yes/no)"
-- yes → proceed mode UPDATE (skill overwrite, memory skip, config merge)
-- no  → STOP.
+→ Output EXACT: "Setup sebelumnya ditemukan. Mode: UPDATE — skill files diperbarui, memory dipertahankan, config di-merge. Caveman Ultra diaktifkan. Lanjut? (yes/no)"
+
+- yes → proceed mode UPDATE
+- no → STOP.
 
 IF mode = fresh:
 → Proceed langsung ke STEP 2.
@@ -63,79 +101,142 @@ IF mode = fresh:
 
 ## STEP 2 — Buat/update skill files
 
-Buat direktori jika belum ada:
-- {AGENT_DIR}/skills/
+Buat direktori jika belum ada: {AGENT_DIR}/skills/
+SELALU overwrite skill files (template, bukan data user).
+Substitusi {AGENT_DIR} ke nilai nyata sebelum menulis.
 
-Untuk setiap skill file: SELALU overwrite (skill adalah template — bukan data user).
+---
+
+### FILE: {AGENT_DIR}/skills/caveman.md ← NEW — TULIS PERTAMA
+
+    # Skill: caveman
+    version: ultra
+    description: Token compression — default mode untuk semua respons non-code
+    agent_dir: <AGENT_DIR_VALUE>
+
+    ## Status
+    ALWAYS ON. Default sejak session pertama. Tidak perlu trigger manual.
+
+    ## Caveman Ultra Rules (NON-NEGOTIABLE)
+    - Drop: artikel, filler (just/really/basically/sure/happy to), pleasantries, hedging
+    - Fragments OK. Synonyms pendek. Abbreviasi max.
+    - Pattern: [thing] [action] [reason]. [next step].
+    - Code, paths, commands, file names — TIDAK BERUBAH. Teknis exact.
+    - Structured output blocks ([PLAN], [VERIFY], dst) — tetap ada, prose di dalamnya compressed
+    - Off: ketik "normal mode" | "stop caveman"
+    - On: ketik "/caveman" | "caveman mode" | "ultra"
+
+    ## Mode Reference
+    | Mode | Trigger | Behavior |
+    |------|---------|----------|
+    | Ultra (default) | always active | Telegraphic. Abbreviate all. |
+    | Full | /caveman full | Drop articles, fragments OK |
+    | Lite | /caveman lite | Drop filler, grammar intact |
+    | Normal | normal mode | Verbose — non-default |
+
+    ## Caveman Ultra Output Pattern
+    BAD:  "The reason your component re-renders is because you're creating a new object reference."
+    GOOD: "Inline obj → new ref → re-render. Wrap useMemo."
+
+    BAD:  "I'd be happy to help you understand the authentication flow."
+    GOOD: "Auth flow: token check → middleware → route guard."
+
+    ## Integration dengan Skills
+    - Semua prose di PLAN, ANALYSIS, VERIFY: compressed
+    - Structured block labels: TETAP (untuk parsability)
+    - Uncertainty/confidence values: TETAP (data, bukan prose)
+    - Code snippets: TIDAK BERUBAH
+
+    ## Caveman Sub-Skills
+
+    ### /caveman-commit
+    Trigger: /.commit atau "caveman commit"
+    Output: Conventional Commits format. ≤50 char subject. Why > what.
+    Example: "fix(auth): token expiry use <= not <"
+
+    ### /caveman-review
+    Trigger: /.review atau "caveman review"
+    Output: One-line per issue. Format: "L{n}: 🔴/🟡/🟢 {type}: {problem}. {fix}."
+    Example: "L42: 🔴 null-deref: user unguarded. Add null check."
+
+    ### /caveman-compress
+    Trigger: /.compress <filepath>
+    Action: Rewrite prose di file ke caveman-speak. Code/paths/commands untouched.
+    Use untuk: memory files, CLAUDE.md, config docs — kurangi input token setiap session.
+    Output: compressed file + backup .original.md
 
 ---
 
 ### FILE: {AGENT_DIR}/skills/explore.md
 
     # Skill: explore
-    description: Graphify-first codebase exploration dengan bounded objective dan intent check
-    agent_dir: {AGENT_DIR}
+    version: V1.0
+    description: Graphify-first codebase exploration — bounded, intent-checked
+    agent_dir: <AGENT_DIR_VALUE>
 
     ## Trigger
     /.explore <hint>
 
-    ## Pre-condition
-    Cek apakah graphify-out/ EXISTS di project aktif:
-    - EXISTS     → proceed ke STEP 0
-    - NOT EXISTS → STOP eksplorasi
-      → Deteksi framework dari sinyal minimal:
-          Laravel → artisan / composer.json
-          FastAPI → requirements.txt / pyproject.toml
-          NestJS  → nest-cli.json
-          Next.js → next.config.*
-          Flutter → pubspec.yaml
-          Rust    → Cargo.toml
-          React   → package.json (tanpa framework marker lain)
-          Default → unknown
-      → Generate .graphifyignore sesuai framework (lihat template di {CONFIG_FILE})
-      → Output EXACTLY:
+    ## Pre-condition: Graphify Check
+    graphify-out/ EXISTS?
+    - YES  → proceed STEP 0
+    - NO   → STOP eksplorasi
+      → Deteksi framework:
+          Laravel  → artisan / composer.json
+          FastAPI  → requirements.txt / pyproject.toml
+          NestJS   → nest-cli.json
+          Next.js  → next.config.*
+          Flutter  → pubspec.yaml
+          Rust     → Cargo.toml
+          React    → package.json (tanpa framework marker lain)
+          Default  → unknown
+      → Generate .graphifyignore (lihat templates di CONFIG_FILE)
+      → Output:
           ```
           .graphifyignore
           <content>
 
-          Run this in your terminal:
-          graphify update
+          Run: graphify update
           ```
       → STOP. Jangan lanjut task.
 
     ## STEP 0 — Intent Check
-    Jika hint luas atau ambigu → output [ASUMSI INTENT]:
-      Hint     : <user hint>
-      Inferred : <intent yang disimpulkan>
-      Scope    : <scope sempit yang akan dieksplorasi>
-    → Tunggu koreksi atau lanjut jika tidak ada respons
+    Hint luas/ambigu → output:
+
+    [ASUMSI INTENT]
+    hint:     <user hint>
+    inferred: <intent disimpulkan>
+    scope:    <scope sempit yang akan dieksplorasi>
+
+    → Tunggu koreksi atau lanjut jika tidak ada respons 30 detik.
 
     ## Execution
 
-    STEP 1 — Tentukan session:
-    - Jika [SESSION_ID] sudah ada di context → reuse
-    - Jika belum → generate: <project>-<YYYYMMDD_HHMMss>
-    - Simpan [SESSION_ID] untuk reuse selama session ini
+    STEP 1 — Session:
+    - [SESSION_ID] sudah ada → reuse
+    - Belum ada → generate: <project>-<YYYYMMDD_HHMMss>
 
-    STEP 2 — Output exploration plan sebelum mulai:
+    STEP 2 — Output exploration plan:
+
     [EXPLORATION PLAN]
     session:        <session_id>
     target:         <derived from hint>
-    stop_condition: <kondisi eksak kapan eksplorasi berhenti>
+    source:         graphify-out/ | agent direct (fallback)
+    stop_condition: <kondisi eksak kapan stop>
 
-    STEP 3 — Explore via graphify-out/:
-    - Map node relevan via graphify-out/
-    - Buka file HANYA jika referensi graph tidak cukup
-    - Tandai pola tidak familiar: "possibly team-specific, needs verification"
+    STEP 3 — Explore:
+    - Map via graphify-out/ — primary
+    - Buka file HANYA jika graph tidak cukup
+    - Flag pola tidak familiar: "possibly team-specific — needs verification"
 
-    STEP 4 — Stop ketika stop_condition terpenuhi
+    STEP 4 — Stop saat stop_condition terpenuhi.
 
-    STEP 5 — Output structured result:
+    STEP 5 — Output:
 
     [EXPLORATION RESULT]
-    session:       <session_id>
-    source:        graphify | agent (direct)
-    confidence:    low | medium | high
+    session:     <session_id>
+    source:      graphify | agent (direct)
+    confidence:  low | medium | high
 
     entry_points:
     <list>
@@ -147,39 +248,38 @@ Untuk setiap skill file: SELALU overwrite (skill adalah template — bukan data 
     <list>
 
     uncertainties:
-    <area yang tidak bisa dikonfirmasi dari graph>
+    <area tidak bisa dikonfirmasi dari graph>
 
     ## End
-    "Lanjut plan, atau cukup informasinya?"
+    "Lanjut plan? /.plan <task>"
 
 ---
 
 ### FILE: {AGENT_DIR}/skills/plan.md
 
     # Skill: plan
-    description: Structured planning dengan confidence model, decision gate, graphify evidence
-    agent_dir: {AGENT_DIR}
+    version: V1.0
+    description: Structured planning — confidence model, decision gate, graphify evidence
+    agent_dir: <AGENT_DIR_VALUE>
 
     ## Trigger
     /.plan <task>
 
     ## Execution
 
-    STEP 1 — Tentukan session:
-    - Jika [SESSION_ID] sudah ada di context → reuse
-    - Jika belum → generate: <project>-<YYYYMMDD_HHMMss>
+    STEP 1 — Session: reuse [SESSION_ID] atau generate baru.
 
     STEP 2 — Collect evidence:
-    - Primary: baca graphify-out/ untuk pahami konteks task
-    - Jika graphify-out/ tidak ada:
-      → Output EXACT: "[GRAPHIFY TIDAK TERSEDIA] Lanjut plan dari file langsung? (yes/no)"
-      - yes → baca file relevan langsung. Tandai: evidence_source: agent (direct)
+    - Primary: graphify-out/
+    - graphify-out/ tidak ada:
+      → Output: "[GRAPHIFY TIDAK TERSEDIA] Plan dari file langsung? (yes/no)"
+      - yes → baca file relevan. evidence_source = agent (direct)
       - no  → STOP.
 
-    STEP 3 — Output structured plan:
+    STEP 3 — Output:
 
     [PLAN]
-    task:            <restatement>
+    task:            <restatement — caveman compressed>
     session:         <session_id>
     evidence_source: graphify | agent (direct)
 
@@ -187,14 +287,14 @@ Untuk setiap skill file: SELALU overwrite (skill adalah template — bukan data 
       - <statement — BUKAN pertanyaan>
 
     open_questions:
-      - <max 5, harus impact impl/arch>
+      - <max 5 — hanya yang impact impl/arch>
 
     steps:
       1. <concrete step>
       2. <concrete step>
 
     files_affected: <list>
-    risks: <list>
+    risks:          <list>
 
     confidence:
       problem_understanding: low | medium | high
@@ -202,25 +302,26 @@ Untuk setiap skill file: SELALU overwrite (skill adalah template — bukan data 
       solution_path:         low | medium | high
 
     uncertainties:
-      - <hal yang tidak bisa dikonfirmasi>
+      - <hal tidak bisa dikonfirmasi>
 
     decision:
       proceed    → confidence cukup
       clarify    → open_questions harus dijawab dulu
-      re-explore → root_cause confidence rendah
+      re-explore → root_cause confidence rendah → /.explore dulu
 
-    STEP 4 — Tunggu approval user. JANGAN auto-proceed ke execute.
+    STEP 4 — STOP. Tunggu user approval. JANGAN auto-proceed ke execute.
 
     ## End
-    "Setuju? Jalankan /.execute -y"
+    "Setuju? /.execute -y"
 
 ---
 
 ### FILE: {AGENT_DIR}/skills/execute.md
 
     # Skill: execute
-    description: Controlled implementation dengan explicit approval gate
-    agent_dir: {AGENT_DIR}
+    version: V1.0
+    description: Controlled implementation — explicit approval gate
+    agent_dir: <AGENT_DIR_VALUE>
 
     ## Trigger
     /.execute -y  → PROCEED
@@ -231,7 +332,7 @@ Untuk setiap skill file: SELALU overwrite (skill adalah template — bukan data 
     Dengan -y → proceed
 
     ## Pre-Execution
-    Output sebelum menyentuh file apapun:
+    Output SEBELUM sentuh file apapun:
 
     [EXECUTION SCOPE]
     allowed:   <files boleh diubah>
@@ -240,15 +341,17 @@ Untuk setiap skill file: SELALU overwrite (skill adalah template — bukan data 
 
     ## During Execution
     - ONLY touch files in allowed list
-    - Jika butuh forbidden file → STOP → report conflict → minta instruksi explicit
+    - Butuh forbidden file → STOP → report conflict → minta instruksi explicit
+    - Setelah setiap file berubah: jalankan `graphify update`
 
     ## Post-Execution
 
     [EXECUTION RESULT]
-    files_changed: <list>
-    confidence:    low | medium | high
-    uncertainties: <list>
-    status:        done | partial | blocked
+    files_changed:   <list>
+    graphify_update: done | skipped (graphify not active)
+    confidence:      low | medium | high
+    uncertainties:   <list>
+    status:          done | partial | blocked
 
     → Auto-trigger /.verify
     → JANGAN declare done sebelum /.verify selesai
@@ -258,8 +361,9 @@ Untuk setiap skill file: SELALU overwrite (skill adalah template — bukan data 
 ### FILE: {AGENT_DIR}/skills/verify.md
 
     # Skill: verify
+    version: V1.0
     description: 3-step verification — logic, falsification, reality check
-    agent_dir: {AGENT_DIR}
+    agent_dir: <AGENT_DIR_VALUE>
 
     ## Trigger
     /.verify
@@ -267,58 +371,61 @@ Untuk setiap skill file: SELALU overwrite (skill adalah template — bukan data 
 
     ## Protocol
 
-    Step 1 — Logical Validation
+    Step 1 — Logic:
     - Solve stated problem?
     - Assumptions masih valid?
     - Konsisten dengan pola codebase?
     Output: PASS / FAIL + reason
 
-    Step 2 — Falsification
+    Step 2 — Falsification:
     - Kondisi apa yang bikin gagal?
-    - Edge case yang tidak ter-cover?
-    - Apa yang break jika input malformed?
+    - Edge case tidak ter-cover?
+    - Break jika input malformed?
     Output: list failure conditions
 
-    Step 3 — Reality Check
-    Priority: test suite → run code → simulate → state "not executable"
+    Step 3 — Reality:
+    Priority: test suite → run code → simulate → "not executable"
     Output: actual vs expected
 
     ## Final Output
 
     [VERIFICATION]
-    Step 1 (Logic):   PASS / FAIL — <reason>
-    Step 2 (Failure): <condition list>
-    Step 3 (Reality): <actual output> | not executable — <reason>
-    Verdict:          DONE / NEEDS FIX — <detail>
+    logic:   PASS | FAIL — <reason>
+    failure: <condition list>
+    reality: <actual output> | not executable — <reason>
+    verdict: DONE | NEEDS FIX — <detail>
 
     ## If NEEDS FIX
-    → Fix → re-run /.verify otomatis → JANGAN output final sebelum selesai
+    → Fix → re-run /.verify otomatis → JANGAN output final sebelum done
 
 ---
 
 ### FILE: {AGENT_DIR}/skills/refactor.md
 
     # Skill: refactor
-    description: Structural improvement tanpa behavior change
-    agent_dir: {AGENT_DIR}
+    version: V1.0
+    description: Structural improvement — zero behavior change
+    agent_dir: <AGENT_DIR_VALUE>
 
     ## Trigger
     /.refactor <scope>
 
     ## Rules
-    - Structural improvement ONLY — behavior TIDAK BOLEH berubah
-    - JANGAN perluas scope
-    - Requires /.verify setelah selesai
+    - Structural improvement ONLY — behavior TIDAK BERUBAH
+    - JANGAN expand scope
+    - Auto-trigger /.verify setelah selesai
+    - Jalankan `graphify update` setelah selesai
 
     ## Pre-Execution
 
     [REFACTOR SCOPE]
-    scope:     <area>
-    allowed:   <files>
-    forbidden: <files>
-    goal:      <tujuan struktural>
+    scope:    <area>
+    allowed:  <files>
+    forbidden:<files>
+    goal:     <tujuan struktural>
 
     ## Post-Refactor
+    → graphify update
     → Auto-trigger /.verify
 
 ---
@@ -326,20 +433,22 @@ Untuk setiap skill file: SELALU overwrite (skill adalah template — bukan data 
 ### FILE: {AGENT_DIR}/skills/analyze.md
 
     # Skill: analyze
-    description: Deep reasoning — zero code changes. Graphify sebagai sumber utama.
-    agent_dir: {AGENT_DIR}
+    version: V1.0
+    description: Deep reasoning — zero code changes. Graphify primary.
+    agent_dir: <AGENT_DIR_VALUE>
 
     ## Trigger
     /.analyze <topic>
 
     ## Execution
 
-    STEP 1 — Session: reuse [SESSION_ID] atau generate baru
+    STEP 1 — Session: reuse [SESSION_ID] atau generate baru.
 
     STEP 2 — Collect evidence:
     - Primary: graphify-out/
     - Buka file spesifik HANYA jika graph tidak cukup
-    - Flag area yang tidak bisa dikonfirmasi
+    - graphify-out/ tidak ada → fallback ke agent direct (konfirmasi dulu)
+    - Flag area tidak bisa dikonfirmasi
 
     STEP 3 — Output:
 
@@ -353,13 +462,13 @@ Untuk setiap skill file: SELALU overwrite (skill adalah template — bukan data 
       solution_path:         low | medium | high
 
     findings:
-    <content>
+    <content — caveman compressed>
 
     implications:
     <dampak ke codebase atau keputusan>
 
     uncertainties:
-    <area yang tidak bisa dikonfirmasi>
+    <area tidak bisa dikonfirmasi>
 
     ## Rules
     - Zero code changes. Zero file modifications.
@@ -369,8 +478,9 @@ Untuk setiap skill file: SELALU overwrite (skill adalah template — bukan data 
 ### FILE: {AGENT_DIR}/skills/memory.md
 
     # Skill: memory
-    description: Propose memory update ke personal knowledge files
-    agent_dir: {AGENT_DIR}
+    version: V1.0
+    description: Propose memory update ke knowledge files
+    agent_dir: <AGENT_DIR_VALUE>
 
     ## Trigger
     /.memory <note>
@@ -378,53 +488,67 @@ Untuk setiap skill file: SELALU overwrite (skill adalah template — bukan data 
     ## Execution
 
     STEP 1 — Evaluasi note:
-    - Berdampak ke keputusan masa depan?
-    - Info ownership atau arsitektur baru?
+    - Impact ke keputusan masa depan?
+    - Info ownership/arsitektur baru?
     - Recurring issue atau landmine?
+    - Jika tidak: output "Note tidak cukup signifikan untuk disimpan. Discard? (yes/no)"
 
-    STEP 2 — Output proposal:
+    STEP 2 — Output proposal (compressed caveman style):
 
     [MEMORY PROPOSAL]
-    file:    <{AGENT_DIR}/memory/PERSONAL_MEMORY.md atau DOMAIN_MAP.md>
-    action:  <add | update | overwrite>
+    file:    <PERSONAL_MEMORY.md | DOMAIN_MAP.md>
+    action:  add | update | overwrite
     content:
-      <proposed content>
+      <proposed content — caveman compressed>
 
     Confirm? (yes / no / edit)
 
     STEP 3 — Tunggu respons:
-    - yes  → write ke file → update {AGENT_DIR}/memory/MEMORY.md jika belum ada entry
+    - yes  → write ke file → update MEMORY.md index jika belum ada entry
     - no   → discard
     - edit → tunggu koreksi → write
 
     STEP 4 — Append ke SESSION_LOG.md:
-    [YYYY-MM-DD]
+    <YYYY-MM-DD>
     task:           <what was done>
     domain:         <module/area>
-    memory written: <yes — which file | no — declined>
+    memory written: yes — <which file> | no — declined
+
+    ## Optional: Compress memory setelah update
+    Setelah write: tawarkan /.compress <file> untuk kurangi input token session berikutnya.
 
 ---
 
 ### FILE: {AGENT_DIR}/skills/help.md
 
     # Skill: help
-    description: Command reference V0.3 Single Agent Mode
-    agent_dir: {AGENT_DIR}
+    version: V1.0 — Caveman Ultra Default
+    description: Command reference
+    agent_dir: <AGENT_DIR_VALUE>
 
     ## Trigger
     /.help
 
     ## Output
 
-    [COMMAND GUIDE — V0.3 SINGLE AGENT MODE]
+    [COMMAND GUIDE — V1.0 CAVEMAN ULTRA]
 
-    /.explore <hint>   → eksplorasi via graphify | fallback: agent direct (konfirmasi dulu)
-    /.plan <task>      → collect graphify evidence → buat rencana struktural
-    /.execute -y       → implementasi (wajib -y)
-    /.verify           → validasi logic + falsification + reality check
-    /.refactor <scope> → perbaikan struktural tanpa ubah behavior (auto-trigger verify)
-    /.analyze <topic>  → analisis mendalam tanpa ubah kode
-    /.memory <note>    → simpan insight (auto-update MEMORY.md index)
+    MODE: Caveman Ultra ON (default). Less token. Same brain.
+
+    [WORKFLOW SKILLS]
+    /.explore <hint>    → graphify map → fallback agent direct (konfirmasi dulu)
+    /.plan <task>       → graphify evidence → structured plan + confidence
+    /.execute -y        → implement (wajib -y) → graphify update → /.verify
+    /.verify            → logic + falsification + reality check
+    /.refactor <scope>  → structural fix, no behavior change → graphify update → /.verify
+    /.analyze <topic>   → deep reasoning, zero code change
+    /.memory <note>     → save insight → optional /.compress
+
+    [CAVEMAN SKILLS]
+    /caveman            → toggle mode (ultra/full/lite/normal)
+    /.commit            → terse commit message (Conventional Commits)
+    /.review            → one-line code review per issue
+    /.compress <file>   → compress file ke caveman-speak (input token saved ~46%)
 
     [WORKFLOW]
     /.explore → /.plan → /.execute -y → /.verify
@@ -433,27 +557,30 @@ Untuk setiap skill file: SELALU overwrite (skill adalah template — bukan data 
     explore  → graphify-out/ (primary) | agent direct (fallback, perlu konfirmasi)
     plan     → graphify evidence + agent reasoning
     analyze  → graphify-out/ (primary) | agent direct (fallback)
-    execute  → agent
+    execute  → agent + graphify update setelah setiap change
     verify   → agent
-    refactor → agent + auto /.verify
+    refactor → agent + graphify update + /.verify
 
+    [RULES]
     Prefix "/." wajib. Tanpa prefix → INVALID.
+    Caveman Ultra = default. "normal mode" untuk verbose.
 
 ---
 
 ## STEP 3 — Buat/pertahankan memory files
 
 Buat direktori jika belum ada: {AGENT_DIR}/memory/
-
-ATURAN: Memory adalah data user — JANGAN overwrite jika sudah ada.
+ATURAN: Memory = data user — JANGAN overwrite jika sudah ada.
+Substitusi {AGENT_DIR} ke nilai nyata sebelum menulis.
 
 ### FILE: {AGENT_DIR}/memory/PERSONAL_MEMORY.md — SKIP JIKA EXISTS
 
     # Personal Memory
     Last updated: <tanggal hari ini>
+    format: caveman-compressed
 
     ## Architecture Decisions
-    - (belum ada)
+    - (none yet)
 
     ## Module Ownership
     | Module | Team | Notes |
@@ -461,18 +588,19 @@ ATURAN: Memory adalah data user — JANGAN overwrite jika sudah ada.
     | -      | -    | -     |
 
     ## Known Landmines
-    - (belum ada)
+    - (none yet)
 
     ## Patterns Per Team
-    - (belum ada)
+    - (none yet)
 
     ## Things I Always Forget
-    - (belum ada)
+    - (none yet)
 
 ### FILE: {AGENT_DIR}/memory/DOMAIN_MAP.md — SKIP JIKA EXISTS
 
     # Domain Map
     Last updated: <tanggal hari ini>
+    format: caveman-compressed
 
     ## Entry Points
     | Domain | Entry File | Key Function |
@@ -480,27 +608,32 @@ ATURAN: Memory adalah data user — JANGAN overwrite jika sudah ada.
     | -      | -          | -            |
 
     ## Cross-Team Boundaries
-    - (belum ada)
+    - (none yet)
 
     ## Dead Code Suspects
-    - (belum ada)
+    - (none yet)
+
+    ## Graphify Index
+    graphify-out/ last updated: <tanggal> | not yet initialized
 
 ### FILE: {AGENT_DIR}/memory/SESSION_LOG.md — SKIP JIKA EXISTS
 
     # Session Log
+    format: caveman-compressed
 
     ## <tanggal hari ini>
-    task:           initial skill setup V0.3
+    task:           setup V1.0 + caveman ultra
     domain:         global config
+    graphify:       active | missing
     memory written: no
 
-### FILE: {AGENT_DIR}/memory/MEMORY.md — UPDATE (tambah entry jika belum ada, jangan hapus yang lama)
+### FILE: {AGENT_DIR}/memory/MEMORY.md — UPDATE (append jika belum ada, jangan hapus lama)
 
-Entry yang harus ada (cek satu per satu, append jika belum ada):
+Entry yang harus ada:
 
-    - [Personal Memory](PERSONAL_MEMORY.md) — arsitektur decisions, module ownership, landmines
-    - [Domain Map](DOMAIN_MAP.md) — entry points, cross-team boundaries, dead code suspects
-    - [Session Log](SESSION_LOG.md) — log aktivitas per session
+    - [Personal Memory](PERSONAL_MEMORY.md) — arch decisions, module ownership, landmines
+    - [Domain Map](DOMAIN_MAP.md) — entry points, cross-team boundaries, dead code, graphify index
+    - [Session Log](SESSION_LOG.md) — aktivitas per session
 
 ---
 
@@ -508,82 +641,73 @@ Entry yang harus ada (cek satu per satu, append jika belum ada):
 
 Target: {CONFIG_FILE}
 
-### Jika {CONFIG_FILE} TIDAK EXISTS → buat baru dengan konten lengkap di bawah.
+### Jika {CONFIG_FILE} TIDAK EXISTS → buat baru.
 
-### Jika {CONFIG_FILE} SUDAH EXISTS → cari marker <!-- WORKFLOW-SKILLS:START --> :
-- Marker DITEMUKAN  → ganti konten antara marker START dan END dengan versi baru
-- Marker TIDAK ADA  → APPEND blok berikut ke akhir file (jangan hapus konten lama)
+### Jika {CONFIG_FILE} SUDAH EXISTS:
 
-Konten yang ditulis (selalu dibungkus marker):
+- Marker `<!-- WORKFLOW-SKILLS:START -->` DITEMUKAN → ganti konten antara marker
+- Marker TIDAK ADA → APPEND ke akhir file (jangan hapus konten lama)
 
-    <!-- WORKFLOW-SKILLS:START — managed by WORKFLOW_V0.3, do not edit manually -->
+Konten yang ditulis (selalu dibungkus marker, substitusi {AGENT_DIR} ke nilai nyata):
 
-    ## Workflow Skills V0.3
-    agent_dir: {AGENT_DIR}
-    skills:    {AGENT_DIR}/skills/
-    memory:    {AGENT_DIR}/memory/
+    <!-- WORKFLOW-SKILLS:START — managed by WORKFLOW_V1.0, do not edit manually -->
+
+    ## Workflow Skills V1.0 + Caveman Ultra
+    agent_dir: <AGENT_DIR_VALUE>
+    skills:    <AGENT_DIR_VALUE>/skills/
+    memory:    <AGENT_DIR_VALUE>/memory/
+
+    ### Caveman Ultra — DEFAULT (NON-NEGOTIABLE)
+    Active from first message. No revert without explicit "normal mode".
+    Pattern: [thing] [action] [reason]. [next step].
+    Drop: articles, filler, pleasantries, hedging, preamble.
+    Fragments OK. Short synonyms. Abbreviate prose.
+    Code/paths/commands/file names: UNCHANGED. Technical exact.
+    Structured block labels: UNCHANGED (parsability).
+    Off: "normal mode" | "stop caveman". On: "/caveman" | "ultra".
 
     ### Core Behavior
-    - Concise. Direct. No over-explanation.
-    - Single user. Optimize for workflow only.
+    - Caveman Ultra on. Always. Every response.
+    - Single user. Workflow-optimized.
     - Never assume. Never expand scope silently.
-    - WAJIB sertakan confidence + uncertainties di setiap plan/analysis.
+    - Confidence + uncertainties WAJIB di setiap plan/analysis.
+    - Graphify primary. Agent direct = fallback (konfirmasi user dulu).
 
     ### Skill Routing
-    - /.explore  → graphify-out/ (primary) | agent direct (fallback, perlu konfirmasi user)
-    - /.analyze  → graphify-out/ (primary) | agent direct (fallback, perlu konfirmasi user)
+    - /.explore  → graphify-out/ (primary) | agent direct (fallback, konfirmasi dulu)
+    - /.analyze  → graphify-out/ (primary) | agent direct (fallback, konfirmasi dulu)
     - /.plan     → graphify evidence + agent reasoning
-    - /.execute  → agent (wajib -y)
+    - /.execute  → agent (wajib -y) → graphify update → auto /.verify
     - /.verify   → agent (auto-triggered setelah execute/refactor)
-    - /.refactor → agent + auto /.verify
+    - /.refactor → agent → graphify update → auto /.verify
+    - /.memory   → propose → confirm → write → optional /.compress
+    - /.commit   → caveman commit message
+    - /.review   → caveman one-line review
+    - /.compress → compress file prose ke caveman-speak
 
     ### Structured Output Rule (NON-NEGOTIABLE)
-    Setiap plan atau analysis HARUS mengandung:
+    Setiap plan/analysis HARUS mengandung:
     - confidence: { problem_understanding, root_cause, solution_path }
-    - uncertainties: [ list hal yang tidak bisa dikonfirmasi ]
+    - uncertainties: [ list hal tidak bisa dikonfirmasi ]
     Output tanpa keduanya = INCOMPLETE.
 
     ### Startup Protocol
     Setiap session (code tasks):
-    1. Cek graphify-out/ di project aktif — jika tidak ada: warning sekali
-    2. Baca {AGENT_DIR}/memory/PERSONAL_MEMORY.md jika ada konten
-    3. session_id di-generate saat skill pertama diinvoke
-
-    ### Default Behavior
-    Task unclear → suggest /.explore
-    Task clear   → jawab langsung
-
-    ### Command Registry V0.3
-    Valid   : /.explore /.plan /.execute /.verify /.refactor /.analyze /.memory /.help
-    Invalid : tanpa prefix "/." → REJECTED
-
-    Jika command invalid:
-    [INVALID COMMAND]
-    Gunakan prefix "/."
-    Contoh: /.plan
-    STOP.
-
-    ### NL Map
-    cek logic → /.analyze | gimana flow → /.explore | tambah fitur → /.plan
-    implement → /.execute -y | rapikan → /.refactor | catat → /.memory | help → /.help
-    NEVER suggest "/" commands (tanpa titik).
-
-    ### Auto Command Suggestion
-    Di akhir setiap respons (code tasks), append max 3 command relevan:
-    [AVAILABLE NEXT COMMANDS]
-    - /.explore | /.plan | /.execute | /.verify | /.analyze  (pilih yang relevan)
+    1. Caveman Ultra ON — aktif dari pesan pertama
+    2. Cek graphify-out/ di project aktif pakai bash (`Test-Path -LiteralPath "graphify-out"`) - tidak ada: warning sekali + .graphifyignore offer
+    3. Baca <AGENT_DIR_VALUE>/memory/PERSONAL_MEMORY.md jika ada konten
+    4. session_id di-generate saat skill pertama diinvoke
 
     ### Graphify Rules
     - NEVER run: graphify init, graphify build, graphify watch
     - Auto-run `graphify update` setelah SETIAP code change
+    - graphify check HARUS pakai bash/PowerShell `Test-Path -LiteralPath "graphify-out"` di project aktif
+    - graphify-out/ EXISTS → ACTIVE, primary source
+    - graphify-out/ NOT EXISTS → STOP, generate .graphifyignore, output "graphify update", STOP
 
     Error handling:
-    - "too large for HTML viz" OR "Graph has too many nodes" → IGNORE, DO NOT retry
-    - Error lain → retry ONCE → jika masih gagal: inform briefly, continue
-
-    Graphify state:
-    - graphify-out/ EXISTS     → ACTIVE, gunakan sebagai primary source
-    - graphify-out/ NOT EXISTS → STOP, generate .graphifyignore, output "graphify update", STOP
+    - "too large for HTML viz" OR "Graph has too many nodes" → IGNORE, tidak retry
+    - Error lain → retry ONCE → masih gagal: inform brief, continue
 
     .graphifyignore templates:
     Laravel:  vendor/ node_modules/ public/build/ storage/ bootstrap/cache/ *.log .env .env.* .cache/ tmp/
@@ -595,15 +719,49 @@ Konten yang ditulis (selalu dibungkus marker):
     Flutter:  .build/ .dart_tool/ build/ ios/Pods/ android/.gradle/ *.log .env .env.* .cache/ tmp/
     Default:  node_modules/ dist/ build/ *.log .env .env.* .cache/ tmp/
 
+    ### Default Behavior
+    Task unclear       → suggest /.explore
+    Task clear         → jawab langsung (caveman ultra)
+    Code berubah       → graphify update otomatis
+    Session end        → tawarkan /.memory untuk insight penting
+
+    ### Command Registry V1.0
+    Valid workflow : /.explore /.plan /.execute /.verify /.refactor /.analyze /.memory /.help
+    Valid caveman  : /caveman /.commit /.review /.compress
+    Invalid        : tanpa prefix "/." → REJECTED
+
+    Jika command invalid:
+    [INVALID COMMAND]
+    Use prefix "/.". Example: /.plan
+    STOP.
+
+    ### NL Map (Natural Language → Command)
+    cek logic → /.analyze
+    gimana flow → /.explore
+    tambah fitur → /.plan → /.execute -y → /.verify
+    rapikan kode → /.refactor
+    catat insight → /.memory
+    commit message → /.commit
+    review PR → /.review
+    kurangi token input → /.compress <file>
+    bantuan → /.help
+
+    ### Auto Command Suggestion
+    Di akhir setiap respons (code tasks), append max 3 command relevan:
+    [NEXT]
+    - /.explore | /.plan | /.execute -y | /.verify | /.analyze (pilih relevan)
+
     ### Global Forbidden
     - Modifikasi file di luar [EXECUTION SCOPE]
     - Proceed /.execute tanpa -y
-    - Output plan tanpa confidence + uncertainties
-    - Claim success sebelum /.verify selesai
-    - Write ke memory files tanpa user confirmation
-    - Auto-fallback ke agent direct tanpa tanya user
-    - Run graphify init / graphify build / graphify watch
+    - Plan tanpa confidence + uncertainties
+    - Claim success sebelum /.verify done
+    - Write memory tanpa user confirmation
+    - Auto-fallback agent direct tanpa tanya user
+    - Run graphify init / build / watch
     - Expand scope tanpa instruksi eksplisit
+    - Tulis literal "{AGENT_DIR}" ke file manapun
+    - Verbose prose saat Caveman Ultra aktif
 
     <!-- WORKFLOW-SKILLS:END -->
 
@@ -612,9 +770,11 @@ Konten yang ditulis (selalu dibungkus marker):
 ## STEP 5 — Verifikasi seluruh setup
 
 1. List semua file di {AGENT_DIR}/skills/ + ukuran byte
+   → Konfirmasi caveman.md ada (baru di V1.0)
 2. List semua file di {AGENT_DIR}/memory/ + ukuran byte
-3. Tampilkan 5 baris pertama {CONFIG_FILE} untuk konfirmasi marker ada
+3. Tampilkan 5 baris pertama {CONFIG_FILE} — konfirmasi marker ada
 4. Tampilkan isi {AGENT_DIR}/memory/MEMORY.md
+5. Konfirmasi: tidak ada literal "{AGENT_DIR}" tersisa di file manapun yang ditulis
 
 ---
 
@@ -622,33 +782,42 @@ Konten yang ditulis (selalu dibungkus marker):
 
 Tampilkan PERSIS:
 
-    [SETUP COMPLETE — V0.3 SINGLE AGENT MODE]
+    [SETUP COMPLETE — V1.0 CAVEMAN ULTRA]
     agent:   <nama agent>
-    dir:     {AGENT_DIR}
-    config:  {CONFIG_FILE}
+    dir:     <AGENT_DIR_VALUE>
+    config:  <CONFIG_FILE_VALUE>
     mode:    fresh install | update
 
     Skills (overwritten):
-      {AGENT_DIR}/skills/explore.md  ✓
-      {AGENT_DIR}/skills/plan.md     ✓
-      {AGENT_DIR}/skills/execute.md  ✓
-      {AGENT_DIR}/skills/verify.md   ✓
-      {AGENT_DIR}/skills/refactor.md ✓
-      {AGENT_DIR}/skills/analyze.md  ✓
-      {AGENT_DIR}/skills/memory.md   ✓
-      {AGENT_DIR}/skills/help.md     ✓
+      <AGENT_DIR>/skills/caveman.md   ✓  ← NEW
+      <AGENT_DIR>/skills/explore.md   ✓
+      <AGENT_DIR>/skills/plan.md      ✓
+      <AGENT_DIR>/skills/execute.md   ✓
+      <AGENT_DIR>/skills/verify.md    ✓
+      <AGENT_DIR>/skills/refactor.md  ✓
+      <AGENT_DIR>/skills/analyze.md   ✓
+      <AGENT_DIR>/skills/memory.md    ✓
+      <AGENT_DIR>/skills/help.md      ✓
 
     Memory (preserved if existed):
-      {AGENT_DIR}/memory/PERSONAL_MEMORY.md ✓ (new | kept)
-      {AGENT_DIR}/memory/DOMAIN_MAP.md      ✓ (new | kept)
-      {AGENT_DIR}/memory/SESSION_LOG.md     ✓ (new | kept)
-      {AGENT_DIR}/memory/MEMORY.md          ✓ (index updated)
+      <AGENT_DIR>/memory/PERSONAL_MEMORY.md ✓ (new | kept)
+      <AGENT_DIR>/memory/DOMAIN_MAP.md      ✓ (new | kept)
+      <AGENT_DIR>/memory/SESSION_LOG.md     ✓ (new | kept)
+      <AGENT_DIR>/memory/MEMORY.md          ✓ (index updated)
 
     Config:
-      {CONFIG_FILE} ✓ (created | merged)
+      <CONFIG_FILE_VALUE> ✓ (created | merged)
       marker: <!-- WORKFLOW-SKILLS:START --> found
 
+    Graphify: active | missing (graphifyignore generated)
+    Placeholder check: CLEAN — no literal {AGENT_DIR} in any written file
+
     Status: READY
+    Default mode: CAVEMAN ULTRA
     Workflow: /.explore → /.plan → /.execute -y → /.verify
-    Active:   /.explore /.plan /.execute /.verify /.refactor /.analyze /.memory /.help
-    Invalid:  /explore /plan /execute /verify — REJECTED
+    Active: /.explore /.plan /.execute /.verify /.refactor /.analyze /.memory /.help
+            /caveman /.commit /.review /.compress
+    Invalid: /explore /plan /execute — REJECTED (missing ".")
+
+    🪨 WHY USE MANY TOKEN WHEN FEW DO TRICK
+````
