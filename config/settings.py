@@ -7,10 +7,13 @@ from config.routing import COMMAND_ROUTES
 BASE_DIR = Path(__file__).resolve().parent.parent
 SESSION_DIR = BASE_DIR / "storage" / "sessions"
 CACHE_FILE = BASE_DIR / "storage" / "cache.json"
+JOB_DIR = BASE_DIR / "storage" / "jobs"
 OPENCODE_CONFIG_FILE = BASE_DIR / "config" / "opencode.json"
 
 DEFAULT_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_TIMEOUT_SECONDS", "0"))
 OPENCODE_COMMAND = os.getenv("OPENCODE_COMMAND", "opencode")
+DEFAULT_JOB_POLL_INTERVAL_SECONDS = float(os.getenv("AI_PROXY_JOB_POLL_INTERVAL_SECONDS", "2"))
+DEFAULT_JOB_POLL_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_JOB_POLL_TIMEOUT_SECONDS", "0"))
 
 
 def default_opencode_config() -> dict:
@@ -18,6 +21,8 @@ def default_opencode_config() -> dict:
         "opencode_command": OPENCODE_COMMAND,
         "default_model": None,
         "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
+        "job_poll_interval_seconds": DEFAULT_JOB_POLL_INTERVAL_SECONDS,
+        "job_poll_timeout_seconds": DEFAULT_JOB_POLL_TIMEOUT_SECONDS,
         "routes": COMMAND_ROUTES,
     }
 

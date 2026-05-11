@@ -1,8 +1,11 @@
 from adapters.opencode_adapter import OpenCodeAdapter
+from core.job_manager import JobManager
 from core.executor import Executor
 from core.prompt_builder import build_prompt
 from utils.parser import clean_opencode_output, extract_opencode_session_id
 import main
+import tempfile
+from pathlib import Path
 
 
 class FakeOpenCodeAdapter:
@@ -38,12 +41,19 @@ class RecordingOpenCodeAdapter(OpenCodeAdapter):
         self.init_calls = []
         self.run_calls = []
 
-    def init_session(self, model: str | None = None, work_dir: str | None = None) -> tuple[str | None, dict]:
+    def init_session(
+        self,
+        model: str | None = None,
+        work_dir: str | None = None,
+        workflow_session_id: str | None = None,
+    ) -> tuple[str | None, dict]:
         args = ["opencode", "run", "Initialize session. Reply READY."]
         if model:
             args.extend(["-m", model])
         args.extend(["--print-logs", "--log-level", "INFO"])
-        self.init_calls.append({"args": args, "model": model, "work_dir": work_dir})
+        self.init_calls.append(
+            {"args": args, "model": model, "work_dir": work_dir, "workflow_session_id": workflow_session_id}
+        )
         return "ses_boot123", {
             "args": args,
             "opencode_session_id": "ses_boot123",
@@ -59,6 +69,11 @@ class RecordingOpenCodeAdapter(OpenCodeAdapter):
         }
 
 
+class FakeJobProcess:
+    def __init__(self, pid: int = 4242) -> None:
+        self.pid = pid
+
+
 def assert_true(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
@@ -66,14 +81,18 @@ def assert_true(condition: bool, message: str) -> None:
 
 def run_tests() -> None:
     fake_opencode = FakeOpenCodeAdapter()
+    temp_root = Path(tempfile.mkdtemp(prefix="agent-workflow-test-"))
+    original_popen = main.subprocess.Popen
+    main.SESSION_MANAGER = main.SessionManager(temp_root / "sessions")
+    main.JOB_MANAGER = JobManager(temp_root / "jobs")
     main.EXECUTOR = Executor(opencode=fake_opencode, session_manager=main.SESSION_MANAGER)
     work_dir = "/tmp/agent-workflow-target"
 
     try:
         # 1. Prompt constraints
         prompt = build_prompt(role="exploration", task="cek graph", session_id="prompt-test")
-        assert_true("do not run `graphify`" in prompt, "prompt must prevent graphify CLI dependency")
-        assert_true("graphify-out/GRAPH_REPORT.md" in prompt, "prompt must point to graphify artifacts")
+        assert_true("[WORKFLOW_AGENT]" in prompt, "prompt must tag workflow-agent context")
+        assert_true("read graphify output first" in prompt, "prompt must require graphify-first exploration")
 
         # 2. Bootstrap flow
         recording_opencode = RecordingOpenCodeAdapter()
@@ -121,9 +140,45 @@ def run_tests() -> None:
         failure = main.run("verify", "simulate opencode failure", "test-session-v2", work_dir=work_dir)
         assert_true(not failure["ok"], "OpenCode failure must return error")
 
+        # 6. Job manager lock + result states
+        job = main.JOB_MANAGER.create_job("execute", "do async thing", "async-session", work_dir, None)
+        assert_true(job["status"] == "pending", "job must start pending")
+        duplicate_error = None
+        try:
+            main.JOB_MANAGER.create_job("execute", "second async thing", "async-session", work_dir, None)
+        except ValueError as exc:
+            duplicate_error = str(exc)
+        assert_true(duplicate_error is not None, "second active job on same session must fail")
+        running = main.JOB_MANAGER.mark_running(job["job_id"])
+        assert_true(running["status"] == "running", "job must move to running")
+        completed = main.JOB_MANAGER.complete_job(job["job_id"], {"ok": True, "content": "done", "meta": {}})
+        assert_true(completed["status"] == "completed", "job must complete")
+        result = main.get_result(job["job_id"])
+        assert_true(result["ok"] and result["status"] == "completed", "result must expose completed output")
+        missing = main.get_status("missing-job")
+        assert_true(not missing["ok"] and missing["status"] == "not_found", "missing status must be structured")
+
+        # 7. Submit spawns worker process and returns pending payload
+        def fake_popen(*args, **kwargs):
+            return FakeJobProcess()
+
+        main.subprocess.Popen = fake_popen
+        submitted = main.submit("execute", "long task", "submit-session", work_dir, None)
+        assert_true(submitted["ok"], "submit must succeed")
+        assert_true(submitted["status"] == "pending", "submit must return pending")
+        assert_true(submitted["meta"]["pid"] == 4242, "submit must expose worker pid")
+        main.subprocess.Popen = original_popen
+
+        # 8. Worker path updates job state on success
+        worker_job = main.JOB_MANAGER.create_job("explore", "inspect async flow", "worker-session", work_dir, None)
+        worker_output = main.run_worker(worker_job["job_id"])
+        assert_true(worker_output["ok"], "worker must execute queued command")
+        worker_status = main.get_status(worker_job["job_id"])
+        assert_true(worker_status["status"] == "completed", "worker must persist completed state")
+
         print("test_scenario: success")
     finally:
-        pass
+        main.subprocess.Popen = original_popen
 
 
 if __name__ == "__main__":

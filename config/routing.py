@@ -6,4 +6,7 @@ COMMAND_ROUTES = {
     "analyze": {"role": ROLE_REASONING, "model": None},
     "execute": {"role": ROLE_EXECUTION, "model": None},
     "verify": {"role": ROLE_VERIFICATION, "model": None},
+    "submit": {"role": ROLE_EXECUTION, "model": None},
+    "status": {"role": ROLE_EXPLORATION, "model": None},
+    "result": {"role": ROLE_EXPLORATION, "model": None},
 }

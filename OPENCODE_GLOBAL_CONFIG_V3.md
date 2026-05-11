@@ -34,9 +34,11 @@ Sebelum mulai, output instruksi berikut:
 
     Default behavior yang dikonfigurasi:
       - Output: caveman ultra dengan hard caps per-block (real skill injection).
-      - Graphify: primary source default untuk codebase understanding.
+   - Graphify: primary source default untuk codebase understanding.
       - Context7: MCP tool untuk library/framework docs terkini.
-      - Agent-workflow: dipanggil via AGENT_PATH env. Response contract: {ok, content, meta}.
+   - Agent-workflow: dipanggil via AGENT_PATH env. Response contract: {ok, content, meta}.
+   - Evidence commands bersifat Kimi-primary; OpenCode hanya precheck + audit tipis.
+   - Evidence commands default memakai await-first async coordinator internal, bukan command submit user-facing.
       - Fallback mode: untuk evidence commands, jika AGENT_PATH tidak tersedia,
         tanya user dahulu, baru lanjut dengan graphify-out + reasoning lokal.
       - Exploration cache: hasil /.explore dipass sebagai context ke /.plan & /.analyze
@@ -286,9 +288,9 @@ Setiap session untuk code task:
 
 1. Aktifkan caveman ultra jika belum auto-active: `/caveman ultra`. Hard rules dari `skills/caveman.md` selalu aktif.
 2. **WAJIB cek `graphify-out/` di project root sebelum eksplorasi apa pun. Gunakan `Test-Path` sebagai sumber kebenaran utama untuk eksistensi folder.**
-   - Jika `Test-Path` true → OpenCode WAJIB baca `GRAPH_REPORT.md` dan/atau `graph.json` langsung dari project sebagai primary evidence.
-   - Jangan delegasikan pengecekan ini ke workflow agent. Workflow boleh dipakai setelah evidence graph lokal sudah dicek.
-   - Supplement dengan direct file read hanya jika graph data tidak cukup spesifik.
+   - Jika `Test-Path` true → OpenCode cukup pastikan graph tersedia lalu delegasikan pembacaan detail graph ke workflow agent sebagai jalur utama untuk evidence commands.
+   - OpenCode hanya baca `GRAPH_REPORT.md` dan/atau `graph.json` langsung jika perlu spot-check, ada konflik evidence, atau user minta audit ketat.
+   - Jangan delegasikan pengecekan eksistensi folder ke workflow agent.
    - Jika `Test-Path` false → jalankan Graphify Missing Protocol untuk task eksplorasi/analisis; untuk task sederhana lanjut file/search langsung.
 3. Gunakan Context7 MCP saat butuh dokumentasi library/framework terkini sebelum menjawab pertanyaan API.
 4. Baca `~/.config/opencode/memory/PERSONAL_MEMORY.md` jika relevan dan tidak kosong.
@@ -310,6 +312,17 @@ Setiap session untuk code task:
 - **Jangan pernah generate session ID baru di tengah sesi chat agent utama.**
 - Session baru workflow agent hanya dibuat kalau agent utama memulai chat baru.
 - Semua skill commands dalam satu sesi chat WAJIB pakai `MAIN_SESSION_ID` yang identik.
+
+## Job Lifecycle Rule (WAJIB)
+
+- `job_id` BUKAN `MAIN_SESSION_ID`. Jangan samakan keduanya.
+- `MAIN_SESSION_ID` tetap 1 per sesi chat agent utama.
+- Async job hanya menyimpan referensi ke `MAIN_SESSION_ID` / session workflow yang relevan.
+- State minimum job: `pending`, `running`, `completed`, `failed`, `not_found`.
+- Default safety rule: 1 active job per `session_id`. Jika ada `pending/running`, submit baru harus gagal jelas.
+- Async path dipakai jika task berisiko melewati hard timeout orchestrator.
+- Flow async internal standar: `await -> background worker -> job JSON poll -> final result`.
+- Jangan claim task selesai setelah `submit`; selesai hanya setelah `result` state `completed`.
 
 ## Session Context Cache (V3 — Exploration Cache Contract)
 
@@ -334,9 +347,9 @@ OpenCode simpan hasil command evidence terakhir di context sesi untuk reuse anta
 
 Workflow commands (evidence):
 
-- `/.explore <hint>` — evidence gathering, graphify-first
-- `/.plan <task>` — plan dengan reasoning layer (reuse LAST_EXPLORE)
-- `/.analyze <topic>` — analysis tanpa code changes (reuse LAST_EXPLORE)
+- `/.explore <hint>` — Kimi-primary exploration, graphify-first
+- `/.plan <task>` — Kimi-primary planning (reuse LAST_EXPLORE)
+- `/.analyze <topic>` — Kimi-primary analysis (reuse LAST_EXPLORE)
 
 Workflow commands (action):
 
@@ -402,6 +415,12 @@ Default safe flow untuk task besar atau berisiko:
 /.explore → /.plan → /.execute -y → /.verify → /.audit (opsional, cross-model)
 ```
 
+For long-running execution:
+
+```text
+/.explore → /.plan → /.execute -y → /.verify → /.audit
+```
+
 For refactor:
 
 ```text
@@ -427,17 +446,23 @@ prompt natural → /.execute -y → /.verify-quick
    - Untuk command yang mapped python, **WAJIB** jalankan multi-layer check (L1–L5) AGENT_PATH dahulu.
    - Berdasarkan hasil check, tentukan jalur:
      - **Evidence commands** (`/.explore`, `/.plan`, `/.analyze`):
-       - OpenCode WAJIB cek dan baca `graphify-out/` langsung dulu sebelum invoke python. Cek eksistensi folder wajib pakai `Test-Path`; `glob` tidak cukup sebagai bukti tidak ada.
+       - OpenCode WAJIB cek `graphify-out/` dengan `Test-Path` sebelum invoke python. `glob` tidak cukup sebagai bukti tidak ada.
+       - Jika `Test-Path` true, workflow agent menjadi explorer utama: baca graph, baca source relevan, hasilkan evidence + scoped reasoning.
+       - OpenCode jangan lakukan deep local exploration sebelum hasil workflow pertama keluar, kecuali user eksplisit minta audit lokal.
        - L1–L5 semua pass + `Test-Path` graphify-out true → **PYTHON INVOKE** (lihat invocation protocol).
        - Ada layer fail → tanya user: lanjut tanpa AGENT_PATH (fallback)? Jika yes → **MODE FALLBACK**. Jika no → STOP.
        - `Test-Path` graphify-out false → STOP, suruh `graphify update`.
-     - **Local action command** (`/.execute -y`):
-       - Implement lokal berbasis `LAST_PLAN_RESULT` jika ada.
-       - Jika plan cache tidak ada atau tidak cukup, boleh baca source yang relevan lalu implement minimal.
-       - Setelah execute, **WAJIB** lanjut verify (`/.verify` atau `/.verify-quick`) secara lokal.
-     - **Python action commands** (`/.verify`, `/.verify-quick`, `/.refactor`, `/.audit`):
-       - L1–L5 semua pass → **PYTHON INVOKE**.
-       - Ada layer fail → **HARD STOP**. Tidak ada fallback.
+      - **Local action command** (`/.execute -y`):
+        - Implement lokal berbasis `LAST_PLAN_RESULT` jika ada.
+        - Jika plan cache tidak ada atau tidak cukup, boleh baca source yang relevan lalu implement minimal.
+        - Setelah execute, **WAJIB** lanjut verify (`/.verify` atau `/.verify-quick`) secara lokal.
+      - **Evidence invoke policy**:
+        - default gunakan mode `await` untuk `/.explore`, `/.plan`, `/.analyze` jika ada risiko melewati hard timeout foreground.
+        - `await` membuat coordinator foreground + worker background + polling file JSON job internal.
+        - async lifecycle tetap internal; bukan command user-facing default.
+      - **Python action commands** (`/.verify`, `/.verify-quick`, `/.refactor`, `/.audit`):
+        - L1–L5 semua pass → **PYTHON INVOKE**.
+        - Ada layer fail → **HARD STOP**. Tidak ada fallback.
    - Parse response JSON {ok, content, meta}, **WAJIB tunggu field `ok` ter-parse** sebelum proses dianggap selesai.
 3. Jika bukan skill command (prompt natural tanpa `/.`):
    - Boleh pilih antara invoke agent-workflow atau langsung lokal sesuai efisiensi.
