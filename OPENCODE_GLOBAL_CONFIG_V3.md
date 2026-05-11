@@ -285,9 +285,11 @@ Off toggle (per session): "normal mode" atau "stop caveman" → balik ke verbose
 Setiap session untuk code task:
 
 1. Aktifkan caveman ultra jika belum auto-active: `/caveman ultra`. Hard rules dari `skills/caveman.md` selalu aktif.
-2. **WAJIB cek `graphify-out/` di project root sebelum eksplorasi apa pun.**
-   - Jika ada → baca `GRAPH_REPORT.md` dan/atau `graph.json` sebagai primary evidence. Supplement dengan direct file read hanya jika graph data tidak cukup spesifik.
-   - Jika tidak ada → jalankan Graphify Missing Protocol untuk task eksplorasi/analisis; untuk task sederhana lanjut file/search langsung.
+2. **WAJIB cek `graphify-out/` di project root sebelum eksplorasi apa pun. Gunakan `Test-Path` sebagai sumber kebenaran utama untuk eksistensi folder.**
+   - Jika `Test-Path` true → OpenCode WAJIB baca `GRAPH_REPORT.md` dan/atau `graph.json` langsung dari project sebagai primary evidence.
+   - Jangan delegasikan pengecekan ini ke workflow agent. Workflow boleh dipakai setelah evidence graph lokal sudah dicek.
+   - Supplement dengan direct file read hanya jika graph data tidak cukup spesifik.
+   - Jika `Test-Path` false → jalankan Graphify Missing Protocol untuk task eksplorasi/analisis; untuk task sederhana lanjut file/search langsung.
 3. Gunakan Context7 MCP saat butuh dokumentasi library/framework terkini sebelum menjawab pertanyaan API.
 4. Baca `~/.config/opencode/memory/PERSONAL_MEMORY.md` jika relevan dan tidak kosong.
 5. **WAJIB generate `MAIN_SESSION_ID` di awal setiap sesi chat agent utama**: `main_YYYYMMDD_HHMMSS`.
@@ -338,7 +340,7 @@ Workflow commands (evidence):
 
 Workflow commands (action):
 
-- `/.execute -y` — implementation dengan contract sanity check
+- `/.execute -y` — local implementation dari plan aktif dengan contract sanity check
 - `/.verify` — full verification
 - `/.verify-quick` — lightweight verify (syntax/lint only)
 - `/.refactor <scope>` — plan + execute sequence
@@ -414,20 +416,26 @@ prompt natural → /.execute -y → /.verify-quick
 
 ## Skill Command Enforcement
 
-**WAJIB invoke agent-workflow untuk setiap skill command — kecuali user setuju mode fallback (hanya untuk evidence commands).**
+**WAJIB invoke agent-workflow untuk skill command evidence. Action command tertentu bisa lokal sesuai mapping.**
 
 ### Detection flow
 
 1. Detect apakah user prompt adalah skill command → cek prefix `/.` + match command registry.
 2. Jika match skill command:
-   - **TIDAK BOLEH** langsung jalankan logic lokal (search/read/edit).
-   - **WAJIB** jalankan multi-layer check (L1–L5) AGENT_PATH dahulu.
+   - Ikuti routing per command mapping. Jangan asumsi semua skill command wajib python.
+   - Untuk command yang mapped local, boleh langsung jalankan logic lokal (search/read/edit).
+   - Untuk command yang mapped python, **WAJIB** jalankan multi-layer check (L1–L5) AGENT_PATH dahulu.
    - Berdasarkan hasil check, tentukan jalur:
      - **Evidence commands** (`/.explore`, `/.plan`, `/.analyze`):
-       - L1–L5 semua pass + graphify-out ada → **PYTHON INVOKE** (lihat invocation protocol).
+       - OpenCode WAJIB cek dan baca `graphify-out/` langsung dulu sebelum invoke python. Cek eksistensi folder wajib pakai `Test-Path`; `glob` tidak cukup sebagai bukti tidak ada.
+       - L1–L5 semua pass + `Test-Path` graphify-out true → **PYTHON INVOKE** (lihat invocation protocol).
        - Ada layer fail → tanya user: lanjut tanpa AGENT_PATH (fallback)? Jika yes → **MODE FALLBACK**. Jika no → STOP.
-       - graphify-out tidak ada → STOP, suruh `graphify update`.
-     - **Action commands** (`/.execute -y`, `/.verify`, `/.verify-quick`, `/.refactor`, `/.audit`):
+       - `Test-Path` graphify-out false → STOP, suruh `graphify update`.
+     - **Local action command** (`/.execute -y`):
+       - Implement lokal berbasis `LAST_PLAN_RESULT` jika ada.
+       - Jika plan cache tidak ada atau tidak cukup, boleh baca source yang relevan lalu implement minimal.
+       - Setelah execute, **WAJIB** lanjut verify (`/.verify` atau `/.verify-quick`) secara lokal.
+     - **Python action commands** (`/.verify`, `/.verify-quick`, `/.refactor`, `/.audit`):
        - L1–L5 semua pass → **PYTHON INVOKE**.
        - Ada layer fail → **HARD STOP**. Tidak ada fallback.
    - Parse response JSON {ok, content, meta}, **WAJIB tunggu field `ok` ter-parse** sebelum proses dianggap selesai.
@@ -441,7 +449,7 @@ prompt natural → /.execute -y → /.verify-quick
 | `/.explore`      | `explore`        | evidence | yes       | Set `LAST_EXPLORE_RESULT`        |
 | `/.plan`         | `plan`           | evidence | yes       | Reuse `LAST_EXPLORE_RESULT`      |
 | `/.analyze`      | `analyze`        | evidence | yes       | Reuse `LAST_EXPLORE_RESULT`      |
-| `/.execute -y`   | `execute`        | action   | no        | Pre-invoke contract sanity check |
+| `/.execute -y`   | local_execute    | action   | n/a       | Implement local dari plan cache  |
 | `/.verify`       | `verify`         | action   | no        | Full check                       |
 | `/.verify-quick` | `verify_quick`   | action   | no        | Lightweight: syntax/lint only    |
 | `/.refactor`     | (plan + execute) | action   | no        | Sequence                         |
@@ -455,7 +463,7 @@ prompt natural → /.execute -y → /.verify-quick
 | `/.review`       | `skills/caveman.md` | Sub-skill: one-line review   |
 | `/.compress <f>` | `skills/caveman.md` | Sub-skill: prose compression |
 
-Error bila user pakai action command tapi agent-workflow unavailable (L1–L5 gagal) → inform user, STOP. Tidak ada opsi fallback untuk action commands.
+Error bila user pakai python action command tapi agent-workflow unavailable (L1–L5 gagal) → inform user, STOP. `/.execute -y` tidak pakai workflow.
 
 Natural prompt tanpa `/.` → optional invoke agent-workflow (agent judgment).
 
@@ -469,6 +477,7 @@ Natural prompt tanpa `/.` → optional invoke agent-workflow (agent judgment).
 - Workflow agent WAJIB manfaatkan `graphify-out/` sebagai sumber struktur utama.
 - Caveman ultra **WAJIB aktif** di sisi workflow agent saat menghasilkan evidence (output `content` harus terkompresi sesuai caps di `skills/caveman.md`).
 - Aturan ini berlaku dengan/tanpa `[WORKFLOW_AGENT]` tag — caveman ultra tetap nyala.
+- Ini TIDAK menggantikan kewajiban OpenCode untuk cek dan baca `graphify-out/` langsung di project terlebih dulu.
 
 ### OpenCode Side (reading response)
 
@@ -540,7 +549,7 @@ Saat invoke `/.plan` atau `/.analyze`, prompt python diaugmentasi:
 <LAST_EXPLORE_RESULT content jika ada>
 ```
 
-Saat invoke `/.execute`, prompt python diaugmentasi dengan contract hint berdasarkan plan:
+Saat menjalankan `/.execute` secara lokal, instruction implementasi diaugmentasi dengan contract hint berdasarkan plan:
 
 ```text
 <execute instruction>
@@ -551,7 +560,7 @@ Saat invoke `/.execute`, prompt python diaugmentasi dengan contract hint berdasa
 - Config/env touched: <yes/no>
 ```
 
-Hint ini memprovoke python agent agar eksplisit consider runtime contract sebelum modify.
+Hint ini memaksa executor lokal untuk eksplisit consider runtime contract sebelum modify.
 
 ### Contoh Invocation
 
@@ -671,10 +680,10 @@ Gagal → output `[CHECK FAILED — L5: SCRIPT NOT CALLABLE]`.
 
 Setelah multi-layer check:
 
-- **Semua layer PASS** → AGENT_PATH valid. Lanjut cek graphify-out (untuk evidence commands). Action commands langsung python invoke.
+- **Semua layer PASS** → AGENT_PATH valid. Lanjut cek graphify-out dengan `Test-Path` (untuk evidence commands). Python action commands boleh invoke python; `/.execute -y` tetap lokal sesuai mapping.
 - **Ada layer FAIL** → AGENT_PATH tidak tersedia:
   - **Evidence commands** → output error layer + tanya user opsi fallback (yes/no).
-  - **Action commands** → output error layer + **HARD STOP**.
+  - **Python action commands** → output error layer + **HARD STOP**.
 
 ### Rules
 
@@ -704,14 +713,16 @@ Caveman caps tetap berlaku: `uncertainties` max 5 items, 80 char/line.
 
 ## Graphify Rules
 
-`graphify-out/` adalah default primary source untuk codebase understanding. **WAJIB cek lebih dulu sebelum setiap eksplorasi.**
+`graphify-out/` adalah default primary source untuk codebase understanding. **WAJIB cek lebih dulu sebelum setiap eksplorasi. Cek eksistensi folder wajib pakai `Test-Path`.**
 
 ### Default Behavior
 
-- **Setiap task eksplorasi, analisis, atau planning → cek `graphify-out/` pertama.**
-- Baca `GRAPH_REPORT.md` untuk summary; `graph.json` untuk detail node/edge.
+- **Setiap task eksplorasi, analisis, atau planning → cek `graphify-out/` pertama dengan `Test-Path -LiteralPath "<root>\\graphify-out"`.**
+- `glob` boleh dipakai setelahnya untuk cari isi atau file turunan, tapi tidak boleh jadi satu-satunya dasar menyimpulkan folder tidak ada.
+- OpenCode sendiri WAJIB baca `GRAPH_REPORT.md` untuk summary; `graph.json` untuk detail node/edge.
+- Jangan andalkan workflow agent sebagai satu-satunya pembaca graph.
 - Supplement dengan direct file read hanya jika graph data tidak cukup spesifik.
-- Untuk evidence commands, graphify-out **WAJIB ada** di kedua jalur (python invoke maupun fallback). Tidak ada → STOP, suruh `graphify update`.
+- Untuk evidence commands, graphify-out **WAJIB ada** di kedua jalur (python invoke maupun fallback). Jika `Test-Path` false → STOP, suruh `graphify update`.
 
 ### Official Commands
 
@@ -725,7 +736,7 @@ Caveman caps tetap berlaku: `uncertainties` max 5 items, 80 char/line.
 
 ## Graphify Missing Protocol
 
-Jika user meminta workflow graphify-first dan `graphify-out/` tidak ada:
+Jika user meminta workflow graphify-first dan `Test-Path` untuk `graphify-out/` false:
 
 1. Detect framework dari sinyal minimal (Laravel/Python/NestJS/Next.js/React/Rust/Flutter).
 2. Buat `.graphifyignore` sesuai template.
@@ -755,8 +766,8 @@ MCP tool untuk dokumentasi library/framework terkini. Default: gunakan sebelum m
 ## Execution Safety
 
 - `/.execute` tanpa `-y` → gate only, output `[EXECUTION SCOPE]`, STOP.
-- `/.execute -y` → boleh edit hanya file dalam execution scope.
-- Sebelum invoke python execute → contract sanity check (DTO/async/config flags).
+- `/.execute -y` → implement lokal berbasis plan aktif; boleh edit hanya file dalam execution scope.
+- Sebelum local execute → contract sanity check (DTO/async/config flags).
 - Jangan modify file di luar scope.
 - Jangan revert user changes.
 - Jangan destructive git command kecuali user eksplisit.
@@ -808,11 +819,12 @@ Read-only safe actions tidak perlu izin (search, list, read, git status/diff/log
 - Jalankan aksi sensitif tanpa permission gate.
 - Output verbose/bertele-tele — caveman ultra dengan caps selalu aktif.
 - Jawab pertanyaan API library spesifik dengan hallucinated signature tanpa cek Context7.
-- Skip cek `graphify-out/` sebelum eksplorasi codebase.
+- Skip cek `graphify-out/` dengan `Test-Path` sebelum eksplorasi codebase.
+- Skip read langsung `graphify-out/` oleh OpenCode sebelum invoke workflow evidence.
 - Inject `[WORKFLOW_AGENT]` tag ke prompt python — python handle internal.
 - Anggap proses python invoke selesai sebelum parse field `ok` dari JSON.
 - Lanjut ke reasoning layer atau output final saat `ok: false` — WAJIB STOP.
-- Fallback ke mode lokal untuk action commands — hanya boleh fallback untuk evidence.
+- Fallback ke mode lokal untuk python action commands — hanya boleh fallback untuk evidence.
 - Skip cek graphify-out/ di mode fallback evidence commands — graphify-out tetap wajib.
 - **Output reasoning melebihi caps caveman ultra** (lihat skills/caveman.md tabel caps).
 - **Skip exploration cache reuse** — jika `LAST_EXPLORE_RESULT` ada di session, WAJIB pass sebagai PRIOR_EVIDENCE ke `/.plan` dan `/.analyze`.
@@ -988,6 +1000,14 @@ Jalankan L1–L5 check per protocol global config:
 
 ### STEP B — Cek graphify-out/ exists
 
+Gunakan PowerShell berikut sebagai cek utama:
+
+```powershell
+Test-Path -LiteralPath "<project_root>\graphify-out"
+```
+
+Jika hasil `False`, baru perlakukan graphify-out tidak ada. Jangan pakai `glob` sebagai satu-satunya bukti negatif.
+
 - Ada → lanjut **PYTHON INVOKE** (STEP C).
 - Tidak ada → STOP, suruh `graphify update`.
 
@@ -1044,6 +1064,8 @@ Caveman ultra **tetap aktif** dengan caps. Graphify-out **wajib ada**.
 
 ### STEP F1 — Cek graphify-out/
 
+Gunakan `Test-Path -LiteralPath "<project_root>\graphify-out"` sebagai gate utama.
+
 - Tidak ada → STOP, suruh `graphify update`.
 
 ### STEP F2 — Eksplorasi sebagai agent utama
@@ -1092,6 +1114,8 @@ Skill ini optional. Gunakan saat user meminta plan, task besar, banyak file, ars
 Jalankan L1–L5 check. Ada FAIL → tanya fallback (yes/no).
 
 ### STEP B — Cek graphify-out/
+
+Gunakan `Test-Path -LiteralPath "<project_root>\graphify-out"` sebagai gate utama.
 
 - Ada → lanjut **PYTHON INVOKE** (STEP C).
 - Tidak ada → STOP, suruh `graphify update`.
@@ -1186,6 +1210,8 @@ Caveman caps tetap. Graphify-out wajib.
 
 ### STEP F1 — Cek graphify-out/
 
+Gunakan `Test-Path -LiteralPath "<project_root>\graphify-out"` sebagai gate utama.
+
 Tidak ada → STOP.
 
 ### STEP F2 — Evidence gathering sebagai agent utama
@@ -1214,7 +1240,7 @@ End with: `Setuju? /.execute -y`
 ````markdown
 # Skill: execute
 
-description: Controlled implementation — pre-invoke contract sanity check + bounded execution
+description: Controlled local implementation — plan-driven, contract-aware, bounded execution
 
 ## Trigger
 
@@ -1240,17 +1266,13 @@ Dengan `-y` → proceed. Dengan prompt natural eksplisit → proceed jika low-ri
 
 ## Execution
 
-### STEP 1 — Multi-layer check AGENT_PATH (HARD STOP on fail)
-
-Jalankan L1–L5. Ada FAIL → **HARD STOP**, no fallback.
-
-### STEP 2 — Tentukan session
+### STEP 1 — Tentukan session
 
 Reuse `MAIN_SESSION_ID`.
 
-### STEP 2.5 — Contract Sanity Check (V3 — pre-invoke)
+### STEP 2 — Contract Sanity Check (V3 — pre-execute)
 
-Sebelum invoke python execute, klasifikasi perubahan dari `LAST_PLAN_RESULT` atau scope:
+Sebelum local execute, klasifikasi perubahan dari `LAST_PLAN_RESULT` atau scope:
 
 | Touchpoint        | Sinyal                                                       |
 | ----------------- | ------------------------------------------------------------ |
@@ -1258,7 +1280,7 @@ Sebelum invoke python execute, klasifikasi perubahan dari `LAST_PLAN_RESULT` ata
 | Async/queue       | edit job, queue, worker, coroutine, await boundary           |
 | Config/env        | edit `.env`, config file, feature flag, environment var      |
 
-Generate `[CONTRACT_AWARENESS]` block untuk inject ke prompt python:
+Generate `[CONTRACT_AWARENESS]` block untuk instruction implementasi lokal:
 
 ```text
 [CONTRACT_AWARENESS]
@@ -1268,40 +1290,30 @@ Generate `[CONTRACT_AWARENESS]` block untuk inject ke prompt python:
 - Note: verify contract before commit untuk yang `yes`.
 ```
 
-Heuristik ringan — bukan formal schema validation. Tujuan: minta python agent eksplisit consider runtime contract.
+Heuristik ringan — bukan formal schema validation. Tujuan: paksa executor lokal eksplisit consider runtime contract.
 
-### STEP 3 — Invoke python dengan contract hint + caveman
+### STEP 3 — Implement lokal berbasis plan aktif
 
-```powershell
-python $env:AGENT_PATH -c execute -p "lakukan perubahan sesuai plan yang sudah disetujui.
+1. Reuse `LAST_PLAN_RESULT` jika ada.
+2. Jika plan cache tidak cukup, baca source relevan seminimal mungkin.
+3. Edit hanya file dalam execution scope.
+4. Jangan revert user changes.
 
-[CONTRACT_AWARENESS]
-<isi dari STEP 2.5>
-
-[OUTPUT_STYLE]
-caveman ultra. result max 10 baris." -s "<session_id>" -w "<workspace_root>" --pretty
-```
-
-### STEP 4 — WAJIB tunggu JSON {ok, content, meta}
-
-- `ok: false` → output `[EXECUTE FAILED]` + content, STOP.
-- `ok: true` → lanjut.
-
-### STEP 5 — Output + Set cache
+### STEP 4 — Output + Set cache
 
 ```text
 [EXECUTION RESULT]
 session: <session_id>
 files_changed: <list>
-<content dari JSON>
+summary: implementasi lokal selesai
 
 status: success
-contract_flags: <yang ditandai yes di STEP 2.5>
+contract_flags: <yang ditandai yes di STEP 2>
 ```
 
 **WAJIB**: set `LAST_EXECUTE_DIFF` di context cache (gunakan untuk `/.audit` & `/.verify`).
 
-### STEP 6 — Auto-trigger verify
+### STEP 5 — Auto-trigger verify
 
 Pilih `/.verify` (full) atau `/.verify-quick` (lightweight) berdasarkan scope:
 
@@ -1310,7 +1322,7 @@ Pilih `/.verify` (full) atau `/.verify-quick` (lightweight) berdasarkan scope:
 
 Cek token budget cumulative.
 
-### STEP 7 — Suggest `/.audit` (V3)
+### STEP 6 — Suggest `/.audit` (V3)
 
 Setelah verify pass, suggest cross-model audit:
 
@@ -1620,6 +1632,8 @@ Jalankan L1–L5. Ada FAIL → tanya fallback (yes/no).
 
 ### STEP B — Cek graphify-out/
 
+Gunakan `Test-Path -LiteralPath "<project_root>\graphify-out"` sebagai gate utama.
+
 Tidak ada → STOP, suruh `graphify update`.
 
 ### STEP B.5 — Cek exploration cache
@@ -1687,6 +1701,8 @@ Cek token budget cumulative.
 Caveman caps tetap. Graphify-out wajib.
 
 ### STEP F1 — Cek graphify-out/. Tidak ada → STOP.
+
+Tidak ada = `Test-Path -LiteralPath "<project_root>\graphify-out"` mengembalikan `False`.
 
 ### STEP F2 — Analisis sebagai agent utama
 
@@ -1876,7 +1892,7 @@ Read `~/.config/opencode/skills/plan.md` and follow it. Reject `/plan` only when
 
 ```markdown
 ---
-description: Implementation with pre-invoke contract sanity check. AGENT_PATH wajib, no fallback. Usage: /.execute -y
+description: Local implementation from active plan with contract sanity check. No workflow invoke. Usage: /.execute -y
 ---
 
 Read `~/.config/opencode/skills/execute.md` and follow it. Reject formal `/.execute` without `-y`. Sensitive actions require Permission Gate.
