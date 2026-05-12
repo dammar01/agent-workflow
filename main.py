@@ -222,6 +222,7 @@ if __name__ == "__main__":
         choices=["explore", "plan", "analyze", "execute", "verify", "submit", "await", "status", "result", "worker"],
     )
     parser.add_argument("--prompt", "-p", default=None)
+    parser.add_argument("--prompt-file", default=None, help="path to file containing the prompt (alternative to --prompt)")
     parser.add_argument("--session", "-s", default="default")
     parser.add_argument(
         "--fresh-session",
@@ -264,18 +265,30 @@ if __name__ == "__main__":
 
     work_dir = str(Path(args.work_dir).resolve()) if args.work_dir else str(Path.cwd())
 
-    if args.command in {"explore", "plan", "analyze", "execute", "verify", "submit", "await"} and not args.prompt:
-        raise SystemExit("--prompt is required for this command")
+    prompt = args.prompt
+    if args.prompt_file:
+        if prompt:
+            raise SystemExit("cannot use both --prompt and --prompt-file")
+        try:
+            prompt = Path(args.prompt_file).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            raise SystemExit(f"prompt file not found: {args.prompt_file}")
+        except IsADirectoryError:
+            raise SystemExit(f"prompt file is a directory: {args.prompt_file}")
+        except OSError as exc:
+            raise SystemExit(f"cannot read prompt file: {exc}")
+    if args.command in {"explore", "plan", "analyze", "execute", "verify", "submit", "await"} and not prompt:
+        raise SystemExit("--prompt or --prompt-file is required for this command")
     if args.command in {"status", "result", "worker"} and not args.job_id:
         raise SystemExit("--job-id is required for this command")
 
     effective_session = resolve_session_id(args.session, fresh=args.fresh_session)
     if args.command == "submit":
-        result = submit(args.job_command, args.prompt, effective_session, work_dir, args.model)
+        result = submit(args.job_command, prompt, effective_session, work_dir, args.model)
     elif args.command == "await":
         result = await_job(
             args.job_command,
-            args.prompt,
+            prompt,
             effective_session,
             work_dir,
             args.model,
@@ -289,5 +302,5 @@ if __name__ == "__main__":
     elif args.command == "worker":
         result = run_worker(args.job_id)
     else:
-        result = run(args.command, args.prompt, effective_session, work_dir, args.model)
+        result = run(args.command, prompt, effective_session, work_dir, args.model)
     print(json.dumps(result, indent=2) if args.pretty else json.dumps(result))
