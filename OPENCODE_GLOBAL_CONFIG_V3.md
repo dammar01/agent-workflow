@@ -294,29 +294,32 @@ Setiap session untuk code task:
    - Jika `Test-Path` false → jalankan Graphify Missing Protocol untuk task eksplorasi/analisis; untuk task sederhana lanjut file/search langsung.
 3. Gunakan Context7 MCP saat butuh dokumentasi library/framework terkini sebelum menjawab pertanyaan API.
 4. Baca `~/.config/opencode/memory/PERSONAL_MEMORY.md` jika relevan dan tidak kosong.
-5. **WAJIB generate `MAIN_SESSION_ID` di awal setiap sesi chat agent utama**: `main_YYYYMMDD_HHMMSS`.
-   - Simpan `MAIN_SESSION_ID` di context/memory sesi chat agent utama.
-   - **Dalam 1 sesi chat agent utama, hanya boleh ada 1 `MAIN_SESSION_ID`.**
-   - Jangan regenerate session ID di tengah sesi kecuali user eksplisit minta reset.
+5. **WAJIB generate `MAIN_SESSION_ID` di awal setiap sesi chat agent utama**: `main_<project_slug>_YYYYMMDD_HHMMSS`.
+   - `project_slug` harus berasal dari **root repo aktif saat ini** (nama folder root workspace/repo), mis. `finance-v2`.
+   - Simpan `MAIN_SESSION_ID` **dan** `MAIN_SESSION_PROJECT_ROOT` di context/memory sesi chat agent utama.
+   - **Dalam 1 sesi chat agent utama, hanya boleh ada 1 `MAIN_SESSION_ID` untuk 1 root project yang sama.**
+   - Jangan regenerate session ID di tengah sesi kecuali user eksplisit minta reset **atau** root project aktif berubah.
    - Semua invoke ke workflow agent dalam sesi yang sama WAJIB pakai `MAIN_SESSION_ID` yang identik.
-   - Hubungan: **1 sesi chat agent utama = 1 session workflow agent.**
+   - Hubungan: **1 sesi chat agent utama + 1 root project = 1 session workflow agent.**
 
 ## Session Handling Rule (WAJIB)
 
-**1 sesi chat agent utama = 1 session workflow agent.**
+**1 sesi chat agent utama + 1 root project = 1 session workflow agent.**
 
-- Di awal setiap sesi chat, agent utama WAJIB generate `MAIN_SESSION_ID` (`main_YYYYMMDD_HHMMSS`) dan simpan di context/memory.
-- Sebelum setiap invoke ke workflow agent, WAJIB cek apakah `MAIN_SESSION_ID` sudah ada di context.
-  - Jika sudah ada → reuse ID tersebut.
+- Di awal setiap sesi chat, agent utama WAJIB resolve **active project root** dari workspace saat ini, lalu generate `MAIN_SESSION_ID` (`main_<project_slug>_YYYYMMDD_HHMMSS`) dan simpan bersama `MAIN_SESSION_PROJECT_ROOT` di context/memory.
+- Sebelum setiap invoke ke workflow agent, WAJIB cek apakah `MAIN_SESSION_ID` **dan** `MAIN_SESSION_PROJECT_ROOT` sudah ada di context.
   - Jika belum ada → generate baru, simpan, dan pakai.
-- **Jangan pernah generate session ID baru di tengah sesi chat agent utama.**
-- Session baru workflow agent hanya dibuat kalau agent utama memulai chat baru.
-- Semua skill commands dalam satu sesi chat WAJIB pakai `MAIN_SESSION_ID` yang identik.
+  - Jika ada dan `MAIN_SESSION_PROJECT_ROOT` **persis sama** dengan root project aktif saat ini → reuse ID tersebut.
+  - Jika ada tapi `MAIN_SESSION_PROJECT_ROOT` berbeda walau branch/repo name mirip → **JANGAN reuse**; generate session baru untuk project root aktif.
+- Equality check project harus berbasis **normalized absolute path** root repo/workspace. Branch boleh beda; path project harus sama persis.
+- **Jangan pernah reuse session workflow lintas project root.**
+- Session baru workflow agent dibuat kalau agent utama memulai chat baru **atau** active project root berubah.
+- Semua skill commands dalam satu root project yang sama WAJIB pakai `MAIN_SESSION_ID` yang identik.
 
 ## Job Lifecycle Rule (WAJIB)
 
 - `job_id` BUKAN `MAIN_SESSION_ID`. Jangan samakan keduanya.
-- `MAIN_SESSION_ID` tetap 1 per sesi chat agent utama.
+- `MAIN_SESSION_ID` tetap 1 per sesi chat agent utama **per root project yang sama**.
 - Async job hanya menyimpan referensi ke `MAIN_SESSION_ID` / session workflow yang relevan.
 - State minimum job: `pending`, `running`, `completed`, `failed`, `not_found`.
 - Default safety rule: 1 active job per `session_id`. Jika ada `pending/running`, submit baru harus gagal jelas.
@@ -341,7 +344,7 @@ OpenCode simpan hasil command evidence terakhir di context sesi untuk reuse anta
 - Jika ada → embed summary di prompt python:
   `"<task>\n\n[PRIOR_EVIDENCE]\n<LAST_EXPLORE_RESULT content>"`
 - Tujuan: python tidak re-explore subsystem yang sudah dipetakan.
-- Cache valid hanya dalam `MAIN_SESSION_ID` yang sama. Reset session = reset cache.
+- Cache valid hanya dalam `MAIN_SESSION_ID` yang sama **dan** `MAIN_SESSION_PROJECT_ROOT` yang sama. Reset session atau pindah project root = reset cache.
 
 ## Command Registry V3
 
@@ -1049,7 +1052,11 @@ Jika hasil `False`, baru perlakukan graphify-out tidak ada. Jangan pakai `glob` 
 
 ### STEP C1 — Tentukan session
 
-Reuse `MAIN_SESSION_ID` atau generate baru.
+Resolve root project aktif dulu.
+
+- Jika `MAIN_SESSION_PROJECT_ROOT` belum ada → generate baru.
+- Jika ada dan normalized absolute path sama persis dengan root aktif → reuse `MAIN_SESSION_ID`.
+- Jika path berbeda → generate `MAIN_SESSION_ID` baru untuk project itu.
 
 ### STEP C2 — Invoke python dengan caveman hint
 
@@ -1174,7 +1181,11 @@ Tujuan: hindari re-explore subsystem yang sudah dipetakan `/.explore` sebelumnya
 
 ### STEP C1 — Session
 
-Reuse `MAIN_SESSION_ID` atau generate baru.
+Resolve root project aktif dulu.
+
+- Jika `MAIN_SESSION_PROJECT_ROOT` belum ada → generate baru.
+- Jika ada dan normalized absolute path sama persis dengan root aktif → reuse `MAIN_SESSION_ID`.
+- Jika path berbeda → generate `MAIN_SESSION_ID` baru untuk project itu.
 
 ### STEP C2 — Invoke dengan PRIOR_EVIDENCE + caveman hint
 
@@ -1316,7 +1327,9 @@ Dengan `-y` → proceed. Dengan prompt natural eksplisit → proceed jika low-ri
 
 ### STEP 1 — Tentukan session
 
-Reuse `MAIN_SESSION_ID`.
+Reuse `MAIN_SESSION_ID` hanya jika `MAIN_SESSION_PROJECT_ROOT`
+normalized absolute path sama persis dengan root project aktif.
+Jika beda → generate session baru untuk project aktif.
 
 ### STEP 2 — Contract Sanity Check (V3 — pre-execute)
 
@@ -1402,7 +1415,9 @@ Jalankan L1–L5. Ada FAIL → **HARD STOP**, no fallback.
 
 ### STEP 2 — Tentukan session
 
-Reuse `MAIN_SESSION_ID`.
+Reuse `MAIN_SESSION_ID` hanya jika `MAIN_SESSION_PROJECT_ROOT`
+normalized absolute path sama persis dengan root project aktif.
+Jika beda → generate session baru untuk project aktif.
 
 ### STEP 3 — Invoke python dengan caveman hint
 
@@ -1467,7 +1482,9 @@ Jalankan L1–L5. Ada FAIL → **HARD STOP**, no fallback.
 
 ### STEP 2 — Tentukan session
 
-Reuse `MAIN_SESSION_ID`.
+Reuse `MAIN_SESSION_ID` hanya jika `MAIN_SESSION_PROJECT_ROOT`
+normalized absolute path sama persis dengan root project aktif.
+Jika beda → generate session baru untuk project aktif.
 
 ### STEP 3 — Invoke python dengan lightweight mode
 
@@ -1558,7 +1575,9 @@ Jalankan L1–L5. Ada FAIL → **HARD STOP**. Tidak ada fallback (audit fallback
 
 ### STEP 3 — Tentukan session
 
-Reuse `MAIN_SESSION_ID`.
+Reuse `MAIN_SESSION_ID` hanya jika `MAIN_SESSION_PROJECT_ROOT`
+normalized absolute path sama persis dengan root project aktif.
+Jika beda → generate session baru untuk project aktif.
 
 ### STEP 4 — Invoke python dengan model override hint + caveman
 
@@ -1713,7 +1732,9 @@ Cek `LAST_EXPLORE_RESULT`. Ada → embed sebagai PRIOR_EVIDENCE.
 
 ### STEP C1 — Session
 
-Reuse `MAIN_SESSION_ID`.
+Reuse `MAIN_SESSION_ID` hanya jika `MAIN_SESSION_PROJECT_ROOT`
+normalized absolute path sama persis dengan root project aktif.
+Jika beda → generate session baru untuk project aktif.
 
 ### STEP C2 — Invoke dengan PRIOR_EVIDENCE + caveman
 
