@@ -543,16 +543,25 @@ Cara setup ada di README project `agent-workflow` — bukan tugas config ini.
 Dari PowerShell:
 
 ```powershell
-python $env:AGENT_PATH -c <command> -p "<prompt>" -s "<session>" -w "<work_dir>" --pretty
+$promptFile = Join-Path $env:TEMP "opencode\agent_prompt.txt"
+# tulis prompt ke file dulu, lalu invoke pakai --prompt-file
+python $env:AGENT_PATH -c <command> --prompt-file "$promptFile" -s "<session>" -w "<work_dir>" --pretty
 ```
+
+Untuk prompt pendek satu baris, `-p` masih boleh.
+Untuk prompt multi-baris/panjang, **default WAJIB pakai `--prompt-file`** agar aman dari quoting/argparse pecah di PowerShell.
 
 Dari Python subprocess:
 
 ```python
 import os, subprocess, json
+from pathlib import Path
 
 script = os.environ.get("AGENT_PATH")
-args = ["python", script, "-c", command, "-p", prompt, "-s", session, "-w", work_dir, "--pretty"]
+prompt_file = Path(os.environ.get("TEMP", ".")) / "opencode" / "agent_prompt.txt"
+prompt_file.parent.mkdir(parents=True, exist_ok=True)
+prompt_file.write_text(prompt, encoding="utf-8")
+args = ["python", script, "-c", command, "--prompt-file", str(prompt_file), "-s", session, "-w", work_dir, "--pretty"]
 result = subprocess.run(args, capture_output=True, text=True)
 # WAJIB parse JSON dan cek field "ok" sebelum proses dianggap selesai.
 data = json.loads(result.stdout)
@@ -590,22 +599,22 @@ Hint ini memaksa executor lokal untuk eksplisit consider runtime contract sebelu
 ### Contoh Invocation
 
 ```powershell
-python $env:AGENT_PATH -c explore -p "cari entry point auth" -s "main_20260511_080000" -w "E:\Work\project" --pretty
-python $env:AGENT_PATH -c analyze -p "cek logic auth\n\n[PRIOR_EVIDENCE]\n..." -s "main_20260511_080000" -w "E:\Work\project" --pretty
-python $env:AGENT_PATH -c plan -p "buat fitur payment\n\n[PRIOR_EVIDENCE]\n..." -s "main_20260511_080000" -w "E:\Work\project" --pretty
-python $env:AGENT_PATH -c audit -p "review last execute git diff" -s "main_20260511_080000" -w "E:\Work\project" --pretty
+python $env:AGENT_PATH -c explore --prompt-file "$promptFile" -s "main_20260511_080000" -w "E:\Work\project" --pretty
+python $env:AGENT_PATH -c analyze --prompt-file "$promptFile" -s "main_20260511_080000" -w "E:\Work\project" --pretty
+python $env:AGENT_PATH -c plan --prompt-file "$promptFile" -s "main_20260511_080000" -w "E:\Work\project" --pretty
+python $env:AGENT_PATH -c audit --prompt-file "$promptFile" -s "main_20260511_080000" -w "E:\Work\project" --pretty
 ```
 
 Override model (deviasi dari `config/opencode.json`):
 
 ```powershell
-python $env:AGENT_PATH -c plan -p "..." -s "..." -w "..." -m "anthropic/claude-sonnet-4-5" --pretty
+python $env:AGENT_PATH -c plan --prompt-file "$promptFile" -s "..." -w "..." -m "anthropic/claude-sonnet-4-5" --pretty
 ```
 
 Cross-model audit (pakai model berbeda dari executor untuk independen review):
 
 ```powershell
-python $env:AGENT_PATH -c audit -p "..." -s "..." -w "..." -m "moonshot/kimi-k2.6" --pretty
+python $env:AGENT_PATH -c audit --prompt-file "$promptFile" -s "..." -w "..." -m "moonshot/kimi-k2.6" --pretty
 ```
 
 ### Response Format (Contract V3)
@@ -1045,10 +1054,17 @@ Reuse `MAIN_SESSION_ID` atau generate baru.
 ### STEP C2 — Invoke python dengan caveman hint
 
 ```powershell
-python $env:AGENT_PATH -c explore -p "<hint>
+$promptFile = Join-Path $env:TEMP "opencode\agent_prompt.txt"
+python $env:AGENT_PATH -c explore --prompt-file "$promptFile"
+
+# isi file:
+<hint>
 
 [OUTPUT_STYLE]
-caveman ultra. entry_points max 8, related_modules max 8, uncertainties max 5." -s "<session_id>" -w "<workspace_root>" --pretty
+caveman ultra. entry_points max 8, related_modules max 8, uncertainties max 5.
+
+# lalu lanjut arg lain:
+-s "<session_id>" -w "<workspace_root>" --pretty
 ```
 
 Tanpa inject `[WORKFLOW_AGENT]`. Tetap kirim `[OUTPUT_STYLE]` hint.
@@ -1163,13 +1179,20 @@ Reuse `MAIN_SESSION_ID` atau generate baru.
 ### STEP C2 — Invoke dengan PRIOR_EVIDENCE + caveman hint
 
 ```powershell
-python $env:AGENT_PATH -c plan -p "<task>
+$promptFile = Join-Path $env:TEMP "opencode\agent_prompt.txt"
+python $env:AGENT_PATH -c plan --prompt-file "$promptFile"
+
+# isi file:
+<task>
 
 [PRIOR_EVIDENCE]
 <LAST_EXPLORE_RESULT summary, jika ada>
 
 [OUTPUT_STYLE]
-caveman ultra. findings max 6, steps max 7, risks max 5, reasoning max 10 baris." -s "<session_id>" -w "<workspace_root>" --pretty
+caveman ultra. findings max 6, steps max 7, risks max 5, reasoning max 10 baris.
+
+# lalu lanjut arg lain:
+-s "<session_id>" -w "<workspace_root>" --pretty
 ```
 
 ### STEP C3 — WAJIB tunggu JSON {ok, content, meta}
@@ -1384,10 +1407,17 @@ Reuse `MAIN_SESSION_ID`.
 ### STEP 3 — Invoke python dengan caveman hint
 
 ```powershell
-python $env:AGENT_PATH -c verify -p "verifikasi perubahan terakhir dengan test/lint/build yang relevan.
+$promptFile = Join-Path $env:TEMP "opencode\agent_prompt.txt"
+python $env:AGENT_PATH -c verify --prompt-file "$promptFile"
+
+# isi file:
+verifikasi perubahan terakhir dengan test/lint/build yang relevan.
 
 [OUTPUT_STYLE]
-caveman ultra. findings max 6." -s "<session_id>" -w "<workspace_root>" --pretty
+caveman ultra. findings max 6.
+
+# lalu lanjut arg lain:
+-s "<session_id>" -w "<workspace_root>" --pretty
 ```
 
 ### STEP 4 — WAJIB tunggu JSON {ok, content, meta}
@@ -1442,10 +1472,17 @@ Reuse `MAIN_SESSION_ID`.
 ### STEP 3 — Invoke python dengan lightweight mode
 
 ```powershell
-python $env:AGENT_PATH -c verify_quick -p "lightweight verify: syntax + lint + type check only. Skip integration test, skip runtime contract validation.
+$promptFile = Join-Path $env:TEMP "opencode\agent_prompt.txt"
+python $env:AGENT_PATH -c verify_quick --prompt-file "$promptFile"
+
+# isi file:
+lightweight verify: syntax + lint + type check only. Skip integration test, skip runtime contract validation.
 
 [OUTPUT_STYLE]
-caveman ultra. findings max 4." -s "<session_id>" -w "<workspace_root>" --pretty
+caveman ultra. findings max 4.
+
+# lalu lanjut arg lain:
+-s "<session_id>" -w "<workspace_root>" --pretty
 ```
 
 ### STEP 4 — WAJIB tunggu JSON {ok, content, meta}
@@ -1526,12 +1563,19 @@ Reuse `MAIN_SESSION_ID`.
 ### STEP 4 — Invoke python dengan model override hint + caveman
 
 ```powershell
-python $env:AGENT_PATH -c audit -p "review git diff / scope berikut. Fokus runtime issue: type mismatch, serialization, async contract, config consistency, state transition.
+$promptFile = Join-Path $env:TEMP "opencode\agent_prompt.txt"
+python $env:AGENT_PATH -c audit --prompt-file "$promptFile"
+
+# isi file:
+review git diff / scope berikut. Fokus runtime issue: type mismatch, serialization, async contract, config consistency, state transition.
 
 scope: <git diff atau file list>
 
 [OUTPUT_STYLE]
-caveman ultra. findings max 10 total (prioritize P0 > P1 > P2 > P3). reasoning max 10 baris." -s "<session_id>" -w "<workspace_root>" --pretty
+caveman ultra. findings max 10 total (prioritize P0 > P1 > P2 > P3). reasoning max 10 baris.
+
+# lalu lanjut arg lain:
+-s "<session_id>" -w "<workspace_root>" --pretty
 ```
 
 **Catatan untuk workflow agent**: routing rule di `config/opencode.json` SHOULD route `-c audit` ke model berbeda dari `-c execute`. Jika user override via `-m` flag, hormati override.
@@ -1674,13 +1718,20 @@ Reuse `MAIN_SESSION_ID`.
 ### STEP C2 — Invoke dengan PRIOR_EVIDENCE + caveman
 
 ```powershell
-python $env:AGENT_PATH -c analyze -p "<topic>
+$promptFile = Join-Path $env:TEMP "opencode\agent_prompt.txt"
+python $env:AGENT_PATH -c analyze --prompt-file "$promptFile"
+
+# isi file:
+<topic>
 
 [PRIOR_EVIDENCE]
 <LAST_EXPLORE_RESULT, jika ada>
 
 [OUTPUT_STYLE]
-caveman ultra. findings max 6, reasoning max 10 baris." -s "<session_id>" -w "<workspace_root>" --pretty
+caveman ultra. findings max 6, reasoning max 10 baris.
+
+# lalu lanjut arg lain:
+-s "<session_id>" -w "<workspace_root>" --pretty
 ```
 
 ### STEP C3 — WAJIB tunggu JSON {ok, content, meta}
