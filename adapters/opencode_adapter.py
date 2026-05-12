@@ -25,6 +25,16 @@ class OpenCodeAdapter:
         self.timeout_seconds = timeout_seconds
         self.no_timeout = timeout_seconds is None or timeout_seconds <= 0
 
+    @staticmethod
+    def _get_windows_startupinfo() -> tuple:
+        """Return startupinfo and creationflags to hide console window on Windows."""
+        if sys.platform == "win32":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+            return startupinfo, subprocess.CREATE_NO_WINDOW
+        return None, 0
+
     def init_session(
         self,
         model: str | None = None,
@@ -47,6 +57,7 @@ class OpenCodeAdapter:
         if workflow_session_id:
             meta["workflow_session_id"] = workflow_session_id
 
+        startupinfo, creationflags = self._get_windows_startupinfo()
         try:
             proc = subprocess.Popen(
                 args,
@@ -57,6 +68,8 @@ class OpenCodeAdapter:
                 errors="replace",
                 env=env,
                 cwd=cwd,
+                startupinfo=startupinfo,
+                creationflags=creationflags,
             )
             stdout, stderr = proc.communicate(timeout=None if self.no_timeout else 30)
         except (OSError, FileNotFoundError) as exc:
@@ -143,6 +156,7 @@ class OpenCodeAdapter:
         env["PYTHONIOENCODING"] = "utf-8"
         cwd = self._resolve_work_dir(work_dir)
 
+        startupinfo, creationflags = self._get_windows_startupinfo()
         try:
             completed = subprocess.run(
                 args,
@@ -154,6 +168,8 @@ class OpenCodeAdapter:
                 check=False,
                 env=env,
                 cwd=cwd,
+                startupinfo=startupinfo,
+                creationflags=creationflags,
             )
         except FileNotFoundError as exc:
             return self._error(
