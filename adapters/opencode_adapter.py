@@ -44,6 +44,7 @@ class OpenCodeAdapter:
         """Capture a new OpenCode session id by running bootstrap and waiting for completion."""
         command = self._resolve_command()
         args = [command, "run", "Initialize session. Reply READY."]
+        args.extend(["--agent", "plan"])
         if model:
             args.extend(["-m", model])
         args.extend(["--print-logs", "--log-level", "INFO"])
