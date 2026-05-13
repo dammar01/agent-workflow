@@ -72,7 +72,7 @@ class OpenCodeAdapter:
                 startupinfo=startupinfo,
                 creationflags=creationflags,
             )
-            stdout, stderr = proc.communicate(timeout=None if self.no_timeout else 30)
+            stdout, stderr = proc.communicate(timeout=None)
         except (OSError, FileNotFoundError) as exc:
             meta.update(
                 {"error": str(exc), "returncode": 1, "opencode_session_id": None}
