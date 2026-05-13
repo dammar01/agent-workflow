@@ -115,6 +115,7 @@ class OpenCodeAdapter:
         command = self._resolve_command()
         safe_prompt = prompt.replace("\n", " \\n ")
         args = [command, "run", safe_prompt]
+        args.extend(["--agent", "plan"])
         if model:
             args.extend(["-m", model])
         args.extend(["-s", session_id])
