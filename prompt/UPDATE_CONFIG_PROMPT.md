@@ -11,7 +11,6 @@ Target global config:
 
 - `~/.config/opencode/AGENTS.md`
 - `~/.config/opencode/install_guide.md`
-- `~/.config/opencode/config.json`
 - `~/.config/opencode/skills/`
 - `~/.config/opencode/commands/`
 - `~/.config/opencode/reference/`
@@ -81,6 +80,7 @@ Apply these semantic changes from v3.0.1 to v3.1.0:
    - v3.1.0 adds `reference/`.
    - Per-command skills remain separate.
    - Memory files are preserved if already present.
+   - Relative references inside generated global files must resolve to `~/.config/opencode/`, especially `~/.config/opencode/reference/` and `~/.config/opencode/skills/`.
 
 ---
 
@@ -140,7 +140,6 @@ Required backup behavior:
 - Existing `memory/PERSONAL_MEMORY.md`: backup and preserve original in target.
 - Existing `memory/DOMAIN_MAP.md`: backup and preserve original in target.
 - Existing `memory/MEMORY.md`: backup, then merge missing index entries only.
-- Existing `config.json`: backup before merge.
 
 If backup fails, STOP:
 
@@ -204,32 +203,7 @@ For `memory/MEMORY.md`:
 
 ---
 
-## STEP 5 - Context7 Config Merge
-
-`config.json` must keep existing user config and ensure Context7 MCP exists.
-
-Required entry:
-
-```json
-"context7": {
-  "type": "local",
-  "command": "npx",
-  "args": ["-y", "@upstash/context7-mcp@latest"]
-}
-```
-
-Rules:
-
-- If `config.json` missing: create minimal valid JSON with `mcp.context7`.
-- If `config.json` exists and valid JSON: merge `mcp.context7` without deleting other keys.
-- If `mcp.context7` exists: keep it if equivalent; update only if missing fields.
-- If JSON invalid: restore backup and STOP with exact error.
-
-Do not overwrite unrelated config keys.
-
----
-
-## STEP 6 - Structural Verify
+## STEP 5 - Structural Verify
 
 This step determines migration success.
 
@@ -238,7 +212,6 @@ Verify:
 1. Root files exist:
    - `AGENTS.md`
    - `install_guide.md`
-   - `config.json`
 
 2. Skill files exist:
    - `skills/caveman.md`
@@ -286,10 +259,12 @@ Verify:
    - `memory/MEMORY.md`
 
 6. Required v3.1.0 wording exists:
-   - `AGENTS.md` contains `v3.1.0 FINAL`.
-   - `AGENTS.md` says `/.execute -y`, `/.verify`, and `/.verify-quick` are local / no `AGENT_PATH`.
-   - `AGENTS.md` says `/.audit` requires `AGENT_PATH`.
-   - `AGENTS.md` contains `Lightweight Risk Classifier`.
+    - `AGENTS.md` contains `v3.1.0 FINAL`.
+    - `AGENTS.md` contains `Untuk input yang memiliki command workflow`.
+    - `AGENTS.md` contains `Evidence commands bersifat workflow-agent primary`.
+    - `AGENTS.md` says `/.execute -y`, `/.verify`, and `/.verify-quick` are local / no `AGENT_PATH`.
+    - `AGENTS.md` says `/.audit` requires `AGENT_PATH`.
+    - `AGENTS.md` contains `Lightweight Risk Classifier`.
    - `skills/execute.md` says it is always local and must not require `AGENT_PATH`.
    - `skills/verify.md` contains `Full local verification`.
    - `skills/verify-quick.md` contains `Lightweight local verify`.
@@ -297,12 +272,11 @@ Verify:
    - `reference/invocation-examples.md` says examples are only for `explore`, `plan`, `analyze`, `audit`.
 
 7. Removed/changed v3.0.1 wording is gone from active target files:
-   - `skills/execute.md` must not require pre-execute contract sanity check.
-   - `skills/verify.md` must not invoke `python $env:AGENT_PATH -c verify`.
-   - `skills/verify-quick.md` must not invoke `python $env:AGENT_PATH -c verify_quick`.
+    - `AGENTS.md` must not say `Untuk input yang diawali command workflow`.
+    - `skills/execute.md` must not require pre-execute contract sanity check.
+    - `skills/verify.md` must not invoke `python $env:AGENT_PATH -c verify`.
+    - `skills/verify-quick.md` must not invoke `python $env:AGENT_PATH -c verify_quick`.
    - `AGENTS.md` must not say action commands require `AGENT_PATH`.
-
-8. `config.json` is valid JSON.
 
 Runtime availability checks are not structural failures:
 
@@ -313,7 +287,7 @@ Runtime availability checks are not structural failures:
 
 ---
 
-## STEP 7 - Runtime Smoke Test (Separate)
+## STEP 6 - Runtime Smoke Test (Separate)
 
 Run only after structural verify passes.
 
@@ -351,7 +325,6 @@ structural_verify:
   commands: PASS / FAIL
   reference: PASS / FAIL
   memory: PASS / FAIL
-  config_json: PASS / FAIL
   v3.1.0_wording: PASS / FAIL
   stale_v3.0.1_wording: PASS / FAIL
 
