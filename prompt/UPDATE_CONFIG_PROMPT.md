@@ -82,6 +82,11 @@ Apply these semantic changes from v3.0.1 to v3.1.0:
    - Memory files are preserved if already present.
    - Relative references inside generated global files must resolve to `~/.config/opencode/`, especially `~/.config/opencode/reference/` and `~/.config/opencode/skills/`.
 
+6. Workflow agent evidence gathering
+   - Workflow agent must perform exhaustive evidence gathering before outputting uncertainties.
+   - Output format must include `assumptions:` based on evidence found.
+   - `uncertainties:` should only contain items that cannot be answered after search.
+
 ---
 
 ## HARD RULES
@@ -262,6 +267,8 @@ Verify:
     - `AGENTS.md` contains `v3.1.0 FINAL`.
     - `AGENTS.md` contains `Untuk input yang memiliki command workflow`.
     - `AGENTS.md` contains `Evidence commands bersifat workflow-agent primary`.
+    - `AGENTS.md` contains `[WORKFLOW_AGENT] Evidence Gathering Protocol`.
+    - `AGENTS.md` output format includes `assumptions:` field.
     - `AGENTS.md` says `/.execute -y`, `/.verify`, and `/.verify-quick` are local / no `AGENT_PATH`.
     - `AGENTS.md` says `/.audit` requires `AGENT_PATH`.
     - `AGENTS.md` contains `Lightweight Risk Classifier`.
@@ -337,6 +344,8 @@ key_changes:
   - audit requires AGENT_PATH, no fallback
   - lightweight risk classifier selects verify depth
   - setup verify separated from runtime smoke
+  - workflow agent evidence gathering protocol added
+  - output format includes assumptions field
 
 warnings:
   - <none or list>
