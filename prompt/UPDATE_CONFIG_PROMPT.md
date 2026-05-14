@@ -94,6 +94,12 @@ Apply these semantic changes from v3.0.1 to v3.1.0:
    - Structured plan must include open questions only when evidence still leaves material implementation gaps.
    - `open questions` must be derived from evidence, especially assumptions/implications/uncertainties.
 
+8. Final framing consistency for related commands
+   - `/.explore` final response belongs to OpenCode agent; workflow agent output is exploration evidence material only.
+   - `/.explore` must synthesize evidence into a scoped exploration result aligned with the user hint.
+   - `/.analyze` may use workflow-agent evidence as primary material, but final framing remains OpenCode-owned.
+   - `/.help`, command descriptions, and skill descriptions must match the final ownership model above.
+
 ---
 
 ## HARD RULES
@@ -109,6 +115,8 @@ Apply these semantic changes from v3.0.1 to v3.1.0:
 - Do not fail structural setup only because runtime condition is missing.
 - Do not use v3.0.1 content as final output if v3.1.0 has a matching FILE block.
 - Do not let `/.plan` end as raw workflow-agent evidence dump.
+- Do not let `/.explore` end as raw workflow-agent evidence dump.
+- Do not leave stale wording in command/skill docs that contradicts final ownership/output contracts.
 
 ---
 
