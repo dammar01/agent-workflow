@@ -87,6 +87,13 @@ Apply these semantic changes from v3.0.1 to v3.1.0:
    - Output format must include `assumptions:` based on evidence found.
    - `uncertainties:` should only contain items that cannot be answered after search.
 
+7. `/.plan` ownership hardening
+   - `/.plan` final response belongs to OpenCode agent, not workflow agent raw output.
+   - Workflow agent output for `/.plan` is evidence/reasoning material only.
+   - OpenCode agent must synthesize a structured plan after parsing workflow output.
+   - Structured plan must include open questions only when evidence still leaves material implementation gaps.
+   - `open questions` must be derived from evidence, especially assumptions/implications/uncertainties.
+
 ---
 
 ## HARD RULES
@@ -101,6 +108,7 @@ Apply these semantic changes from v3.0.1 to v3.1.0:
 - Do not claim migration success before structural verify completes.
 - Do not fail structural setup only because runtime condition is missing.
 - Do not use v3.0.1 content as final output if v3.1.0 has a matching FILE block.
+- Do not let `/.plan` end as raw workflow-agent evidence dump.
 
 ---
 
