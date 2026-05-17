@@ -9,15 +9,17 @@ from config.roles import (
 _EVIDENCE_ROLES = {ROLE_EXPLORATION, ROLE_REASONING}
 
 
-def build_prompt(*, role: str, task: str, session_id: str) -> str:
+def build_prompt(*, role: str, task: str, session_id: str, command: str, project_root: str) -> str:
     if role not in VALID_ROLES:
         raise ValueError(f"unsupported role: {role}")
 
     header = [
         "[WORKFLOW_AGENT]",
         "source: proxy",
+        f"command: {command}",
         f"role: {role}",
         f"session_id: {session_id}",
+        f"project_root: {project_root}",
         "",
     ]
 

@@ -6,6 +6,13 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Added
+
+- Project-local `.workflow/` workspace with `config.json`, `state.json`, `scope.json`, `command-cache.json`, runtime handoff files, and reports.
+- New local commands: `init`, `doctor`, and `sweep`.
+- Project-local prompt handoff via `.workflow/runtime/prompt.txt` and `.workflow/runtime/prompt.meta.json`.
+- Runtime lock with TTL and last-response snapshot at `.workflow/runtime/response.last.md`.
+
 ### Changed
 
 - Refactor V2 ke OpenCode-only backend.
@@ -13,11 +20,19 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 - Tambah config user JSON di `config/opencode.json`.
 - Tambah session resume OpenCode via parsed `session.id=ses_...` dan `-s <session_id>`.
 - Tambah cleanup output log OpenCode/Nest-like.
+- Session binding now treats `--session` as source of truth and resets active project-local state when incoming session changes.
+- `execute` now auto-runs bounded `sweep` after successful execution.
+- Resolver now checks `.workflow/config.json.runtime.agent_workflow_path` before env `AGENT_PATH`.
 
-### Added
+### Deferred
 
-- `adapters/opencode_adapter.py`.
-- CLI `--model/-m` untuk override model OpenCode.
+- `audit` intentionally not implemented in v3.1.1.
+- No `repair` command; repair flow is expected through `execute` with latest sweep context.
+
+### Notes
+
+- `.workflow` is snapshot/state only and is not the owner of the primary session.
+- `.workflow/sessions/current.json` is intentionally not created.
 
 ---
 

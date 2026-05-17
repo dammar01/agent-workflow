@@ -1,13 +1,22 @@
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from core.executor import Executor
 from core.job_manager import JobManager
 from core.session_manager import SessionManager
+from core.workflow_runtime import (
+    detect_project_root,
+    ensure_workflow_workspace,
+    resolve_agent_workflow_path,
+    run_doctor,
+    run_sweep,
+)
 from config.settings import (
     DEFAULT_JOB_POLL_INTERVAL_SECONDS,
     DEFAULT_JOB_POLL_TIMEOUT_SECONDS,
+    load_opencode_config,
     get_cached_main_session_id,
     set_cached_main_session_id,
 )
@@ -38,6 +47,29 @@ def run(
     work_dir: str | None = None,
     model: str | None = None,
 ) -> dict:
+    normalized_command = command.strip().lower()
+    project_root = detect_project_root(work_dir)
+
+    if normalized_command == "init":
+        resolver = resolve_agent_workflow_path(project_root)
+        agent_workflow_path = resolver.get("path")
+        try:
+            meta = ensure_workflow_workspace(project_root, agent_workflow_path)
+        except ValueError as exc:
+            return {
+                "ok": False,
+                "content": str(exc),
+                "meta": {"project_root": str(project_root), "error_type": "workflow_init_error"},
+            }
+        return {"ok": True, "content": "workflow workspace initialized", "meta": meta}
+
+    if normalized_command == "doctor":
+        config = load_opencode_config()
+        return run_doctor(project_root, config.get("opencode_command", "opencode"))
+
+    if normalized_command == "sweep":
+        return run_sweep(project_root)
+
     session = SESSION_MANAGER.load_or_create(session_id)
     output = EXECUTOR.execute(command, task, session, work_dir, model)
     SESSION_MANAGER.record_run(session, command)
@@ -212,14 +244,12 @@ if __name__ == "__main__":
     import argparse
     import json
 
-    from pathlib import Path
-
     parser = argparse.ArgumentParser(description="agent-workflow CLI")
     parser.add_argument(
         "--command",
         "-c",
         required=True,
-        choices=["explore", "plan", "analyze", "execute", "verify", "submit", "await", "status", "result", "worker"],
+        choices=["init", "doctor", "explore", "plan", "analyze", "execute", "verify", "sweep", "submit", "await", "status", "result", "worker"],
     )
     parser.add_argument("--prompt", "-p", default=None)
     parser.add_argument("--prompt-file", default=None, help="path to file containing the prompt (alternative to --prompt)")
@@ -245,7 +275,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--job-command",
         default="execute",
-        choices=["explore", "plan", "analyze", "execute", "verify"],
+        choices=["explore", "plan", "analyze", "execute", "verify", "sweep"],
         help="workflow command to execute asynchronously via submit",
     )
     parser.add_argument(

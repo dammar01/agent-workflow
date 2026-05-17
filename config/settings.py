@@ -23,6 +23,7 @@ def default_opencode_config() -> dict:
         "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
         "job_poll_interval_seconds": DEFAULT_JOB_POLL_INTERVAL_SECONDS,
         "job_poll_timeout_seconds": DEFAULT_JOB_POLL_TIMEOUT_SECONDS,
+        "agent_workflow_path": None,
         "routes": COMMAND_ROUTES,
     }
 

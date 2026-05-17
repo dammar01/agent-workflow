@@ -1,20 +1,25 @@
-# agent-workflow v2
+# agent-workflow v3.1.1
 
-OpenCode-only proxy CLI untuk workflow personal.
+OpenCode-oriented workflow runtime with project-local workspace support.
 
 ## Ringkas
 
-`agent-workflow` menerima command workflow, membangun prompt terstruktur, menjalankan `opencode run`, menyimpan session OpenCode, membersihkan log, lalu mengembalikan JSON contract stabil.
+`agent-workflow` menerima command workflow, membangun prompt terstruktur, menjalankan `opencode run` untuk command agent-backed, menyimpan session OpenCode, menulis handoff ke `.workflow/runtime/`, menjaga state project-local, lalu mengembalikan JSON contract stabil.
 
 Command utama:
 
 ```text
+init      -> local workspace bootstrap
+doctor    -> local readiness check
 explore   -> role exploration
 plan      -> role reasoning
 analyze   -> role reasoning
 execute   -> role execution
 verify    -> role verification
+sweep     -> local post-edit impact check
 ```
+
+`audit` belum diimplementasikan di v3.1.1.
 
 ## Prasyarat
 
@@ -44,10 +49,10 @@ Referensi: https://github.com/JuliusBrussee/caveman
 
 ## Setup setelah clone
 
-### 1. Set env variable `AGENT_PATH`
+### 1. Optional: set env variable `AGENT_PATH`
 
-`AGENT_PATH` harus menunjuk ke `main.py` di folder project ini.
-Env variable ini dipakai oleh OpenCode global config untuk invoke agent-workflow tanpa hardcode path.
+`AGENT_PATH` masih didukung dan boleh menunjuk ke `main.py` di folder project ini.
+Namun v3.1.1 menambah resolver project-local: runtime akan membaca `.workflow/config.json.runtime.agent_workflow_path` lebih dulu, lalu fallback ke `AGENT_PATH`.
 
 **Persistent (bertahan setelah restart) — jalankan sekali:**
 
@@ -143,14 +148,22 @@ python main.py -c analyze -p "cek logic auth" -s "finance-auth" -m "9router-sdi/
 
 Arg:
 
-- `-c`, `--command`: `explore`, `plan`, `analyze`, `execute`, `verify`
+- `-c`, `--command`: `init`, `doctor`, `explore`, `plan`, `analyze`, `execute`, `verify`, `sweep`
 - `-p`, `--prompt`: task/prompt
 - `-s`, `--session`: proxy session id
 - `-w`, `--work-dir`: project context untuk cache key
 - `-m`, `--model`: override model OpenCode
 - `--pretty`: JSON indent
 
+`init`, `doctor`, dan `sweep` adalah command lokal dan tidak memerlukan `--prompt`.
+
 ## Session
+
+`--session` adalah source of truth untuk binding session workflow.
+
+- `storage/sessions/*.json` tetap menyimpan mapping runtime ke session OpenCode.
+- `.workflow/state.json` hanya snapshot state aktif project-local, bukan pemilik session utama.
+- Jika `state.session.id` berbeda dengan `--session` saat command jalan, runtime akan reset active state, scope, dan command cache sebelum lanjut.
 
 Run pertama untuk proxy session memanggil:
 
@@ -182,18 +195,60 @@ Banner model seperti ini juga dibuang:
 
 Konten assistant dipertahankan.
 
+## Project-local Workspace
+
+`init` membuat struktur berikut di project target:
+
+```text
+.workflow/
+├─ config.json
+├─ state.json
+├─ scope.json
+├─ command-cache.json
+├─ .gitignore
+├─ runtime/
+│  ├─ prompt.txt
+│  ├─ prompt.meta.json
+│  ├─ response.last.md
+│  └─ lock
+└─ reports/
+   ├─ doctor.json
+   └─ sweep.last.md
+```
+
+Root `.gitignore` project target juga akan di-update agar meng-ignore `.workflow/`.
+
 ## Storage
 
 Runtime data:
 
 - Session: `storage/sessions/*.json`
 - Cache: `storage/cache.json`
+- Project-local workflow state: `<target-project>/.workflow/*`
 
-Cache key include command, model, work dir hash, prompt hash.
+## Typical Flow
+
+```bash
+python main.py -c init -w "path\to\target-app" --pretty
+python main.py -c doctor -w "path\to\target-app" --pretty
+python main.py -c explore -p "cari entry point auth" -s "main_target_20260517_101010" -w "path\to\target-app" --pretty
+python main.py -c execute -p "implementasikan plan aktif" -s "main_target_20260517_101010" -w "path\to\target-app" --pretty
+python main.py -c sweep -w "path\to\target-app" --pretty
+```
+
+`execute` tetap mengedit lewat OpenCode, tetapi runtime lokal akan:
+
+- bind session ke `--session`
+- menulis prompt handoff ke `.workflow/runtime/prompt.txt`
+- menyimpan response terakhir ke `.workflow/runtime/response.last.md`
+- auto-run `sweep` setelah execute sukses
 
 ## Verifikasi
 
 ```bash
 python test_scenario.py
 python main.py --help
+python main.py -c init -w . --pretty
+python main.py -c doctor -w . --pretty
+python main.py -c sweep -w . --pretty
 ```
