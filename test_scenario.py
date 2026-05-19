@@ -9,6 +9,8 @@ from utils.parser import clean_opencode_output, extract_opencode_session_id
 import check
 import main
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 
@@ -211,6 +213,28 @@ def run_tests() -> None:
 
         missing_status = check._status_payload("missing-job")
         assert_true(missing_status["status"] == "not_found", "missing job must report not_found in check.py")
+
+        # 10. check.py internal wait loop and timeout contract
+        wait_job = main.JOB_MANAGER.create_job("execute", "wait task", "wait-session", work_dir, None)
+
+        def complete_later() -> None:
+            time.sleep(0.1)
+            main.JOB_MANAGER.complete_job(wait_job["job_id"], {"ok": True, "content": "waited output", "meta": {}})
+
+        waiter = threading.Thread(target=complete_later)
+        waiter.start()
+        wait_ok, wait_payload = check._wait_for_result(wait_job["job_id"], 0.05, 2)
+        waiter.join()
+        assert_true(wait_ok, "wait loop must eventually return completed result")
+        assert_true(wait_payload == "waited output", "wait loop must return cleaned output only on success")
+
+        timeout_job = main.JOB_MANAGER.create_job("execute", "timeout task", "timeout-session", work_dir, None)
+        timeout_ok, timeout_payload = check._result_payload(timeout_job["job_id"])
+        assert_true(not timeout_ok, "non-wait result lookup must stay incomplete")
+
+        timeout_status = check._wait_for_status(timeout_job["job_id"], 0.05, 1)
+        assert_true(timeout_status["status"] == "pending", "timed out status must preserve current job state")
+        assert_true(timeout_status.get("timed_out") is True, "timed out wait must mark timed_out")
 
         print("test_scenario: success")
     finally:
