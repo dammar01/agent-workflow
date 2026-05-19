@@ -51,8 +51,11 @@ class SessionManager:
 
     def _save(self, session: dict) -> None:
         path = self._path_for(session["session_id"])
-        with path.open("w", encoding="utf-8") as file:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp = path.with_suffix(".tmp")
+        with temp.open("w", encoding="utf-8") as file:
             json.dump(session, file, indent=2)
+        temp.replace(path)
 
     def _path_for(self, session_id: str) -> Path:
         safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", session_id)

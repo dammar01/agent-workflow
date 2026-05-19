@@ -1,8 +1,12 @@
+import os
+
 from adapters.opencode_adapter import OpenCodeAdapter
 from core.job_manager import JobManager
 from core.executor import Executor
 from core.prompt_builder import build_prompt
+from core.workflow_runtime import ensure_workflow_workspace
 from utils.parser import clean_opencode_output, extract_opencode_session_id
+import check
 import main
 import tempfile
 from pathlib import Path
@@ -86,11 +90,19 @@ def run_tests() -> None:
     main.SESSION_MANAGER = main.SessionManager(temp_root / "sessions")
     main.JOB_MANAGER = JobManager(temp_root / "jobs")
     main.EXECUTOR = Executor(opencode=fake_opencode, session_manager=main.SESSION_MANAGER)
-    work_dir = "/tmp/agent-workflow-target"
+    check.JOB_MANAGER = main.JOB_MANAGER
+    work_dir = str(temp_root)
+    ensure_workflow_workspace(temp_root, os.getenv("AGENT_PATH"))
 
     try:
         # 1. Prompt constraints
-        prompt = build_prompt(role="exploration", task="cek graph", session_id="prompt-test")
+        prompt = build_prompt(
+            role="exploration",
+            task="cek graph",
+            session_id="prompt-test",
+            command="explore",
+            project_root=str(temp_root),
+        )
         assert_true("[WORKFLOW_AGENT]" in prompt, "prompt must tag workflow-agent context")
         assert_true("read graphify output first" in prompt, "prompt must require graphify-first exploration")
 
@@ -167,6 +179,10 @@ def run_tests() -> None:
         assert_true(submitted["ok"], "submit must succeed")
         assert_true(submitted["status"] == "pending", "submit must return pending")
         assert_true(submitted["meta"]["pid"] == 4242, "submit must expose worker pid")
+
+        queued = main.submit("explore", "inspect queued flow", "queued-session", work_dir, None)
+        assert_true(queued["ok"], "queued background submit must succeed")
+        assert_true(main.should_run_in_background("explore"), "explore must be marked as background command")
         main.subprocess.Popen = original_popen
 
         # 8. Worker path updates job state on success
@@ -175,6 +191,26 @@ def run_tests() -> None:
         assert_true(worker_output["ok"], "worker must execute queued command")
         worker_status = main.get_status(worker_job["job_id"])
         assert_true(worker_status["status"] == "completed", "worker must persist completed state")
+
+        # 9. check.py status/result payloads
+        pending_status = check._status_payload(queued["job_id"])
+        assert_true(pending_status["status"] == "pending", "check status must expose pending job")
+        assert_true(pending_status["done"] is False, "pending job must not be done")
+
+        complete_job = main.JOB_MANAGER.create_job("execute", "done task", "result-session", work_dir, None)
+        main.JOB_MANAGER.complete_job(complete_job["job_id"], {"ok": True, "content": "clean output", "meta": {}})
+        result_ok, result_payload = check._result_payload(complete_job["job_id"])
+        assert_true(result_ok, "completed job must return output-only payload")
+        assert_true(result_payload == "clean output", "completed result must expose cleaned content only")
+
+        failed_job = main.JOB_MANAGER.create_job("execute", "bad task", "failed-session", work_dir, None)
+        main.JOB_MANAGER.fail_job(failed_job["job_id"], "boom")
+        failed_ok, failed_payload = check._result_payload(failed_job["job_id"])
+        assert_true(not failed_ok, "failed job must not return plain output")
+        assert_true(failed_payload["status"] == "failed", "failed result must keep failed status")
+
+        missing_status = check._status_payload("missing-job")
+        assert_true(missing_status["status"] == "not_found", "missing job must report not_found in check.py")
 
         print("test_scenario: success")
     finally:

@@ -25,6 +25,7 @@ from utils.parser import generate_main_session_id
 SESSION_MANAGER = SessionManager()
 EXECUTOR = Executor(session_manager=SESSION_MANAGER)
 JOB_MANAGER = JobManager()
+BACKGROUND_COMMANDS = {"explore", "plan", "analyze", "execute", "verify"}
 
 
 def resolve_session_id(session_id: str, fresh: bool = False) -> str:
@@ -123,6 +124,10 @@ def get_status(job_id: str) -> dict:
 
 def get_result(job_id: str) -> dict:
     return JOB_MANAGER.get_result(job_id)
+
+
+def should_run_in_background(command: str) -> bool:
+    return command.strip().lower() in BACKGROUND_COMMANDS
 
 
 def await_job(
@@ -331,6 +336,8 @@ if __name__ == "__main__":
         result = get_result(args.job_id)
     elif args.command == "worker":
         result = run_worker(args.job_id)
+    elif should_run_in_background(args.command):
+        result = submit(args.command, prompt, effective_session, work_dir, args.model)
     else:
         result = run(args.command, prompt, effective_session, work_dir, args.model)
     print(json.dumps(result, indent=2) if args.pretty else json.dumps(result))
