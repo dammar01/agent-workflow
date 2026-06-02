@@ -1,5 +1,4 @@
 from config.roles import (
-    ROLE_EXECUTION,
     ROLE_EXPLORATION,
     ROLE_REASONING,
     ROLE_VERIFICATION,
@@ -15,7 +14,7 @@ def build_prompt(*, role: str, task: str, session_id: str, command: str, project
 
     header = [
         "[WORKFLOW_AGENT]",
-        "source: proxy",
+        "source: second_agent",
         f"command: {command}",
         f"role: {role}",
         f"session_id: {session_id}",

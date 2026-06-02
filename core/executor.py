@@ -84,12 +84,6 @@ class Executor:
             update_command_cache(project_root, "last_plan_result", result.get("content"), session_id)
             update_state_from_agent_output(project_root, normalized_command, task, result.get("content") or "", session_id)
             update_plan_scope(project_root, result.get("content") or "", session_id)
-        elif normalized_command == "execute":
-            execute_diff = {"content": result.get("content"), "meta": result.get("meta", {})}
-            update_command_cache(project_root, "last_execute_diff", execute_diff, session_id)
-            sweep_result = run_sweep(project_root)
-            result.setdefault("meta", {})["auto_sweep"] = sweep_result
-
         result.setdefault("meta", {})["project_root"] = str(project_root)
         result["meta"]["session_reset"] = bool(bound.get("session_reset"))
         return result

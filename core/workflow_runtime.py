@@ -70,7 +70,7 @@ def workflow_paths(project_root: Path) -> dict[str, Path]:
 def default_config(project_root: Path, agent_workflow_path: str | None) -> dict:
     project_name = project_root.name
     return {
-        "version": "3.1.1",
+        "version": "3.2.0",
         "project": {
             "name": project_name,
             "slug": slugify_project_name(project_name),
@@ -78,7 +78,8 @@ def default_config(project_root: Path, agent_workflow_path: str | None) -> dict:
         },
         "runtime": {
             "agent_workflow_path": agent_workflow_path,
-            "preferred_agent": "opencode",
+            "second_agent": "opencode",
+            "main_agent": "agnostic",
             "prompt_file": ".workflow/runtime/prompt.txt",
             "response_file": ".workflow/runtime/response.last.md",
             "meta_file": ".workflow/runtime/prompt.meta.json",

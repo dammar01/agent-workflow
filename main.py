@@ -25,7 +25,7 @@ from utils.parser import generate_main_session_id
 SESSION_MANAGER = SessionManager()
 EXECUTOR = Executor(session_manager=SESSION_MANAGER)
 JOB_MANAGER = JobManager()
-BACKGROUND_COMMANDS = {"explore", "plan", "analyze", "execute", "verify"}
+BACKGROUND_COMMANDS = {"explore", "plan", "analyze", "verify", "sweep"}
 
 
 def resolve_session_id(session_id: str, fresh: bool = False) -> str:
@@ -254,7 +254,7 @@ if __name__ == "__main__":
         "--command",
         "-c",
         required=True,
-        choices=["init", "doctor", "explore", "plan", "analyze", "execute", "verify", "sweep", "submit", "await", "status", "result", "worker"],
+        choices=["init", "doctor", "explore", "plan", "analyze", "verify", "sweep", "submit", "await", "status", "result", "worker"],
     )
     parser.add_argument("--prompt", "-p", default=None)
     parser.add_argument("--prompt-file", default=None, help="path to file containing the prompt (alternative to --prompt)")
@@ -279,8 +279,8 @@ if __name__ == "__main__":
     parser.add_argument("--job-id", default=None, help="job ID for status/result/worker")
     parser.add_argument(
         "--job-command",
-        default="execute",
-        choices=["explore", "plan", "analyze", "execute", "verify", "sweep"],
+        default="explore",
+        choices=["explore", "plan", "analyze", "verify", "sweep"],
         help="workflow command to execute asynchronously via submit",
     )
     parser.add_argument(
