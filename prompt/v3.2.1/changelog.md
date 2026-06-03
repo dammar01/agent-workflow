@@ -62,6 +62,43 @@ Setiap skill yang melakukan synthesis dari second_agent mendapat tambahan **SYNT
 
 ---
 
+## v3.2.1 — Addendum: Session Lifecycle Binding (hook-driven)
+
+**Tanggal:** 2026-06-03
+**Scope:** main_agent.md (STEP 5 managed block + STEP 5b hook setup + skill session-resolution), settings.json, hooks/session-bind.ps1
+**Breaking:** Tidak — backward compatible. Hook absent → fallback ke state.json + context (perilaku v3.2.0).
+
+### Problem yang Diperbaiki
+
+MAIN_SESSION_ID lama diikat ke project root saja: `.workflow/state.json` match → SELALU reuse. Akibat:
+- `claude` baru / `/clear` di project sama → tetap reuse thread second_agent lama → context main_agent fresh tapi thread second_agent penuh (mismatch).
+- Thread second_agent numpuk tanpa batas reset → risiko context limit second_agent.
+
+**Root cause:** tidak ada signal lifecycle chat main_agent. State.json hanya tahu project root, bukan "ini sesi pertama atau lanjutan".
+
+### Solusi
+
+Ikat lifecycle thread second_agent ke lifecycle chat main_agent via SessionStart hook field `source`:
+- `startup` | `clear` | `compact` → MAIN_SESSION_ID BARU → second_agent thread BARU
+- `resume` → REUSE MAIN_SESSION_ID → thread LANJUT
+
+### Perubahan
+
+- **+`hooks/session-bind.ps1`** (Claude Code) — baca `source` dari stdin, kelola registry `session_registry.json` (key = agent session_id), inject blok `[SESSION BINDING - authoritative]` ke context. Id format `main_<slug>_<yyyyMMdd>_<HHmmssfff>_<rand4>` (ms + 4-hex random, anti-collision).
+- **+`settings.json`** — daftar hook `SessionStart` matcher `startup|resume|clear|compact`.
+- **`main_agent.md` STEP 5 managed block** — Startup Protocol 3b/5 → hook-driven; +section "Session Lifecycle Rule (AUTHORITATIVE)"; Session Handling Rule diberi precedence note (hook > context > state.json).
+- **`main_agent.md` +STEP 5b** — setup hook (Claude Code only; agent lain SKIP + fallback note).
+- **`main_agent.md` skill session-resolution** (explore/plan/analyze/sweep/doctor) — +step 0 cek `[SESSION BINDING]` (authoritative) sebelum context/state.json.
+- **`main_agent.md` DESIGN NOTES + STEP 6/7** — dokumentasi + verifikasi hook.
+
+### Catatan Desain
+
+- Pilihan: `compact` → thread BARU. `autoCompactEnabled=true` → tiap auto-compact reset thread second_agent mid-session. Ubah `compact`=reuse: di `session-bind.ps1` ganti `$source -eq 'resume'` → `$source -in 'resume','compact'`.
+- Hook = Claude Code specific (SessionStart + settings.json). Agent lain (Codex/Cursor/Gemini/dst) belum punya padanan → fallback state.json + context (perilaku v3.2.0).
+- **Koreksi** terhadap "Yang TIDAK Berubah" di v3.2.1 awal: session handling SEKARANG berubah (hook-driven). Sub-rule lain (AGENT_PATH check, proxy invocation, Output Contract) tetap.
+
+---
+
 ## Migrasi dari v3.2.0 → v3.2.1
 
 ### Cara Update

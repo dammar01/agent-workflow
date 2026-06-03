@@ -15,6 +15,7 @@
 - `second_agent` = OpenCode, dipanggil via `python main.py` (read-only, evidence only)
 - Main agent orchestrates, synthesizes, dan mengeksekusi aksi langsung
 - Second agent hanya mengembalikan evidence JSON — bukan final answer
+- Session lifecycle `second_agent` diikat ke lifecycle chat `main_agent` via SessionStart hook (Claude Code): `startup`/`clear`/`compact` → thread BARU; `resume` → thread LANJUT. Lihat STEP 5b.
 
 **Command split:**
 
@@ -171,8 +172,9 @@ Substitusi semua `{AGENT_DIR}` ke nilai nyata dari STEP 0.
     ## STEP 2 — Tentukan session dan work dir
     - work_dir = absolute path project aktif
     - MAIN_SESSION_ID:
-        1. Cek di context (same project root) → reuse
-        2. Cek .workflow/state.json → baca session.id jika project.root match
+        0. Cek blok [SESSION BINDING] dari SessionStart hook (AUTHORITATIVE) → pakai MAIN_SESSION_ID itu
+        1. Else cek di context (same project root) → reuse
+        2. Else cek .workflow/state.json → baca session.id jika project.root match
         3. Else generate: main_<project>_YYYYMMDD_HHMMss
     - check_py_path = direktori(AGENT_PATH) + "/check.py"
 
@@ -186,8 +188,8 @@ Substitusi semua `{AGENT_DIR}` ke nilai nyata dari STEP 0.
     ## STEP 3 — Invoke second_agent
     Output EXACT ke user: "Sedang menunggu response second_agent..."
 
-    Tulis prompt ke temp file lalu jalankan via Bash run_in_background: true:
-      $promptFile = Join-Path $env:TEMP "agent_prompt.txt"
+    Tulis prompt ke .workflow/runtime/prompt.txt lalu jalankan via Bash run_in_background: true:
+      $promptFile = Join-Path "<work_dir>" ".workflow\runtime\prompt.txt"
       Set-Content $promptFile "<hint>`n`n[OUTPUT_STYLE]`ncaveman ultra. Telegraphic. No filler."
       python $env:AGENT_PATH --command explore --prompt-file "$promptFile" --session "<MAIN_SESSION_ID>" --work-dir "<work_dir>" --pretty
 
@@ -263,8 +265,9 @@ Substitusi semua `{AGENT_DIR}` ke nilai nyata dari STEP 0.
     ## STEP 1 — Tentukan session dan work dir
     - work_dir = absolute path project aktif
     - MAIN_SESSION_ID:
-        1. Cek di context (same project root) → reuse
-        2. Cek .workflow/state.json → baca session.id jika project.root match
+        0. Cek blok [SESSION BINDING] dari SessionStart hook (AUTHORITATIVE) → pakai MAIN_SESSION_ID itu
+        1. Else cek di context (same project root) → reuse
+        2. Else cek .workflow/state.json → baca session.id jika project.root match
         3. Else generate: main_<project>_YYYYMMDD_HHMMss
     - check_py_path = direktori(AGENT_PATH) + "/check.py"
 
@@ -286,7 +289,7 @@ Substitusi semua `{AGENT_DIR}` ke nilai nyata dari STEP 0.
       caveman ultra. Telegraphic. No filler.
 
     Jalankan via Bash run_in_background: true:
-      $promptFile = Join-Path $env:TEMP "agent_prompt.txt"
+      $promptFile = Join-Path "<work_dir>" ".workflow\runtime\prompt.txt"
       python $env:AGENT_PATH --command explore --prompt-file "$promptFile" --session "<MAIN_SESSION_ID>" --work-dir "<work_dir>" --pretty
 
     WAJIB tunggu notifikasi completion.
@@ -501,8 +504,9 @@ Substitusi semua `{AGENT_DIR}` ke nilai nyata dari STEP 0.
     ## STEP 1 — Tentukan session dan work dir
     - work_dir = absolute path project aktif
     - MAIN_SESSION_ID:
-        1. Cek di context (same project root) → reuse
-        2. Cek .workflow/state.json → baca session.id jika project.root match
+        0. Cek blok [SESSION BINDING] dari SessionStart hook (AUTHORITATIVE) → pakai MAIN_SESSION_ID itu
+        1. Else cek di context (same project root) → reuse
+        2. Else cek .workflow/state.json → baca session.id jika project.root match
         3. Else generate: main_<project>_YYYYMMDD_HHMMss
     - check_py_path = direktori(AGENT_PATH) + "/check.py"
 
@@ -524,7 +528,7 @@ Substitusi semua `{AGENT_DIR}` ke nilai nyata dari STEP 0.
         caveman ultra. Telegraphic. No filler.
 
       Jalankan via Bash run_in_background: true:
-        $promptFile = Join-Path $env:TEMP "agent_prompt.txt"
+        $promptFile = Join-Path "<work_dir>" ".workflow\runtime\prompt.txt"
         python $env:AGENT_PATH --command analyze --prompt-file "$promptFile" --session "<MAIN_SESSION_ID>" --work-dir "<work_dir>" --pretty
 
       WAJIB tunggu notifikasi completion.
@@ -733,8 +737,9 @@ Substitusi semua `{AGENT_DIR}` ke nilai nyata dari STEP 0.
     ## STEP 1 — Tentukan session dan work dir
     - work_dir = absolute path project aktif
     - MAIN_SESSION_ID:
-        1. Cek di context (same project root) → reuse
-        2. Cek .workflow/state.json → baca session.id jika project.root match
+        0. Cek blok [SESSION BINDING] dari SessionStart hook (AUTHORITATIVE) → pakai MAIN_SESSION_ID itu
+        1. Else cek di context (same project root) → reuse
+        2. Else cek .workflow/state.json → baca session.id jika project.root match
         3. Else generate: main_<project>_YYYYMMDD_HHMMss
     - check_py_path = direktori(AGENT_PATH) + "/check.py"
 
@@ -750,7 +755,7 @@ Substitusi semua `{AGENT_DIR}` ke nilai nyata dari STEP 0.
     Output EXACT ke user: "Sedang menunggu response second_agent..."
 
     Jalankan via Bash run_in_background: true:
-      $promptFile = Join-Path $env:TEMP "agent_prompt.txt"
+      $promptFile = Join-Path "<work_dir>" ".workflow\runtime\prompt.txt"
       Set-Content $promptFile "scan git diff dan identify impact`n`n[OUTPUT_STYLE]`ncaveman ultra. Telegraphic. No filler."
       python $env:AGENT_PATH --command sweep --prompt-file "$promptFile" --session "<MAIN_SESSION_ID>" --work-dir "<work_dir>" --pretty
 
@@ -818,8 +823,9 @@ Substitusi semua `{AGENT_DIR}` ke nilai nyata dari STEP 0.
     ## STEP 1 — Tentukan session dan work dir
     - work_dir = absolute path project aktif
     - MAIN_SESSION_ID:
-        1. Cek di context (same project root) → reuse
-        2. Cek .workflow/state.json → baca session.id jika project.root match
+        0. Cek blok [SESSION BINDING] dari SessionStart hook (AUTHORITATIVE) → pakai MAIN_SESSION_ID itu
+        1. Else cek di context (same project root) → reuse
+        2. Else cek .workflow/state.json → baca session.id jika project.root match
         3. Else generate: main_<project>_YYYYMMDD_HHMMss
     - check_py_path = direktori(AGENT_PATH) + "/check.py"
 
@@ -835,7 +841,7 @@ Substitusi semua `{AGENT_DIR}` ke nilai nyata dari STEP 0.
     Output EXACT ke user: "Sedang menunggu response second_agent..."
 
     Jalankan via Bash run_in_background: true:
-      $promptFile = Join-Path $env:TEMP "agent_prompt.txt"
+      $promptFile = Join-Path "<work_dir>" ".workflow\runtime\prompt.txt"
       Set-Content $promptFile "check .workflow readiness`n`n[OUTPUT_STYLE]`ncaveman ultra. Telegraphic. No filler."
       python $env:AGENT_PATH --command doctor --prompt-file "$promptFile" --session "<MAIN_SESSION_ID>" --work-dir "<work_dir>" --pretty
 
@@ -1203,21 +1209,36 @@ Konten yang ditulis (substitusi `{AGENT_DIR}` ke nilai nyata):
     3. Cek graphify-out/ di project root.
        - Ada → graph tersedia, delegasi detail ke second_agent.
        - Tidak ada → offer generate .graphifyignore.
-    3b. Cek .workflow/state.json di project root:
-       - Ada + project.root match work_dir → load MAIN_SESSION_ID dari state.json["session"]["id"]
-         → SKIP step 5 (jangan generate baru)
-       - Tidak ada atau root beda → proceed step 5
+    3b. MAIN_SESSION_ID di-set oleh SessionStart hook ({AGENT_DIR}/hooks/session-bind.ps1). Lihat "Session Lifecycle Rule".
+       - Hook inject blok [SESSION BINDING - authoritative] ke context tiap session start.
+       - PAKAI MAIN_SESSION_ID dari blok itu. OVERRIDE state.json["session"]["id"] dan step 5.
+       - Hook absent / blok tak muncul → fallback: load state.json.session.id (jika root match) → else step 5.
     4. Baca memory file jika relevan ({AGENT_DIR}/memory/PERSONAL_MEMORY.md).
-    5. Generate MAIN_SESSION_ID: main_<project_slug>_YYYYMMDD_HHMMSS.
+    5. Fallback generate (HANYA jika hook absent): MAIN_SESSION_ID = main_<project_slug>_YYYYMMDD_HHMMSS.
        - Simpan bersama MAIN_SESSION_PROJECT_ROOT (normalized absolute path).
-       - Dalam 1 sesi: hanya 1 MAIN_SESSION_ID per project root.
-       - Jangan regenerate kecuali user minta reset atau project root berubah.
+
+    ### Session Lifecycle Rule (hook-driven, AUTHORITATIVE)
+
+    second_agent thread lifecycle ikut lifecycle chat main_agent, dideteksi via SessionStart `source`:
+    - startup → chat pertama (proses agent baru) → MAIN_SESSION_ID BARU → second_agent thread BARU
+    - clear   → /clear                          → MAIN_SESSION_ID BARU → thread BARU
+    - compact → compaction (auto + manual)      → MAIN_SESSION_ID BARU → thread BARU
+    - resume  → resume / continue               → REUSE MAIN_SESSION_ID lama → thread LANJUT
+
+    Mekanisme: hooks/session-bind.ps1 baca `source` dari stdin → kelola registry
+    {AGENT_DIR}/session_registry.json (key = agent session_id) → inject MAIN_SESSION_ID ke context.
+    Precedence: blok [SESSION BINDING] > Session Handling Rule (di bawah) > state.json.
+    WARNING auto-compact: autoCompactEnabled=true → tiap auto-compact fire source=compact → MAIN_SESSION_ID BARU mid-session → thread second_agent reset (evidence continuity putus). Ubah compact=reuse: di hooks/session-bind.ps1 ganti `$source -eq 'resume'` → `$source -in 'resume','compact'`.
+    Hook = Claude Code specific (SessionStart + settings.json). Agent lain → fallback state.json + context.
 
     ### Session Handling Rule (HARD RULE)
 
-    1 sesi main_agent + 1 project root = 1 session second_agent.
+    Hook-driven (lihat Session Lifecycle Rule) = sumber utama MAIN_SESSION_ID. Aturan di bawah = FALLBACK saat hook absent.
+
+    1 sesi main_agent + 1 project root = 1 session second_agent (fallback mode).
 
     Sebelum invoke second_agent:
+    - Ada blok [SESSION BINDING] dari hook → pakai itu (override semua di bawah).
     - Ada MAIN_SESSION_ID di context + path sama → reuse.
     - Ada .workflow/state.json + project.root match → load dari file, reuse.
     - Path beda → generate baru.
@@ -1249,7 +1270,7 @@ Konten yang ditulis (substitusi `{AGENT_DIR}` ke nilai nyata):
 
     ### Invocation Pattern (second_agent)
 
-      $promptFile = Join-Path $env:TEMP "agent_prompt.txt"
+      $promptFile = Join-Path "<work_dir>" ".workflow\runtime\prompt.txt"
       python $env:AGENT_PATH --command <command> --prompt-file "$promptFile" --session "<MAIN_SESSION_ID>" --work-dir "<project_root>" --pretty
 
     Parse response JSON:
@@ -1397,12 +1418,153 @@ Konten yang ditulis (substitusi `{AGENT_DIR}` ke nilai nyata):
 
 ---
 
+## STEP 5b — Session-binding hook (Claude Code only)
+
+Tujuan: ikat lifecycle thread second_agent ke lifecycle chat main_agent (lihat "Session Lifecycle Rule" di STEP 5).
+
+Berlaku HANYA jika agent (STEP 0) = Claude Code (`~/.claude/`).
+Agent lain (Codex/Cursor/Gemini/dst) → SKIP step ini, output EXACT:
+"[SESSION HOOK] Agent <nama> belum punya padanan SessionStart hook. Fallback: state.json + context (perilaku v3.2.0)."
+
+### 5b.1 — Buat hook file: `{AGENT_DIR}/hooks/session-bind.ps1` (overwrite — template, bukan data user)
+
+    # session-bind.ps1 - SessionStart hook
+    # Maps Claude Code session lifecycle -> second_agent (opencode) MAIN_SESSION_ID.
+    #
+    # source mapping:
+    #   startup | clear | compact  -> NEW  MAIN_SESSION_ID  -> second_agent thread NEW
+    #   resume                     -> REUSE MAIN_SESSION_ID  -> second_agent thread CONTINUE
+    #
+    # Registry: %USERPROFILE%\.claude\session_registry.json  (key = claude session_id)
+    # Output: JSON hookSpecificOutput.additionalContext -> injects MAIN_SESSION_ID into context.
+    # Never blocks session start (always exit 0).
+
+    $ErrorActionPreference = 'Stop'
+
+    function Write-NoBom([string]$Path, [string]$Content) {
+        $enc = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($Path, $Content, $enc)
+    }
+
+    try {
+        $raw = [Console]::In.ReadToEnd()
+        if ([string]::IsNullOrWhiteSpace($raw)) { exit 0 }
+
+        $payload   = $raw | ConvertFrom-Json
+        $source    = $payload.source
+        $claudeSid = $payload.session_id
+        $cwd       = $payload.cwd
+        if ([string]::IsNullOrWhiteSpace($cwd)) { $cwd = (Get-Location).Path }
+
+        $root = $cwd
+        try { $rp = Resolve-Path -LiteralPath $cwd -ErrorAction Stop; $root = $rp.Path } catch { }
+        $slug = Split-Path -Leaf $root
+
+        $registryPath = Join-Path $env:USERPROFILE '.claude\session_registry.json'
+
+        # load registry
+        $registry = @{}
+        if (Test-Path -LiteralPath $registryPath) {
+            try {
+                $j = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
+                foreach ($p in $j.PSObject.Properties) { $registry[$p.Name] = $p.Value }
+            } catch { $registry = @{} }
+        }
+
+        # decide reuse vs new
+        $reuse  = $false
+        $mainId = $null
+        if ($source -eq 'resume' -and $claudeSid -and $registry.ContainsKey($claudeSid)) {
+            $mainId = $registry[$claudeSid].main_session_id
+            $reuse  = $true
+        }
+        if ([string]::IsNullOrWhiteSpace($mainId)) {
+            $ts     = Get-Date -Format 'yyyyMMdd_HHmmssfff'   # ms-resolution avoids same-second collision
+            $rand   = -join (((48..57) + (97..102)) | Get-Random -Count 4 | ForEach-Object { [char]$_ })
+            $mainId = "main_${slug}_${ts}_${rand}"
+            $reuse  = $false
+        }
+
+        $boundAt = (Get-Date).ToUniversalTime().ToString('o')
+        if ($claudeSid) {
+            $registry[$claudeSid] = [PSCustomObject]@{
+                main_session_id = $mainId
+                cwd             = $root
+                bound_at        = $boundAt
+                source          = $source
+            }
+        }
+
+        # prune to newest 50 by bound_at
+        try {
+            $rows = foreach ($k in $registry.Keys) { [PSCustomObject]@{ key = $k; val = $registry[$k] } }
+            $kept = $rows | Sort-Object { try { [datetime]$_.val.bound_at } catch { [datetime]::MinValue } } -Descending |
+                    Select-Object -First 50
+            $pruned = @{}
+            foreach ($e in $kept) { $pruned[$e.key] = $e.val }
+            $registry = $pruned
+        } catch { }
+
+        Write-NoBom $registryPath (($registry | ConvertTo-Json -Depth 6))
+
+        $verb = if ($reuse) { 'REUSE (continue)' } else { 'NEW' }
+        $ctx  = @"
+    [SESSION BINDING - authoritative]
+    MAIN_SESSION_ID=$mainId
+    MAIN_SESSION_PROJECT_ROOT=$root
+    source=$source
+    second_agent_thread=$verb
+    Use this MAIN_SESSION_ID for all /.explore /.plan /.analyze /.verify /.sweep invocations. Overrides .workflow/state.json session.id.
+    "@
+
+        $out = [PSCustomObject]@{
+            hookSpecificOutput = [PSCustomObject]@{
+                hookEventName     = 'SessionStart'
+                additionalContext = $ctx
+            }
+        }
+        Write-Output ($out | ConvertTo-Json -Depth 5 -Compress)
+        exit 0
+    }
+    catch {
+        # never block session start
+        exit 0
+    }
+
+> CATATAN: here-string `@" ... "@` di atas — saat ditulis ke file nyata, hapus indentasi 4-spasi dari blok ini. Closing `"@` HARUS di kolom 0. (Indentasi di prompt ini hanya penanda code block.)
+
+### 5b.2 — Register di `{AGENT_DIR}/settings.json` (MERGE, jangan overwrite file)
+
+Baca settings.json, tambahkan key `hooks.SessionStart` (pertahankan semua key lain):
+
+    "hooks": {
+      "SessionStart": [
+        {
+          "matcher": "startup|resume|clear|compact",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"{AGENT_DIR}\\hooks\\session-bind.ps1\""
+            }
+          ]
+        }
+      ]
+    }
+
+Catatan desain:
+- `compact` → thread BARU (default). Jika `autoCompactEnabled=true` → tiap auto-compact reset thread second_agent mid-session. Ubah `compact`=reuse: di session-bind.ps1 ganti `$source -eq 'resume'` → `$source -in 'resume','compact'`.
+- Registry `{AGENT_DIR}/session_registry.json` auto-managed (key = agent session_id, prune 50 entry terbaru). Jangan edit manual.
+- Id format: `main_<slug>_<yyyyMMdd>_<HHmmssfff>_<rand4>` — ms + 4-hex random, anti-collision saat multi session start dalam 1 detik.
+
+---
+
 ## STEP 6 — Verifikasi
 
 1. List semua file di `{AGENT_DIR}/skills/` + ukuran byte
 2. List semua file di `{AGENT_DIR}/memory/` + ukuran byte
 3. Tampilkan 5 baris pertama `{CONFIG_FILE}` untuk konfirmasi marker ada
 4. Tampilkan isi `{AGENT_DIR}/memory/MEMORY.md`
+5. (Claude Code) Konfirmasi `{AGENT_DIR}/hooks/session-bind.ps1` EXISTS + `settings.json` punya `hooks.SessionStart`
 
 ---
 
@@ -1440,6 +1602,10 @@ Tampilkan PERSIS:
     Config:
       {CONFIG_FILE} ✓ (created | merged)
       marker: <!-- WORKFLOW-MAIN-AGENT:START --> found
+
+    Session hook (Claude Code only):
+      {AGENT_DIR}/hooks/session-bind.ps1 ✓ (created | skipped — non-Claude agent)
+      settings.json SessionStart         ✓ (registered | skipped)
 
     Status: READY
     Workflow: /.explore → /.plan → /.execute -y → /.verify
