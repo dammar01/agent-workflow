@@ -170,7 +170,10 @@ Substitusi semua `{AGENT_DIR}` ke nilai nyata dari STEP 0.
 
     ## STEP 2 — Tentukan session dan work dir
     - work_dir = absolute path project aktif
-    - MAIN_SESSION_ID: reuse jika ada di context (same project root), else generate: main_<project>_YYYYMMDD_HHMMss
+    - MAIN_SESSION_ID:
+        1. Cek di context (same project root) → reuse
+        2. Cek .workflow/state.json → baca session.id jika project.root match
+        3. Else generate: main_<project>_YYYYMMDD_HHMMss
     - check_py_path = direktori(AGENT_PATH) + "/check.py"
 
     Output exploration plan sebelum mulai:
@@ -259,7 +262,10 @@ Substitusi semua `{AGENT_DIR}` ke nilai nyata dari STEP 0.
 
     ## STEP 1 — Tentukan session dan work dir
     - work_dir = absolute path project aktif
-    - MAIN_SESSION_ID: reuse jika ada di context (same project root), else generate: main_<project>_YYYYMMDD_HHMMss
+    - MAIN_SESSION_ID:
+        1. Cek di context (same project root) → reuse
+        2. Cek .workflow/state.json → baca session.id jika project.root match
+        3. Else generate: main_<project>_YYYYMMDD_HHMMss
     - check_py_path = direktori(AGENT_PATH) + "/check.py"
 
     ## STEP 2 — Cek AGENT_PATH
@@ -494,7 +500,10 @@ Substitusi semua `{AGENT_DIR}` ke nilai nyata dari STEP 0.
 
     ## STEP 1 — Tentukan session dan work dir
     - work_dir = absolute path project aktif
-    - MAIN_SESSION_ID: reuse jika ada di context (same project root), else generate: main_<project>_YYYYMMDD_HHMMss
+    - MAIN_SESSION_ID:
+        1. Cek di context (same project root) → reuse
+        2. Cek .workflow/state.json → baca session.id jika project.root match
+        3. Else generate: main_<project>_YYYYMMDD_HHMMss
     - check_py_path = direktori(AGENT_PATH) + "/check.py"
 
     ## STEP 2 — Cek AGENT_PATH
@@ -633,7 +642,7 @@ Substitusi semua `{AGENT_DIR}` ke nilai nyata dari STEP 0.
 
     ## Output
 
-    [COMMAND GUIDE — V3.2.0]
+    [COMMAND GUIDE — V3.2.1]
 
     LOCAL (main_agent langsung, no proxy):
 
@@ -723,7 +732,10 @@ Substitusi semua `{AGENT_DIR}` ke nilai nyata dari STEP 0.
 
     ## STEP 1 — Tentukan session dan work dir
     - work_dir = absolute path project aktif
-    - MAIN_SESSION_ID: reuse jika ada di context (same project root), else generate: main_<project>_YYYYMMDD_HHMMss
+    - MAIN_SESSION_ID:
+        1. Cek di context (same project root) → reuse
+        2. Cek .workflow/state.json → baca session.id jika project.root match
+        3. Else generate: main_<project>_YYYYMMDD_HHMMss
     - check_py_path = direktori(AGENT_PATH) + "/check.py"
 
     ## STEP 2 — Cek AGENT_PATH
@@ -805,7 +817,10 @@ Substitusi semua `{AGENT_DIR}` ke nilai nyata dari STEP 0.
 
     ## STEP 1 — Tentukan session dan work dir
     - work_dir = absolute path project aktif
-    - MAIN_SESSION_ID: reuse jika ada di context (same project root), else generate: main_<project>_YYYYMMDD_HHMMss
+    - MAIN_SESSION_ID:
+        1. Cek di context (same project root) → reuse
+        2. Cek .workflow/state.json → baca session.id jika project.root match
+        3. Else generate: main_<project>_YYYYMMDD_HHMMss
     - check_py_path = direktori(AGENT_PATH) + "/check.py"
 
     ## STEP 2 — Cek AGENT_PATH
@@ -1188,6 +1203,10 @@ Konten yang ditulis (substitusi `{AGENT_DIR}` ke nilai nyata):
     3. Cek graphify-out/ di project root.
        - Ada → graph tersedia, delegasi detail ke second_agent.
        - Tidak ada → offer generate .graphifyignore.
+    3b. Cek .workflow/state.json di project root:
+       - Ada + project.root match work_dir → load MAIN_SESSION_ID dari state.json["session"]["id"]
+         → SKIP step 5 (jangan generate baru)
+       - Tidak ada atau root beda → proceed step 5
     4. Baca memory file jika relevan ({AGENT_DIR}/memory/PERSONAL_MEMORY.md).
     5. Generate MAIN_SESSION_ID: main_<project_slug>_YYYYMMDD_HHMMSS.
        - Simpan bersama MAIN_SESSION_PROJECT_ROOT (normalized absolute path).
@@ -1199,7 +1218,8 @@ Konten yang ditulis (substitusi `{AGENT_DIR}` ke nilai nyata):
     1 sesi main_agent + 1 project root = 1 session second_agent.
 
     Sebelum invoke second_agent:
-    - Ada MAIN_SESSION_ID + path sama → reuse.
+    - Ada MAIN_SESSION_ID di context + path sama → reuse.
+    - Ada .workflow/state.json + project.root match → load dari file, reuse.
     - Path beda → generate baru.
     - Belum ada → generate baru.
 
@@ -1390,7 +1410,7 @@ Konten yang ditulis (substitusi `{AGENT_DIR}` ke nilai nyata):
 
 Tampilkan PERSIS:
 
-    [SETUP COMPLETE — V3.2.0 DUAL AGENT MODE]
+    [SETUP COMPLETE — V3.2.1 DUAL AGENT MODE]
     agent:   <nama agent>
     dir:     {AGENT_DIR}
     config:  {CONFIG_FILE}
