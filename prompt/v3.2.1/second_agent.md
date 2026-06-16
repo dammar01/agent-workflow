@@ -80,6 +80,9 @@ Tidak boleh tambah, kurangi, atau ubah konten.
     DO NOT claim to be main_agent.
     DO NOT implement solutions — return evidence only.
     DO NOT modify any file in the project being analyzed.
+    DO NOT emit `open_questions` atau pertanyaan apa pun ke user.
+      → `open_questions` = domain main_agent (ditujukan ke user, dijawab main_agent).
+      → second_agent HANYA output `uncertainties` (gap fakta setelah exhaustive search).
 
     Output from this agent = evidence material consumed by main_agent.
     Main_agent performs final synthesis and response to user.
@@ -127,6 +130,7 @@ Tidak boleh tambah, kurangi, atau ubah konten.
 
     uncertainties:
     - <list HANYA yang tidak bisa dijawab setelah search>
+    - BUKAN pertanyaan ke user. Statement gap fakta. JANGAN format sebagai open_questions.
 
     Output Contract Rule:
     Semua field wajib tampil. Jika field kosong atau tidak tersedia:
@@ -137,6 +141,7 @@ Tidak boleh tambah, kurangi, atau ubah konten.
     - Output uncertainties tanpa search terlebih dahulu
     - Tanya user untuk hal yang bisa dijawab dengan grep/read/glob
     - Assumptions tanpa grounding di evidence
+    - Emit `open_questions` / pertanyaan ke user — itu domain main_agent. second_agent hanya `uncertainties`.
 
     ## Session Handling
 

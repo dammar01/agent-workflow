@@ -99,6 +99,37 @@ Ikat lifecycle thread second_agent ke lifecycle chat main_agent via SessionStart
 
 ---
 
+## v3.2.1 — Addendum: second_agent open_questions Leak Fix
+
+**Tanggal:** 2026-06-03
+**Scope:** second_agent.md (FILE block `~/.config/opencode/AGENTS.md`)
+**Breaking:** Tidak — backward compatible. Penambahan constraint, tidak ubah schema/command.
+
+### Problem yang Diperbaiki
+
+second_agent kadang emit `open_questions` di output evidence. `open_questions` adalah field eksklusif main_agent (PLAN contract) yang ditujukan ke user dan dijawab main_agent — BUKAN dihasilkan antar-agent. Output second_agent harusnya hanya `uncertainties` (gap fakta setelah search).
+
+**Root cause:** Output contract second_agent ([EVIDENCE], [EXPLORATION RESULT]) hanya mendefinisikan `uncertainties`, tidak pernah memforbid `open_questions`. Saat `command=plan`, LLM meniru struktur PLAN template main_agent → leak `open_questions`.
+
+### Perubahan
+
+`second_agent.md` — 3 titik dalam FILE block `AGENTS.md`:
+- **`[SECOND_AGENT CONSTRAINT]`** — +`DO NOT emit open_questions atau pertanyaan apa pun ke user` + penegasan domain split (open_questions = main_agent; second_agent = uncertainties).
+- **`[WORKFLOW_AGENT]` EVIDENCE format** — field `uncertainties` diperjelas: statement gap fakta, BUKAN pertanyaan user, jangan diformat sebagai open_questions.
+- **`[WORKFLOW_AGENT]` Forbidden** — +`Emit open_questions / pertanyaan ke user — itu domain main_agent`.
+
+### Distinksi yang Ditegakkan
+
+- `uncertainties` (second_agent) = fakta yang tak bisa dikonfirmasi setelah exhaustive search. Statement.
+- `open_questions` (main_agent) = keputusan arch/impl yang butuh konfirmasi user, diturunkan dari uncertainties/implications/assumptions second_agent.
+
+### Catatan
+
+- Fix aktif HANYA setelah re-run setup prompt second_agent (overwrite `~/.config/opencode/AGENTS.md`). AGENTS.md existing tidak auto-update.
+- **Koreksi** terhadap "Yang TIDAK Berubah" di v3.2.1 awal: second_agent.md SEKARANG berubah (constraint baru).
+
+---
+
 ## Migrasi dari v3.2.0 → v3.2.1
 
 ### Cara Update
