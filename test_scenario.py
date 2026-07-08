@@ -236,6 +236,55 @@ def run_tests() -> None:
         assert_true(timeout_status["status"] == "pending", "timed out status must preserve current job state")
         assert_true(timeout_status.get("timed_out") is True, "timed out wait must mark timed_out")
 
+        # 11. v3.3.0 — structured errors, idempotency, reaper, digest, guard, router
+        from core.contract import extract_digest, make_error
+        from core.router import Router
+        from utils import osutil, path_guard
+
+        # next_action mandatory
+        enforced = False
+        try:
+            make_error("permission_denied", "x", next_action="")
+        except ValueError:
+            enforced = True
+        assert_true(enforced, "make_error must require next_action")
+
+        # role code-authoritative; local command rejected from delegation
+        assert_true(Router().route("explore")["role"] == "exploration", "router derives role from code")
+        execute_rejected = False
+        try:
+            Router().route("execute")
+        except ValueError:
+            execute_rejected = True
+        assert_true(execute_rejected, "execute must not be delegable")
+
+        # idempotency: identical request reuses the same job
+        idem_a = main.JOB_MANAGER.create_job("explore", "same task", "idem-session", work_dir, None)
+        idem_b = main.JOB_MANAGER.create_job("explore", "same task", "idem-session", work_dir, None)
+        assert_true(idem_a["job_id"] == idem_b["job_id"], "identical request must reuse job")
+        main.JOB_MANAGER.complete_job(idem_a["job_id"], {"ok": True, "content": "x", "meta": {}})
+
+        # reaper: running job with a dead worker pid is failed on lookup
+        dead = main.JOB_MANAGER.create_job("explore", "dead worker", "reaper-session", work_dir, None)
+        main.JOB_MANAGER.set_worker_pid(dead["job_id"], 999999999)
+        main.JOB_MANAGER.mark_running(dead["job_id"])
+        reaped = main.get_result(dead["job_id"])
+        assert_true(reaped["status"] == "failed", "dead-worker job must be reaped to failed")
+
+        # digest extraction + fallback
+        digest = extract_digest("findings:\n- a\n[DIGEST]\nsummary: s\nkey_findings:\n- k\nrisk_level: high\nrecommended_next_action: go\nconfidence: low")
+        assert_true(digest and digest["summary"] == "s" and digest["risk_level"] == "high", "digest must parse")
+        assert_true(extract_digest("no digest here") is None, "missing digest must fall back to None")
+
+        # preflight path guard
+        guard_ok, blocked = path_guard.validate_scope("read the .env and secret files", temp_root)
+        assert_true(not guard_ok and blocked, "path guard must block sensitive references")
+        clean_ok, _ = path_guard.validate_scope("find the auth entry point", temp_root)
+        assert_true(clean_ok, "clean task must pass the guard")
+
+        # cross-OS primitive
+        assert_true(osutil.process_alive(999999999) is False, "process_alive must report dead pid")
+
         print("test_scenario: success")
     finally:
         main.subprocess.Popen = original_popen

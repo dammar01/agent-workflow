@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import shutil
@@ -5,10 +6,13 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from utils import osutil
+
 
 WORKFLOW_DIRNAME = ".workflow"
 LOCK_TTL_SECONDS = 300
 JSON_INDENT = 2
+ARCHIVE_KEEP = 20
 
 
 def now_iso() -> str:
@@ -48,6 +52,7 @@ def workflow_paths(project_root: Path) -> dict[str, Path]:
     workflow_dir = project_root / WORKFLOW_DIRNAME
     runtime_dir = workflow_dir / "runtime"
     reports_dir = workflow_dir / "reports"
+    logs_dir = workflow_dir / "logs"
     return {
         "project_root": project_root,
         "workflow_dir": workflow_dir,
@@ -64,13 +69,32 @@ def workflow_paths(project_root: Path) -> dict[str, Path]:
         "reports_dir": reports_dir,
         "doctor_report": reports_dir / "doctor.json",
         "sweep_report": reports_dir / "sweep.last.md",
+        "logs_dir": logs_dir,
+    }
+
+
+def _tool_paths(agent_workflow_path: str | None) -> dict:
+    """Resolve absolute tool paths (main.py/check.py) so .workflow is self-contained."""
+    from config.settings import CHECK_PY, MAIN_PY, TOOL_VERSION
+
+    main_py = Path(agent_workflow_path).resolve() if agent_workflow_path else MAIN_PY
+    tool_dir = main_py.parent
+    check_py = tool_dir / "check.py"
+    if not check_py.exists():
+        check_py = CHECK_PY
+    return {
+        "main_py_path": str(main_py),
+        "check_py_path": str(check_py),
+        "tool_dir": str(tool_dir),
+        "tool_version": TOOL_VERSION,
     }
 
 
 def default_config(project_root: Path, agent_workflow_path: str | None) -> dict:
     project_name = project_root.name
+    tool = _tool_paths(agent_workflow_path)
     return {
-        "version": "3.2.0",
+        "version": "3.3.0",
         "project": {
             "name": project_name,
             "slug": slugify_project_name(project_name),
@@ -78,18 +102,23 @@ def default_config(project_root: Path, agent_workflow_path: str | None) -> dict:
         },
         "runtime": {
             "agent_workflow_path": agent_workflow_path,
+            "main_py_path": tool["main_py_path"],
+            "check_py_path": tool["check_py_path"],
+            "tool_dir": tool["tool_dir"],
+            "tool_version": tool["tool_version"],
             "second_agent": "opencode",
             "main_agent": "agnostic",
+            "opencode_config": ".workflow/opencode.json",
             "prompt_file": ".workflow/runtime/prompt.txt",
             "response_file": ".workflow/runtime/response.last.md",
             "meta_file": ".workflow/runtime/prompt.meta.json",
             "lock_file": ".workflow/runtime/lock",
+            "logs_dir": ".workflow/logs",
         },
         "commands": {
             "allow_analyze_to_plan": True,
             "allow_explore_to_plan": True,
             "auto_sweep_after_execute": True,
-            "audit_enabled": False,
         },
         "policies": {
             "workflow_prefix": "/.",
@@ -178,11 +207,71 @@ def ensure_valid_json_or_create(path: Path, factory) -> tuple[str, dict]:
     return "created", payload
 
 
+def _copy_opencode_config(project_root: Path, tool_dir: str) -> str | None:
+    """Copy the tool's opencode.json into .workflow so it is project-local and overridable."""
+    dest = project_root / WORKFLOW_DIRNAME / "opencode.json"
+    if dest.exists():
+        return str(dest)  # already project-local; never overwrite user edits
+    src = Path(tool_dir) / "config" / "opencode.json"
+    if not src.exists():
+        src = Path(tool_dir) / "config" / "opencode.example.json"
+    if src.exists():
+        shutil.copyfile(src, dest)
+        return str(dest)
+    return None
+
+
+def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
+    """Emit run.ps1 + run.sh + inspect.ps1 + inspect.sh so main_agent calls one script."""
+    py = osutil.python_exe()
+    root = str(project_root)
+    workflow_dir = project_root / WORKFLOW_DIRNAME
+    written: list[str] = []
+
+    run_ps1 = (
+        'param([Parameter(Mandatory=$true)][string]$Command,'
+        '[Parameter(Mandatory=$true)][string]$Task,'
+        '[string]$Session=$env:MAIN_SESSION_ID)\n'
+        'if (-not $Session) { $Session = "default" }\n'
+        f'& "{py}" "{main_py}" --command await --job-command $Command '
+        f'--prompt $Task --session $Session --work-dir "{root}" --pretty\n'
+    )
+    run_sh = (
+        '#!/usr/bin/env bash\n'
+        'set -euo pipefail\n'
+        'COMMAND="${1:?command required}"\n'
+        'TASK="${2:?task required}"\n'
+        'SESSION="${3:-${MAIN_SESSION_ID:-default}}"\n'
+        f'exec "{py}" "{main_py}" --command await --job-command "$COMMAND" '
+        f'--prompt "$TASK" --session "$SESSION" --work-dir "{root}" --pretty\n'
+    )
+    inspect_ps1 = f'& "{py}" "{main_py}" --command inspect --work-dir "{root}" --pretty\n'
+    inspect_sh = (
+        '#!/usr/bin/env bash\n'
+        'set -euo pipefail\n'
+        f'exec "{py}" "{main_py}" --command inspect --work-dir "{root}" --pretty\n'
+    )
+
+    for name, content in (
+        ("run.ps1", run_ps1),
+        ("run.sh", run_sh),
+        ("inspect.ps1", inspect_ps1),
+        ("inspect.sh", inspect_sh),
+    ):
+        path = workflow_dir / name
+        atomic_write_text(path, content)
+        if name.endswith(".sh"):
+            osutil.make_executable(path)
+        written.append(str(path))
+    return written
+
+
 def ensure_workflow_workspace(project_root: Path, agent_workflow_path: str | None) -> dict:
     paths = workflow_paths(project_root)
     paths["workflow_dir"].mkdir(parents=True, exist_ok=True)
     paths["runtime_dir"].mkdir(parents=True, exist_ok=True)
     paths["reports_dir"].mkdir(parents=True, exist_ok=True)
+    paths["logs_dir"].mkdir(parents=True, exist_ok=True)
 
     created_files: list[str] = []
     existing_files: list[str] = []
@@ -229,6 +318,10 @@ def ensure_workflow_workspace(project_root: Path, agent_workflow_path: str | Non
         )
         created_files.append(str(paths["prompt_meta"]))
 
+    tool = _tool_paths(agent_workflow_path)
+    opencode_copied = _copy_opencode_config(project_root, tool["tool_dir"])
+    generated_scripts = _generate_run_scripts(project_root, tool["main_py_path"])
+
     gitignore_updated = ensure_root_gitignore_entry(project_root)
     return {
         "project_root": str(project_root),
@@ -236,6 +329,9 @@ def ensure_workflow_workspace(project_root: Path, agent_workflow_path: str | Non
         "created_files": created_files,
         "existing_files": existing_files,
         "gitignore_updated": gitignore_updated,
+        "opencode_config": opencode_copied,
+        "generated_scripts": generated_scripts,
+        "tool": tool,
     }
 
 
@@ -438,6 +534,23 @@ def release_runtime_lock(lock_path: Path) -> None:
         pass
 
 
+def _prune_archive(logs_dir: Path, keep: int = ARCHIVE_KEEP) -> None:
+    """Keep only the newest `keep` per-run archive folders."""
+    if not logs_dir.exists():
+        return
+    runs = sorted((p for p in logs_dir.iterdir() if p.is_dir()), key=lambda p: p.name, reverse=True)
+    for stale in runs[keep:]:
+        shutil.rmtree(stale, ignore_errors=True)
+
+
+def _archive_prompt(logs_dir: Path, prompt_id: str, prompt: str) -> None:
+    run_dir = logs_dir / prompt_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(run_dir / "prompt.md", prompt)
+    atomic_write_text(run_dir / "prompt.sha256", hashlib.sha256(prompt.encode("utf-8")).hexdigest())
+    _prune_archive(logs_dir)
+
+
 def write_prompt_handoff(project_root: Path, command: str, session_id: str, prompt: str) -> dict:
     loaded = load_workspace_state(project_root)
     lock_result = acquire_runtime_lock(loaded["paths"]["lock"], command, session_id)
@@ -470,13 +583,21 @@ def write_prompt_handoff(project_root: Path, command: str, session_id: str, prom
     prompt_tmp.replace(loaded["paths"]["prompt"])
     prompt_meta_tmp.replace(loaded["paths"]["prompt_meta"])
 
+    # Per-run archive (rolling): prompt + checksum, keyed by prompt_id.
+    _archive_prompt(loaded["paths"]["logs_dir"], prompt_id, prompt)
+
     state["guards"]["last_prompt_id"] = prompt_id
     atomic_write_json(loaded["paths"]["state"], state)
     return {"ok": True, "meta": meta, "paths": loaded["paths"]}
 
 
-def write_response_snapshot(project_root: Path, content: str) -> None:
-    atomic_write_text(workflow_paths(project_root)["response_last"], content)
+def write_response_snapshot(project_root: Path, content: str, prompt_id: str | None = None) -> None:
+    paths = workflow_paths(project_root)
+    atomic_write_text(paths["response_last"], content)
+    if prompt_id:
+        run_dir = paths["logs_dir"] / prompt_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(run_dir / "output.raw.md", content)
 
 
 def check_writable(path: Path) -> tuple[bool, str | None]:

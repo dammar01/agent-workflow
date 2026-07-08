@@ -10,6 +10,10 @@ CACHE_FILE = BASE_DIR / "storage" / "cache.json"
 JOB_DIR = BASE_DIR / "storage" / "jobs"
 OPENCODE_CONFIG_FILE = BASE_DIR / "config" / "opencode.json"
 
+TOOL_VERSION = "3.3.0"
+MAIN_PY = BASE_DIR / "main.py"
+CHECK_PY = BASE_DIR / "check.py"
+
 DEFAULT_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_TIMEOUT_SECONDS", "0"))
 OPENCODE_COMMAND = os.getenv("OPENCODE_COMMAND", "opencode")
 DEFAULT_JOB_POLL_INTERVAL_SECONDS = float(os.getenv("AI_PROXY_JOB_POLL_INTERVAL_SECONDS", "2"))
@@ -70,3 +74,11 @@ def load_opencode_config(path: Path = OPENCODE_CONFIG_FILE) -> dict:
         if not isinstance(config.get("routes"), dict):
             config["routes"] = COMMAND_ROUTES
     return config
+
+
+def load_opencode_config_for(project_root) -> dict:
+    """Prefer the project-local .workflow/opencode.json, falling back to the tool default."""
+    local = Path(project_root) / ".workflow" / "opencode.json"
+    if local.exists():
+        return load_opencode_config(local)
+    return load_opencode_config()

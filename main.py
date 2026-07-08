@@ -3,15 +3,18 @@ import sys
 import time
 from pathlib import Path
 
+from core.contract import make_error
 from core.executor import Executor
 from core.job_manager import JobManager
 from core.session_manager import SessionManager
+from utils import osutil
 from core.workflow_runtime import (
     detect_project_root,
     ensure_workflow_workspace,
     resolve_agent_workflow_path,
     run_doctor,
     run_sweep,
+    workflow_paths,
 )
 from config.settings import (
     DEFAULT_JOB_POLL_INTERVAL_SECONDS,
@@ -71,6 +74,17 @@ def run(
     if normalized_command == "sweep":
         return run_sweep(project_root)
 
+    if normalized_command == "clean":
+        summary = JOB_MANAGER.prune_jobs()
+        return {
+            "ok": True,
+            "content": f"pruned {summary['removed']} job(s), kept {summary['kept']}",
+            "meta": summary,
+        }
+
+    if normalized_command == "inspect":
+        return _inspect(project_root)
+
     session = SESSION_MANAGER.load_or_create(session_id)
     output = EXECUTOR.execute(command, task, session, work_dir, model)
     SESSION_MANAGER.record_run(session, command)
@@ -86,19 +100,39 @@ def submit(
     model: str | None = None,
 ) -> dict:
     if command in {"submit", "status", "result", "worker"}:
-        return {
-            "ok": False,
-            "content": f"unsupported submit target: {command}",
-            "meta": {"error_type": "job_submit_error", "command": command},
-        }
+        return make_error(
+            "job_submit_error",
+            f"unsupported submit target: {command}",
+            next_action="Use a delegated command (explore/plan/analyze/verify/sweep).",
+            meta={"command": command},
+        )
 
     try:
         job = JOB_MANAGER.create_job(command, task, session_id, work_dir, model)
     except ValueError as exc:
+        active = JOB_MANAGER.active_job_for_session(session_id)
+        active_id = active["job_id"] if active else None
+        next_action = (
+            f"Wait for {active_id} or run: .workflow/check.{osutil.script_ext()} {active_id} --wait"
+            if active_id
+            else "Wait for the active job to finish, then retry."
+        )
+        return make_error(
+            "job_already_running",
+            str(exc),
+            next_action=next_action,
+            meta={"command": command},
+            active_job_id=active_id,
+        )
+
+    # Idempotent reuse: identical request already has a running worker.
+    if job.get("worker_pid") is not None or job.get("status") == "running":
         return {
-            "ok": False,
-            "content": str(exc),
-            "meta": {"error_type": "job_submit_error", "command": command},
+            "ok": True,
+            "job_id": job["job_id"],
+            "status": job["status"],
+            "submitted_at": job["created_at"],
+            "meta": {"pid": job.get("worker_pid"), "reused": True},
         }
 
     worker = _spawn_worker(job["job_id"], work_dir)
@@ -106,6 +140,7 @@ def submit(
         JOB_MANAGER.fail_job(job["job_id"], worker["content"])
         return worker
 
+    JOB_MANAGER.set_worker_pid(job["job_id"], worker["meta"]["pid"])
     return {
         "ok": True,
         "job_id": job["job_id"],
@@ -185,6 +220,42 @@ def await_job(
         time.sleep(interval)
 
 
+def _inspect(project_root) -> dict:
+    """Human-readable snapshot: session, workflow stage, recent jobs, last response."""
+    import json as _json
+
+    paths = workflow_paths(project_root)
+    lines: list[str] = [f"# .workflow inspect — {project_root}"]
+
+    try:
+        state = _json.loads(paths["state"].read_text(encoding="utf-8"))
+        session = (state.get("session") or {}).get("id")
+        stage = state.get("workflow", {}).get("stage")
+        lines.append(f"session: {session}")
+        lines.append(f"stage: {stage}")
+    except (OSError, ValueError):
+        lines.append("session: (state.json unavailable)")
+
+    job_files = sorted(JOB_MANAGER.job_dir.glob("job_*.json"), key=lambda p: p.name, reverse=True)[:5]
+    lines.append(f"recent jobs ({len(job_files)}):")
+    for path in job_files:
+        try:
+            job = _json.loads(path.read_text(encoding="utf-8"))
+            lines.append(f"  - {job['job_id']} [{job['status']}] {job['command']} pid={job.get('worker_pid')}")
+        except (OSError, ValueError, KeyError):
+            continue
+
+    last = ""
+    try:
+        last = paths["response_last"].read_text(encoding="utf-8")[:400]
+    except OSError:
+        pass
+    lines.append("last_response_preview:")
+    lines.append(last or "  (none)")
+
+    return {"ok": True, "content": "\n".join(lines), "meta": {"project_root": str(project_root)}}
+
+
 def run_worker(job_id: str) -> dict:
     job = JOB_MANAGER.get_job(job_id)
     if not job:
@@ -218,18 +289,6 @@ def _spawn_worker(job_id: str, work_dir: str | None = None) -> dict:
         "--job-id",
         job_id,
     ]
-    creationflags = 0
-    startupinfo = None
-    if sys.platform == "win32":
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = 0
-        creationflags = (
-            subprocess.CREATE_NEW_PROCESS_GROUP
-            | subprocess.DETACHED_PROCESS
-            | subprocess.CREATE_NO_WINDOW
-        )
-
     try:
         proc = subprocess.Popen(
             args,
@@ -237,11 +296,15 @@ def _spawn_worker(job_id: str, work_dir: str | None = None) -> dict:
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            creationflags=creationflags,
-            startupinfo=startupinfo,
+            **osutil.detached_popen_kwargs(),
         )
     except OSError as exc:
-        return {"ok": False, "content": str(exc), "meta": {"error_type": type(exc).__name__}}
+        return make_error(
+            "unknown",
+            str(exc),
+            next_action="Check python is on PATH and the job dir is writable, then retry.",
+            meta={"error": type(exc).__name__},
+        )
     return {"ok": True, "content": "worker started", "meta": {"pid": proc.pid}}
 
 
@@ -254,7 +317,7 @@ if __name__ == "__main__":
         "--command",
         "-c",
         required=True,
-        choices=["init", "doctor", "explore", "plan", "analyze", "verify", "sweep", "submit", "await", "status", "result", "worker"],
+        choices=["init", "doctor", "explore", "plan", "analyze", "verify", "sweep", "clean", "inspect", "submit", "await", "status", "result", "worker"],
     )
     parser.add_argument("--prompt", "-p", default=None)
     parser.add_argument("--prompt-file", default=None, help="path to file containing the prompt (alternative to --prompt)")

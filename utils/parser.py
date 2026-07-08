@@ -24,9 +24,20 @@ def first_non_empty(*values) -> str:
     return ""
 
 
+_SESSION_ID_PATTERNS = (
+    r"(?:session\.id=|service=session\s+id=)(ses_[A-Za-z0-9]+)",
+    r"\bid=(ses_[A-Za-z0-9]+)",           # generic key=value log
+    r"\b(ses_[A-Za-z0-9]{6,})\b",          # bare session token, last resort
+)
+
+
 def extract_opencode_session_id(text: str) -> str | None:
-    match = re.search(r"(?:session\.id=|service=session\s+id=)(ses_[A-Za-z0-9]+)", ensure_text(text))
-    return match.group(1) if match else None
+    body = ensure_text(text)
+    for pattern in _SESSION_ID_PATTERNS:
+        match = re.search(pattern, body)
+        if match:
+            return match.group(1)
+    return None
 
 
 def clean_opencode_output(text: str) -> str:

@@ -1,16 +1,28 @@
 import os
 from pathlib import Path
-import shutil
 import subprocess
-import sys
 
 from config.settings import DEFAULT_TIMEOUT_SECONDS, OPENCODE_COMMAND
+from core.contract import make_error, make_ok
+from utils import osutil
 from utils.parser import (
     clean_opencode_output,
     ensure_text,
     extract_opencode_session_id,
     first_non_empty,
 )
+
+# Substrings that signal opencode refused a path rather than a real crash.
+_PERMISSION_SIGNS = ("permission denied", "eacces", "not permitted", "access is denied", "outside", "forbidden")
+
+
+def _guess_blocked_paths(stderr: str) -> list[str]:
+    """Best-effort pull of path-like tokens from an opencode permission error."""
+    import re
+
+    tokens = re.findall(r"(?:[A-Za-z]:[\\/]|/|~)[^\s\"']+", stderr or "")
+    seen: set[str] = set()
+    return [t for t in tokens if not (t in seen or seen.add(t))][:8]
 
 
 class OpenCodeAdapter:
@@ -24,16 +36,6 @@ class OpenCodeAdapter:
         self.command = command
         self.timeout_seconds = timeout_seconds
         self.no_timeout = timeout_seconds is None or timeout_seconds <= 0
-
-    @staticmethod
-    def _get_windows_startupinfo() -> tuple:
-        """Return startupinfo and creationflags to hide console window on Windows."""
-        if sys.platform == "win32":
-            startupinfo = subprocess.STARTUPINFO()
-            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            startupinfo.wShowWindow = subprocess.SW_HIDE
-            return startupinfo, subprocess.CREATE_NO_WINDOW
-        return None, 0
 
     def init_session(
         self,
@@ -58,7 +60,6 @@ class OpenCodeAdapter:
         if workflow_session_id:
             meta["workflow_session_id"] = workflow_session_id
 
-        startupinfo, creationflags = self._get_windows_startupinfo()
         try:
             proc = subprocess.Popen(
                 args,
@@ -69,8 +70,7 @@ class OpenCodeAdapter:
                 errors="replace",
                 env=env,
                 cwd=cwd,
-                startupinfo=startupinfo,
-                creationflags=creationflags,
+                **osutil.hidden_run_kwargs(),
             )
             stdout, stderr = proc.communicate(timeout=None)
         except (OSError, FileNotFoundError) as exc:
@@ -113,8 +113,9 @@ class OpenCodeAdapter:
     ) -> dict:
         """Spawn workflow agent in existing session."""
         command = self._resolve_command()
-        safe_prompt = prompt.replace("\n", " \\n ")
-        args = [command, "run", safe_prompt]
+        # Pass the prompt as-is: subprocess list-args preserve newlines (no shell),
+        # so opencode receives the multiline text intact. No flattening.
+        args = [command, "run", prompt]
         args.extend(["--agent", "plan"])
         if model:
             args.extend(["-m", model])
@@ -135,10 +136,19 @@ class OpenCodeAdapter:
             opencode_session_id, bootstrap_meta = self.init_session(
                 model, work_dir, workflow_session_id=session.get("session_id")
             )
+            if not opencode_session_id:  # one retry — capture is the flaky step
+                opencode_session_id, bootstrap_meta = self.init_session(
+                    model, work_dir, workflow_session_id=session.get("session_id")
+                )
 
         if not opencode_session_id:
-            return self._error(
-                "init_session failed: session_id not captured", bootstrap_meta or {}
+            meta = dict(bootstrap_meta or {})
+            return make_error(
+                "session_capture_failed",
+                "init_session failed: opencode session id not captured after retry",
+                next_action="Check opencode is logged in and `opencode run` prints a ses_ id; rerun the command.",
+                meta=meta,
+                raw_tail=ensure_text(meta.get("error"))[:500],
             )
 
         result = self.run_agent(prompt, opencode_session_id, model, work_dir)
@@ -158,7 +168,6 @@ class OpenCodeAdapter:
         env["PYTHONIOENCODING"] = "utf-8"
         cwd = self._resolve_work_dir(work_dir)
 
-        startupinfo, creationflags = self._get_windows_startupinfo()
         try:
             completed = subprocess.run(
                 args,
@@ -170,24 +179,29 @@ class OpenCodeAdapter:
                 check=False,
                 env=env,
                 cwd=cwd,
-                startupinfo=startupinfo,
-                creationflags=creationflags,
+                **osutil.hidden_run_kwargs(),
             )
         except FileNotFoundError as exc:
-            return self._error(
+            return make_error(
+                "command_not_found",
                 f"command not found: {args[0]}",
-                {"error": str(exc), "args": args, "cwd": cwd},
+                next_action="Install opencode or fix opencode_command in .workflow/opencode.json.",
+                meta={"error": str(exc), "args": args, "cwd": cwd},
             )
         except subprocess.TimeoutExpired as exc:
-            raw = first_non_empty(
-                exc.stderr, exc.stdout, f"timeout after {self.timeout_seconds}s"
-            )
-            return self._error(
-                raw, {"timeout_seconds": self.timeout_seconds, "args": args, "cwd": cwd}
+            raw = first_non_empty(exc.stderr, exc.stdout, f"timeout after {self.timeout_seconds}s")
+            return make_error(
+                "timeout",
+                clean_opencode_output(raw),
+                next_action="Increase timeout_seconds (0 = no limit) or narrow the task, then retry.",
+                meta={"timeout_seconds": self.timeout_seconds, "args": args, "cwd": cwd},
             )
         except OSError as exc:
-            return self._error(
-                str(exc), {"error": type(exc).__name__, "args": args, "cwd": cwd}
+            return make_error(
+                "unknown",
+                str(exc),
+                next_action="Inspect .workflow/logs and rerun; report if it persists.",
+                meta={"error": type(exc).__name__, "args": args, "cwd": cwd},
             )
 
         raw = first_non_empty(completed.stdout, completed.stderr)
@@ -203,24 +217,47 @@ class OpenCodeAdapter:
             "cwd": cwd,
             "opencode_session_id": extract_opencode_session_id(combined),
         }
+        cleaned = clean_opencode_output(raw)
 
         if completed.returncode != 0:
-            return self._error(clean_opencode_output(raw), meta)
+            stderr_low = meta["stderr"].lower()
+            if any(sign in stderr_low or sign in cleaned.lower() for sign in _PERMISSION_SIGNS):
+                return make_error(
+                    "permission_denied",
+                    cleaned or "opencode refused access",
+                    next_action="Grant explicit access to the path or move the context inside the project, then retry.",
+                    meta=meta,
+                    blocked_paths=_guess_blocked_paths(meta["stderr"]),
+                )
+            return make_error(
+                "unknown",
+                cleaned or f"opencode exited {completed.returncode}",
+                next_action="Inspect .workflow/logs for the raw output and rerun.",
+                meta=meta,
+            )
 
-        return {"ok": True, "content": clean_opencode_output(raw), "meta": meta}
+        if not cleaned.strip():
+            return make_error(
+                "empty_output",
+                "opencode returned no content",
+                next_action="Rephrase the task or check .workflow/logs raw_tail; the run succeeded but produced nothing.",
+                meta=meta,
+                raw_tail=raw[:500],
+            )
+
+        return make_ok(cleaned, meta)
 
     @staticmethod
     def _error(content: str, meta: dict) -> dict:
-        return {"ok": False, "content": ensure_text(content), "meta": meta}
+        return make_error(
+            "unknown",
+            ensure_text(content),
+            next_action="Inspect .workflow/logs and rerun.",
+            meta=meta,
+        )
 
     def _resolve_command(self) -> str:
-        if sys.platform != "win32" or os.path.splitext(self.command)[1]:
-            return self.command
-        return (
-            shutil.which(f"{self.command}.cmd")
-            or shutil.which(self.command)
-            or self.command
-        )
+        return osutil.resolve_exe(self.command)
 
     @staticmethod
     def _resolve_work_dir(work_dir: str | None) -> str | None:

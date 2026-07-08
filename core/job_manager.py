@@ -1,10 +1,13 @@
+import hashlib
 import json
 import os
 import re
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from config.settings import JOB_DIR
+from utils import osutil
 
 
 class JobManager:
@@ -22,16 +25,25 @@ class JobManager:
         work_dir: str | None,
         model: str | None,
     ) -> dict:
+        request_hash = self._request_hash(workflow_command, task, session_id, work_dir)
+
+        # Idempotency: identical request already active on this session → reuse it.
+        existing = self.active_job_for_session(session_id)
+        if existing and existing.get("request_hash") == request_hash:
+            return existing
+
         job_id = self._new_job_id()
         self._acquire_session_lock(session_id, job_id)
         job = {
             "job_id": job_id,
+            "request_hash": request_hash,
             "command": workflow_command,
             "task": task,
             "session_id": session_id,
             "work_dir": work_dir,
             "model": model,
             "status": "pending",
+            "worker_pid": None,
             "created_at": self._now(),
             "started_at": None,
             "completed_at": None,
@@ -40,6 +52,11 @@ class JobManager:
         }
         self._save(job)
         return job
+
+    def set_worker_pid(self, job_id: str, pid: int | None) -> None:
+        job = self._load(job_id)
+        job["worker_pid"] = pid
+        self._save(job)
 
     def mark_running(self, job_id: str) -> dict:
         job = self._load(job_id)
@@ -77,6 +94,14 @@ class JobManager:
         job = self.get_job(job_id)
         if not job:
             return {"ok": False, "job_id": job_id, "status": "not_found", "meta": {}}
+
+        # Reap a job whose worker died without writing a terminal state.
+        if job["status"] in {"pending", "running"} and self._worker_dead(job):
+            job = self.fail_job(
+                job_id,
+                "worker process died before completing (reaped)",
+            )
+
         if job["status"] == "completed":
             return {"ok": True, "job_id": job_id, "status": "completed", "output": job["output"]}
         if job["status"] == "failed":
@@ -85,7 +110,7 @@ class JobManager:
                 "job_id": job_id,
                 "status": "failed",
                 "content": job.get("error") or "job failed",
-                "meta": {},
+                "meta": {"error_type": "worker_died" if "reaped" in (job.get("error") or "") else "unknown"},
             }
         return {
             "ok": False,
@@ -94,6 +119,52 @@ class JobManager:
             "content": f"job {job_id} not completed yet",
             "meta": {},
         }
+
+    def prune_jobs(self, ttl_days: int = 7, keep_last: int = 50) -> dict:
+        """Delete terminal jobs older than ttl_days, always keeping the newest keep_last."""
+        files = sorted(
+            (p for p in self.job_dir.glob("job_*.json")),
+            key=lambda p: p.name,
+            reverse=True,
+        )
+        cutoff = time.time() - ttl_days * 86400
+        removed = 0
+        for index, path in enumerate(files):
+            if index < keep_last:
+                continue
+            try:
+                job = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if job.get("status") not in {"completed", "failed"}:
+                continue
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink()
+                    removed += 1
+            except OSError:
+                continue
+        return {"removed": removed, "kept": min(len(files), keep_last)}
+
+    # --- internals -------------------------------------------------------
+
+    def _worker_dead(self, job: dict) -> bool:
+        pid = job.get("worker_pid")
+        if pid is None:
+            return False  # not yet spawned; don't reap
+        return not osutil.process_alive(pid)
+
+    def active_job_for_session(self, session_id: str) -> dict | None:
+        lock_path = self._lock_path(session_id)
+        if not lock_path.exists():
+            return None
+        data = self._read_lock(lock_path)
+        if not data:
+            return None
+        job = self.get_job(data.get("job_id", ""))
+        if job and job.get("status") in {"pending", "running"}:
+            return job
+        return None
 
     def _path(self, job_id: str) -> Path:
         return self.job_dir / f"{self._safe(job_id)}.json"
@@ -124,9 +195,13 @@ class JobManager:
             existing = self._read_lock(lock_path)
             existing_job = self.get_job(existing.get("job_id", "")) if existing else None
             if existing_job and existing_job.get("status") in {"pending", "running"}:
-                raise ValueError(
-                    f"session {session_id} already has active job {existing_job['job_id']}"
-                )
+                # Reap a dead worker instead of blocking forever.
+                if self._worker_dead(existing_job):
+                    self.fail_job(existing_job["job_id"], "worker process died before completing (reaped)")
+                else:
+                    raise ValueError(
+                        f"session {session_id} already has active job {existing_job['job_id']}"
+                    )
             self._release_lock_path(lock_path)
             fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
 
@@ -151,6 +226,11 @@ class JobManager:
             return data if isinstance(data, dict) else None
         except (OSError, json.JSONDecodeError):
             return None
+
+    @staticmethod
+    def _request_hash(command: str, task: str, session_id: str, work_dir: str | None) -> str:
+        raw = "|".join([command.strip().lower(), task.strip(), session_id, work_dir or ""])
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
     @staticmethod
     def _safe(value: str) -> str:

@@ -3,25 +3,10 @@
   "default_model": null,
   "timeout_seconds": 300,
   "routes": {
-    "explore": {
-      "role": "exploration",
-      "model": "provider_id/model_id"
-    },
-    "plan": {
-      "role": "reasoning",
-      "model": "provider_id/model_id"
-    },
-    "analyze": {
-      "role": "reasoning",
-      "model": "provider_id/model_id"
-    },
-    "execute": {
-      "role": "execution",
-      "model": null
-    },
-    "verify": {
-      "role": "verification",
-      "model": null
-    }
+    "explore": { "model": "provider_id/model_id" },
+    "plan": { "model": "provider_id/model_id" },
+    "analyze": { "model": "provider_id/model_id" },
+    "verify": { "model": null },
+    "sweep": { "model": null }
   }
 }

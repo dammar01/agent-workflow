@@ -34,6 +34,7 @@ def build_prompt(*, role: str, task: str, session_id: str, command: str, project
                 "- read graphify output first, then inspect only the most relevant source files",
                 "- provide scoped reasoning grounded in evidence, not just file lists",
                 "- if evidence conflicts, say so clearly instead of guessing",
+                "- do NOT emit open_questions or any question to the user; that is main_agent's domain",
                 "",
                 "[TASK]",
                 task.strip(),
@@ -46,6 +47,8 @@ def build_prompt(*, role: str, task: str, session_id: str, command: str, project
                     if role == ROLE_EXPLORATION
                     else _reasoning_format()
                 ),
+                "",
+                *_digest_format(),
             ]
         )
 
@@ -88,6 +91,18 @@ def _exploration_format() -> list[str]:
         "",
         "uncertainties:",
         "- <list>",
+    ]
+
+
+def _digest_format() -> list[str]:
+    return [
+        "[DIGEST]",
+        "summary: <1-2 plain sentences, what main_agent needs to know>",
+        "key_findings:",
+        "- <max 3 bullets, most important first>",
+        "risk_level: low | medium | high",
+        "recommended_next_action: <one concrete next step>",
+        "confidence: low | medium | high",
     ]
 
 
