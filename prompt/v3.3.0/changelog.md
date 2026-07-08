@@ -22,8 +22,9 @@
 - Lock tunggal (session O_EXCL); parallel-read dibuang.
 
 ### Prompt fidelity (FASE 3)
-- Buang newline-flatten — prompt multiline dikirim utuh (subprocess list-arg).
-- Rolling archive `.workflow/logs/<prompt_id>/` (prompt.md + sha256 + output) — simpan 20 terakhir. Global `runtime/prompt.txt` tetap sbg handoff aktif.
+- Prompt multiline di-flatten ke 1 line (`\n` → ` \n `) saat kirim ke opencode — opencode `run` **truncate** multiline arg di newline pertama (cuma baris 1 sampai). Wire = 1 line; arsip tetap multiline.
+- Rolling archive `.workflow/logs/<prompt_id>/` (prompt.md multiline + sha256 + output) — simpan 20 terakhir. Global `runtime/prompt.txt` tetap sbg handoff aktif.
+- CATATAN: v3.3.0 awal sempat buang flatten (asumsi salah subprocess preserve newline) → prompt terpotong → direvert.
 
 ## Interface (kurangi beban AI)
 

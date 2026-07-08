@@ -75,11 +75,13 @@ class JobManager:
         self._release_session_lock(job)
         return job
 
-    def fail_job(self, job_id: str, error: str) -> dict:
+    def fail_job(self, job_id: str, error: str, output: dict | None = None) -> dict:
         job = self._load(job_id)
         job["status"] = "failed"
         job["completed_at"] = self._now()
         job["error"] = error
+        if output is not None:
+            job["output"] = output  # preserve rich error (error_type, next_action, meta)
         self._save(job)
         self._release_session_lock(job)
         return job
@@ -105,6 +107,15 @@ class JobManager:
         if job["status"] == "completed":
             return {"ok": True, "job_id": job_id, "status": "completed", "output": job["output"]}
         if job["status"] == "failed":
+            stored = job.get("output")
+            if isinstance(stored, dict) and stored.get("meta"):
+                return {
+                    "ok": False,
+                    "job_id": job_id,
+                    "status": "failed",
+                    "content": stored.get("content") or job.get("error") or "job failed",
+                    "meta": dict(stored.get("meta") or {}),
+                }
             return {
                 "ok": False,
                 "job_id": job_id,

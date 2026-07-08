@@ -96,13 +96,15 @@ Buat `{AGENT_DIR}/skills/`. Skill = template → SELALU overwrite. Substitusi `{
     mac/linux: "<work_dir>/.workflow/run.sh" explore "<hint>"
     - Blocking sampai selesai. Return JSON {ok, content, meta, digest}.
     - Session otomatis (hook MAIN_SESSION_ID). Tak karang command, tak check.py, tak AGENT_PATH.
-    - .workflow belum ada / run script hilang → /.init dulu. Atau /.local on (fallback lokal).
-    - ok:false → tampilkan meta.error_type + meta.next_action → ikuti next_action atau STOP.
+    - .workflow belum ada / run script hilang → /.init dulu.
+    - GAGAL (ok:false | invalid_evidence | content menu/refusal, no [EVIDENCE]/[DIGEST]) → HARD GATE:
+      STOP → output "[PROXY GAGAL] <alasan>. Lanjut /.local? (yes/no)" → TUNGGU user. JANGAN auto-fallback.
 
-    ## Output
-    Relay digest: summary, key_findings, risk_level, recommended_next_action, confidence.
-    Butuh detail → buka content (contract_detail). JANGAN rebuild field manual.
-    digest absen (fallback) → ringkas content sendiri: entry_points, related_modules, uncertainties.
+    ## Output (RELAY mode)
+    digest ada → relay: summary, key_findings, risk_level, recommended_next_action, confidence.
+    digest absen (fallback) → [EXPLORATION RESULT] penuh dari content:
+      source | session | confidence | entry_points | ownership_hints | related_modules | uncertainties
+      (tiap field kosong → tampilkan + alasan). Butuh detail → buka content.
 
     ## End
     "Lanjut /.plan, atau cukup?"
@@ -121,7 +123,8 @@ Buat `{AGENT_DIR}/skills/`. Skill = template → SELALU overwrite. Substitusi `{
     Reuse LAST_EXPLORE_RESULT jika ada di context. Else 1-call:
       Windows:   & "<work_dir>\.workflow\run.ps1" plan "<task>"
       mac/linux: "<work_dir>/.workflow/run.sh" plan "<task>"
-    - ok:false → tampilkan error_type + next_action → tawarkan lanjut tanpa evidence (yes/no) atau STOP.
+    - GAGAL (ok:false | invalid_evidence | content menu/refusal) → HARD GATE:
+      STOP → "[PROXY GAGAL] <alasan>. Lanjut plan via /.local (evidence lokal) atau tanpa evidence? (yes/no)" → TUNGGU. JANGAN auto-fallback.
     - [LOCAL_MODE]=true → skip run, pakai /.local flow sebagai evidence.
 
     ## STEP 2 — Output [PLAN]
@@ -159,8 +162,10 @@ Buat `{AGENT_DIR}/skills/`. Skill = template → SELALU overwrite. Substitusi `{
     ## Run (1-call)
     Windows:   & "<work_dir>\.workflow\run.ps1" analyze "<topic>"
     mac/linux: "<work_dir>/.workflow/run.sh" analyze "<topic>"
-    Reuse LAST_EXPLORE_RESULT jika relevan. ok:false → error_type + next_action.
-    --local atau [LOCAL_MODE]=true → skip run, /.local flow.
+    Reuse LAST_EXPLORE_RESULT jika relevan.
+    GAGAL (ok:false | invalid_evidence | content menu/refusal) → HARD GATE:
+      STOP → "[PROXY GAGAL] <alasan>. Lanjut /.local? (yes/no)" → TUNGGU user. JANGAN auto-fallback, JANGAN reasoning dari garbage.
+    --local atau [LOCAL_MODE]=true → skip run, /.local flow (bukan fallback diam-diam — mode eksplisit user).
 
     ## Output [ANALYSIS RESULT]
     Relay digest + isi dari content. confidence (3 sub) + uncertainties WAJIB.
@@ -198,19 +203,68 @@ Buat `{AGENT_DIR}/skills/`. Skill = template → SELALU overwrite. Substitusi `{
 ### FILE: {AGENT_DIR}/skills/doctor.md
 
     # Skill: doctor
-    description: .workflow readiness check (1-call). Fallback: local check.
+    description: .workflow readiness check. 1-call bila .workflow ada, else local check. Local jangan gagal.
 
     ## Trigger
     /.doctor
 
-    ## Run (1-call)
-    Windows:   & "<work_dir>\.workflow\run.ps1" doctor "check .workflow readiness"
-    mac/linux: "<work_dir>/.workflow/run.sh" doctor "check .workflow readiness"
-    run script hilang → fallback local: .workflow/ ada? .gitignore ignore .workflow/? config.json valid? graphify-out/ ada?
+    ## STEP 1 — Bootstrap check
+    - .workflow/run.ps1|sh ADA → 1-call:
+        Windows:   & "<work_dir>\.workflow\run.ps1" doctor "check .workflow readiness"
+        mac/linux: "<work_dir>/.workflow/run.sh" doctor "check .workflow readiness"
+    - .workflow belum ada → STEP 2 (local check). JANGAN gagal, JANGAN simpulkan package missing.
 
-    ## Output [DOCTOR REPORT]
-    Relay digest + checks. status: READY | NEEDS SETUP. actions bila ada masalah.
-    NEEDS SETUP → "Jalankan /.init".
+    ## STEP 2 — Local check (fallback, cek langsung)
+    .workflow/          : EXISTS | MISSING
+    .workflow/run.*     : EXISTS | MISSING
+    .gitignore          : CONTAINS .workflow/ | MISSING
+    $AGENT_PATH         : SET (<path>, exists) | NOT SET
+    .workflow/config.json : v3.3.0 (main_py_path set) | old | MISSING
+    graphify-out/       : EXISTS | MISSING
+
+    ## Output
+    [DOCTOR REPORT]
+    source: second_agent (1-call) | claude (local)
+    checks: <semua item STEP 2 + status>
+    status: READY | NEEDS SETUP
+    actions: <fix per item MISSING/NOT SET> (kosong → "tidak ada — semua OK")
+    NEEDS SETUP → "Jalankan /.init". $AGENT_PATH NOT SET → set dulu (lihat /.init STEP 1).
+
+---
+
+### FILE: {AGENT_DIR}/skills/init.md
+
+    # Skill: init
+    description: Buat/regenerate .workflow/ workspace. Local. Bootstrap dari $AGENT_PATH (repo agent-workflow).
+
+    ## Trigger
+    /.init
+
+    ## STEP 1 — Resolve bootstrap source (WAJIB — urutan ini, JANGAN dilewati)
+    PENTING: main.py TIDAK ada di project. Ada di repo agent-workflow. Pointer utama = $AGENT_PATH.
+    Resolve berurutan:
+    1. Cek $AGENT_PATH — Windows: `$env:AGENT_PATH` | POSIX: `echo $AGENT_PATH`.
+       Berisi path + file exists → INI SUMBER. Lanjut STEP 2.
+    2. Kosong tapi .workflow/config.json ada → baca runtime.main_py_path.
+    3. Masih tak ada → tanya user path repo agent-workflow, ATAU minta set:
+       Windows: [Environment]::SetEnvironmentVariable("AGENT_PATH","<repo>\main.py","User")
+       POSIX:   export AGENT_PATH="<repo>/main.py"
+    JANGAN simpulkan "package missing / chicken-egg" sebelum cek $AGENT_PATH.
+    JANGAN hunt main.py di project/global/pip/npm — bukan package, ini git repo via $AGENT_PATH.
+
+    ## STEP 2 — Run init
+    work_dir = absolute path project aktif.
+    Windows: python "$env:AGENT_PATH" --command init --work-dir "<work_dir>" --pretty
+    POSIX:   python3 "$AGENT_PATH" --command init --work-dir "<work_dir>" --pretty
+    init otomatis: generate scripts + config abs-path + copy opencode.json + logs/ + .gitignore (.workflow/).
+
+    ## Output
+    [INIT]
+    bootstrap: $AGENT_PATH = <path>
+    generated: run.ps1/run.sh/inspect.* + config.json (v3.3.0, main_py_path abs) + opencode.json (copy) + state/logs
+    gitignore: .workflow/ ok
+    status: READY
+    ".workflow siap. Coba /.explore atau /.doctor."
 
 ---
 
@@ -283,6 +337,45 @@ Buat `{AGENT_DIR}/skills/`. Skill = template → SELALU overwrite. Substitusi `{
     1. `git status` + `git diff --staged`. Tak ada staged → "[COMMIT] Stage dulu: git add <files>", STOP.
     2. Tentukan type (feat|fix|refactor|chore|docs|test|perf|style|build|ci), scope, subject (≤50, imperative, no period), body (hanya jika why non-obvious).
     3. Output [COMMIT MESSAGE] block. "Jalankan? (yes/no)" → yes: `git commit -m`. JANGAN commit tanpa konfirmasi.
+
+---
+
+### FILE: {AGENT_DIR}/skills/review.md
+
+    # Skill: review
+    description: One-line-per-issue code review. Local — no proxy.
+
+    ## Trigger
+    /.review <file|diff>
+
+    ## Execution
+    Baca target (file/diff). Per issue = satu baris. Tanpa praise, tanpa scope creep.
+    Format: path:line: <severity> — <problem>. <fix>.
+    severity: 🔴 critical | 🟠 major | 🟡 minor. Skip nit kecuali ubah makna.
+
+    ## Output
+    [REVIEW <target>]
+    <path:line: severity — problem. fix.> (bersih → "no issues — <alasan>")
+    summary: <n> issues (<crit> critical, <major> major, <minor> minor)
+
+---
+
+### FILE: {AGENT_DIR}/skills/compress.md
+
+    # Skill: compress
+    description: Compress prose file ke caveman-speak. Preserve substansi teknis. Local.
+
+    ## Trigger
+    /.compress <file>
+
+    ## Execution
+    Baca file. Compress prose: drop artikel/filler/pleasantries/hedging. Fragments OK.
+    PRESERVE exact: code, paths, commands, URLs, angka, heading, technical terms.
+    Backup original → <file>.original.md sebelum overwrite.
+
+    ## Output
+    [COMPRESS <file>] before: <bytes> | after: <bytes> | saved: <pct> | backup: <file>.original.md
+    "Confirm overwrite? (yes/no)"
 
 ---
 
@@ -412,6 +505,19 @@ Target `{CONFIG_FILE}`. Marker ada → ganti antara START/END. Tidak ada → app
     - Concise. Direct. Single user. Never assume, never expand scope silently.
     - Caveman ultra DEFAULT dari pesan pertama (off: "normal mode"). Code/paths exact.
     - WAJIB output hasil setelah evidence. Tidak boleh diam.
+    - Task ambigu → suggest /.explore. Task jelas → jawab langsung.
+
+    ### Output Contract (NON-NEGOTIABLE — SEMUA skill)
+    Output SELALU ikut format skill terkait — kontrak, bukan suggestion.
+    Field wajib SELALU tampil; kosong/tak tersedia → tetap tampilkan + tulis alasan. Jangan hapus/lewati.
+    Dua mode (jangan campur):
+    - RELAY (explore/sweep/doctor): relay `digest`; digest absen → isi format skill penuh dari `content`. Jangan karang di luar evidence.
+    - SYNTHESIS (plan/analyze): main_agent REASONING sendiri → isi [PLAN]/[ANALYSIS RESULT] penuh dari evidence+digest. confidence (3 sub) + uncertainties WAJIB. "Jangan rebuild" TIDAK berlaku di sini — ini memang output main_agent.
+    Violasi = output incomplete.
+
+    ### Command Validation (STRICT)
+    Hanya prefix "/." valid. Tanpa "/." → jangan interpret/auto-correct/fallback. Output EXACT:
+    [INVALID COMMAND] / Gunakan prefix "/." / Contoh: /.plan / STOP.
 
     ### Session (satu otoritas)
     MAIN_SESSION_ID dari blok [SESSION BINDING] hook (STEP 5b) — AUTHORITATIVE, override semua.
@@ -421,9 +527,18 @@ Target `{CONFIG_FILE}`. Marker ada → ganti antara START/END. Tidak ada → app
     ### Delegated commands — 1-call (NON-NEGOTIABLE)
     Panggil: .workflow/run.ps1 (Windows) | .workflow/run.sh (mac/linux) <command> "<task>".
     - Blocking, return {ok, content, meta, digest}. Session otomatis. Tak karang command, tak check.py, tak $AGENT_PATH.
-    - ok:false → baca meta.error_type + meta.next_action → ikuti next_action. Jangan retry buta, jangan lanjut synthesis.
-    - Relay `digest` (summary, key_findings, risk_level, recommended_next_action, confidence). Buka `content` HANYA jika butuh detail. JANGAN rebuild field manual.
-    - .workflow/run script hilang → /.init. Proxy gagal → tawarkan /.local (fallback lokal).
+    - Output ikut Output Contract (dua mode): explore/sweep/doctor = RELAY digest; plan/analyze = SYNTHESIS penuh. Buka `content` bila butuh detail.
+    - .workflow/run script hilang → /.init (bootstrap $AGENT_PATH).
+
+    ### Proxy failure (HARD GATE — JANGAN auto-fallback)
+    Proxy dianggap GAGAL jika: ok:false | error_type=invalid_evidence/empty_output/session_capture_failed | content bukan evidence (menu/pertanyaan/refusal, tak ada [EVIDENCE]/[DIGEST]).
+    Saat gagal → WAJIB:
+    1. STOP. JANGAN lanjut synthesis. JANGAN gather evidence sendiri diam-diam.
+    2. Output EXACT peringatan:
+       [PROXY GAGAL] <error_type/alasan singkat>. next_action: <meta.next_action jika ada>.
+       Lanjut /.local (evidence lokal via graphify+Read/Grep)? (yes/no)
+    3. TUNGGU input user. yes → /.local flow. no → STOP.
+    Auto-fallback ke local tanpa tanya user = DILARANG.
 
     ### Command registry
     LOCAL:     /.execute -y /.init /.refactor /.commit /.review /.compress /.memory /.caveman /.local /.help
@@ -437,19 +552,22 @@ Target `{CONFIG_FILE}`. Marker ada → ganti antara START/END. Tidak ada → app
 
     ### Execution rules
     /.execute -y: ada plan aktif (LAST_PLAN_RESULT) → edit HANYA execution scope → auto /.verify → jangan declare done sebelum verify. Jangan commit kecuali user minta.
-    /.init: .workflow/run.ps1 init (atau python main.py --command init) → regenerate scripts + config. Ensure .gitignore punya .workflow/.
+    /.init: bootstrap dari $AGENT_PATH (main.py di repo agent-workflow, BUKAN di project/pip/npm). `python "$env:AGENT_PATH" --command init --work-dir <root>`. $AGENT_PATH kosong → minta set dulu (lihat skill init). Regenerate scripts+config+opencode.json. Cek $AGENT_PATH SEBELUM simpul "package missing".
 
     ### Session cache (valid dalam MAIN_SESSION_ID + project root sama)
     LAST_EXPLORE_RESULT→plan,analyze | LAST_PLAN_RESULT→execute | LAST_EXECUTE_DIFF→verify,sweep | LAST_SWEEP_RESULT→context.
 
     ### Graphify
-    Cek graphify-out/ sebelum codebase task. Ada → primary context. Tidak ada → offer .graphifyignore + `graphify update`.
-    Never run: graphify init/build/watch. Auto `graphify update` setelah code change. Error "too large"/"too many nodes" → IGNORE.
+    Cek graphify-out/ sebelum codebase task. Ada → primary context. Tidak ada → offer generate .graphifyignore + `graphify update`.
+    .graphifyignore framework-aware (ignore deps/build/secret): node_modules/ vendor/ .venv/ venv/ __pycache__/ target/ dist/ build/ .next/ coverage/ *.log .env .env.*
+    Never run: graphify init/build/watch. Auto `graphify update` setelah code change. Error "too large"/"too many nodes" → IGNORE, jangan retry.
 
     ### Global Forbidden
     Modif file luar scope | /.execute tanpa -y | plan tanpa confidence+uncertainties | auto-expand scope |
-    claim success sebelum verify | lanjut synthesis saat ok:false | delegate /.execute atau /.init ke second_agent |
-    reuse session lintas project | interpret "/" tanpa "." | write memory mid-session tanpa konfirmasi | ignore [LOCAL_MODE].
+    claim success sebelum verify | lanjut synthesis saat ok:false ATAU content non-evidence (menu/refusal) |
+    auto-fallback ke /.local tanpa tanya+tunggu user saat proxy gagal | delegate /.execute atau /.init ke second_agent |
+    reuse session lintas project | interpret "/" tanpa "." | write memory mid-session tanpa konfirmasi | ignore [LOCAL_MODE] |
+    plan/analyze tanpa evidence saat [LOCAL_MODE]=false (kecuali user setuju) | simpul bootstrap gagal / "package missing" sebelum cek $AGENT_PATH.
 
     <!-- WORKFLOW-MAIN-AGENT:END -->
 
@@ -514,7 +632,7 @@ Catatan: `compact` → thread BARU. autoCompact reset thread mid-session. Reuse:
     [SETUP COMPLETE — v3.3.0 DUAL AGENT MODE]
     agent: <nama> | dir: {AGENT_DIR} | config: {CONFIG_FILE} | mode: fresh|update
 
-    Skills (overwritten, ringan): explore plan analyze sweep doctor execute verify refactor commit memory help caveman local
+    Skills (overwritten, ringan): explore plan analyze sweep doctor init execute verify refactor commit review compress memory help caveman local
     Memory (preserved): PERSONAL_MEMORY DOMAIN_MAP SESSION_LOG MEMORY(index)
     Config: {CONFIG_FILE} (managed block v3.3.0, ramping) | Session hook: session-bind.ps1 (Claude Code) | .sh (POSIX bila didukung)
 

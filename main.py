@@ -199,10 +199,13 @@ def await_job(
             }
 
         if result.get("status") == "failed":
+            meta = dict(result.get("meta") or {})
+            meta.setdefault("job_id", job_id)
+            meta.setdefault("submitted_at", submitted.get("submitted_at"))
             return {
                 "ok": False,
                 "content": result.get("content") or f"job {job_id} failed",
-                "meta": {"job_id": job_id, "submitted_at": submitted.get("submitted_at")},
+                "meta": meta,
             }
 
         if poll_timeout > 0 and (time.monotonic() - started_at) >= poll_timeout:
@@ -273,7 +276,7 @@ def run_worker(job_id: str) -> dict:
         if output.get("ok"):
             JOB_MANAGER.complete_job(job_id, output)
         else:
-            JOB_MANAGER.fail_job(job_id, output.get("content") or "worker failed")
+            JOB_MANAGER.fail_job(job_id, output.get("content") or "worker failed", output=output)
         return output
     except Exception as exc:
         JOB_MANAGER.fail_job(job_id, str(exc))

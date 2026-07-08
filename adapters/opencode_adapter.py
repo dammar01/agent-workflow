@@ -113,9 +113,12 @@ class OpenCodeAdapter:
     ) -> dict:
         """Spawn workflow agent in existing session."""
         command = self._resolve_command()
-        # Pass the prompt as-is: subprocess list-args preserve newlines (no shell),
-        # so opencode receives the multiline text intact. No flattening.
-        args = [command, "run", prompt]
+        # opencode `run` truncates a multiline arg at the first newline (only line 1
+        # reaches the agent). Flatten to a single line with visible \n markers so the
+        # whole prompt survives. The multiline original stays archived in
+        # .workflow/logs + runtime/prompt.txt for audit — only the wire form is flattened.
+        safe_prompt = prompt.replace("\n", " \\n ")
+        args = [command, "run", safe_prompt]
         args.extend(["--agent", "plan"])
         if model:
             args.extend(["-m", model])

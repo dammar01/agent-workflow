@@ -222,34 +222,51 @@ def _copy_opencode_config(project_root: Path, tool_dir: str) -> str | None:
 
 
 def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
-    """Emit run.ps1 + run.sh + inspect.ps1 + inspect.sh so main_agent calls one script."""
-    py = osutil.python_exe()
+    """Emit run.ps1 + run.sh + inspect.ps1 + inspect.sh so main_agent calls one script.
+
+    Each script uses a python resolvable on ITS OWN platform: the current-OS script
+    gets the exact interpreter; the cross-OS script gets a generic name (python/python3)
+    resolved via PATH on the target machine — so a project copied across OSes still runs.
+    """
+    ps_py = osutil.python_exe() if osutil.IS_WINDOWS else "python"
+    sh_py = osutil.python_exe() if not osutil.IS_WINDOWS else "python3"
     root = str(project_root)
     workflow_dir = project_root / WORKFLOW_DIRNAME
     written: list[str] = []
 
+    # Background (job) commands go through await+job-command; the rest run directly.
     run_ps1 = (
         'param([Parameter(Mandatory=$true)][string]$Command,'
-        '[Parameter(Mandatory=$true)][string]$Task,'
+        '[string]$Task="",'
         '[string]$Session=$env:MAIN_SESSION_ID)\n'
         'if (-not $Session) { $Session = "default" }\n'
-        f'& "{py}" "{main_py}" --command await --job-command $Command '
+        "$bg = @('explore','plan','analyze','verify','sweep')\n"
+        'if ($bg -contains $Command) {\n'
+        f'  & "{ps_py}" "{main_py}" --command await --job-command $Command '
         f'--prompt $Task --session $Session --work-dir "{root}" --pretty\n'
+        '} else {\n'
+        f'  & "{ps_py}" "{main_py}" --command $Command --work-dir "{root}" --pretty\n'
+        '}\n'
     )
     run_sh = (
         '#!/usr/bin/env bash\n'
         'set -euo pipefail\n'
         'COMMAND="${1:?command required}"\n'
-        'TASK="${2:?task required}"\n'
+        'TASK="${2:-}"\n'
         'SESSION="${3:-${MAIN_SESSION_ID:-default}}"\n'
-        f'exec "{py}" "{main_py}" --command await --job-command "$COMMAND" '
-        f'--prompt "$TASK" --session "$SESSION" --work-dir "{root}" --pretty\n'
+        'case " explore plan analyze verify sweep " in\n'
+        '  *" $COMMAND "*)\n'
+        f'    exec "{sh_py}" "{main_py}" --command await --job-command "$COMMAND" '
+        f'--prompt "$TASK" --session "$SESSION" --work-dir "{root}" --pretty ;;\n'
+        '  *)\n'
+        f'    exec "{sh_py}" "{main_py}" --command "$COMMAND" --work-dir "{root}" --pretty ;;\n'
+        'esac\n'
     )
-    inspect_ps1 = f'& "{py}" "{main_py}" --command inspect --work-dir "{root}" --pretty\n'
+    inspect_ps1 = f'& "{ps_py}" "{main_py}" --command inspect --work-dir "{root}" --pretty\n'
     inspect_sh = (
         '#!/usr/bin/env bash\n'
         'set -euo pipefail\n'
-        f'exec "{py}" "{main_py}" --command inspect --work-dir "{root}" --pretty\n'
+        f'exec "{sh_py}" "{main_py}" --command inspect --work-dir "{root}" --pretty\n'
     )
 
     for name, content in (
@@ -620,15 +637,13 @@ def python_callable() -> tuple[bool, str]:
 
 
 def opencode_callable(command_name: str) -> tuple[bool, str]:
-    resolved = shutil.which(f"{command_name}.cmd") or shutil.which(command_name) or command_name
-    try:
-        completed = subprocess.run([resolved, "--help"], capture_output=True, text=True, check=False, timeout=15)
-    except OSError as exc:
-        return False, str(exc)
-    except subprocess.TimeoutExpired:
-        return False, "timeout"
-    output = (completed.stdout or completed.stderr or "").strip()
-    return completed.returncode == 0, output[:500]
+    # Presence check ONLY — do not invoke. `opencode --help` can resolve to a native
+    # .exe shim that false-negatives ("not compatible with this Windows version"),
+    # while `opencode.cmd run` (what the workflow actually uses) works fine.
+    resolved = shutil.which(f"{command_name}.cmd") or shutil.which(command_name)
+    if resolved:
+        return True, resolved
+    return False, f"{command_name} not found in PATH"
 
 
 def run_doctor(project_root: Path, opencode_command: str) -> dict:
@@ -726,6 +741,38 @@ def run_doctor(project_root: Path, opencode_command: str) -> dict:
         recommended_fixes.append("Ensure opencode CLI is installed and available in PATH")
 
     checks["graphify_out_exists"] = (project_root / "graphify-out").exists()
+
+    # Session continuation: is the current main session linked to an opencode session?
+    # An unlinked session re-bootstraps opencode every call (breaks 1 main = 1 second).
+    import re as _re
+    from config.settings import SESSION_DIR
+
+    session_id = None
+    try:
+        session_block = read_json_file(paths["state"]).get("session")
+        if isinstance(session_block, dict):
+            session_id = session_block.get("id")
+    except (ValueError, OSError):
+        session_id = None
+
+    if not session_id:
+        checks["session_continuation"] = "no active session (state.json)"
+    else:
+        safe = _re.sub(r"[^A-Za-z0-9_.-]", "_", session_id)
+        session_file = Path(SESSION_DIR) / f"{safe}.json"
+        if not session_file.exists():
+            checks["session_continuation"] = f"no session record for {session_id} (first delegated call will bootstrap)"
+        else:
+            try:
+                opencode_id = read_json_file(session_file).get("opencode_session_id")
+            except (ValueError, OSError):
+                opencode_id = None
+            if opencode_id:
+                checks["session_continuation"] = f"linked: {session_id} -> {opencode_id}"
+            else:
+                checks["session_continuation"] = f"BROKEN: {session_id} has no opencode_session_id — continuation re-bootstraps each call"
+                issues.append("session continuation broken: opencode_session_id not captured for active session")
+                recommended_fixes.append("Re-run a delegated command; if it keeps failing, opencode session capture is failing (check opencode `run` output for a ses_ id)")
 
     status = "READY" if not issues else "NOT_READY"
     payload = {

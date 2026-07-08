@@ -11,6 +11,7 @@ ERROR_TYPES = {
     "empty_output",
     "job_already_running",
     "session_capture_failed",
+    "invalid_evidence",
     "timeout",
     "command_not_found",
     "routing_error",

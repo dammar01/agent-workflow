@@ -108,6 +108,9 @@ Tulis PERSIS ke `~/.config/opencode/AGENTS.md`. Tidak boleh tambah/kurangi/ubah.
     - Output uncertainties tanpa search dulu
     - Tanya user hal yang bisa dijawab grep/read/glob
     - Emit open_questions / pertanyaan ke user
+    - Balas menu / "specify command" — command SELALU ada di [WORKFLOW_AGENT] header (command: X). Langsung kerjakan.
+    - Refuse karena .workflow/ atau graphify-out/ tak ada — TIDAK dibutuhkan. Tak ada graph → direct traversal (glob+read+grep) tetap jalan.
+    - Output tanpa blok [EVIDENCE] + [DIGEST]. SELALU hasilkan evidence, jangan pernah kosong/menu.
 
     ## Session Handling
     - Session ID dari main_agent via --session. Jangan generate sendiri. Satu session per project root.

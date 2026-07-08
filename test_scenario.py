@@ -27,7 +27,11 @@ class FakeOpenCodeAdapter:
         content = """
 INFO  2026-05-09T12:10:24 +1ms service=session.prompt session.id=ses_test123 step=0 loop
 > build · gpt-5.3-codex
-OpenCode response
+[EVIDENCE]
+findings:
+- entry point at app/main.py
+[DIGEST]
+summary: OpenCode response.
 INFO  2026-05-09T12:10:28 +0ms service=session.idle publishing
 """.strip()
         return {
@@ -284,6 +288,32 @@ def run_tests() -> None:
 
         # cross-OS primitive
         assert_true(osutil.process_alive(999999999) is False, "process_alive must report dead pid")
+
+        # invalid_evidence: menu/refusal (ok:true but no evidence) must be rejected as proxy failure
+        class MenuAdapter:
+            command = "opencode"
+            timeout_seconds = 0
+            no_timeout = True
+
+            def run(self, prompt, session, model=None, work_dir=None):
+                return {"ok": True, "content": "Specify command: explore, plan, analyze, verify, sweep, doctor.", "meta": {"opencode_session_id": "ses_menu"}}
+
+        menu_exec = Executor(opencode=MenuAdapter(), session_manager=main.SESSION_MANAGER)
+        menu_session = main.SESSION_MANAGER.load_or_create("menu-session")
+        menu_res = menu_exec.execute("analyze", "do analysis", menu_session, work_dir)
+        assert_true(not menu_res["ok"], "menu/refusal response must be rejected, not treated as success")
+        assert_true(menu_res["meta"]["error_type"] == "invalid_evidence", "non-evidence must flag invalid_evidence")
+
+        # rich error (error_type + next_action) must survive the job path, not collapse to a string
+        rich_job = main.JOB_MANAGER.create_job("analyze", "rich err", "rich-session", work_dir, None)
+        main.JOB_MANAGER.fail_job(
+            rich_job["job_id"],
+            "non-evidence",
+            output={"ok": False, "content": "non-evidence", "meta": {"error_type": "invalid_evidence", "next_action": "STOP, ask user"}},
+        )
+        rich_res = main.get_result(rich_job["job_id"])
+        assert_true(rich_res["meta"].get("error_type") == "invalid_evidence", "job path must preserve error_type")
+        assert_true(rich_res["meta"].get("next_action") == "STOP, ask user", "job path must preserve next_action")
 
         print("test_scenario: success")
     finally:
