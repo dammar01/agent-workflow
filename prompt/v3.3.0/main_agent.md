@@ -271,12 +271,12 @@ Buat `{AGENT_DIR}/skills/`. Skill = template → SELALU overwrite. Substitusi `{
     work_dir = absolute path project aktif.
     Windows: python "$env:AGENT_PATH" --command init --work-dir "<work_dir>" --pretty
     POSIX:   python3 "$AGENT_PATH" --command init --work-dir "<work_dir>" --pretty
-    init otomatis: generate scripts + config abs-path + copy opencode.json + logs/ + .gitignore (.workflow/).
+    init otomatis: generate scripts (run/inspect/check) + config abs-path + copy opencode.json + sessions/ scaffold + .gitignore (.workflow/). state/scope/cache/logs/runtime = per-session, dibuat lazy saat delegated call pertama (BUKAN di root).
 
     ## Output
     [INIT]
     bootstrap: $AGENT_PATH = <path>
-    generated: run.ps1/run.sh/inspect.* + config.json (v3.3.0, main_py_path abs) + opencode.json (copy) + state/logs
+    generated: run/inspect/check.{ps1,sh} + config.json (v3.3.0, main_py_path abs) + opencode.json (copy) + sessions/ (state/scope/cache/logs/runtime per-session, lazy)
     gitignore: .workflow/ ok
     status: READY
     ".workflow siap. Coba /.explore atau /.doctor."
@@ -537,7 +537,7 @@ Target `{CONFIG_FILE}`. Marker ada → ganti antara START/END. Tidak ada → app
     ### Session (satu otoritas)
     MAIN_SESSION_ID dari blok [SESSION BINDING] hook (STEP 5b) — AUTHORITATIVE, override semua.
     WAJIB teruskan nilainya ke run script (arg ke-3) tiap delegated call — hook taruh id di context, run script baca dari arg; tanpa diteruskan jatuh ke "default" (fatal untuk concurrent same-project).
-    Hook absent → fallback .workflow/state.json (root match) → else generate main_<slug>_<ts_ms>_<pid>.
+    Hook absent → generate main_<slug>_<ts_ms>_<pid> (state per-session di sessions/<id>/, nol root state.json untuk fallback).
     Jangan reuse session lintas project root. Detail lifecycle: skill/hook, bukan sini.
 
     ### Delegated commands — 1-call (NON-NEGOTIABLE)

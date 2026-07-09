@@ -127,11 +127,8 @@ def default_config(project_root: Path, agent_workflow_path: str | None) -> dict:
             "second_agent": "opencode",
             "main_agent": "agnostic",
             "opencode_config": ".workflow/opencode.json",
-            "prompt_file": ".workflow/runtime/prompt.txt",
-            "response_file": ".workflow/runtime/response.last.md",
-            "meta_file": ".workflow/runtime/prompt.meta.json",
-            "lock_file": ".workflow/runtime/lock",
-            "logs_dir": ".workflow/logs",
+            "sessions_dir": ".workflow/sessions",
+            "per_session_layout": "sessions/<session_id>/: state.json, scope.json, command-cache.json, runtime/{prompt.txt,response.last.md,prompt.meta.json,lock}, logs/",
         },
         "commands": {
             "allow_analyze_to_plan": True,
@@ -259,6 +256,7 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         '[string]$Task="",'
         '[string]$Session=$env:MAIN_SESSION_ID)\n'
         'if (-not $Session) { $Session = "default" }\n'
+        'if ($Session -eq "default") { [Console]::Error.WriteLine("[workflow] WARN: session=default — pass MAIN_SESSION_ID (arg 3) for concurrent-safe isolation") }\n'
         "$bg = @('explore','plan','analyze','verify','sweep')\n"
         'if ($bg -contains $Command) {\n'
         f'  & "{ps_py}" "{main_py}" --command await --job-command $Command '
@@ -273,6 +271,7 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         'COMMAND="${1:?command required}"\n'
         'TASK="${2:-}"\n'
         'SESSION="${3:-${MAIN_SESSION_ID:-default}}"\n'
+        '[ "$SESSION" = "default" ] && echo "[workflow] WARN: session=default — pass MAIN_SESSION_ID for concurrent-safe isolation" >&2\n'
         'case " explore plan analyze verify sweep " in\n'
         '  *" $COMMAND "*)\n'
         f'    exec "{sh_py}" "{main_py}" --command await --job-command "$COMMAND" '
@@ -322,7 +321,8 @@ def ensure_workflow_workspace(project_root: Path, agent_workflow_path: str | Non
     paths = workflow_paths(project_root)
     paths["workflow_dir"].mkdir(parents=True, exist_ok=True)
     paths["reports_dir"].mkdir(parents=True, exist_ok=True)
-    paths["logs_dir"].mkdir(parents=True, exist_ok=True)
+    # logs are per-session: created lazily under sessions/<sid>/logs on first delegated
+    # call. Init only scaffolds the sessions/ root — no vestigial .workflow/logs.
     (paths["workflow_dir"] / "sessions").mkdir(parents=True, exist_ok=True)
 
     created_files: list[str] = []
@@ -985,3 +985,29 @@ def run_sweep(project_root: Path, session_id: str | None = None) -> dict:
             "project_root": str(project_root),
         },
     }
+
+
+def prune_sessions(project_root: Path, ttl_days: int = 7, keep_last: int = 20) -> dict:
+    """Delete per-session dirs older than ttl_days, always keeping the newest keep_last.
+    Recent (active) sessions survive the TTL, so this never reaps a live session."""
+    sessions_dir = workflow_paths(project_root)["workflow_dir"] / "sessions"
+    if not sessions_dir.exists():
+        return {"removed": 0, "kept": 0}
+    dirs = sorted(
+        (p for p in sessions_dir.iterdir() if p.is_dir()),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    cutoff = datetime.now(timezone.utc) - timedelta(days=ttl_days)
+    removed = 0
+    for index, path in enumerate(dirs):
+        if index < keep_last:
+            continue
+        try:
+            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            if mtime < cutoff:
+                shutil.rmtree(path, ignore_errors=True)
+                removed += 1
+        except OSError:
+            continue
+    return {"removed": removed, "kept": min(len(dirs), keep_last)}

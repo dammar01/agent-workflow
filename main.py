@@ -11,6 +11,7 @@ from utils import osutil
 from core.workflow_runtime import (
     detect_project_root,
     ensure_workflow_workspace,
+    prune_sessions,
     resolve_agent_workflow_path,
     run_doctor,
     run_sweep,
@@ -79,13 +80,15 @@ def run(
 
         summary = JOB_MANAGER.prune_jobs()
         facts = fact_store.prune(project_root)
+        sessions = prune_sessions(project_root)
         return {
             "ok": True,
             "content": (
                 f"pruned {summary['removed']} job(s), kept {summary['kept']}; "
-                f"facts kept {facts['kept']}, dropped {facts['removed']} stale"
+                f"facts kept {facts['kept']}, dropped {facts['removed']} stale; "
+                f"sessions removed {sessions['removed']}, kept {sessions['kept']}"
             ),
-            "meta": {**summary, "facts": facts},
+            "meta": {**summary, "facts": facts, "sessions": sessions},
         }
 
     if normalized_command == "inspect":

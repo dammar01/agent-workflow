@@ -116,7 +116,7 @@ class OpenCodeAdapter:
         # opencode `run` truncates a multiline arg at the first newline (only line 1
         # reaches the agent). Flatten to a single line with visible \n markers so the
         # whole prompt survives. The multiline original stays archived in
-        # .workflow/logs + runtime/prompt.txt for audit — only the wire form is flattened.
+        # .workflow/sessions/<session>/logs + runtime/prompt.txt for audit — only the wire form is flattened.
         safe_prompt = prompt.replace("\n", " \\n ")
         args = [command, "run", safe_prompt]
         args.extend(["--agent", "plan"])
@@ -203,7 +203,7 @@ class OpenCodeAdapter:
             return make_error(
                 "unknown",
                 str(exc),
-                next_action="Inspect .workflow/logs and rerun; report if it persists.",
+                next_action="Inspect .workflow/sessions/<session>/logs and rerun; report if it persists.",
                 meta={"error": type(exc).__name__, "args": args, "cwd": cwd},
             )
 
@@ -235,7 +235,7 @@ class OpenCodeAdapter:
             return make_error(
                 "unknown",
                 cleaned or f"opencode exited {completed.returncode}",
-                next_action="Inspect .workflow/logs for the raw output and rerun.",
+                next_action="Inspect .workflow/sessions/<session>/logs for the raw output and rerun.",
                 meta=meta,
             )
 
@@ -243,7 +243,7 @@ class OpenCodeAdapter:
             return make_error(
                 "empty_output",
                 "opencode returned no content",
-                next_action="Rephrase the task or check .workflow/logs raw_tail; the run succeeded but produced nothing.",
+                next_action="Rephrase the task or check .workflow/sessions/<session>/logs raw_tail; the run succeeded but produced nothing.",
                 meta=meta,
                 raw_tail=raw[:500],
             )
@@ -255,7 +255,7 @@ class OpenCodeAdapter:
         return make_error(
             "unknown",
             ensure_text(content),
-            next_action="Inspect .workflow/logs and rerun.",
+            next_action="Inspect .workflow/sessions/<session>/logs and rerun.",
             meta=meta,
         )
 
