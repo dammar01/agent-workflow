@@ -1,5 +1,6 @@
 from adapters.opencode_adapter import OpenCodeAdapter
 from core.contract import extract_digest, make_error
+from core import fact_store
 from core.prompt_builder import build_prompt
 from core.router import Router
 from utils.path_guard import validate_scope
@@ -70,12 +71,20 @@ class Executor:
                 meta={"command": normalized_command},
             )
 
+        known_facts = None
+        if route["role"] in ("exploration", "reasoning"):
+            facts = fact_store.load_relevant(project_root, task)
+            known_facts = [
+                f"{f['claim']} [{f['file']}:{f['line']}]" for f in facts if f.get("file")
+            ] or None
+
         prompt = build_prompt(
             role=route["role"],
             task=task,
             session_id=session["session_id"],
             command=normalized_command,
             project_root=str(project_root),
+            known_facts=known_facts,
         )
 
         bound = bind_session(project_root, session_id)
@@ -108,6 +117,7 @@ class Executor:
             project_root,
             result.get("content") or "",
             prompt_id=handoff.get("meta", {}).get("prompt_id"),
+            session_id=session_id,
         )
 
         opencode_session_id = result.get("meta", {}).get(
@@ -133,8 +143,9 @@ class Executor:
                 "[digest]",
                 "[exploration result]",
                 "entry_points",
-                "findings",
-                "reasoning:",
+                "grounded:",
+                "assumptions:",
+                "scope_covered",
             )
             if not any(m in body for m in markers):
                 return make_error(
@@ -148,6 +159,12 @@ class Executor:
         digest = extract_digest(result.get("content") or "")
         if digest is not None:
             result["digest"] = digest
+
+        if route["role"] in ("exploration", "reasoning"):
+            try:
+                fact_store.ingest(project_root, result.get("content") or "", session_id)
+            except Exception:
+                pass  # fact store is best-effort; never fail the delegated call over it
 
         if normalized_command == "explore":
             update_command_cache(

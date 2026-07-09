@@ -1,11 +1,17 @@
+import os
 import re
 from datetime import datetime, timezone
 
 
 def generate_main_session_id() -> str:
-    """Generate a timestamp-based session ID for the main agent session."""
+    """Generate a collision-resistant session ID for the main agent session.
+
+    Microsecond timestamp + process id: two concurrent main agents (even started
+    in the same second on the same project) never collide, because distinct
+    processes have distinct pids. Mirrors the hook generator's ms+entropy intent.
+    """
     now = datetime.now(timezone.utc)
-    return f"main_{now.strftime('%Y%m%d_%H%M%S')}"
+    return f"main_{now.strftime('%Y%m%d_%H%M%S%f')}_{os.getpid():x}"
 
 
 def ensure_text(value) -> str:

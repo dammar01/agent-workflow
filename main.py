@@ -69,21 +69,27 @@ def run(
 
     if normalized_command == "doctor":
         config = load_opencode_config()
-        return run_doctor(project_root, config.get("opencode_command", "opencode"))
+        return run_doctor(project_root, config.get("opencode_command", "opencode"), session_id)
 
     if normalized_command == "sweep":
-        return run_sweep(project_root)
+        return run_sweep(project_root, session_id)
 
     if normalized_command == "clean":
+        from core import fact_store
+
         summary = JOB_MANAGER.prune_jobs()
+        facts = fact_store.prune(project_root)
         return {
             "ok": True,
-            "content": f"pruned {summary['removed']} job(s), kept {summary['kept']}",
-            "meta": summary,
+            "content": (
+                f"pruned {summary['removed']} job(s), kept {summary['kept']}; "
+                f"facts kept {facts['kept']}, dropped {facts['removed']} stale"
+            ),
+            "meta": {**summary, "facts": facts},
         }
 
     if normalized_command == "inspect":
-        return _inspect(project_root)
+        return _inspect(project_root, session_id)
 
     session = SESSION_MANAGER.load_or_create(session_id)
     output = EXECUTOR.execute(command, task, session, work_dir, model)
@@ -223,11 +229,11 @@ def await_job(
         time.sleep(interval)
 
 
-def _inspect(project_root) -> dict:
+def _inspect(project_root, session_id: str | None = None) -> dict:
     """Human-readable snapshot: session, workflow stage, recent jobs, last response."""
     import json as _json
 
-    paths = workflow_paths(project_root)
+    paths = workflow_paths(project_root, session_id)
     lines: list[str] = [f"# .workflow inspect — {project_root}"]
 
     try:

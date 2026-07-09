@@ -92,10 +92,11 @@ Buat `{AGENT_DIR}/skills/`. Skill = template → SELALU overwrite. Substitusi `{
     /.explore <hint>
 
     ## Run (1-call)
-    Windows:   & "<work_dir>\.workflow\run.ps1" explore "<hint>"
-    mac/linux: "<work_dir>/.workflow/run.sh" explore "<hint>"
+    Windows:   & "<work_dir>\.workflow\run.ps1" explore "<hint>" "<MAIN_SESSION_ID>"
+    mac/linux: "<work_dir>/.workflow/run.sh" explore "<hint>" "<MAIN_SESSION_ID>"
+    - <MAIN_SESSION_ID> = nilai dari blok [SESSION BINDING]. WAJIB diteruskan (arg ke-3) — concurrent same-project butuh isolasi per-session. Absent → run script fallback (single-agent OK).
     - Blocking sampai selesai. Return JSON {ok, content, meta, digest}.
-    - Session otomatis (hook MAIN_SESSION_ID). Tak karang command, tak check.py, tak AGENT_PATH.
+    - Tak karang command, tak check.py, tak AGENT_PATH.
     - .workflow belum ada / run script hilang → /.init dulu.
     - GAGAL (ok:false | invalid_evidence | content menu/refusal, no [EVIDENCE]/[DIGEST]) → HARD GATE:
       STOP → output "[PROXY GAGAL] <alasan>. Lanjut /.local? (yes/no)" → TUNGGU user. JANGAN auto-fallback.
@@ -114,39 +115,48 @@ Buat `{AGENT_DIR}/skills/`. Skill = template → SELALU overwrite. Substitusi `{
 ### FILE: {AGENT_DIR}/skills/plan.md
 
     # Skill: plan
-    description: Structured planning — evidence (1-call) + reasoning main_agent. Confidence + decision gate.
+    description: Structured planning — evidence (1-call) + reasoning main_agent. Atribusi klaim + decision gate mekanis.
 
     ## Trigger
     /.plan <task>
 
     ## STEP 1 — Evidence
     Reuse LAST_EXPLORE_RESULT jika ada di context. Else 1-call:
-      Windows:   & "<work_dir>\.workflow\run.ps1" plan "<task>"
-      mac/linux: "<work_dir>/.workflow/run.sh" plan "<task>"
+      Windows:   & "<work_dir>\.workflow\run.ps1" plan "<task>" "<MAIN_SESSION_ID>"
+      mac/linux: "<work_dir>/.workflow/run.sh" plan "<task>" "<MAIN_SESSION_ID>"
+    <MAIN_SESSION_ID> dari [SESSION BINDING], WAJIB arg ke-3 (isolasi concurrent).
     - GAGAL (ok:false | invalid_evidence | content menu/refusal) → HARD GATE:
-      STOP → "[PROXY GAGAL] <alasan>. Lanjut plan via /.local (evidence lokal) atau tanpa evidence? (yes/no)" → TUNGGU. JANGAN auto-fallback.
+      STOP → "[PROXY GAGAL] <alasan>. Lanjut plan via /.local atau tanpa evidence? (yes/no)" → TUNGGU. JANGAN auto-fallback.
     - [LOCAL_MODE]=true → skip run, pakai /.local flow sebagai evidence.
+    - Proxy scope-bounded ke file yg kamu sebut. Lintas-sistem (saldo, UX, perf, security) TAK dilihat proxy kecuali kamu inject ke task. Inject eksplisit ATAU tandai not_investigated. Tugasmu sambung, bukan proxy.
+    - Instruksikan proxy trace REVERSE-dep (siapa consume/panggil target perubahan) → `dependents`. Tiap fitur/modul lain yg terdampak WAJIB masuk `risks` dgn [proxy:file:line] bukti coupling.
+    - Task nyentuh library/framework eksternal → SEBUT nama library di task; proxy WAJIB baca docs via context7 DULU (versi + API resmi) → temuan di `external`. Jangan biar API library dari tebakan masuk plan.
 
     ## STEP 2 — Output [PLAN]
-    Bangun dari digest + content. Confidence + uncertainties WAJIB. Field kosong → tulis alasan.
+    TIAP klaim di assumptions/steps/dependencies/risks WAJIB atribusi sumber:
+      [proxy:file:line] berbukti | [main_agent-inference] simpulanmu | [user-provided] | [PLACEHOLDER-perlu-kalibrasi] angka/metrik tanpa basis.
+    DILARANG sajikan tebakan (angka, dependency, regresi) sebagai fakta tak berlabel. Belum ada evidence → minta evidence baru ATAU label. Jangan naikkan kepercayaan diam-diam saat didorong.
 
     [PLAN]
     task:            <restatement>
     evidence_source: second_agent (1-call) | graphify+claude (local) | none
-    assumptions:     - <statement, bukan pertanyaan> | (tidak ada: alasan)
-    open_questions:  - <max 5, hanya keputusan arch/impl yg tak bisa diasumsikan> | (tidak ada: alasan)
-    steps:           1. <concrete> 2. <concrete>
+    assumptions:     - <statement + atribusi> | (tidak ada: alasan)
+    open_questions:  - <keputusan arch/impl yg HANYA user bisa putus; BLOCKING> | (tidak ada: alasan)
+    resolvable_uncertainties: - <bisa ditutup> → cara: <read/grep/explore apa> | (tidak ada)
+    steps:           1. <concrete + atribusi> 2. ...
+    dependencies:    - A→B [bukti:file:line] | A→B [ASUMSI-belum-verified] | (tidak ada)
     files_affected:  <list>
-    risks:           - <breakage/side-effect> | (tidak ada: alasan)
+    risks:           - <breakage/side-effect + fitur lain terdampak (blast radius dari dependents) + atribusi> | (tidak ada: alasan)
     confidence:
       problem_understanding: low|medium|high — <alasan>
       root_cause:            low|medium|high — <alasan>
       solution_path:         low|medium|high — <alasan>
-    uncertainties:   - <tak terkonfirmasi> | (tidak ada)
-    decision:        proceed | clarify (open_questions blocking) | re-explore (root_cause rendah)
+    decision:        proceed | clarify | re-explore
+      MEKANIS: open_questions ada ATAU solution_path<high ATAU jalur kritis berat [main_agent-inference] → clarify (DILARANG proceed/tawar execute). root_cause rendah → re-explore. Selain itu → proceed.
 
-    ## STEP 3 — Tunggu approval. JANGAN auto-execute.
-    "Setuju? Jalankan /.execute -y"
+    ## STEP 3
+    resolvable_uncertainties WAJIB kamu coba tutup DULU sebelum tanya user; sisakan open_questions saja ke user.
+    decision=proceed → "Setuju? Jalankan /.execute -y". clarify → tanya open_questions. JANGAN auto-execute.
 
 ---
 
@@ -160,9 +170,10 @@ Buat `{AGENT_DIR}/skills/`. Skill = template → SELALU overwrite. Substitusi `{
     /.analyze --local <topic>  → Claude langsung (skip proxy)
 
     ## Run (1-call)
-    Windows:   & "<work_dir>\.workflow\run.ps1" analyze "<topic>"
-    mac/linux: "<work_dir>/.workflow/run.sh" analyze "<topic>"
-    Reuse LAST_EXPLORE_RESULT jika relevan.
+    Windows:   & "<work_dir>\.workflow\run.ps1" analyze "<topic>" "<MAIN_SESSION_ID>"
+    mac/linux: "<work_dir>/.workflow/run.sh" analyze "<topic>" "<MAIN_SESSION_ID>"
+    <MAIN_SESSION_ID> dari [SESSION BINDING], WAJIB arg ke-3 (isolasi concurrent). Reuse LAST_EXPLORE_RESULT jika relevan.
+    Task nyentuh library eksternal → sebut nama library; proxy baca context7 docs dulu → temuan di external (bukan tebakan API).
     GAGAL (ok:false | invalid_evidence | content menu/refusal) → HARD GATE:
       STOP → "[PROXY GAGAL] <alasan>. Lanjut /.local? (yes/no)" → TUNGGU user. JANGAN auto-fallback, JANGAN reasoning dari garbage.
     --local atau [LOCAL_MODE]=true → skip run, /.local flow (bukan fallback diam-diam — mode eksplisit user).
@@ -171,8 +182,9 @@ Buat `{AGENT_DIR}/skills/`. Skill = template → SELALU overwrite. Substitusi `{
     Relay digest + isi dari content. confidence (3 sub) + uncertainties WAJIB.
     source: second_agent (1-call) | claude (local)
     confidence: { problem_understanding, root_cause, solution_path } — masing low|medium|high — <alasan>
-    findings: <dari content> | (kosong: alasan)
+    findings: <dari content, atribusi grounded/assumption> | (kosong: alasan)
     implications: <dampak> | (kosong: alasan)
+    impacted_features: <fitur/modul lain terdampak — dari dependents/reverse-dep> [file:line] | (tidak ada: alasan)
     uncertainties: <tak terkonfirmasi> | (tidak ada)
 
     ## Rules: zero code changes, zero file mods.
@@ -188,8 +200,9 @@ Buat `{AGENT_DIR}/skills/`. Skill = template → SELALU overwrite. Substitusi `{
     /.sweep
 
     ## Run (1-call)
-    Windows:   & "<work_dir>\.workflow\run.ps1" sweep "scan git diff, identify impact"
-    mac/linux: "<work_dir>/.workflow/run.sh" sweep "scan git diff, identify impact"
+    Windows:   & "<work_dir>\.workflow\run.ps1" sweep "scan git diff, identify impact" "<MAIN_SESSION_ID>"
+    mac/linux: "<work_dir>/.workflow/run.sh" sweep "scan git diff, identify impact" "<MAIN_SESSION_ID>"
+    <MAIN_SESSION_ID> dari [SESSION BINDING], WAJIB arg ke-3 (isolasi concurrent).
     ok:false / run script hilang → fallback: `git diff HEAD`, `git status` langsung, source: claude (direct).
 
     ## Output [SWEEP RESULT]
@@ -221,13 +234,15 @@ Buat `{AGENT_DIR}/skills/`. Skill = template → SELALU overwrite. Substitusi `{
     $AGENT_PATH         : SET (<path>, exists) | NOT SET
     .workflow/config.json : v3.3.0 (main_py_path set) | old | MISSING
     graphify-out/       : EXISTS | MISSING
+    second_agent MCP    : SAFE | RISK (<server>) | REVIEW (<server>) | NONE — scan opencode config mcp (context7=safe read-only; write/exec/fs/db/browser=risk)
 
     ## Output
     [DOCTOR REPORT]
     source: second_agent (1-call) | claude (local)
     checks: <semua item STEP 2 + status>
+    mcp_second_agent: <verdict + daftar server + classification> — RISK/REVIEW = second_agent lampaui read-only, WAJIB tampil + alasan
     status: READY | NEEDS SETUP
-    actions: <fix per item MISSING/NOT SET> (kosong → "tidak ada — semua OK")
+    actions: <fix per item MISSING/NOT SET + disable/confirm MCP risky> (kosong → "tidak ada — semua OK")
     NEEDS SETUP → "Jalankan /.init". $AGENT_PATH NOT SET → set dulu (lihat /.init STEP 1).
 
 ---
@@ -521,13 +536,16 @@ Target `{CONFIG_FILE}`. Marker ada → ganti antara START/END. Tidak ada → app
 
     ### Session (satu otoritas)
     MAIN_SESSION_ID dari blok [SESSION BINDING] hook (STEP 5b) — AUTHORITATIVE, override semua.
-    Hook absent → fallback .workflow/state.json (root match) → else generate main_<slug>_<ts>.
+    WAJIB teruskan nilainya ke run script (arg ke-3) tiap delegated call — hook taruh id di context, run script baca dari arg; tanpa diteruskan jatuh ke "default" (fatal untuk concurrent same-project).
+    Hook absent → fallback .workflow/state.json (root match) → else generate main_<slug>_<ts_ms>_<pid>.
     Jangan reuse session lintas project root. Detail lifecycle: skill/hook, bukan sini.
 
     ### Delegated commands — 1-call (NON-NEGOTIABLE)
-    Panggil: .workflow/run.ps1 (Windows) | .workflow/run.sh (mac/linux) <command> "<task>".
-    - Blocking, return {ok, content, meta, digest}. Session otomatis. Tak karang command, tak check.py, tak $AGENT_PATH.
+    Panggil: .workflow/run.ps1 (Windows) | .workflow/run.sh (mac/linux) <command> "<task>" "<MAIN_SESSION_ID>".
+    - <MAIN_SESSION_ID> = nilai [SESSION BINDING], WAJIB diteruskan arg ke-3 tiap explore/plan/analyze/verify/sweep. Tanpa ini, 2 main agent di project sama collapse ke sesi "default" yang sama (job saling block, state saling timpa). doctor/init/clean/inspect = direct, tak butuh session.
+    - Blocking, return {ok, content, meta, digest}. Tak karang command, tak $AGENT_PATH. Normal path tak perlu check.py (kecuali recovery attach di bawah).
     - Output ikut Output Contract (dua mode): explore/sweep/doctor = RELAY digest; plan/analyze = SYNTHESIS penuh. Buka `content` bila butuh detail.
+    - Panggilan TERPUTUS (tool timeout / no JSON / mau re-run) → JANGAN langsung re-run (worker detached lanjut; job yg sudah selesai TAK auto-ke-ambil). Recovery WAJIB otomatis: /.inspect dulu → (a) job running + cmd sama → attach `.workflow/check.<ps1|sh> <job_id> --wait --result` (nol run baru); (b) job baru selesai → baca `.workflow/sessions/<MAIN_SESSION_ID>/runtime/response.last.md`; (c) nihil → baru re-run.
     - .workflow/run script hilang → /.init (bootstrap $AGENT_PATH).
 
     ### Proxy failure (HARD GATE — JANGAN auto-fallback)
@@ -547,8 +565,11 @@ Target `{CONFIG_FILE}`. Marker ada → ganti antara START/END. Tidak ada → app
     Prefix "/." wajib. Command tanpa "/." → INVALID, jangan interpret.
 
     ### Plan/analysis output (structured)
-    WAJIB: confidence {problem_understanding, root_cause, solution_path} (low|medium|high — alasan) + uncertainties.
-    Field kosong → tetap tampilkan + alasan. Bangun dari digest+content, bukan struktur evidence mentah.
+    WAJIB: confidence {problem_understanding, root_cause, solution_path} (low|medium|high — alasan).
+    Pisah open_questions (keputusan-user, BLOCKING) vs resolvable_uncertainties (kamu tutup dulu). Jangan campur — nyampur = geser bebanmu ke user.
+    Atribusi: TIAP klaim beri sumber [proxy:file:line]|[main_agent-inference]|[user-provided]|[PLACEHOLDER]. Field kosong → tampilkan + alasan. Bangun dari digest+content.
+    Anti-spekulasi: DILARANG masukkan angka/dependency/regresi absen-evidence sebagai fakta. Didorong user ≠ izin ngarang; label [main_agent-inference] atau minta evidence. dependency palsu ubah urutan kerja — tunjukkan bukti coupling atau tandai [ASUMSI].
+    Relay-tag: teruskan tag grounded/assumption dari proxy apa adanya; JANGAN re-summarize sampai hilang bedanya (tiap ringkas = lossy).
 
     ### Execution rules
     /.execute -y: ada plan aktif (LAST_PLAN_RESULT) → edit HANYA execution scope → auto /.verify → jangan declare done sebelum verify. Jangan commit kecuali user minta.
@@ -563,7 +584,9 @@ Target `{CONFIG_FILE}`. Marker ada → ganti antara START/END. Tidak ada → app
     Never run: graphify init/build/watch. Auto `graphify update` setelah code change. Error "too large"/"too many nodes" → IGNORE, jangan retry.
 
     ### Global Forbidden
-    Modif file luar scope | /.execute tanpa -y | plan tanpa confidence+uncertainties | auto-expand scope |
+    Modif file luar scope | /.execute tanpa -y | plan tanpa confidence+atribusi | auto-expand scope |
+    sajikan angka/dependency/regresi tebakan sebagai fakta tak berlabel | naikkan kepercayaan diam-diam saat didorong | campur open_questions dgn resolvable_uncertainties |
+    proceed/tawar-execute saat solution_path<high atau open_questions ada |
     claim success sebelum verify | lanjut synthesis saat ok:false ATAU content non-evidence (menu/refusal) |
     auto-fallback ke /.local tanpa tanya+tunggu user saat proxy gagal | delegate /.execute atau /.init ke second_agent |
     reuse session lintas project | interpret "/" tanpa "." | write memory mid-session tanpa konfirmasi | ignore [LOCAL_MODE] |
@@ -580,39 +603,152 @@ HANYA jika agent (STEP 0) = Claude Code. Agent lain → SKIP, output:
 
 ### 5b.1 — Buat `{AGENT_DIR}/hooks/session-bind.ps1` (Windows — overwrite)
 
-    # session-bind.ps1 — SessionStart hook. Maps chat lifecycle → MAIN_SESSION_ID.
-    #   startup|clear|compact → NEW | resume → REUSE. Registry: ~/.claude/session_registry.json. Never blocks (exit 0).
+    # session-bind.ps1 - SessionStart hook
+    # Maps Claude Code session lifecycle -> second_agent (opencode) MAIN_SESSION_ID.
+    #
+    # source mapping (user decision):
+    #   startup | clear | compact  -> NEW  MAIN_SESSION_ID  -> second_agent thread NEW
+    #   resume                     -> REUSE MAIN_SESSION_ID  -> second_agent thread CONTINUE
+    #
+    # Registry: %USERPROFILE%\.claude\session_registry.json  (key = claude session_id)
+    # Output: JSON hookSpecificOutput.additionalContext -> injects MAIN_SESSION_ID into context.
+    # Never blocks session start (always exit 0).
+
     $ErrorActionPreference = 'Stop'
-    function Write-NoBom([string]$Path,[string]$Content){ $enc=New-Object System.Text.UTF8Encoding($false); [System.IO.File]::WriteAllText($Path,$Content,$enc) }
+
+    function Write-NoBom([string]$Path, [string]$Content) {
+        $enc = New-Object System.Text.UTF8Encoding($false)
+        [System.IO.File]::WriteAllText($Path, $Content, $enc)
+    }
+
     try {
-        $raw=[Console]::In.ReadToEnd(); if([string]::IsNullOrWhiteSpace($raw)){exit 0}
-        $p=$raw|ConvertFrom-Json; $source=$p.source; $sid=$p.session_id; $cwd=$p.cwd
-        if([string]::IsNullOrWhiteSpace($cwd)){$cwd=(Get-Location).Path}
-        $root=$cwd; try{$root=(Resolve-Path -LiteralPath $cwd -ErrorAction Stop).Path}catch{}
-        $slug=Split-Path -Leaf $root
-        $reg="$env:USERPROFILE\.claude\session_registry.json"; $r=@{}
-        if(Test-Path $reg){try{$j=Get-Content $reg -Raw|ConvertFrom-Json; foreach($x in $j.PSObject.Properties){$r[$x.Name]=$x.Value}}catch{$r=@{}}}
-        $reuse=$false; $mid=$null
-        if($source -eq 'resume' -and $sid -and $r.ContainsKey($sid)){$mid=$r[$sid].main_session_id; $reuse=$true}
-        if([string]::IsNullOrWhiteSpace($mid)){$ts=Get-Date -Format 'yyyyMMdd_HHmmssfff'; $rnd=-join(((48..57)+(97..102))|Get-Random -Count 4|%{[char]$_}); $mid="main_${slug}_${ts}_${rnd}"}
-        $bt=(Get-Date).ToUniversalTime().ToString('o')
-        if($sid){$r[$sid]=[PSCustomObject]@{main_session_id=$mid; cwd=$root; bound_at=$bt; source=$source}}
-        try{$rows=foreach($k in $r.Keys){[PSCustomObject]@{key=$k;val=$r[$k]}}; $keep=$rows|Sort-Object {try{[datetime]$_.val.bound_at}catch{[datetime]::MinValue}} -Descending|Select-Object -First 50; $pr=@{}; foreach($e in $keep){$pr[$e.key]=$e.val}; $r=$pr}catch{}
-        Write-NoBom $reg (($r|ConvertTo-Json -Depth 6))
-        $verb=if($reuse){'REUSE (continue)'}else{'NEW'}
-        $ctx="[SESSION BINDING - authoritative]`nMAIN_SESSION_ID=$mid`nMAIN_SESSION_PROJECT_ROOT=$root`nsource=$source`nsecond_agent_thread=$verb`nUse this MAIN_SESSION_ID for all delegated commands. Overrides .workflow/state.json session.id."
-        Write-Output (([PSCustomObject]@{hookSpecificOutput=[PSCustomObject]@{hookEventName='SessionStart'; additionalContext=$ctx}})|ConvertTo-Json -Depth 5 -Compress)
+        $raw = [Console]::In.ReadToEnd()
+        if ([string]::IsNullOrWhiteSpace($raw)) { exit 0 }
+
+        $payload   = $raw | ConvertFrom-Json
+        $source    = $payload.source
+        $claudeSid = $payload.session_id
+        $cwd       = $payload.cwd
+        if ([string]::IsNullOrWhiteSpace($cwd)) { $cwd = (Get-Location).Path }
+
+        $root = $cwd
+        try { $rp = Resolve-Path -LiteralPath $cwd -ErrorAction Stop; $root = $rp.Path } catch { }
+        $slug = Split-Path -Leaf $root
+
+        $registryPath = Join-Path $env:USERPROFILE '.claude\session_registry.json'
+
+        # load registry
+        $registry = @{}
+        if (Test-Path -LiteralPath $registryPath) {
+            try {
+                $j = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
+                foreach ($p in $j.PSObject.Properties) { $registry[$p.Name] = $p.Value }
+            } catch { $registry = @{} }
+        }
+
+        # decide reuse vs new
+        $reuse  = $false
+        $mainId = $null
+        if ($source -eq 'resume' -and $claudeSid -and $registry.ContainsKey($claudeSid)) {
+            $mainId = $registry[$claudeSid].main_session_id
+            $reuse  = $true
+        }
+        if ([string]::IsNullOrWhiteSpace($mainId)) {
+            $ts     = Get-Date -Format 'yyyyMMdd_HHmmssfff'   # ms-resolution avoids same-second collision
+            $rand   = -join (((48..57) + (97..102)) | Get-Random -Count 4 | ForEach-Object { [char]$_ })
+            $mainId = "main_${slug}_${ts}_${rand}"
+            $reuse  = $false
+        }
+
+        $boundAt = (Get-Date).ToUniversalTime().ToString('o')
+        if ($claudeSid) {
+            $registry[$claudeSid] = [PSCustomObject]@{
+                main_session_id = $mainId
+                cwd             = $root
+                bound_at        = $boundAt
+                source          = $source
+            }
+        }
+
+        # prune to newest 50 by bound_at
+        try {
+            $rows = foreach ($k in $registry.Keys) { [PSCustomObject]@{ key = $k; val = $registry[$k] } }
+            $kept = $rows | Sort-Object { try { [datetime]$_.val.bound_at } catch { [datetime]::MinValue } } -Descending |
+                    Select-Object -First 50
+            $pruned = @{}
+            foreach ($e in $kept) { $pruned[$e.key] = $e.val }
+            $registry = $pruned
+        } catch { }
+
+        Write-NoBom $registryPath (($registry | ConvertTo-Json -Depth 6))
+
+        $verb = if ($reuse) { 'REUSE (continue)' } else { 'NEW' }
+        $ctx  = @"
+    [SESSION BINDING - authoritative]
+    MAIN_SESSION_ID=$mainId
+    MAIN_SESSION_PROJECT_ROOT=$root
+    source=$source
+    second_agent_thread=$verb
+    Use this MAIN_SESSION_ID for all /.explore /.plan /.analyze /.verify /.sweep invocations. Overrides .workflow/state.json session.id.
+    "@
+
+        $out = [PSCustomObject]@{
+            hookSpecificOutput = [PSCustomObject]@{
+                hookEventName     = 'SessionStart'
+                additionalContext = $ctx
+            }
+        }
+        Write-Output ($out | ConvertTo-Json -Depth 5 -Compress)
         exit 0
-    } catch { exit 0 }
+    }
+    catch {
+        # never block session start
+        exit 0
+    }
 
 > Saat tulis ke file: hapus indentasi 4-spasi. (Indentasi di prompt = penanda code block.)
 
-**POSIX (mac/linux) — `{AGENT_DIR}/hooks/session-bind.sh`** bila harness non-Windows dukung SessionStart. Paritas logika: baca stdin JSON, map source, kelola registry, inject `[SESSION BINDING]`. Bila harness tak dukung → fallback state.json (perilaku tetap jalan).
+**POSIX (mac/linux) — `{AGENT_DIR}/hooks/session-bind.sh`** (WAJIB bila agent jalan di mac/linux — tanpa ini MAIN_SESSION_ID tak sampai ke context → concurrent same-project rusak). Paritas logika .ps1: NEW pada startup|clear|compact, REUSE pada resume.
 
-### 5b.2 — Register di `{AGENT_DIR}/settings.json` (MERGE)
+    #!/usr/bin/env bash
+    # session-bind.sh — SessionStart hook (POSIX parity). Inject MAIN_SESSION_ID. Never blocks (exit 0).
+    raw="$(cat)"; [ -z "$raw" ] && exit 0
+    val(){ printf '%s' "$raw" | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -n1; }
+    source="$(val source)"; sid="$(val session_id)"; cwd="$(val cwd)"; [ -z "$cwd" ] && cwd="$PWD"
+    root="$cwd"; slug="$(basename "$root")"
+    regdir="$HOME/.claude/session_registry"; mkdir -p "$regdir" 2>/dev/null
+    safe_sid="$(printf '%s' "${sid:-none}" | tr -c 'A-Za-z0-9_.-' '_')"; regfile="$regdir/$safe_sid"
+    mid=""; verb="NEW"
+    if [ "$source" = "resume" ] && [ -n "${sid:-}" ] && [ -f "$regfile" ]; then mid="$(cat "$regfile" 2>/dev/null)"; verb="REUSE (continue)"; fi
+    if [ -z "$mid" ]; then
+      ts="$(date -u +%Y%m%d_%H%M%S)"; rnd="$(head -c4 /dev/urandom 2>/dev/null | od -An -tx1 | tr -d ' \n')"; [ -z "$rnd" ] && rnd="$$"
+      mid="main_${slug}_${ts}_${rnd}"; verb="NEW"
+    fi
+    [ -n "${sid:-}" ] && printf '%s' "$mid" > "$regfile" 2>/dev/null
+    find "$regdir" -type f -mtime +30 -delete 2>/dev/null || true
+    ctx="[SESSION BINDING - authoritative]
+    MAIN_SESSION_ID=$mid
+    MAIN_SESSION_PROJECT_ROOT=$root
+    source=$source
+    second_agent_thread=$verb
+    Use this MAIN_SESSION_ID for all delegated commands. Overrides .workflow/state.json session.id."
+    esc="$(printf '%s' "$ctx" | sed 's/\\/\\\\/g; s/"/\\"/g' | sed ':a;N;$!ba;s/\n/\\n/g')"
+    printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"%s"}}\n' "$esc"
+    exit 0
+
+> Saat tulis ke file: hapus indentasi 4-spasi + `chmod +x`. Entropi = detik + 8-hex urandom → collision-free concurrent (tak pakai `%N`, tak portable di macOS).
+
+### 5b.2 — Register di `{AGENT_DIR}/settings.json` (MERGE — pilih sesuai OS agent)
+
+Windows:
 
     "hooks": { "SessionStart": [ { "matcher": "startup|resume|clear|compact",
       "hooks": [ { "type": "command", "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"{AGENT_DIR}\\hooks\\session-bind.ps1\"" } ] } ] }
+
+mac/linux:
+
+    "hooks": { "SessionStart": [ { "matcher": "startup|resume|clear|compact",
+      "hooks": [ { "type": "command", "command": "bash \"{AGENT_DIR}/hooks/session-bind.sh\"" } ] } ] }
 
 Catatan: `compact` → thread BARU. autoCompact reset thread mid-session. Reuse: ganti `$source -eq 'resume'` → `$source -in 'resume','compact'`.
 

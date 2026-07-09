@@ -25,8 +25,8 @@ ERROR_TYPES = {
 # Required fields per command, checked by validate_fields.
 REQUIRED_FIELDS = {
     "explore": ("entry_points", "uncertainties"),
-    "analyze": ("findings", "uncertainties"),
-    "plan": ("findings", "uncertainties"),
+    "analyze": ("grounded", "uncertainties"),
+    "plan": ("grounded", "uncertainties"),
 }
 
 

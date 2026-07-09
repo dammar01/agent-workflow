@@ -49,6 +49,37 @@
 - **`utils/osutil.py`** (baru) — semua platform-specific terisolasi: `process_alive` (POSIX `os.kill` / Win `OpenProcess`), `detached_popen_kwargs` (POSIX `start_new_session` / Win flags), `python_exe`, `resolve_exe`, `script_ext`, `make_executable`.
 - Diverifikasi di Windows + WSL (POSIX): primitif OK. Generate script `.ps1`+`.sh` sekaligus.
 
+## Iterasi pre-release — trust + concurrency + session delivery
+
+### Session identity + delivery (F0)
+- `utils/parser.py generate_main_session_id`: detik → **ms + pid** (`main_<ts_ms>_<pid>`). Fallback tak lagi collision-prone antar-proses.
+- **Explicit session threading**: skill delegated (explore/plan/analyze/sweep) + managed block WAJIB teruskan `MAIN_SESSION_ID` (arg ke-3 run script). Akar bug: hook taruh id di context, run script baca dari arg — tanpa diteruskan jatuh ke sesi `default` bersama → 2 main agent concurrent collapse.
+
+### Trust contract (F1 — plan.md + managed block)
+- Atribusi tiap klaim: `[proxy:file:line]|[main_agent-inference]|[user-provided]|[PLACEHOLDER]`. Larang tebakan (angka/dependency/regresi) sebagai fakta tak berlabel.
+- Pisah `open_questions` (keputusan-user, BLOCKING) vs `resolvable_uncertainties` (main_agent tutup dulu).
+- `dependencies` bukti/asumsi. Decision gate MEKANIS: solution_path<high ∨ open_q ∨ inference-berat → clarify (dilarang proceed).
+- Inject lintas-sistem sebelum delegate (proxy scope-bounded).
+
+### Evidence-grade kontrak proxy (F2 — prompt_builder.py + second_agent.md)
+- `[EVIDENCE]`: `findings/reasoning` → **`grounded` (WAJIB file:line) + `assumptions`** + `dependencies` + `external` ([EXTERNAL:context7] dll, pisah dari codebase) + `scope_covered/scope_not_covered`.
+- `[DIGEST]`: tambah `evidence_basis: grounded|mixed|mostly-assumption` (relay-tag anti-lossy).
+- MCP context7: read-only, diizinkan tapi WAJIB tag `external` (provenance visible).
+
+### Concurrency partition (F3 — workflow_runtime.py)
+- State mutable per-session: `.workflow/sessions/<session_id>/{state,scope,command-cache}.json` + `runtime/` (lock per-session). Static (config/opencode.json/logs/reports) tetap shared.
+- `bind_session` **buang reset-on-mismatch** — file per-session, nol tabrakan. Per-session lazy-create (init = static scaffolding saja).
+- Lock-block error kini bawa `error_type=runtime_lock` + `next_action`.
+- 2 main agent concurrent project sama → state terisolasi, nol clobber (diverifikasi).
+
+### Batch lanjutan (hardening + memory)
+- **POSIX concurrency (session-bind.sh)**: hook `.sh` paritas `.ps1` (STEP 5b.1) + registrasi settings per-OS (5b.2). Tanpa ini MAIN_SESSION_ID tak sampai di mac/linux → concurrent rusak.
+- **Timeout recovery (#3)**: managed block — panggilan terputus → auto `/.inspect` → attach `check.<ps1|sh> <job_id> --wait --result` atau baca `response.last.md`; re-run cuma bila nihil. `_generate_run_scripts` kini emit `check.ps1`/`check.sh`.
+- **Logs per-session (#4)**: `_archive_prompt`/`response` → `.workflow/sessions/<sid>/logs/`.
+- **Blast-radius (#5)**: kontrak `dependents` (reverse-dep) + plan/analyze WAJIB masukkan fitur terdampak ke `risks`.
+- **Fact-store (#6)** — `core/fact_store.py`: `.workflow/facts.jsonl` project-shared. Ingest HANYA `durable_facts` [config|pattern|invariant] atau grounded recurring ≥5 sesi. Anchor hash file:line → ingest-verify (skip stale-at-birth) + read-verify (drop stale, nol serve-as-fresh). Inject `[KNOWN_FACTS — verify]` sebelum delegate. Prune via `/.clean`.
+- Hang opencode: cap wall-clock worker sengaja OFF (keputusan user) — reaper-only.
+
 ## FASE 6 — CLAUDE.md rewrite (PENDING)
 - Rombak managed block global `~/.claude/CLAUDE.md` ke alur 1-call + dedup section duplikat + longgarkan aturan 11-field jadi relay-digest.
 - **Di luar repo, sensitif (semua project) → butuh approval terpisah, dikerjakan terakhir.**

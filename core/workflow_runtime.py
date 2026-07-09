@@ -1,12 +1,18 @@
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from utils import osutil
+
+
+def _safe_component(value: str) -> str:
+    """Filesystem-safe single path component for a session id."""
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", value)
 
 
 WORKFLOW_DIRNAME = ".workflow"
@@ -48,18 +54,30 @@ def slugify_project_name(name: str) -> str:
     return slug or "project"
 
 
-def workflow_paths(project_root: Path) -> dict[str, Path]:
+def workflow_paths(project_root: Path, session_id: str | None = None) -> dict[str, Path]:
+    """Resolve workflow paths. Mutable per-flow state (state/scope/cache/runtime)
+    lives under sessions/<sid>/ so concurrent main agents on the SAME project never
+    clobber each other; static config/logs/reports stay shared at the .workflow root.
+    session_id=None → legacy root fallback (init scaffolding / no-session tooling)."""
     workflow_dir = project_root / WORKFLOW_DIRNAME
-    runtime_dir = workflow_dir / "runtime"
     reports_dir = workflow_dir / "reports"
-    logs_dir = workflow_dir / "logs"
+    session_dir = (
+        workflow_dir / "sessions" / _safe_component(session_id) if session_id else workflow_dir
+    )
+    runtime_dir = session_dir / "runtime"
+    # Per-run archive lives inside the session so each flow's evidence trail is isolated.
+    logs_dir = (session_dir / "logs") if session_id else (workflow_dir / "logs")
+    sweep_report = (
+        session_dir / "reports" / "sweep.last.md" if session_id else reports_dir / "sweep.last.md"
+    )
     return {
         "project_root": project_root,
         "workflow_dir": workflow_dir,
         "config": workflow_dir / "config.json",
-        "state": workflow_dir / "state.json",
-        "scope": workflow_dir / "scope.json",
-        "command_cache": workflow_dir / "command-cache.json",
+        "session_dir": session_dir,
+        "state": session_dir / "state.json",
+        "scope": session_dir / "scope.json",
+        "command_cache": session_dir / "command-cache.json",
         "gitignore": workflow_dir / ".gitignore",
         "runtime_dir": runtime_dir,
         "prompt": runtime_dir / "prompt.txt",
@@ -68,7 +86,7 @@ def workflow_paths(project_root: Path) -> dict[str, Path]:
         "lock": runtime_dir / "lock",
         "reports_dir": reports_dir,
         "doctor_report": reports_dir / "doctor.json",
-        "sweep_report": reports_dir / "sweep.last.md",
+        "sweep_report": sweep_report,
         "logs_dir": logs_dir,
     }
 
@@ -230,6 +248,7 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
     """
     ps_py = osutil.python_exe() if osutil.IS_WINDOWS else "python"
     sh_py = osutil.python_exe() if not osutil.IS_WINDOWS else "python3"
+    check_py = str(Path(main_py).parent / "check.py")
     root = str(project_root)
     workflow_dir = project_root / WORKFLOW_DIRNAME
     written: list[str] = []
@@ -268,12 +287,26 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         'set -euo pipefail\n'
         f'exec "{sh_py}" "{main_py}" --command inspect --work-dir "{root}" --pretty\n'
     )
+    # Attach to an existing job by id (recovery after a foreground timeout). Passes through
+    # flags like --wait --result to check.py, which polls without spawning a new run.
+    check_ps1 = (
+        'param([Parameter(Mandatory=$true)][string]$JobId,'
+        '[Parameter(ValueFromRemainingArguments=$true)]$Rest)\n'
+        f'& "{ps_py}" "{check_py}" $JobId @Rest\n'
+    )
+    check_sh = (
+        '#!/usr/bin/env bash\n'
+        'set -euo pipefail\n'
+        f'exec "{sh_py}" "{check_py}" "$@"\n'
+    )
 
     for name, content in (
         ("run.ps1", run_ps1),
         ("run.sh", run_sh),
         ("inspect.ps1", inspect_ps1),
         ("inspect.sh", inspect_sh),
+        ("check.ps1", check_ps1),
+        ("check.sh", check_sh),
     ):
         path = workflow_dir / name
         atomic_write_text(path, content)
@@ -284,56 +317,27 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
 
 
 def ensure_workflow_workspace(project_root: Path, agent_workflow_path: str | None) -> dict:
+    """Create STATIC scaffolding only. Per-session state/scope/cache/runtime are
+    created lazily under sessions/<sid>/ on first delegated call (see load_workspace_state)."""
     paths = workflow_paths(project_root)
     paths["workflow_dir"].mkdir(parents=True, exist_ok=True)
-    paths["runtime_dir"].mkdir(parents=True, exist_ok=True)
     paths["reports_dir"].mkdir(parents=True, exist_ok=True)
     paths["logs_dir"].mkdir(parents=True, exist_ok=True)
+    (paths["workflow_dir"] / "sessions").mkdir(parents=True, exist_ok=True)
 
     created_files: list[str] = []
     existing_files: list[str] = []
 
-    mapping = {
-        paths["config"]: lambda: default_config(project_root, agent_workflow_path),
-        paths["state"]: lambda: default_state(project_root),
-        paths["scope"]: default_scope,
-        paths["command_cache"]: default_command_cache,
-    }
-    for path, factory in mapping.items():
-        status, _payload = ensure_valid_json_or_create(path, factory)
-        (created_files if status == "created" else existing_files).append(str(path))
+    status, _payload = ensure_valid_json_or_create(
+        paths["config"], lambda: default_config(project_root, agent_workflow_path)
+    )
+    (created_files if status == "created" else existing_files).append(str(paths["config"]))
 
-    text_defaults = {
-        paths["gitignore"]: "*\n",
-        paths["prompt"]: "",
-        paths["response_last"]: "",
-        paths["sweep_report"]: "",
-    }
-    for path, content in text_defaults.items():
-        if path.exists():
-            existing_files.append(str(path))
-        else:
-            atomic_write_text(path, content)
-            created_files.append(str(path))
-
-    if paths["prompt_meta"].exists():
-        read_json_file(paths["prompt_meta"])
-        existing_files.append(str(paths["prompt_meta"]))
+    if paths["gitignore"].exists():
+        existing_files.append(str(paths["gitignore"]))
     else:
-        atomic_write_json(
-            paths["prompt_meta"],
-            {
-                "prompt_id": None,
-                "session_id": None,
-                "project_root": str(project_root),
-                "command": None,
-                "state_version": 1,
-                "scope_version": 0,
-                "created_at": now_iso(),
-                "status": "idle",
-            },
-        )
-        created_files.append(str(paths["prompt_meta"]))
+        atomic_write_text(paths["gitignore"], "*\n")
+        created_files.append(str(paths["gitignore"]))
 
     tool = _tool_paths(agent_workflow_path)
     opencode_copied = _copy_opencode_config(project_root, tool["tool_dir"])
@@ -368,19 +372,25 @@ def ensure_root_gitignore_entry(project_root: Path) -> bool:
     return True
 
 
-def load_workspace_state(project_root: Path) -> dict:
-    paths = workflow_paths(project_root)
+def load_workspace_state(project_root: Path, session_id: str | None = None) -> dict:
+    """Load workspace state for a session, lazily creating per-session defaults.
+    config.json is static (must exist from init); state/scope/cache are per-session."""
+    paths = workflow_paths(project_root, session_id)
+    paths["session_dir"].mkdir(parents=True, exist_ok=True)
+    _, state = ensure_valid_json_or_create(paths["state"], lambda: default_state(project_root))
+    _, scope = ensure_valid_json_or_create(paths["scope"], default_scope)
+    _, command_cache = ensure_valid_json_or_create(paths["command_cache"], default_command_cache)
     return {
         "config": read_json_file(paths["config"]),
-        "state": read_json_file(paths["state"]),
-        "scope": read_json_file(paths["scope"]),
-        "command_cache": read_json_file(paths["command_cache"]),
+        "state": state,
+        "scope": scope,
+        "command_cache": command_cache,
         "paths": paths,
     }
 
 
 def reset_active_workflow_state(project_root: Path, session_id: str) -> dict:
-    loaded = load_workspace_state(project_root)
+    loaded = load_workspace_state(project_root, session_id)
     state = default_state(project_root)
     state["session"] = {"id": session_id, "bound_at": now_iso()}
     scope = default_scope()
@@ -394,11 +404,15 @@ def reset_active_workflow_state(project_root: Path, session_id: str) -> dict:
 
 
 def bind_session(project_root: Path, session_id: str) -> dict:
-    loaded = load_workspace_state(project_root)
+    """Bind a session to its OWN per-session state dir. Because state/scope/cache are
+    keyed by session_id (sessions/<sid>/), two concurrent main agents on the same
+    project never collide — so there is no cross-session mismatch and no reset. The
+    session record is stamped on first bind."""
+    loaded = load_workspace_state(project_root, session_id)
     state = loaded["state"]
     current = state.get("session") or {}
     current_id = current.get("id") if isinstance(current, dict) else None
-    if not current_id:
+    if current_id != session_id:
         state["session"] = {"id": session_id, "bound_at": now_iso()}
         atomic_write_json(loaded["paths"]["state"], state)
         scope = loaded["scope"]
@@ -410,12 +424,6 @@ def bind_session(project_root: Path, session_id: str) -> dict:
         loaded["state"] = state
         loaded["scope"] = scope
         loaded["command_cache"] = command_cache
-        loaded["session_reset"] = False
-        return loaded
-    if current_id != session_id:
-        reset = reset_active_workflow_state(project_root, session_id)
-        reset["session_reset"] = True
-        return reset
     loaded["session_reset"] = False
     return loaded
 
@@ -464,7 +472,7 @@ def update_state_from_agent_output(project_root: Path, command: str, objective: 
 
 
 def update_plan_scope(project_root: Path, content: str, session_id: str) -> dict:
-    loaded = load_workspace_state(project_root)
+    loaded = load_workspace_state(project_root, session_id)
     scope = loaded["scope"]
     before = json.dumps(scope, sort_keys=True)
     scope["session_id"] = session_id
@@ -484,7 +492,7 @@ def update_plan_scope(project_root: Path, content: str, session_id: str) -> dict
 
 
 def update_command_cache(project_root: Path, key: str, value, session_id: str) -> dict:
-    loaded = load_workspace_state(project_root)
+    loaded = load_workspace_state(project_root, session_id)
     command_cache = loaded["command_cache"]
     command_cache["session_id"] = session_id
     command_cache[key] = value
@@ -569,13 +577,20 @@ def _archive_prompt(logs_dir: Path, prompt_id: str, prompt: str) -> None:
 
 
 def write_prompt_handoff(project_root: Path, command: str, session_id: str, prompt: str) -> dict:
-    loaded = load_workspace_state(project_root)
+    loaded = load_workspace_state(project_root, session_id)
+    loaded["paths"]["runtime_dir"].mkdir(parents=True, exist_ok=True)
     lock_result = acquire_runtime_lock(loaded["paths"]["lock"], command, session_id)
     if not lock_result["ok"]:
+        holder = lock_result["payload"].get("session_id")
         return {
             "ok": False,
-            "content": f"runtime lock active for session {lock_result['payload'].get('session_id')}",
-            "meta": {"lock": lock_result["payload"], "lock_path": str(loaded["paths"]["lock"])}
+            "content": f"runtime lock active for session {holder}",
+            "meta": {
+                "error_type": "runtime_lock",
+                "next_action": "Wait for the in-flight delegated call on this session to finish, then retry; if it is stuck, clear .workflow/sessions/<sid>/runtime/lock.",
+                "lock": lock_result["payload"],
+                "lock_path": str(loaded["paths"]["lock"]),
+            },
         }
 
     state = loaded["state"]
@@ -608,8 +623,8 @@ def write_prompt_handoff(project_root: Path, command: str, session_id: str, prom
     return {"ok": True, "meta": meta, "paths": loaded["paths"]}
 
 
-def write_response_snapshot(project_root: Path, content: str, prompt_id: str | None = None) -> None:
-    paths = workflow_paths(project_root)
+def write_response_snapshot(project_root: Path, content: str, prompt_id: str | None = None, session_id: str | None = None) -> None:
+    paths = workflow_paths(project_root, session_id)
     atomic_write_text(paths["response_last"], content)
     if prompt_id:
         run_dir = paths["logs_dir"] / prompt_id
@@ -646,8 +661,76 @@ def opencode_callable(command_name: str) -> tuple[bool, str]:
     return False, f"{command_name} not found in PATH"
 
 
-def run_doctor(project_root: Path, opencode_command: str) -> dict:
-    paths = workflow_paths(project_root)
+_MCP_SAFE = ("context7", "docs", "documentation", "read-only", "readonly", "search")
+_MCP_RISK = (
+    "shell", "exec", "bash", "run-command", "runcommand", "filesystem", "file-system",
+    "write", "postgres", "mysql", "mongo", "sqlite", "git", "playwright", "puppeteer",
+    "browser", "selenium", "kubernetes", "docker", "ssh",
+)
+
+
+def _mcp_config_candidates(project_root: Path) -> list[Path]:
+    home = Path.home()
+    oc = home / ".config" / "opencode"
+    return [
+        project_root / WORKFLOW_DIRNAME / "opencode.json",
+        oc / "opencode.json",
+        oc / "opencode.jsonc",
+        oc / "config.json",
+    ]
+
+
+def _classify_mcp(name: str, spec) -> tuple[str, bool, str]:
+    """Classify one MCP server for second_agent (read-only evidence) safety."""
+    enabled = bool(spec["enabled"]) if isinstance(spec, dict) and "enabled" in spec else True
+    payload = json.dumps(spec) if isinstance(spec, (dict, list)) else str(spec)
+    blob = f"{name} {payload}".lower()
+    risk = next((k for k in _MCP_RISK if k in blob), None)
+    if risk:
+        return "risk", enabled, f"matches write/exec keyword '{risk}' — exceeds read-only second_agent role"
+    if any(k in blob for k in _MCP_SAFE):
+        return "safe", enabled, "read-only (docs/search)"
+    return "unknown", enabled, "capability unknown — review manually"
+
+
+def _scan_mcp(project_root: Path) -> dict:
+    """Enumerate MCP servers opencode exposes to second_agent + a safety verdict."""
+    servers: list[dict] = []
+    sources: list[str] = []
+    seen: set[str] = set()
+    for path in _mcp_config_candidates(project_root):
+        if not path.exists():
+            continue
+        try:
+            raw = path.read_text(encoding="utf-8")
+            cleaned = re.sub(r"(?m)^\s*//.*$", "", raw)  # tolerate // comments (jsonc)
+            data = json.loads(cleaned)
+        except (OSError, ValueError):
+            continue
+        mcp = data.get("mcp") if isinstance(data, dict) else None
+        if not isinstance(mcp, dict) or not mcp:
+            continue
+        sources.append(str(path))
+        for name, spec in mcp.items():
+            if name in seen:  # first config wins (project overrides global)
+                continue
+            seen.add(name)
+            cls, enabled, reason = _classify_mcp(name, spec)
+            servers.append({"name": name, "enabled": enabled, "classification": cls, "reason": reason})
+    active = [s for s in servers if s["enabled"]]
+    if not servers:
+        verdict = "none"
+    elif any(s["classification"] == "risk" for s in active):
+        verdict = "risk"
+    elif any(s["classification"] == "unknown" for s in active):
+        verdict = "review"
+    else:
+        verdict = "safe"
+    return {"sources": sources, "servers": servers, "verdict": verdict}
+
+
+def run_doctor(project_root: Path, opencode_command: str, session_id: str | None = None) -> dict:
+    paths = workflow_paths(project_root, session_id)
     issues: list[str] = []
     recommended_fixes: list[str] = []
     checks: dict[str, object] = {}
@@ -657,15 +740,25 @@ def run_doctor(project_root: Path, opencode_command: str) -> dict:
         issues.append(".workflow directory missing")
         recommended_fixes.append("Run init first")
 
-    json_targets = {
-        "config_json_valid": paths["config"],
+    # config.json is static (strict); per-session state/scope/cache are created lazily
+    # on first delegated call, so absence is normal, not a failure.
+    try:
+        checks["config_json_valid"] = paths["config"].exists() and isinstance(read_json_file(paths["config"]), dict)
+    except ValueError as exc:
+        checks["config_json_valid"] = False
+        issues.append(str(exc))
+        recommended_fixes.append(f"Fix invalid JSON at {paths['config']}")
+
+    for key, path in {
         "state_json_valid": paths["state"],
         "scope_json_valid": paths["scope"],
         "command_cache_json_valid": paths["command_cache"],
-    }
-    for key, path in json_targets.items():
+    }.items():
+        if not path.exists():
+            checks[key] = "lazy (created on first delegated call)"
+            continue
         try:
-            checks[key] = path.exists() and isinstance(read_json_file(path), dict)
+            checks[key] = isinstance(read_json_file(path), dict)
         except ValueError as exc:
             checks[key] = False
             issues.append(str(exc))
@@ -742,6 +835,19 @@ def run_doctor(project_root: Path, opencode_command: str) -> dict:
 
     checks["graphify_out_exists"] = (project_root / "graphify-out").exists()
 
+    # second_agent MCP safety: enumerate opencode MCP servers, flag any that exceed
+    # the read-only evidence role (write/exec/fs/db/browser/etc).
+    mcp = _scan_mcp(project_root)
+    checks["mcp_second_agent"] = mcp
+    active_risky = [s["name"] for s in mcp["servers"] if s["enabled"] and s["classification"] == "risk"]
+    active_unknown = [s["name"] for s in mcp["servers"] if s["enabled"] and s["classification"] == "unknown"]
+    if active_risky:
+        issues.append(f"second_agent MCP risk: {', '.join(active_risky)} — write/exec-capable, exceeds read-only role")
+        recommended_fixes.append("Disable write/exec-capable MCP for opencode (second_agent = read-only evidence), or confirm intended")
+    if active_unknown:
+        issues.append(f"second_agent MCP unknown: {', '.join(active_unknown)} — capability unverified for read-only safety")
+        recommended_fixes.append("Review the flagged MCP server(s); ensure second_agent stays read-only")
+
     # Session continuation: is the current main session linked to an opencode session?
     # An unlinked session re-bootstraps opencode every call (breaks 1 main = 1 second).
     import re as _re
@@ -797,8 +903,8 @@ def run_doctor(project_root: Path, opencode_command: str) -> dict:
     }
 
 
-def run_sweep(project_root: Path) -> dict:
-    paths = workflow_paths(project_root)
+def run_sweep(project_root: Path, session_id: str | None = None) -> dict:
+    paths = workflow_paths(project_root, session_id)
     changed_files: list[str] = []
     diff_summary = ""
     try:
@@ -821,7 +927,7 @@ def run_sweep(project_root: Path) -> dict:
     except OSError as exc:
         return {"ok": False, "content": str(exc), "meta": {"error_type": type(exc).__name__}}
 
-    loaded = load_workspace_state(project_root)
+    loaded = load_workspace_state(project_root, session_id)
     scope = loaded["scope"]
     impact_radius = scope.get("impact_radius") or []
     risk_hits = []
