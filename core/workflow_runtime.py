@@ -256,7 +256,7 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         '[string]$Task="",'
         '[string]$Session=$env:MAIN_SESSION_ID)\n'
         'if (-not $Session) { $Session = "default" }\n'
-        'if ($Session -eq "default") { [Console]::Error.WriteLine("[workflow] WARN: session=default — pass MAIN_SESSION_ID (arg 3) for concurrent-safe isolation") }\n'
+        'if ($Session -eq "default") { [Console]::Error.WriteLine("[workflow] WARN: session=default - pass MAIN_SESSION_ID (arg 3) for concurrent-safe isolation") }\n'
         "$bg = @('explore','plan','analyze','verify','sweep')\n"
         'if ($bg -contains $Command) {\n'
         f'  & "{ps_py}" "{main_py}" --command await --job-command $Command '
@@ -271,7 +271,7 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         'COMMAND="${1:?command required}"\n'
         'TASK="${2:-}"\n'
         'SESSION="${3:-${MAIN_SESSION_ID:-default}}"\n'
-        '[ "$SESSION" = "default" ] && echo "[workflow] WARN: session=default — pass MAIN_SESSION_ID for concurrent-safe isolation" >&2\n'
+        '[ "$SESSION" = "default" ] && echo "[workflow] WARN: session=default - pass MAIN_SESSION_ID for concurrent-safe isolation" >&2\n'
         'case " explore plan analyze verify sweep " in\n'
         '  *" $COMMAND "*)\n'
         f'    exec "{sh_py}" "{main_py}" --command await --job-command "$COMMAND" '
@@ -308,7 +308,14 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         ("check.sh", check_sh),
     ):
         path = workflow_dir / name
-        atomic_write_text(path, content)
+        if name.endswith(".ps1"):
+            # UTF-8 BOM: Windows PowerShell 5.1 reads a no-BOM file as ANSI/Win-1252,
+            # which corrupts any non-ASCII byte (em-dash, accented path) -> parse error.
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            tmp.write_text(content, encoding="utf-8-sig")
+            tmp.replace(path)
+        else:
+            atomic_write_text(path, content)  # .sh stays plain UTF-8 (BOM breaks the shebang)
         if name.endswith(".sh"):
             osutil.make_executable(path)
         written.append(str(path))
