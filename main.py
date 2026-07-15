@@ -301,13 +301,24 @@ def _spawn_worker(job_id: str, work_dir: str | None = None) -> dict:
         "--job-id",
         job_id,
     ]
+    # Capture the detached worker's stdout+stderr to a per-job file. Without this
+    # an uncaught crash before run_worker's try (import error, env fault, OS kill)
+    # goes to DEVNULL and only a synthetic "reaped" message survives — the real
+    # traceback is lost, making such failures impossible to diagnose after the fact.
+    log_path = JOB_MANAGER.job_dir / "logs" / f"{job_id}.log"
+    log_handle = subprocess.DEVNULL
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_handle = open(log_path, "w", encoding="utf-8", errors="replace")
+    except OSError:
+        log_handle = subprocess.DEVNULL  # never block spawning on logging
     try:
         proc = subprocess.Popen(
             args,
             cwd=work_dir,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT if log_handle is not subprocess.DEVNULL else subprocess.DEVNULL,
             **osutil.detached_popen_kwargs(),
         )
     except OSError as exc:
@@ -317,7 +328,13 @@ def _spawn_worker(job_id: str, work_dir: str | None = None) -> dict:
             next_action="Check python is on PATH and the job dir is writable, then retry.",
             meta={"error": type(exc).__name__},
         )
-    return {"ok": True, "content": "worker started", "meta": {"pid": proc.pid}}
+    finally:
+        if log_handle is not subprocess.DEVNULL:
+            log_handle.close()  # child inherited its own fd; parent copy not needed
+    meta = {"pid": proc.pid}
+    if log_handle is not subprocess.DEVNULL:
+        meta["log"] = str(log_path)
+    return {"ok": True, "content": "worker started", "meta": meta}
 
 
 if __name__ == "__main__":
