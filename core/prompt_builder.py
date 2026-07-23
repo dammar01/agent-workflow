@@ -77,6 +77,62 @@ def build_prompt(
             ]
         )
 
+    # ROLE_VERIFICATION also covers init/doctor/sweep/submit, which want the terse
+    # fallback — only /.verify gets the severity-tiered contract.
+    if command == "verify":
+        return "\n".join(
+            [
+                *header,
+                "[CONSTRAINTS]",
+                "- do not implement, do not modify files; report only",
+                "- no scope expansion beyond the change under verification",
+                "- every finding MUST carry ALL THREE tags — severity, origin, scope_relation:",
+                "    severity:       critical | high | medium | low",
+                "    origin:         introduced | regression | pre_existing | unknown",
+                "    scope_relation: in_scope | out_of_scope",
+                "- severity scale (apply literally, do not inflate to draw attention nor deflate to pass):",
+                "    critical = data loss, security hole, silently wrong result, or every command broken",
+                "    high     = normal path of a feature broken, existing caller regressed, stated contract violated",
+                "    medium   = edge case, degraded behaviour, or a real defect with an available workaround",
+                "    low      = naming/style/doc drift, or a hypothetical with no demonstrated trigger",
+                "- origin scale: introduced = this change created it; regression = this change broke"
+                " something that used to work; pre_existing = present beforehand, this change did not"
+                " touch it; unknown = you could not establish which",
+                "- scope_relation: in_scope = inside what this change was meant to touch;"
+                " out_of_scope = outside it (an out_of_scope `introduced` finding IS a scope violation,"
+                " report it as such)",
+                "- severity ALONE does not decide blocking. Route every finding by this table:",
+                "    introduced/regression + in_scope      + critical|high -> blocking_findings",
+                "    introduced/regression + out_of_scope  + critical|high -> blocking_findings (+ scope violation)",
+                "    introduced/regression + out_of_scope  + medium|low    -> escalations",
+                "    unknown               + any           + critical|high -> blocking_findings (fail closed)",
+                "    pre_existing          + any           + critical|high -> escalations",
+                "    anything else                                        -> notes",
+                "- `unknown` is not an escape hatch: to move a finding off unknown, cite the evidence"
+                " (diff, git history, prior version). If you cannot, it stays unknown and it blocks",
+                "- `escalations` do NOT change the verdict, but they are NOT notes: they are real"
+                " critical/high problems the user must decide about. Never bury one in notes",
+                "- a finding without a file:line and a concrete failing scenario is NOT critical/high;"
+                " demote it to a note and say what evidence is missing",
+                "- that rule is about evidence quality, NOT about suppressing systemic problems:"
+                " a defect spanning many sites stays critical/high — cite representative file:line"
+                " occurrences and state how widespread it is",
+                "- state what you actually ran or read under `checks_run`, and what you could NOT"
+                " verify under `not_verified` — an unrun check is never a pass",
+                "- do NOT ask the user questions; that is main_agent's domain",
+                "",
+                "[TASK]",
+                task.strip(),
+                "",
+                "[OUTPUT_FORMAT]",
+                "Return ONLY this structure:",
+                "",
+                *_verification_format(),
+                "",
+                *_digest_format(),
+            ]
+        )
+
     return "\n".join(
         [
             *header,
@@ -128,6 +184,44 @@ def _exploration_format() -> list[str]:
         "",
         "uncertainties:",
         "- <list>",
+    ]
+
+
+def _verification_format() -> list[str]:
+    return [
+        "[VERIFICATION]",
+        "verdict: DONE | NEEDS FIX",
+        "  (NEEDS FIX only when blocking_findings is non-empty —"
+        " escalations and notes never change this)",
+        "",
+        "blocking_findings:   # routed here by the table above, not by severity alone",
+        "- severity: <critical|high> | origin: <introduced|regression|unknown>"
+        " | scope_relation: <in_scope|out_of_scope>",
+        "  problem: <what is wrong> [file:line]",
+        "  trigger: <concrete input/state that makes it fail>",
+        "  impact: <what breaks for the user>",
+        "  fix: <specific change>",
+        "- none (say why: what you checked that came back clean)",
+        "",
+        "escalations:         # critical/high that does NOT block this verdict — user decides",
+        "- severity: <critical|high> | origin: <pre_existing|introduced|regression>"
+        " | scope_relation: <in_scope|out_of_scope>",
+        "  problem: <what is wrong> [file:line]",
+        "  why_not_blocking: <which routing rule sent it here>",
+        "- none",
+        "",
+        "notes:               # medium | low — informational",
+        "- severity: <medium|low> | origin: <...> | scope_relation: <...> —"
+        " <problem> [file:line] — <why it does not block>",
+        "- none",
+        "",
+        "checks_run:",
+        "- <command executed / file read / scenario traced + outcome>",
+        "",
+        "not_verified:",
+        "- <area or claim you could NOT check + the reason> | none",
+        "",
+        "confidence: low | medium | high — <reason>",
     ]
 
 

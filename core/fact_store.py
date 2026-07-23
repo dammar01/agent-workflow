@@ -13,25 +13,135 @@ import json
 import re
 from pathlib import Path
 
-from core.workflow_runtime import now_iso, workflow_paths
+from core.workflow_runtime import (
+    _safe_component,
+    now_iso,
+    read_json_file,
+    workflow_paths,
+)
 
 FACTS_FILENAME = "facts.jsonl"
-RECURRENCE_THRESHOLD = 5   # distinct sessions a grounded claim must appear in to auto-promote
+RECURRENCE_THRESHOLD = 5   # distinct OTHER sessions a grounded claim must appear in to auto-promote
 MAX_FACTS = 500
-RELEVANT_LIMIT = 8
+RELEVANT_LIMIT = 3
+# Two claims anchored to the SAME file are treated as one when their word sets
+# overlap this much — proxies rephrase the same fact every run, and the plain
+# normalized-string key never catches that.
+DUPLICATE_SIMILARITY = 0.5
+# Short claims overlap by accident ("validates token" vs "handles token" is 0.5),
+# so similarity is only trusted once both claims carry enough words to be specific.
+# Below that, only an exact normalized match counts as a duplicate.
+MIN_WORDS_FOR_SIMILARITY = 6
+# Line proximity is a WEAK identity signal, so it is allowed only for read-time dedup
+# (which merely trims what gets injected). A collapse that deletes a stored record
+# always demands an identical anchor_hash — losing a real fact is unrecoverable.
+LINE_PROXIMITY = 3
 
 _FILELINE = re.compile(r"([A-Za-z0-9_./\\-]+\.[A-Za-z0-9_]+):(\d+)")
 _CATEGORY = re.compile(r"^\[(config|pattern|invariant)\]", re.IGNORECASE)
+_WORD = re.compile(r"[a-z0-9_]+")
+# "X is cached" and "X is not cached" share almost every word — high similarity, opposite
+# meaning. A polarity mismatch vetoes a collapse outright.
+_NEGATION = re.compile(
+    r"\b(not|no|never|without|non|un|cannot|tidak|bukan|tanpa|belum|jangan)\b"
+)
 
 
 def _facts_path(project_root: Path) -> Path:
     return workflow_paths(project_root)["workflow_dir"] / FACTS_FILENAME
 
 
+def _policies(project_root: Path) -> dict:
+    """Project-local tuning knobs; falls back to module constants when absent."""
+    try:
+        config = read_json_file(workflow_paths(project_root)["config"])
+    except (OSError, ValueError):
+        return {}
+    policies = config.get("policies")
+    return policies if isinstance(policies, dict) else {}
+
+
+def _policy_int(project_root: Path, key: str, fallback: int) -> int:
+    value = _policies(project_root).get(key, fallback)
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return value if value > 0 else fallback
+
+
 def _normalize(claim: str) -> str:
     text = _FILELINE.sub("", claim)          # drop file:line
     text = re.sub(r"\[[^\]]*\]", "", text)   # drop [tags]
+    text = text.replace("*", "").replace("`", "")  # drop markdown emphasis/code ticks
     return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def _words(normalized: str) -> set[str]:
+    return set(_WORD.findall(normalized))
+
+
+def _similar(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+def _signature(
+    claim: str, category: str | None, anchor_hash: str | None, line: int | None
+) -> dict:
+    normalized = _normalize(claim)
+    return {
+        "words": _words(normalized),
+        "negated": bool(_NEGATION.search(normalized)),
+        "category": category,
+        "anchor_hash": anchor_hash,
+        "line": line,
+    }
+
+
+def _fact_signature(fact: dict) -> dict:
+    return _signature(
+        fact.get("claim", ""),
+        fact.get("category"),
+        fact.get("anchor_hash"),
+        fact.get("line"),
+    )
+
+
+def _is_duplicate(
+    sig: dict, others: list[dict], *, allow_line_proximity: bool = False
+) -> bool:
+    """Two same-file claims are the same fact only when EVERY guard agrees.
+
+    Word similarity alone is not identity: it happily merges a claim with its own
+    negation, or two unrelated facts that happen to share vocabulary. Each guard below
+    exists to veto one of those false merges, and a veto always means "keep both".
+    """
+    for other in others:
+        if sig["category"] != other["category"]:
+            continue  # a [config] value and an [invariant] are not interchangeable
+        if sig["negated"] != other["negated"]:
+            continue  # opposite polarity — never the same fact
+        same_anchor = (
+            sig["anchor_hash"] is not None
+            and sig["anchor_hash"] == other["anchor_hash"]
+        )
+        near_line = (
+            allow_line_proximity
+            and sig["line"] is not None
+            and other["line"] is not None
+            and abs(sig["line"] - other["line"]) <= LINE_PROXIMITY
+        )
+        if not (same_anchor or near_line):
+            continue  # different anchor → treat as different facts
+        if sig["words"] == other["words"]:
+            return True
+        if min(len(sig["words"]), len(other["words"])) < MIN_WORDS_FOR_SIMILARITY:
+            continue
+        if _similar(sig["words"], other["words"]) >= DUPLICATE_SIMILARITY:
+            return True
+    return False
 
 
 def _parse_block(content: str, header: str) -> list[str]:
@@ -94,10 +204,36 @@ def _load_facts(project_root: Path) -> list[dict]:
     return facts
 
 
+def _dedupe(facts: list[dict], *, allow_line_proximity: bool = False) -> list[dict]:
+    """Collapse duplicate claims anchored to the same file, keeping the first.
+
+    The store is append-only, so a rephrased-but-identical fact would otherwise be
+    stored (and later injected) once per phrasing.
+
+    `allow_line_proximity` is for READ-time trimming only, where dropping a near-duplicate
+    costs nothing. Persistent collapse (save/ingest/prune) leaves it off, so a stored
+    record is deleted only when another record carries the very same anchor.
+    """
+    kept: list[dict] = []
+    per_file: dict[str | None, list[dict]] = {}
+    for fact in facts:
+        sig = _fact_signature(fact)
+        if not sig["words"]:
+            continue
+        file = fact.get("file")
+        if _is_duplicate(
+            sig, per_file.get(file, []), allow_line_proximity=allow_line_proximity
+        ):
+            continue
+        per_file.setdefault(file, []).append(sig)
+        kept.append(fact)
+    return kept
+
+
 def _save_facts(project_root: Path, facts: list[dict]) -> None:
     path = _facts_path(project_root)
     path.parent.mkdir(parents=True, exist_ok=True)
-    facts = facts[-MAX_FACTS:]
+    facts = _dedupe(facts)[-MAX_FACTS:]
     tmp = path.with_suffix(".tmp")
     tmp.write_text(
         "\n".join(json.dumps(f, ensure_ascii=False) for f in facts) + ("\n" if facts else ""),
@@ -106,15 +242,25 @@ def _save_facts(project_root: Path, facts: list[dict]) -> None:
     tmp.replace(path)
 
 
-def _recurrence_counts(project_root: Path) -> dict[str, int]:
-    """normalized grounded claim -> number of DISTINCT sessions whose logs contain it."""
+def _recurrence_counts(
+    project_root: Path, exclude_session_id: str | None = None
+) -> dict[str, int]:
+    """normalized grounded claim -> number of DISTINCT sessions whose logs contain it.
+
+    The CURRENT session is excluded: its output.raw.md is written before ingest runs,
+    so counting it lets a fact that was injected as a KNOWN_FACT (and merely echoed
+    back by second_agent) raise its own recurrence — evidence laundering, not support.
+    """
     sessions = workflow_paths(project_root)["workflow_dir"] / "sessions"
     if not sessions.exists():
         return {}
+    excluded = _safe_component(exclude_session_id) if exclude_session_id else None
     per_claim: dict[str, set[str]] = {}
     for sdir in sessions.iterdir():
         logs = sdir / "logs"
         if not (sdir.is_dir() and logs.exists()):
+            continue
+        if excluded and sdir.name == excluded:
             continue
         seen: set[str] = set()
         for run in logs.iterdir():
@@ -136,8 +282,14 @@ def _recurrence_counts(project_root: Path) -> dict[str, int]:
 
 def ingest(project_root: Path, content: str, session_id: str) -> int:
     """Promote qualifying claims from one run's output into the fact store. Returns count added."""
-    existing = _load_facts(project_root)
-    seen = {(_normalize(f.get("claim", "")), f.get("file")) for f in existing}
+    loaded = _load_facts(project_root)
+    existing = _dedupe(loaded)
+    collapsed = len(loaded) - len(existing)
+    seen: dict[str | None, list[dict]] = {}
+    for fact in existing:
+        sig = _fact_signature(fact)
+        if sig["words"]:
+            seen.setdefault(fact.get("file"), []).append(sig)
     added = 0
 
     def _try_add(raw_claim: str, category: str) -> None:
@@ -147,10 +299,12 @@ def ingest(project_root: Path, content: str, session_id: str) -> int:
         if anchor is None:
             return  # ingest-time verify: anchor gone/invalid → skip stale-at-birth
         claim = _CATEGORY.sub("", raw_claim).strip()
-        key = (_normalize(claim), file)
-        if not key[0] or key in seen:
+        sig = _signature(claim, category, anchor, line)
+        if not sig["words"]:
             return
-        seen.add(key)
+        if _is_duplicate(sig, seen.get(file, [])):
+            return
+        seen.setdefault(file, []).append(sig)
         existing.append(
             {
                 "claim": claim,
@@ -168,20 +322,28 @@ def ingest(project_root: Path, content: str, session_id: str) -> int:
     for item in _parse_block(content, "durable_facts"):
         _try_add(item, _extract_category(item) or "invariant")
 
-    # 2) grounded claims recurring across >= threshold distinct sessions
-    counts = _recurrence_counts(project_root)
+    # 2) grounded claims recurring across >= threshold distinct OTHER sessions
+    threshold = _policy_int(
+        project_root, "fact_recurrence_threshold", RECURRENCE_THRESHOLD
+    )
+    counts = _recurrence_counts(project_root, exclude_session_id=session_id)
     for claim in _parse_block(content, "grounded"):
-        if counts.get(_normalize(claim), 0) >= RECURRENCE_THRESHOLD:
+        if counts.get(_normalize(claim), 0) >= threshold:
             _try_add(claim, "recurring")
 
-    if added:
+    if added or collapsed:
         _save_facts(project_root, existing)
     return added
 
 
-def load_relevant(project_root: Path, task: str, limit: int = RELEVANT_LIMIT) -> list[dict]:
+def load_relevant(
+    project_root: Path, task: str, limit: int | None = None
+) -> list[dict]:
     """FRESH facts relevant to `task` (stale ones dropped — never served as fresh)."""
-    facts = _load_facts(project_root)
+    if limit is None:
+        limit = _policy_int(project_root, "fact_relevant_limit", RELEVANT_LIMIT)
+    # read-time trimming: nothing is deleted here, so the weaker proximity signal is safe
+    facts = _dedupe(_load_facts(project_root), allow_line_proximity=True)
     if not facts:
         return []
     task_words = set(re.findall(r"[a-z0-9_]{3,}", (task or "").lower()))
@@ -198,7 +360,7 @@ def load_relevant(project_root: Path, task: str, limit: int = RELEVANT_LIMIT) ->
 
 
 def prune(project_root: Path) -> dict:
-    """Drop stale/invalid facts (anchored line changed or vanished)."""
+    """Drop stale/invalid facts (anchored line changed or vanished) and collapse duplicates."""
     facts = _load_facts(project_root)
     fresh = [
         f
@@ -206,6 +368,11 @@ def prune(project_root: Path) -> dict:
         if _anchor_hash(project_root, f.get("file"), f.get("line")) == f.get("anchor_hash")
         and f.get("anchor_hash") is not None
     ]
-    if len(fresh) != len(facts):
-        _save_facts(project_root, fresh)
-    return {"kept": len(fresh), "removed": len(facts) - len(fresh)}
+    deduped = _dedupe(fresh)
+    if len(deduped) != len(facts):
+        _save_facts(project_root, deduped)
+    return {
+        "kept": len(deduped),
+        "removed": len(facts) - len(fresh),
+        "duplicates_collapsed": len(fresh) - len(deduped),
+    }

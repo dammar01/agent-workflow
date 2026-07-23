@@ -4,6 +4,7 @@ from core import fact_store
 from core.prompt_builder import build_prompt
 from core.router import Router
 from utils.path_guard import validate_scope
+from core import quick_verify
 from core.workflow_runtime import (
     bind_session,
     detect_project_root,
@@ -12,6 +13,7 @@ from core.workflow_runtime import (
     update_command_cache,
     update_plan_scope,
     update_state_from_agent_output,
+    verify_mode,
     write_prompt_handoff,
     write_response_snapshot,
 )
@@ -58,6 +60,13 @@ class Executor:
                 meta={"command": normalized_command},
                 blocked_paths=blocked,
             )
+
+        mode = verify_mode(project_root) if normalized_command == "verify" else None
+        if mode == "syntax":
+            result = quick_verify.run(project_root, session_id)
+            result["meta"]["verify_mode"] = mode
+            result["meta"]["command"] = normalized_command
+            return result
 
         try:
             route = self._router_for(project_root).route(

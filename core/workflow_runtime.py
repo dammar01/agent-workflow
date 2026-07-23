@@ -19,6 +19,7 @@ WORKFLOW_DIRNAME = ".workflow"
 LOCK_TTL_SECONDS = 300
 JSON_INDENT = 2
 ARCHIVE_KEEP = 20
+CONFIG_VERSION = "3.3.1"
 
 
 def now_iso() -> str:
@@ -114,11 +115,117 @@ def _tool_paths(agent_workflow_path: str | None) -> dict:
     }
 
 
+VERIFY_MODES = ("delegated", "syntax")
+
+# Keys the Python runtime actually reads. Everything else in commands/policies is an
+# instruction to main_agent only — it is inert here, and renaming it changes nothing
+# in this process. Kept explicit so "configured" is never mistaken for "enforced".
+RUNTIME_CONSUMED_KEYS = (
+    "commands.verify_mode",
+    "policies.fact_relevant_limit",
+    "policies.fact_recurrence_threshold",
+)
+
+
+def default_commands() -> dict:
+    return {
+        # --- prompt-only: read by main_agent, NOT by this runtime ---
+        "allow_analyze_to_plan": True,
+        "allow_explore_to_plan": True,
+        "auto_sweep_after_execute": True,
+        # whether /.execute chains into /.verify on its own. false => /.execute reports
+        # `verification: not_run` and must never call itself done. Prompt-only: /.execute
+        # has no Python path at all, so this runtime cannot enforce it.
+        "auto_verify_after_execute": False,
+        # --- runtime-consumed ---
+        # how deep /.verify goes when it does run:
+        #   delegated -> full verification by second_agent
+        #   syntax    -> local parse/name check on changed files, no test suite
+        "verify_mode": "delegated",
+    }
+
+
+def default_policies() -> dict:
+    return {
+        # --- prompt-only ---
+        "workflow_prefix": "/.",
+        "chat_mode_for_plain_text": True,
+        "fallback_requires_confirmation": True,
+        "max_active_job_per_session": 1,
+        # --- runtime-consumed (core/fact_store.py) ---
+        "fact_relevant_limit": 3,
+        "fact_recurrence_threshold": 5,
+    }
+
+
+def _rewrite_superseded_keys(config: dict) -> bool:
+    """Carry a config written by an earlier build onto the current key names.
+
+    Additive backfill alone cannot do this: it would leave the retired key in place next
+    to its replacement, and the user could not tell which one the runtime obeys.
+    """
+    commands = config.get("commands")
+    if not isinstance(commands, dict) or "autoverify" not in commands:
+        return False
+    # `autoverify` was the single boolean that later split into two settings.
+    legacy = commands.pop("autoverify")
+    commands.setdefault("verify_mode", "delegated" if legacy else "syntax")
+    policies = config.get("policies")
+    if isinstance(policies, dict) and policies.get("fact_recurrence_threshold") == 3:
+        # 3 was that same build's default. A deliberate 3 is indistinguishable from it, so
+        # this does overwrite one — accepted because the window was a single unreleased
+        # build, and the effect is tuning (slower auto-promotion), not correctness.
+        policies["fact_recurrence_threshold"] = default_policies()[
+            "fact_recurrence_threshold"
+        ]
+    return True
+
+
+def merge_config_defaults(config: dict) -> tuple[dict, bool]:
+    """Additively backfill new keys into an existing config. User values always win.
+
+    `ensure_valid_json_or_create` only writes a config when it is MISSING, so without
+    this an already-initialized project would never see keys added by a later version.
+    """
+    changed = _rewrite_superseded_keys(config)
+    for section, defaults in (
+        ("commands", default_commands()),
+        ("policies", default_policies()),
+    ):
+        current = config.get(section)
+        if not isinstance(current, dict):
+            current = {}
+            config[section] = current
+            changed = True
+        for key, value in defaults.items():
+            if key not in current:
+                current[key] = value
+                changed = True
+    if config.get("version") != CONFIG_VERSION:
+        config["version"] = CONFIG_VERSION
+        changed = True
+    return config, changed
+
+
+def verify_mode(project_root: Path) -> str:
+    """commands.verify_mode. Anything unreadable or unrecognised falls back to
+    'delegated' — an unclear setting must not silently downgrade verification."""
+    try:
+        config = read_json_file(workflow_paths(project_root)["config"])
+    except (OSError, ValueError):
+        return "delegated"
+    commands = config.get("commands")
+    if not isinstance(commands, dict):
+        return "delegated"
+    mode = commands.get("verify_mode", "delegated")
+    return mode if mode in VERIFY_MODES else "delegated"
+
+
 def default_config(project_root: Path, agent_workflow_path: str | None) -> dict:
     project_name = project_root.name
     tool = _tool_paths(agent_workflow_path)
     return {
-        "version": "3.3.0",
+        "version": CONFIG_VERSION,
         "project": {
             "name": project_name,
             "slug": slugify_project_name(project_name),
@@ -136,17 +243,8 @@ def default_config(project_root: Path, agent_workflow_path: str | None) -> dict:
             "sessions_dir": ".workflow/sessions",
             "per_session_layout": "sessions/<session_id>/: state.json, scope.json, command-cache.json, runtime/{prompt.txt,response.last.md,prompt.meta.json,lock}, logs/",
         },
-        "commands": {
-            "allow_analyze_to_plan": True,
-            "allow_explore_to_plan": True,
-            "auto_sweep_after_execute": True,
-        },
-        "policies": {
-            "workflow_prefix": "/.",
-            "chat_mode_for_plain_text": True,
-            "fallback_requires_confirmation": True,
-            "max_active_job_per_session": 1,
-        },
+        "commands": default_commands(),
+        "policies": default_policies(),
     }
 
 
@@ -406,8 +504,11 @@ def load_workspace_state(project_root: Path, session_id: str | None = None) -> d
     _, command_cache = ensure_valid_json_or_create(
         paths["command_cache"], default_command_cache
     )
+    config, config_changed = merge_config_defaults(read_json_file(paths["config"]))
+    if config_changed:
+        atomic_write_json(paths["config"], config)
     return {
-        "config": read_json_file(paths["config"]),
+        "config": config,
         "state": state,
         "scope": scope,
         "command_cache": command_cache,
