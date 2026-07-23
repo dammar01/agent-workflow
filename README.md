@@ -1,4 +1,4 @@
-# agent-workflow v3.3.1
+# agent-workflow v3.4.0-a
 
 Runtime orkestrasi mandiri untuk alur kerja dua-agent. Tanpa dependency pihak ketiga.
 
@@ -220,19 +220,35 @@ Salinan project-local dari `config/opencode.json`, boleh diubah per project:
 ```json
 {
   "opencode_command": "opencode",
-  "default_model": "opencode/deepseek-v4-flash-free",
-  "timeout_seconds": null,
+  "default_model": "opencode/nemotron-3-ultra-free",
+  "timeout_seconds": 1800,
+  "bootstrap_timeout_seconds": 180,
+  "stall_threshold_seconds": 360,
+  "probe_timeout_seconds": 45,
+  "job_max_runtime_seconds": 5400,
   "routes": {
-    "explore": { "model": "opencode/deepseek-v4-flash-free" },
-    "plan":    { "model": "opencode/deepseek-v4-flash-free" },
-    "analyze": { "model": "opencode/deepseek-v4-flash-free" },
+    "explore": { "model": "opencode/nemotron-3-ultra-free" },
+    "plan":    { "model": "opencode/nemotron-3-ultra-free" },
+    "analyze": { "model": "opencode/nemotron-3-ultra-free" },
     "verify":  { "model": null },
     "sweep":   { "model": null }
   }
 }
 ```
 
-`model: null` berarti pakai model default OpenCode. `timeout_seconds: null` berarti menunggu tanpa batas.
+`model: null` berarti pakai model default OpenCode.
+
+Kunci reliability (v3.4.0):
+
+| Kunci | Default | Arti |
+| --- | --- | --- |
+| `timeout_seconds` | `1800` | Batas satu panggilan agent. `0` = tanpa batas (tidak lagi default). `null` = warisi default, **bukan** tanpa batas. |
+| `bootstrap_timeout_seconds` | `180` | Anggaran terpisah untuk `init_session`. Bootstrap hanya membalas "READY", jadi tak boleh mewarisi anggaran task panjang. |
+| `stall_threshold_seconds` | `360` | Tanpa heartbeat selama ini padahal PID hidup → job ditandai `alive-stalled` dan diprobe. |
+| `probe_timeout_seconds` | `45` | Batas probe PING itu sendiri. Tanpa ini watchdog ikut menggantung seperti pasiennya. |
+| `job_max_runtime_seconds` | `5400` | Plafon keras. Job yang melewatinya gagal sebagai `job_expired` walau PID tampak hidup — jaring pengaman kasus OOM. |
+
+Per-route juga bisa: `"plan": { "model": "...", "timeout_seconds": 3600 }`.
 
 **Role tidak dibaca dari file ini.** Pemetaan command → role ditentukan di kode (`config/routing.py`), jadi tak bisa ditumpuk lewat config.
 
@@ -335,6 +351,27 @@ Exit code `check`: `0` selesai · `1` gagal · `2` masih jalan/antre · `3` tak 
 
 Kalau tak ada job yang cocok, hasil terakhir masih ada di `.workflow/sessions/<id>/runtime/response.last.md`.
 
+### Liveness worker (v3.4.0)
+
+PID yang hidup **tidak** berarti sedang bekerja — proses tampak sama persis saat agent sibuk maupun saat menggantung kena rate limit. Karena itu worker mengirim heartbeat dari poll loop-nya, dan job diklasifikasi tiga keadaan:
+
+| Keadaan | Arti | Tindakan |
+| --- | --- | --- |
+| `alive-progressing` | PID hidup, heartbeat segar | tunggu |
+| `alive-stalled` | PID hidup, heartbeat basi > `stall_threshold_seconds` | **tidak di-reap** — diprobe dulu |
+| `dead` | PID hilang | reap → `worker_died` |
+
+Saat `alive-stalled`, runtime mengirim probe PING sekali ke **sesi opencode baru** (bukan sesi yang dicurigai menggantung), dengan timeout sendiri:
+
+- probe menjawab → `stalled_no_progress`: opencode sehat, sesi ini yang menggantung
+- probe gagal/timeout → `stalled_on_limit`: kemungkinan kena rate/usage limit; kerja bisa saja masih menyusul
+
+Keduanya dilaporkan, **tak ada yang di-reap atas dasar kecurigaan**. Probe dibatasi satu per job karena probe sendiri memakai kuota.
+
+Plafon keras `job_max_runtime_seconds` tetap ada sebagai jaring pengaman: job yang melewatinya gagal sebagai `job_expired` meski PID tampak hidup — kasus RAM habis, di mana worker mati dengan cara yang luput dari cek PID.
+
+Setiap panggilan terdelegasi juga menuliskan `call.meta.json` (exit code, durasi, timeout, cara kill, ekor stderr) ke `.workflow/sessions/<id>/logs/<prompt_id>/`.
+
 ---
 
 ## Sesi
@@ -365,7 +402,11 @@ python3 test_scenario.py
 python test_scenario.py
 ```
 
-11 blok test dengan adapter palsu — tak ada satu pun yang memanggil `opencode` sungguhan. Cepat, tapi berarti perilaku subprocess nyata (timeout, retry, penangkapan sesi) belum tercakup. Smoke test CLI sungguhan masih di daftar tunggu.
+12 blok test. Blok 1–11 memakai adapter palsu — tak satu pun memanggil `opencode` sungguhan; cepat, tapi retry dan penangkapan sesi nyata belum tercakup.
+
+Blok 12 (v3.4.0) menutup jalur reliability tanpa menyentuh `opencode`: tri-state liveness, heartbeat, plafon runtime, verdict probe, parser fact yang toleran, dan degradasi graph leads. Jalur `Popen` nyata (capture, tick, timeout, kill-tree beserta cucunya) diverifikasi terhadap subprocess Python sungguhan, bukan mock — cara satu-satunya membuktikan proses cucu benar-benar ikut mati alih-alih jadi orphan.
+
+Smoke test CLI opencode sungguhan masih di daftar tunggu.
 
 Pemeriksaan tambahan:
 
@@ -384,8 +425,10 @@ Disebut terbuka karena diam soal ini akan membuat runtime terlihat lebih menjami
 - **Kontrak masih sebagian berbasis prompt.** Validasi bukti berupa pencocokan penanda; nilai `confidence` belum divalidasi runtime.
 - **`facts.jsonl` dibaca-ubah-tulis tanpa lock.** Dua sesi yang ingest bersamaan bisa saling menimpa.
 - **`config.json` yang hilang atau rusak** membuat command terdelegasi gagal dengan exception mentah, bukan error terstruktur.
-- **Nol telemetry.** Token, durasi, dan jumlah pemanggilan tool tak dicatat, jadi klaim efisiensi apa pun belum bisa diukur.
-- **Test 100% palsu.** Lihat bagian Test.
+- **Telemetry masih parsial.** Sejak v3.4.0 durasi, exit code, dan hasil kill dicatat per panggilan di `call.meta.json`; token dan jumlah pemanggilan tool masih belum, jadi klaim efisiensi belum bisa diukur.
+- **Test sebagian besar palsu.** Adapter opencode nyata masih disimulasikan; yang kini ditest sungguhan adalah jalur `Popen` (capture, heartbeat tick, timeout, kill-tree lintas-OS). Lihat bagian Test.
+- **Probe PING memakai kuota.** Membedakan menggantung dari kena limit berarti satu panggilan opencode tambahan. Dibatasi satu per job, tapi bukan gratis.
+- **Graph leads bisa basi.** `graphify-out/graph.json` hanya diperbarui saat `graphify update` dijalankan. Runtime mendeteksi dan menandainya, tapi tak bisa memperbaikinya sendiri.
 - **Skrip runner tidak portabel lintas-OS.** Path absolut dipanggang saat `init`; pindah OS berarti `init` ulang. Lihat bagian Init.
 
 ---

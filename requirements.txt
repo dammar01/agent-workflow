@@ -1,1 +1,9 @@
-# agent-workflow — stdlib only, no third-party dependencies
+# agent-workflow — runtime dependencies
+#
+# Currently EMPTY: the runtime (v3.4.0-a) is still pure stdlib.
+#
+# The "stdlib only" rule is no longer an architectural invariant, though — it was
+# lifted deliberately so later milestones can depend on real packages
+# (graphify for graph queries, headroom for context compression). Anything added
+# here must degrade gracefully when missing: an optional dependency that is absent
+# should disable a feature, never break a delegated call.

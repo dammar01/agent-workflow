@@ -19,7 +19,7 @@ WORKFLOW_DIRNAME = ".workflow"
 LOCK_TTL_SECONDS = 300
 JSON_INDENT = 2
 ARCHIVE_KEEP = 20
-CONFIG_VERSION = "3.3.1"
+CONFIG_VERSION = "3.4.0"
 
 
 def now_iso() -> str:
@@ -124,6 +124,9 @@ RUNTIME_CONSUMED_KEYS = (
     "commands.verify_mode",
     "policies.fact_relevant_limit",
     "policies.fact_recurrence_threshold",
+    "policies.graph_leads_enabled",
+    # Timeout/stall/probe live in opencode.json (adapter + job manager read them there),
+    # not here — listed in the doctor report so their home is not a guessing game.
 )
 
 
@@ -155,6 +158,9 @@ def default_policies() -> dict:
         # --- runtime-consumed (core/fact_store.py) ---
         "fact_relevant_limit": 3,
         "fact_recurrence_threshold": 5,
+        # --- runtime-consumed (core/graph_index.py) ---
+        # inject a ranked file shortlist from graphify-out/graph.json into evidence prompts
+        "graph_leads_enabled": True,
     }
 
 
@@ -204,6 +210,16 @@ def merge_config_defaults(config: dict) -> tuple[dict, bool]:
     if config.get("version") != CONFIG_VERSION:
         config["version"] = CONFIG_VERSION
         changed = True
+
+    # tool_version is derived, not a user setting: left alone it pins an upgraded
+    # workspace to the version that first wrote it, and `doctor` then reports a
+    # tool version the runtime is no longer running.
+    from config.settings import TOOL_VERSION
+
+    runtime = config.get("runtime")
+    if isinstance(runtime, dict) and runtime.get("tool_version") != TOOL_VERSION:
+        runtime["tool_version"] = TOOL_VERSION
+        changed = True
     return config, changed
 
 
@@ -219,6 +235,19 @@ def verify_mode(project_root: Path) -> str:
         return "delegated"
     mode = commands.get("verify_mode", "delegated")
     return mode if mode in VERIFY_MODES else "delegated"
+
+
+def graph_leads_enabled(project_root: Path) -> bool:
+    """policies.graph_leads_enabled. Defaults to on; an unreadable config must not
+    silently disable the shortlist (a missing graph already degrades to no leads)."""
+    try:
+        config = read_json_file(workflow_paths(project_root)["config"])
+    except (OSError, ValueError):
+        return True
+    policies = config.get("policies")
+    if not isinstance(policies, dict):
+        return True
+    return bool(policies.get("graph_leads_enabled", True))
 
 
 def default_config(project_root: Path, agent_workflow_path: str | None) -> dict:
@@ -797,6 +826,33 @@ def write_response_snapshot(
         run_dir = paths["logs_dir"] / prompt_id
         run_dir.mkdir(parents=True, exist_ok=True)
         atomic_write_text(run_dir / "output.raw.md", content)
+
+
+def write_call_meta(
+    project_root: Path,
+    prompt_id: str | None,
+    session_id: str | None,
+    meta: dict,
+) -> None:
+    """Archive one delegated call's raw outcome next to its prompt/output.
+
+    Exit code, duration, whether it timed out, how it was killed, stderr tail —
+    the ground truth needed to characterise real failure modes (rate limits,
+    hangs, orphaned children) instead of guessing at them.
+    """
+    if not prompt_id:
+        return
+    try:
+        paths = workflow_paths(project_root, session_id)
+        run_dir = paths["logs_dir"] / prompt_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        payload = dict(meta or {})
+        payload["recorded_at"] = now_iso()
+        atomic_write_text(
+            run_dir / "call.meta.json", json.dumps(payload, indent=JSON_INDENT)
+        )
+    except (OSError, TypeError, ValueError):
+        pass  # instrumentation must never break the call it is measuring
 
 
 def check_writable(path: Path) -> tuple[bool, str | None]:

@@ -20,7 +20,9 @@ from core.workflow_runtime import (
 from config.settings import (
     DEFAULT_JOB_POLL_INTERVAL_SECONDS,
     DEFAULT_JOB_POLL_TIMEOUT_SECONDS,
+    DEFAULT_PROBE_TIMEOUT_SECONDS,
     load_opencode_config,
+    load_opencode_config_for,
     get_cached_main_session_id,
     set_cached_main_session_id,
 )
@@ -51,6 +53,7 @@ def run(
     session_id: str,
     work_dir: str | None = None,
     model: str | None = None,
+    on_progress=None,
 ) -> dict:
     normalized_command = command.strip().lower()
     project_root = detect_project_root(work_dir)
@@ -95,7 +98,9 @@ def run(
         return _inspect(project_root, session_id)
 
     session = SESSION_MANAGER.load_or_create(session_id)
-    output = EXECUTOR.execute(command, task, session, work_dir, model)
+    output = EXECUTOR.execute(
+        command, task, session, work_dir, model, on_progress=on_progress
+    )
     SESSION_MANAGER.record_run(session, command)
     output["session_id"] = session_id
     return output
@@ -174,6 +179,26 @@ def should_run_in_background(command: str) -> bool:
     return command.strip().lower() in BACKGROUND_COMMANDS
 
 
+def probe_second_agent(work_dir: str | None = None, model: str | None = None) -> dict:
+    """Ask the second agent a trivial question in a fresh session.
+
+    This is the only signal that separates "rate limited, still coming back" from
+    "hung, never coming back" — the worker PID looks identical in both cases.
+    """
+    project_root = detect_project_root(work_dir)
+    config = load_opencode_config_for(project_root)
+    from adapters.opencode_adapter import OpenCodeAdapter
+
+    adapter = OpenCodeAdapter(command=config.get("opencode_command", "opencode"))
+    return adapter.probe(
+        model=model or config.get("default_model"),
+        work_dir=str(project_root),
+        timeout_seconds=int(
+            config.get("probe_timeout_seconds", DEFAULT_PROBE_TIMEOUT_SECONDS)
+        ),
+    )
+
+
 def await_job(
     command: str,
     task: str,
@@ -190,9 +215,21 @@ def await_job(
     job_id = submitted["job_id"]
     started_at = time.monotonic()
     interval = poll_interval if poll_interval > 0 else DEFAULT_JOB_POLL_INTERVAL_SECONDS
+    probed = False
 
     while True:
         result = get_result(job_id)
+
+        # Alive but silent past the stall threshold. Probe ONCE to tell a rate-limited
+        # agent (work may still land) from a genuinely hung one — then keep waiting.
+        # The probe costs a session, so it is capped at one per job.
+        if (result.get("meta") or {}).get("error_type") == "worker_stalled" and not probed:
+            probed = True
+            probe = probe_second_agent(work_dir, model)
+            try:
+                JOB_MANAGER.record_probe(job_id, probe)
+            except (OSError, KeyError, ValueError):
+                pass
         if result.get("status") == "completed":
             output = result.get("output") or {}
             if isinstance(output, dict):
@@ -274,6 +311,11 @@ def run_worker(job_id: str) -> dict:
         return {"ok": False, "job_id": job_id, "status": "not_found", "meta": {}}
 
     JOB_MANAGER.mark_running(job_id)
+    JOB_MANAGER.touch_heartbeat(job_id, {"phase": "starting", "elapsed_seconds": 0})
+
+    def _beat(progress: dict) -> None:
+        JOB_MANAGER.touch_heartbeat(job_id, progress)
+
     try:
         output = run(
             job["command"],
@@ -281,6 +323,7 @@ def run_worker(job_id: str) -> dict:
             job["session_id"],
             job.get("work_dir"),
             job.get("model"),
+            on_progress=_beat,
         )
         if output.get("ok"):
             JOB_MANAGER.complete_job(job_id, output)

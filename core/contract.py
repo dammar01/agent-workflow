@@ -16,6 +16,9 @@ ERROR_TYPES = {
     "command_not_found",
     "routing_error",
     "worker_died",
+    "worker_stalled",  # PID alive, no progress — probe before judging, never reap blind
+    "job_expired",  # ran past the hard runtime ceiling (OOM backstop)
+    "fact_ingest_failed",
     "workflow_init_error",
     "job_submit_error",
     "runtime_lock",

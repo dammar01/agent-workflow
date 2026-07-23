@@ -144,20 +144,60 @@ def _is_duplicate(
     return False
 
 
+# A sibling section starts at column 0 with a snake_case key and a colon — the shape
+# every block in the agent's output format uses (`grounded:`, `external:`, `confidence:`).
+# Trailing text after the colon still counts: `external: none (...)` ends the previous
+# block, it is NOT a continuation of the last bullet.
+_SECTION_HEADER = re.compile(r"^[a-z][a-z0-9_]{0,30}:(\s|$)")
+_BULLET = re.compile(r"^[-*•]\s*")
+
+
 def _parse_block(content: str, header: str) -> list[str]:
-    """Bullet lines under `header:` until the first non-bullet line."""
+    """Bullet lines under `header:`, up to the next section header.
+
+    Tolerant on purpose. The previous version stopped at the FIRST line that did not
+    start with "-", so a blank line, an indented sub-bullet, a fenced code block or a
+    "*" bullet silently truncated the section to nothing — and since ingest swallowed
+    exceptions, that looked exactly like "the run had no facts". Anything the second
+    agent plausibly emits should still parse; only a genuine new section ends the block.
+    """
     out: list[str] = []
     collecting = False
+    in_fence = False
+    header_prefix = header.lower() + ":"
+
     for line in content.splitlines():
-        s = line.strip()
-        if not collecting:
-            if s.lower().startswith(header.lower() + ":"):
-                collecting = True
+        stripped = line.strip()
+
+        if stripped.startswith("```"):
+            in_fence = not in_fence
             continue
-        if s.startswith("-"):
-            out.append(s[1:].strip())
-        else:
+        if in_fence:
+            continue
+
+        if not collecting:
+            if stripped.lower().startswith(header_prefix):
+                collecting = True
+                inline = stripped[len(header_prefix):].strip()
+                if inline and inline.lower() != "none":
+                    out.append(_BULLET.sub("", inline).strip())
+            continue
+
+        if not stripped:
+            continue  # blank lines separate bullets, they do not end the section
+        # Unindented on purpose: an indented `key:` is sub-structure of the current
+        # bullet, only a column-0 key opens the next section.
+        if _SECTION_HEADER.match(line) and not _BULLET.match(stripped):
             break
+        if stripped.startswith("[") and stripped.endswith("]"):
+            break  # a bracketed block marker, e.g. [DIGEST]
+        if _BULLET.match(stripped):
+            out.append(_BULLET.sub("", stripped).strip())
+            continue
+        if out:
+            # Continuation of the previous bullet (wrapped line).
+            out[-1] = f"{out[-1]} {stripped}".strip()
+
     return [o for o in out if o and o.lower() != "none"]
 
 

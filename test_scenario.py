@@ -315,6 +315,203 @@ def run_tests() -> None:
         assert_true(rich_res["meta"].get("error_type") == "invalid_evidence", "job path must preserve error_type")
         assert_true(rich_res["meta"].get("next_action") == "STOP, ask user", "job path must preserve next_action")
 
+        # 12. v3.4.0 reliability: liveness tri-state, heartbeat, runtime ceiling, probe
+        from core import fact_store, graph_index, job_manager as jm_mod
+
+        # Stall detection and the runtime ceiling are separate managers on purpose: the
+        # ceiling outranks stall in get_result (a hard backstop must win over a probe
+        # hint), so sharing one tiny threshold would mask the stall path entirely.
+        watchdog = JobManager(
+            temp_root / "jobs", stall_threshold_seconds=1, max_runtime_seconds=3600
+        )
+        live_job = watchdog.create_job("explore", "watchdog", "watchdog-session", work_dir, None)
+        job_id = live_job["job_id"]
+
+        assert_true(
+            watchdog.liveness(watchdog.get_job(job_id)) is None,
+            "a job with no worker pid yet must not be classified (nothing to reap)",
+        )
+        watchdog.set_worker_pid(job_id, 999999999)
+        assert_true(
+            watchdog.liveness(watchdog.get_job(job_id)) == jm_mod.DEAD,
+            "a gone pid must classify as dead",
+        )
+
+        # Live pid + fresh heartbeat = progressing; the SAME pid with a stale heartbeat
+        # must classify as stalled. That difference is the whole point of the heartbeat:
+        # pid liveness alone reports both cases identically.
+        watchdog.mark_running(job_id)
+        watchdog.set_worker_pid(job_id, os.getpid())
+        watchdog.touch_heartbeat(job_id, {"phase": "agent", "elapsed_seconds": 3})
+        beat = watchdog.read_heartbeat(job_id)
+        assert_true(
+            beat and beat.get("at") and beat["progress"]["phase"] == "agent",
+            "heartbeat must record its timestamp and progress payload",
+        )
+        beating = watchdog.get_job(job_id)
+        assert_true(
+            watchdog.liveness(beating) == jm_mod.ALIVE_PROGRESSING,
+            "live pid with a fresh heartbeat must be progressing",
+        )
+        time.sleep(1.2)  # exceed the 1s stall threshold configured above
+        assert_true(
+            watchdog.liveness(watchdog.get_job(job_id)) == jm_mod.ALIVE_STALLED,
+            "live pid with a stale heartbeat must be stalled, not dead",
+        )
+
+        stalled = watchdog.get_result(job_id)
+        assert_true(
+            stalled["meta"].get("error_type") == "worker_stalled",
+            "a stalled worker must be reported as stalled",
+        )
+        assert_true(
+            watchdog.get_job(job_id)["status"] == "running",
+            "a stalled worker must NOT be reaped on suspicion — its work may still land",
+        )
+
+        probed = watchdog.record_probe(job_id, {"alive": False, "reason": "probe_timeout"})
+        assert_true(
+            probed["liveness"] == "stalled_on_limit",
+            "a probe that cannot reach opencode means rate/usage limit, not a hang",
+        )
+        assert_true(
+            watchdog.read_probe(job_id)["liveness"] == "stalled_on_limit",
+            "the probe verdict must survive a round-trip through its side file",
+        )
+        assert_true(
+            watchdog.record_probe(job_id, {"alive": True, "reason": "probe_ok"})["liveness"]
+            == "stalled_no_progress",
+            "a probe that answers means opencode is healthy and this session is hung",
+        )
+
+        # A late beat must NOT resurrect a job another process already ended. Heartbeats
+        # arrive every couple of seconds and get_result runs in a different process, so
+        # folding the beat into the job record made this a routine collision, not a rare one.
+        raced = watchdog.create_job("explore", "race", "race-session", work_dir, None)
+        watchdog.set_worker_pid(raced["job_id"], os.getpid())
+        watchdog.mark_running(raced["job_id"])
+        watchdog.fail_job(raced["job_id"], "worker process died before completing (reaped)")
+        watchdog.touch_heartbeat(raced["job_id"], {"phase": "agent"})  # beat arrives late
+        settled = watchdog.get_job(raced["job_id"])
+        assert_true(
+            settled["status"] == "failed" and settled["error"],
+            "a late heartbeat must never revert a terminal job or erase its error",
+        )
+
+        # Runtime ceiling: the OOM backstop, where the pid can look alive but the job is lost.
+        ceiling = JobManager(
+            temp_root / "jobs", stall_threshold_seconds=3600, max_runtime_seconds=1
+        )
+        expired = ceiling.create_job("plan", "expired", "expired-session", work_dir, None)
+        ceiling.set_worker_pid(expired["job_id"], os.getpid())
+        ceiling.mark_running(expired["job_id"])
+        ceiling.touch_heartbeat(expired["job_id"], {"phase": "agent"})
+        time.sleep(1.2)
+        expired_res = ceiling.get_result(expired["job_id"])
+        assert_true(
+            expired_res["meta"].get("error_type") == "job_expired",
+            "a job past the runtime ceiling must fail as expired, distinct from worker_died",
+        )
+
+        # Tolerant fact parsing: the old parser stopped at the first non-bullet line, so a
+        # blank line or a nested bullet silently emptied the section (and ingest hid it).
+        messy = (
+            "grounded:\n\n- claim A [main.py:1]\n  * nested detail\n"
+            "- claim B [core/x.py:2]\n  wrapped tail\n\nassumptions:\n- guess\n"
+        )
+        grounded = fact_store._parse_block(messy, "grounded")
+        assert_true(len(grounded) == 3, f"tolerant parser must keep blank/nested bullets, got {grounded}")
+        assert_true(
+            "wrapped tail" in grounded[-1],
+            "a wrapped continuation line must join its bullet, not be dropped",
+        )
+        assert_true(
+            fact_store._parse_block(messy, "assumptions") == ["guess"],
+            "the next section header must end the block",
+        )
+        assert_true(
+            fact_store._parse_block("grounded:\n- a [x.py:1]\n- b [y.py:2]\nassumptions:\n- c\n", "grounded")
+            == ["a [x.py:1]", "b [y.py:2]"],
+            "the pre-3.4.0 flat format must keep parsing identically",
+        )
+        # A section header carrying trailing text ends the block. Real second_agent output
+        # writes `external: none (...)`, and gluing that onto the last bullet corrupts the
+        # claim text — which is what the recurrence key is computed from.
+        assert_true(
+            fact_store._parse_block(
+                "dependents:\n- calls X [a.py:1]\nexternal: none (no external libs)\n", "dependents"
+            )
+            == ["calls X [a.py:1]"],
+            "a `key: value` line at column 0 must end the section, not extend the last bullet",
+        )
+        assert_true(
+            fact_store._parse_block("grounded:\n- claim [a.py:1]\nconfidence: high\n", "grounded")
+            == ["claim [a.py:1]"],
+            "a trailing confidence line must not be absorbed into a claim",
+        )
+
+        # Graph leads: absent graph degrades to None, never an exception.
+        assert_true(
+            graph_index.leads(temp_root, "anything") is None,
+            "a project without graphify-out must yield no leads instead of failing",
+        )
+        assert_true(
+            graph_index.load_graph(temp_root) is None,
+            "a missing graph.json must return None, not raise",
+        )
+        repo_root = Path(__file__).resolve().parent
+        repo_leads = graph_index.leads(repo_root, "session manager")
+        # Guarded on the graph EXISTING, not on leads being truthy: keying the guard on
+        # the result itself would let a leads() that silently returns None skip its own
+        # assertions and still report success.
+        assert_true(
+            (graph_index.graph_path(repo_root).exists()) == (repo_leads is not None),
+            "leads must be produced whenever graph.json exists, and only then",
+        )
+        if repo_leads:
+            assert_true(
+                all("\\" not in row["file"] for row in repo_leads["files"]),
+                "lead paths must be repo-relative POSIX so they mean the same on any machine",
+            )
+            leads_prompt = build_prompt(
+                role="reasoning",
+                task="session manager",
+                session_id="leads",
+                command="plan",
+                project_root=str(repo_root),
+                graph_leads=repo_leads,
+            )
+            assert_true("[GRAPH_LEADS" in leads_prompt, "leads must reach the prompt")
+            assert_true(
+                "not evidence" in leads_prompt,
+                "leads must be framed as starting points, never as findings",
+            )
+
+        # Timeout is on by default now: an unbounded wait is how a rate-limited agent
+        # used to hang a job forever.
+        default_adapter = OpenCodeAdapter()
+        assert_true(
+            not default_adapter.no_timeout and default_adapter.timeout_seconds > 0,
+            "the default adapter must carry a real timeout",
+        )
+        assert_true(
+            default_adapter.bootstrap_timeout_seconds > 0
+            and default_adapter.bootstrap_timeout_seconds < default_adapter.timeout_seconds,
+            "bootstrap must have its own, shorter budget than a full task",
+        )
+        # Side files must not outlive their job — nothing rewrites them once it ends.
+        pruned_id = raced["job_id"]
+        assert_true(
+            watchdog._beat_path(pruned_id).exists(),
+            "precondition: the raced job still has its beat file",
+        )
+        watchdog.prune_jobs(ttl_days=0, keep_last=0)
+        assert_true(
+            not watchdog._beat_path(pruned_id).exists()
+            and not watchdog._probe_path(pruned_id).exists(),
+            "pruning a job must take its heartbeat/probe side files with it",
+        )
+
         print("test_scenario: success")
     finally:
         main.subprocess.Popen = original_popen

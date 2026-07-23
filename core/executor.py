@@ -1,6 +1,7 @@
 from adapters.opencode_adapter import OpenCodeAdapter
 from core.contract import extract_digest, make_error
 from core import fact_store
+from core import graph_index
 from core.prompt_builder import build_prompt
 from core.router import Router
 from utils.path_guard import validate_scope
@@ -8,12 +9,14 @@ from core import quick_verify
 from core.workflow_runtime import (
     bind_session,
     detect_project_root,
+    graph_leads_enabled,
     release_runtime_lock,
     run_sweep,
     update_command_cache,
     update_plan_scope,
     update_state_from_agent_output,
     verify_mode,
+    write_call_meta,
     write_prompt_handoff,
     write_response_snapshot,
 )
@@ -46,6 +49,7 @@ class Executor:
         session: dict,
         work_dir: str | None = None,
         model: str | None = None,
+        on_progress=None,
     ) -> dict:
         normalized_command = command.strip().lower()
         session_id = session["session_id"]
@@ -81,11 +85,17 @@ class Executor:
             )
 
         known_facts = None
+        graph_leads = None
         if route["role"] in ("exploration", "reasoning"):
             facts = fact_store.load_relevant(project_root, task)
             known_facts = [
                 f"{f['claim']} [{f['file']}:{f['line']}]" for f in facts if f.get("file")
             ] or None
+            # Graph-first: hand the second agent a ranked shortlist before it starts
+            # reading. These are LEADS, not findings — the prompt says so, because a
+            # graph edge is not evidence until the file backs it up.
+            if graph_leads_enabled(project_root):
+                graph_leads = graph_index.leads(project_root, task)
 
         prompt = build_prompt(
             role=route["role"],
@@ -94,6 +104,7 @@ class Executor:
             command=normalized_command,
             project_root=str(project_root),
             known_facts=known_facts,
+            graph_leads=graph_leads,
         )
 
         bound = bind_session(project_root, session_id)
@@ -112,6 +123,12 @@ class Executor:
         self.opencode.no_timeout = (
             self.opencode.timeout_seconds is None or self.opencode.timeout_seconds <= 0
         )
+        if route.get("bootstrap_timeout_seconds") is not None:
+            self.opencode.bootstrap_timeout_seconds = route["bootstrap_timeout_seconds"]
+        if route.get("poll_interval_seconds") is not None:
+            self.opencode.poll_interval = route["poll_interval_seconds"]
+        # Only the adapter's poll loop can emit liveness while opencode blocks.
+        self.opencode.on_progress = on_progress
         try:
             result = self.opencode.run(
                 prompt,
@@ -121,6 +138,20 @@ class Executor:
             )
         finally:
             release_runtime_lock(handoff["paths"]["lock"])
+            self.opencode.on_progress = None
+            # Record what the call actually did (exit code, duration, kill, stderr tail).
+            # Without this, "opencode behaves oddly under rate limits" stays folklore.
+            write_call_meta(
+                project_root,
+                handoff.get("meta", {}).get("prompt_id"),
+                session_id,
+                {
+                    "command": normalized_command,
+                    "model": route.get("model"),
+                    "timeout_seconds": self.opencode.timeout_seconds,
+                    **(getattr(self.opencode, "last_call_meta", None) or {}),
+                },
+            )
 
         write_response_snapshot(
             project_root,
@@ -170,10 +201,20 @@ class Executor:
             result["digest"] = digest
 
         if route["role"] in ("exploration", "reasoning"):
+            # Ingest stays best-effort — it must never fail a delegated call — but the
+            # failure is now REPORTED. Swallowing it silently let the fact store stop
+            # accepting facts for days without a single visible symptom.
             try:
-                fact_store.ingest(project_root, result.get("content") or "", session_id)
-            except Exception:
-                pass  # fact store is best-effort; never fail the delegated call over it
+                added = fact_store.ingest(
+                    project_root, result.get("content") or "", session_id
+                )
+                result.setdefault("meta", {})["facts_ingested"] = added
+            except Exception as exc:
+                result.setdefault("meta", {})["fact_ingest_error"] = {
+                    "error_type": "fact_ingest_failed",
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "next_action": "Report this: the fact store rejected the run's output; facts are not being learned.",
+                }
 
         if normalized_command == "explore":
             update_command_cache(

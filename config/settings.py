@@ -10,11 +10,32 @@ CACHE_FILE = BASE_DIR / "storage" / "cache.json"
 JOB_DIR = BASE_DIR / "storage" / "jobs"
 OPENCODE_CONFIG_FILE = BASE_DIR / "config" / "opencode.json"
 
-TOOL_VERSION = "3.3.1"
+TOOL_VERSION = "3.4.0"
 MAIN_PY = BASE_DIR / "main.py"
 CHECK_PY = BASE_DIR / "check.py"
 
-DEFAULT_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_TIMEOUT_SECONDS", "0"))
+# A delegated call that has produced nothing for this long is not working, it is hung.
+# 0 still means "no limit", but it is no longer the DEFAULT — an unbounded wait is how
+# a rate-limited second agent used to hang a job forever.
+DEFAULT_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_TIMEOUT_SECONDS", "1800"))
+# Bootstrap only says "READY"; it must never inherit the long task budget.
+DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS = int(
+    os.getenv("AI_PROXY_BOOTSTRAP_TIMEOUT_SECONDS", "180")
+)
+# Gap between liveness ticks while opencode runs.
+DEFAULT_POLL_INTERVAL_SECONDS = float(
+    os.getenv("AI_PROXY_POLL_INTERVAL_SECONDS", "2")
+)
+# No heartbeat for this long while the PID is still alive => stalled, probe it.
+DEFAULT_STALL_THRESHOLD_SECONDS = int(
+    os.getenv("AI_PROXY_STALL_THRESHOLD_SECONDS", "360")
+)
+DEFAULT_PROBE_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_PROBE_TIMEOUT_SECONDS", "45"))
+# Hard ceiling: a job running past this is failed even if its PID looks alive.
+# Backstop for the OOM case, where the worker dies in a way PID checks miss.
+DEFAULT_JOB_MAX_RUNTIME_SECONDS = int(
+    os.getenv("AI_PROXY_JOB_MAX_RUNTIME_SECONDS", "5400")
+)
 OPENCODE_COMMAND = os.getenv("OPENCODE_COMMAND", "opencode")
 DEFAULT_JOB_POLL_INTERVAL_SECONDS = float(os.getenv("AI_PROXY_JOB_POLL_INTERVAL_SECONDS", "2"))
 DEFAULT_JOB_POLL_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_JOB_POLL_TIMEOUT_SECONDS", "0"))
@@ -25,6 +46,10 @@ def default_opencode_config() -> dict:
         "opencode_command": OPENCODE_COMMAND,
         "default_model": None,
         "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
+        "bootstrap_timeout_seconds": DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,
+        "stall_threshold_seconds": DEFAULT_STALL_THRESHOLD_SECONDS,
+        "probe_timeout_seconds": DEFAULT_PROBE_TIMEOUT_SECONDS,
+        "job_max_runtime_seconds": DEFAULT_JOB_MAX_RUNTIME_SECONDS,
         "job_poll_interval_seconds": DEFAULT_JOB_POLL_INTERVAL_SECONDS,
         "job_poll_timeout_seconds": DEFAULT_JOB_POLL_TIMEOUT_SECONDS,
         "agent_workflow_path": None,

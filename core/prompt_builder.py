@@ -8,6 +8,42 @@ from config.roles import (
 _EVIDENCE_ROLES = {ROLE_EXPLORATION, ROLE_REASONING}
 
 
+def _graph_block(graph_leads: dict | None) -> list[str]:
+    """Ranked shortlist from graphify, framed as leads.
+
+    Framing matters: a graph edge says two things are related, not that a claim is
+    true. Presented as findings these would come back as `grounded` without anyone
+    opening the file.
+    """
+    if not graph_leads or not graph_leads.get("files"):
+        return []
+
+    lines = [
+        "[GRAPH_LEADS — from graphify-out/graph.json; ranked STARTING POINTS, not evidence]",
+        "- open these first, then follow the code; a graph edge is never a substitute for reading the file",
+        "- a file listed here that turns out to be irrelevant is expected — say so rather than forcing it into the answer",
+    ]
+    if graph_leads.get("stale"):
+        lines.append(
+            "- WARNING: the graph is older than the current sources; treat every lead as possibly outdated"
+        )
+
+    lines.append("candidate_files:")
+    for row in graph_leads["files"]:
+        community = row.get("community")
+        suffix = f" [community {community}]" if community is not None else ""
+        lines.append(f"- {row['file']}{suffix}")
+
+    if graph_leads.get("communities"):
+        lines.append("clusters:")
+        for cluster in graph_leads["communities"]:
+            members = ", ".join(cluster.get("files") or [])
+            lines.append(f"- community {cluster['community']}: {members}")
+
+    lines.append("")
+    return lines
+
+
 def build_prompt(
     *,
     role: str,
@@ -16,6 +52,7 @@ def build_prompt(
     command: str,
     project_root: str,
     known_facts: list[str] | None = None,
+    graph_leads: dict | None = None,
 ) -> str:
     if role not in VALID_ROLES:
         raise ValueError(f"unsupported role: {role}")
@@ -38,11 +75,14 @@ def build_prompt(
             "",
         ]
 
+    graph_block = _graph_block(graph_leads)
+
     if role in _EVIDENCE_ROLES:
         return "\n".join(
             [
                 *header,
                 *facts_block,
+                *graph_block,
                 "[CONSTRAINTS]",
                 "- do not implement, do not plan, do not modify files",
                 "- flag all uncertainties explicitly",
