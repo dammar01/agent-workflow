@@ -10,7 +10,7 @@ CACHE_FILE = BASE_DIR / "storage" / "cache.json"
 JOB_DIR = BASE_DIR / "storage" / "jobs"
 OPENCODE_CONFIG_FILE = BASE_DIR / "config" / "opencode.json"
 
-TOOL_VERSION = "3.3.0"
+TOOL_VERSION = "3.3.1"
 MAIN_PY = BASE_DIR / "main.py"
 CHECK_PY = BASE_DIR / "check.py"
 
