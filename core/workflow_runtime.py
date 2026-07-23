@@ -125,6 +125,7 @@ RUNTIME_CONSUMED_KEYS = (
     "policies.fact_relevant_limit",
     "policies.fact_recurrence_threshold",
     "policies.graph_leads_enabled",
+    "policies.subagent_fanout_enabled",
     # Timeout/stall/probe live in opencode.json (adapter + job manager read them there),
     # not here — listed in the doctor report so their home is not a guessing game.
 )
@@ -161,6 +162,11 @@ def default_policies() -> dict:
         # --- runtime-consumed (core/graph_index.py) ---
         # inject a ranked file shortlist from graphify-out/graph.json into evidence prompts
         "graph_leads_enabled": True,
+        # --- runtime-consumed (core/prompt_builder.py) ---
+        # ask second_agent to spawn one sub-agent per graph cluster. Off by default:
+        # fan-out multiplies both quota use and output size, and large structured
+        # responses have been seen to die mid-stream.
+        "subagent_fanout_enabled": False,
     }
 
 
@@ -248,6 +254,19 @@ def graph_leads_enabled(project_root: Path) -> bool:
     if not isinstance(policies, dict):
         return True
     return bool(policies.get("graph_leads_enabled", True))
+
+
+def subagent_fanout_enabled(project_root: Path) -> bool:
+    """policies.subagent_fanout_enabled. Defaults to OFF — unlike graph leads, fan-out
+    costs extra quota per call, so an unreadable config must not silently turn it on."""
+    try:
+        config = read_json_file(workflow_paths(project_root)["config"])
+    except (OSError, ValueError):
+        return False
+    policies = config.get("policies")
+    if not isinstance(policies, dict):
+        return False
+    return bool(policies.get("subagent_fanout_enabled", False))
 
 
 def default_config(project_root: Path, agent_workflow_path: str | None) -> dict:

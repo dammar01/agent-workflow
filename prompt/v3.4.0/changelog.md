@@ -118,6 +118,26 @@ Bounded dengan sengaja, karena format ini gampang berubah jadi mesin scope creep
 
 User memilih opsi non-rekomendasi → jalankan pilihannya. Minus-nya sudah disebut; keputusannya milik user.
 
+### Sub-agent fan-out (default OFF)
+
+Rencana awal menyatakan second_agent tak punya kemampuan spawn — disimpulkan dari tidak adanya konfigurasi MCP/tools di `opencode.json`. Observasi config-nya benar; kesimpulannya salah. Tool `task` bawaan agent opencode, bukan sesuatu yang dinyalakan lewat config.
+
+Spike membuktikannya lewat trace runtime, bukan lewat pengakuan model: dua sub-agent dimulai bersamaan lalu selesai bersamaan. Bukti eksekusi mengalahkan laporan-diri — sebuah agent bisa saja mengaku fan-out padahal membaca berurutan.
+
+Saat dinyalakan dan graphify punya ≥2 cluster, prompt membawa `[SUBAGENT_PLAN]`: satu sub-agent per cluster, paralel, tiap sub-agent dibatasi ke file cluster-nya sendiri.
+
+Default **OFF**, dan itu disengaja:
+
+- fan-out mengalikan kuota per panggilan — memperbesar peluang kena limit, keadaan yang justru diperbaiki `3.4.0-a`
+- blok instruksinya menambah ~1,1 KB, sementara prompt dikirim sebagai argv dengan plafon ~8191 char
+- output terstruktur besar terbukti mati di tengah stream 3 dari 3 kali hari itu; fan-out memperbesar output
+
+Satu cluster tidak memicu fan-out: satu sub-agent memakan round trip tanpa keuntungan atas membaca langsung.
+
+**Klaim fan-out diverifikasi, bukan dipercaya.** Dua sinyal harus sepakat — baris `subagents:` yang dideklarasikan, dan tag `[cN]` pada klaim hasil merge. Deklarasi tanpa tag menghasilkan `subagent_used: false` plus peringatan eksplisit. Menerimanya diam-diam adalah cara sebuah langkah yang tak dikerjakan mulai terlihat selesai.
+
+Jawaban jujur `subagents: none (no spawn tool)` diperlakukan sebagai hasil sah, bukan kegagalan.
+
 ---
 
 ## Migrasi
@@ -127,11 +147,14 @@ User memilih opsi non-rekomendasi → jalankan pilihannya. Minus-nya sudah diseb
 Key baru di `opencode.json`: `bootstrap_timeout_seconds`, `stall_threshold_seconds`, `probe_timeout_seconds`, `job_max_runtime_seconds`. Semua punya default; config lama tetap jalan.
 
 `policies.graph_leads_enabled` (default `true`) mematikan injeksi leads bila tak diinginkan.
+`policies.subagent_fanout_enabled` (default `false`) menyalakan fan-out sub-agent.
 
 ## Belum tuntas
 
 - Cabang kill-tree POSIX nol diuji
 - Perilaku opencode nyata saat rate limit belum terekam; ambang masih tebakan
 - `probe()` belum pernah menghadapi limit asli
-- Prompt dikirim sebagai argv → plafon keras ~8191 char lewat `cmd.exe` di Windows
+- Prompt dikirim sebagai argv → plafon keras ~8191 char lewat `cmd.exe` di Windows. Blok fan-out memakan ~1,1 KB dari anggaran itu
 - `config/opencode.json` cocok dengan pola `.gitignore`, jadi perubahan di sana tak ikut ter-commit
+- Fan-out sub-agent belum pernah dijalankan dari ujung ke ujung: kapabilitas spawn terbukti, tapi jalur merge + deteksi baru diuji lawan output sintetis, belum lawan hasil fan-out sungguhan
+- `3.4.0-b` murni prompt-layer di sisi auto-detect intent — nol tercakup `test_scenario.py`, karena runtime tak punya jalur intent sama sekali

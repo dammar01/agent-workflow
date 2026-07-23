@@ -8,6 +8,38 @@ from config.roles import (
 _EVIDENCE_ROLES = {ROLE_EXPLORATION, ROLE_REASONING}
 
 
+def _subagent_block(graph_leads: dict | None) -> list[str]:
+    """Explicit fan-out instruction: one sub-agent per graph cluster.
+
+    Only emitted when the graph gives at least two clusters — dispatching a single
+    sub-agent costs a round trip and buys nothing over reading the files directly.
+
+    Output stays deliberately terse. Large structured responses have been observed to
+    die mid-stream, and fan-out multiplies output volume, so per-cluster findings are
+    capped and cluster attribution is a two-character tag rather than a prose field.
+    """
+    clusters = (graph_leads or {}).get("communities") or []
+    if len(clusters) < 2:
+        return []
+
+    lines = [
+        "[SUBAGENT_PLAN — dispatch these in parallel, then merge]",
+        "- spawn ONE sub-agent per cluster below, all at once, not one after another",
+        "- each sub-agent is scope-bounded to ITS OWN cluster's files; it must not read outside them",
+        "- keep each sub-agent's report SHORT: max 5 grounded claims, each one line with file:line",
+        "- you merge the reports; sub-agent text is raw material, not the answer",
+        "- tag every merged claim with its origin cluster as a leading [cN] (e.g. `[c3] Router routes by command string [core/router.py:16]`)",
+        "- a cluster that yields nothing relevant: say so under that cluster, do not pad it",
+        "- list the clusters you actually dispatched on the `subagents:` line",
+        "- NO spawn tool available -> read the clusters yourself in order and write `subagents: none (no spawn tool)`. Do NOT claim fan-out you did not perform",
+    ]
+    for cluster in clusters:
+        members = ", ".join(cluster.get("files") or [])
+        lines.append(f"- c{cluster['community']}: {members}")
+    lines.append("")
+    return lines
+
+
 def _graph_block(graph_leads: dict | None) -> list[str]:
     """Ranked shortlist from graphify, framed as leads.
 
@@ -53,6 +85,7 @@ def build_prompt(
     project_root: str,
     known_facts: list[str] | None = None,
     graph_leads: dict | None = None,
+    subagent_fanout: bool = False,
 ) -> str:
     if role not in VALID_ROLES:
         raise ValueError(f"unsupported role: {role}")
@@ -76,6 +109,7 @@ def build_prompt(
         ]
 
     graph_block = _graph_block(graph_leads)
+    subagent_block = _subagent_block(graph_leads) if subagent_fanout else []
 
     if role in _EVIDENCE_ROLES:
         return "\n".join(
@@ -83,6 +117,7 @@ def build_prompt(
                 *header,
                 *facts_block,
                 *graph_block,
+                *subagent_block,
                 "[CONSTRAINTS]",
                 "- do not implement, do not plan, do not modify files",
                 "- flag all uncertainties explicitly",
@@ -111,6 +146,14 @@ def build_prompt(
                     _exploration_format()
                     if role == ROLE_EXPLORATION
                     else _reasoning_format()
+                ),
+                *(
+                    [
+                        "",
+                        "subagents: c<N>, c<N> (clusters you actually dispatched) | none (<reason>)",
+                    ]
+                    if subagent_block
+                    else []
                 ),
                 "",
                 *_digest_format(),

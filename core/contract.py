@@ -4,6 +4,7 @@ Shape stays `{ok, content, meta}` (backward compatible). Errors carry
 `error_type` + mandatory `next_action` inside `meta`. Optional `digest`
 rides at the top level for main_agent to relay.
 """
+import re
 
 ERROR_TYPES = {
     "permission_denied",
@@ -50,6 +51,38 @@ def make_error(error_type: str, message: str, next_action: str, meta: dict | Non
     merged["next_action"] = next_action
     merged.update(fields)
     return {"ok": False, "content": message or error_type, "meta": merged}
+
+
+_SUBAGENT_LINE = re.compile(r"^\s*subagents\s*:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+_CLUSTER_TAG = re.compile(r"\[c(\d+)\]")
+
+
+def detect_subagent_usage(content: str) -> dict:
+    """Did the second agent actually fan out, or just say it did?
+
+    Two independent signals: the declared `subagents:` line and the [cN] tags that
+    should appear on merged claims. Agreement is what makes the answer trustworthy —
+    a declaration with no tagged claims is a claim of work, not evidence of it.
+
+    Returns {'used', 'declared', 'clusters', 'tagged_clusters', 'mismatch'}.
+    """
+    declared: list[str] = []
+    match = _SUBAGENT_LINE.search(content or "")
+    raw = (match.group(1).strip() if match else "")
+    if raw and not raw.lower().startswith("none"):
+        declared = sorted({f"c{n}" for n in re.findall(r"c(\d+)", raw)})
+
+    tagged = sorted({f"c{n}" for n in _CLUSTER_TAG.findall(content or "")})
+    used = bool(declared) and bool(tagged)
+    return {
+        "used": used,
+        "declared": declared,
+        "clusters": declared or tagged,
+        "tagged_clusters": tagged,
+        # Declared fan-out with nothing tagged: report it rather than counting it as
+        # success. Silent acceptance is how an unperformed step starts looking done.
+        "mismatch": bool(declared) and not tagged,
+    }
 
 
 def normalize_output(*, ok: bool, content: str, meta: dict | None = None) -> dict:

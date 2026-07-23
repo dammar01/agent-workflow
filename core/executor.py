@@ -1,5 +1,5 @@
 from adapters.opencode_adapter import OpenCodeAdapter
-from core.contract import extract_digest, make_error
+from core.contract import detect_subagent_usage, extract_digest, make_error
 from core import fact_store
 from core import graph_index
 from core.prompt_builder import build_prompt
@@ -11,6 +11,7 @@ from core.workflow_runtime import (
     detect_project_root,
     graph_leads_enabled,
     release_runtime_lock,
+    subagent_fanout_enabled,
     run_sweep,
     update_command_cache,
     update_plan_scope,
@@ -86,6 +87,7 @@ class Executor:
 
         known_facts = None
         graph_leads = None
+        fanout = False
         if route["role"] in ("exploration", "reasoning"):
             facts = fact_store.load_relevant(project_root, task)
             known_facts = [
@@ -96,6 +98,9 @@ class Executor:
             # graph edge is not evidence until the file backs it up.
             if graph_leads_enabled(project_root):
                 graph_leads = graph_index.leads(project_root, task)
+            # Fan-out needs clusters to fan out over; without a graph there is nothing
+            # to partition and the instruction would be noise.
+            fanout = bool(graph_leads) and subagent_fanout_enabled(project_root)
 
         prompt = build_prompt(
             role=route["role"],
@@ -105,6 +110,7 @@ class Executor:
             project_root=str(project_root),
             known_facts=known_facts,
             graph_leads=graph_leads,
+            subagent_fanout=fanout,
         )
 
         bound = bind_session(project_root, session_id)
@@ -199,6 +205,20 @@ class Executor:
         digest = extract_digest(result.get("content") or "")
         if digest is not None:
             result["digest"] = digest
+
+        if fanout:
+            # Report what actually happened, not what was asked for. A run that was told
+            # to fan out and did not is still a usable result — but calling it a fan-out
+            # would make the next decision rest on work nobody did.
+            usage = detect_subagent_usage(result.get("content") or "")
+            meta = result.setdefault("meta", {})
+            meta["subagent_used"] = usage["used"]
+            meta["subagent_clusters"] = usage["clusters"]
+            if usage["mismatch"]:
+                meta["subagent_warning"] = (
+                    "second_agent declared sub-agents but tagged no claims with [cN]; "
+                    "treat the fan-out as unconfirmed"
+                )
 
         if route["role"] in ("exploration", "reasoning"):
             # Ingest stays best-effort — it must never fail a delegated call — but the

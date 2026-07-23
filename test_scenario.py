@@ -512,6 +512,84 @@ def run_tests() -> None:
             "pruning a job must take its heartbeat/probe side files with it",
         )
 
+        # 13. v3.4.0-b sub-agent fan-out: instruction gating + honest usage detection
+        from core.contract import detect_subagent_usage
+        from core.workflow_runtime import subagent_fanout_enabled
+
+        two_clusters = {
+            "files": [{"file": "a.py", "community": 1}, {"file": "b.py", "community": 2}],
+            "communities": [
+                {"community": 1, "files": ["a.py", "c.py"]},
+                {"community": 2, "files": ["b.py"]},
+            ],
+        }
+        one_cluster = {
+            "files": [{"file": "a.py", "community": 1}],
+            "communities": [{"community": 1, "files": ["a.py"]}],
+        }
+
+        def _p(leads, fanout):
+            return build_prompt(
+                role="exploration", task="t", session_id="s", command="explore",
+                project_root=str(temp_root), graph_leads=leads, subagent_fanout=fanout,
+            )
+
+        assert_true("[SUBAGENT_PLAN" in _p(two_clusters, True), "two clusters must produce a fan-out plan")
+        assert_true(
+            "subagents:" in _p(two_clusters, True),
+            "the output format must ask which clusters were dispatched",
+        )
+        # One cluster is not a fan-out: a single sub-agent costs a round trip and buys
+        # nothing over reading the files directly.
+        assert_true(
+            "[SUBAGENT_PLAN" not in _p(one_cluster, True),
+            "a single cluster must not trigger fan-out",
+        )
+        assert_true(
+            "[SUBAGENT_PLAN" not in _p(two_clusters, False),
+            "fan-out must stay off unless explicitly enabled",
+        )
+        assert_true(
+            "[SUBAGENT_PLAN" not in _p(None, True),
+            "no graph means no clusters to fan out over",
+        )
+
+        # Detection needs BOTH signals to agree — a declaration alone is a claim of work,
+        # not evidence of it.
+        real = "subagents: c1, c2\ngrounded:\n- [c1] X [a.py:1]\n- [c2] Y [b.py:2]\n"
+        got = detect_subagent_usage(real)
+        assert_true(got["used"] and got["declared"] == ["c1", "c2"], f"real fan-out must register: {got}")
+        assert_true(not got["mismatch"], "matching declaration and tags must not warn")
+
+        lying = "subagents: c1, c2\ngrounded:\n- X [a.py:1]\n"
+        got = detect_subagent_usage(lying)
+        assert_true(
+            not got["used"] and got["mismatch"],
+            "a declared fan-out with no tagged claims must be flagged, not counted as success",
+        )
+
+        honest = "subagents: none (no spawn tool)\ngrounded:\n- X [a.py:1]\n"
+        got = detect_subagent_usage(honest)
+        assert_true(
+            not got["used"] and not got["mismatch"],
+            "an honest 'no spawn tool' answer must be neither used nor a mismatch",
+        )
+        assert_true(
+            not detect_subagent_usage("grounded:\n- X [a.py:1]\n")["used"],
+            "output with no subagents line must not register as fan-out",
+        )
+
+        # Default OFF: fan-out spends extra quota per call, so an unreadable or silent
+        # config must never turn it on by itself.
+        assert_true(
+            subagent_fanout_enabled(temp_root) is False,
+            "fan-out must default to off",
+        )
+        assert_true(
+            subagent_fanout_enabled(temp_root / "does-not-exist") is False,
+            "an unreadable config must leave fan-out off",
+        )
+
         print("test_scenario: success")
     finally:
         main.subprocess.Popen = original_popen

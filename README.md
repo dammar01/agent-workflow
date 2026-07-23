@@ -252,6 +252,30 @@ Per-route juga bisa: `"plan": { "model": "...", "timeout_seconds": 3600 }`.
 
 **Role tidak dibaca dari file ini.** Pemetaan command → role ditentukan di kode (`config/routing.py`), jadi tak bisa ditumpuk lewat config.
 
+### Sub-agent fan-out (v3.4.0, default OFF)
+
+`policies.subagent_fanout_enabled` di `.workflow/config.json`. Saat `true` dan graphify punya ≥2 cluster, prompt evidence membawa blok `[SUBAGENT_PLAN]`: second_agent diminta spawn satu sub-agent per cluster, paralel, masing-masing scope-bounded ke file cluster-nya.
+
+Kapabilitas spawn sudah dikonfirmasi ada pada agent opencode — dibuktikan lewat trace runtime dua sub-agent berjalan bersamaan, bukan dari pengakuan model.
+
+Default **OFF** dengan alasan:
+
+- fan-out mengalikan konsumsi kuota per panggilan
+- blok instruksinya menambah ~1,1 KB ke prompt, sementara prompt dikirim sebagai argv dengan plafon ~8191 char lewat `cmd.exe`
+- output terstruktur besar terbukti bisa mati di tengah stream
+
+Satu cluster saja → fan-out tidak dipasang: satu sub-agent memakan satu round trip tanpa keuntungan atas membaca file langsung.
+
+**Pemakaian dilaporkan apa adanya.** Runtime mengecek dua sinyal yang harus sepakat: baris `subagents:` yang dideklarasikan, dan tag `[cN]` pada klaim hasil merge.
+
+| Kondisi | `meta` |
+|---|---|
+| deklarasi + tag cocok | `subagent_used: true`, `subagent_clusters: [...]` |
+| deklarasi tanpa tag | `subagent_used: false` + `subagent_warning` |
+| `subagents: none (...)` jujur | `subagent_used: false`, nol warning |
+
+Deklarasi tanpa klaim bertag adalah pengakuan kerja, bukan bukti kerja — dan tidak dihitung sukses.
+
 ---
 
 ## Mode verify
