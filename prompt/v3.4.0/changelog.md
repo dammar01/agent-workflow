@@ -128,9 +128,18 @@ Saat dinyalakan dan graphify punya ≥2 cluster, prompt membawa `[SUBAGENT_PLAN]
 
 Default **OFF**, dan itu disengaja:
 
+- **terukur lebih lambat pada task kecil**: 166 dtk dengan fan-out vs 116 dtk berurutan, task identik (+43%). Spin-up empat sub-agent plus merge memakan lebih banyak daripada yang dihemat paralelisme
 - fan-out mengalikan kuota per panggilan — memperbesar peluang kena limit, keadaan yang justru diperbaiki `3.4.0-a`
 - blok instruksinya menambah ~1,1 KB, sementara prompt dikirim sebagai argv dengan plafon ~8191 char
 - output terstruktur besar terbukti mati di tengah stream 3 dari 3 kali hari itu; fan-out memperbesar output
+
+### Instruksi lemah menghasilkan kepatuhan lemah
+
+Blok `[SUBAGENT_PLAN]` versi pertama menutup dengan jalan keluar sopan: *"tak ada spawn tool → baca sendiri dan tulis `subagents: none`"*. Dijalankan sungguhan, agent mengambil jalan itu — menjawab "no spawn tool" dan membaca berurutan, padahal kapabilitas spawn-nya sudah terbukti ada sehari sebelumnya.
+
+Versi sekarang menuntut agent **menyebut nama setiap tool yang dipunyainya** sebelum boleh mengaku tak punya spawn tool, dan menyatakan bahwa membaca sendiri saat tool tersedia adalah instruksi gagal, bukan jalan pintas. Dijalankan ulang tanpa perubahan lain, empat sub-agent berjalan paralel dan selesai di luar urutan dispatch.
+
+Yang membedakan kedua run itu hanya teks instruksinya. Ketika sebuah jalan keluar lebih murah daripada pekerjaannya, jalan keluar itu yang akan diambil.
 
 Satu cluster tidak memicu fan-out: satu sub-agent memakan round trip tanpa keuntungan atas membaca langsung.
 

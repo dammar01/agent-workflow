@@ -558,21 +558,34 @@ def run_tests() -> None:
         # not evidence of it.
         real = "subagents: c1, c2\ngrounded:\n- [c1] X [a.py:1]\n- [c2] Y [b.py:2]\n"
         got = detect_subagent_usage(real)
-        assert_true(got["used"] and got["declared"] == ["c1", "c2"], f"real fan-out must register: {got}")
+        assert_true(
+            got["used"] and got["fanout_clusters"] == ["c1", "c2"],
+            f"real fan-out must register: {got}",
+        )
         assert_true(not got["mismatch"], "matching declaration and tags must not warn")
 
         lying = "subagents: c1, c2\ngrounded:\n- X [a.py:1]\n"
         got = detect_subagent_usage(lying)
         assert_true(
-            not got["used"] and got["mismatch"],
+            not got["used"] and got["mismatch"] and got["fanout_clusters"] == [],
             "a declared fan-out with no tagged claims must be flagged, not counted as success",
         )
 
-        honest = "subagents: none (no spawn tool)\ngrounded:\n- X [a.py:1]\n"
+        # Observed for real: the agent read sequentially but still tagged every claim.
+        # Cluster coverage must NOT be reported as fan-out — that reads as proof of work
+        # nobody did.
+        honest = (
+            "subagents: none (no spawn tool; tools: read, grep)\n"
+            "grounded:\n- [c1] X [a.py:1]\n- [c3] Y [b.py:2]\n"
+        )
         got = detect_subagent_usage(honest)
         assert_true(
             not got["used"] and not got["mismatch"],
             "an honest 'no spawn tool' answer must be neither used nor a mismatch",
+        )
+        assert_true(
+            got["fanout_clusters"] == [] and got["covered_clusters"] == ["c1", "c3"],
+            f"tagged-but-not-fanned-out must report coverage, never fan-out: {got}",
         )
         assert_true(
             not detect_subagent_usage("grounded:\n- X [a.py:1]\n")["used"],

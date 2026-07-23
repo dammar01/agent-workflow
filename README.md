@@ -260,9 +260,14 @@ Kapabilitas spawn sudah dikonfirmasi ada pada agent opencode — dibuktikan lewa
 
 Default **OFF** dengan alasan:
 
+- **terukur lebih lambat pada task kecil**: 166 dtk dengan fan-out vs 116 dtk berurutan untuk task yang sama (+43%). Ongkos spin-up 4 sub-agent plus merge melebihi keuntungan paralelnya
 - fan-out mengalikan konsumsi kuota per panggilan
 - blok instruksinya menambah ~1,1 KB ke prompt, sementara prompt dikirim sebagai argv dengan plafon ~8191 char lewat `cmd.exe`
 - output terstruktur besar terbukti bisa mati di tengah stream
+
+Nyalakan saat scope-nya lebar dan cakupan lebih berharga daripada wall-clock — bukan sebagai default untuk mempercepat.
+
+**Instruksinya harus tegas.** Versi pertama menawarkan jalan keluar sopan (*"tak ada spawn tool → baca sendiri"*) dan agent mengambilnya meski kapabilitasnya ada. Versi sekarang menuntut agent menyebut nama setiap tool yang dipunyai sebelum boleh mengaku tak punya. Perubahan itu saja yang membedakan pembacaan berurutan dari fan-out sungguhan pada dua run identik.
 
 Satu cluster saja → fan-out tidak dipasang: satu sub-agent memakan satu round trip tanpa keuntungan atas membaca file langsung.
 

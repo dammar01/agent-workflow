@@ -213,7 +213,8 @@ class Executor:
             usage = detect_subagent_usage(result.get("content") or "")
             meta = result.setdefault("meta", {})
             meta["subagent_used"] = usage["used"]
-            meta["subagent_clusters"] = usage["clusters"]
+            meta["subagent_fanout_clusters"] = usage["fanout_clusters"]
+            meta["covered_clusters"] = usage["covered_clusters"]
             if usage["mismatch"]:
                 meta["subagent_warning"] = (
                     "second_agent declared sub-agents but tagged no claims with [cN]; "

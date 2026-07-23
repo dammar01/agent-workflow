@@ -64,7 +64,12 @@ def detect_subagent_usage(content: str) -> dict:
     should appear on merged claims. Agreement is what makes the answer trustworthy —
     a declaration with no tagged claims is a claim of work, not evidence of it.
 
-    Returns {'used', 'declared', 'clusters', 'tagged_clusters', 'mismatch'}.
+    `fanout_clusters` and `covered_clusters` are deliberately separate. Claims can be
+    cluster-tagged whether or not any sub-agent ran, so collapsing the two produced a
+    populated "clusters" field on runs that never fanned out — accurate content under a
+    name that read like proof of fan-out.
+
+    Returns {'used', 'fanout_clusters', 'covered_clusters', 'mismatch'}.
     """
     declared: list[str] = []
     match = _SUBAGENT_LINE.search(content or "")
@@ -76,9 +81,10 @@ def detect_subagent_usage(content: str) -> dict:
     used = bool(declared) and bool(tagged)
     return {
         "used": used,
-        "declared": declared,
-        "clusters": declared or tagged,
-        "tagged_clusters": tagged,
+        # Clusters a sub-agent was actually dispatched to — empty unless BOTH signals agree.
+        "fanout_clusters": declared if used else [],
+        # Clusters the answer draws on, fan-out or not.
+        "covered_clusters": tagged,
         # Declared fan-out with nothing tagged: report it rather than counting it as
         # success. Silent acceptance is how an unperformed step starts looking done.
         "mismatch": bool(declared) and not tagged,

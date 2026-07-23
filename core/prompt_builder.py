@@ -24,6 +24,7 @@ def _subagent_block(graph_leads: dict | None) -> list[str]:
 
     lines = [
         "[SUBAGENT_PLAN — dispatch these in parallel, then merge]",
+        "- FIRST check your own tool list for a sub-agent/task/dispatch tool. If one exists, using it is MANDATORY — reading the clusters yourself instead is a failed instruction, not a shortcut",
         "- spawn ONE sub-agent per cluster below, all at once, not one after another",
         "- each sub-agent is scope-bounded to ITS OWN cluster's files; it must not read outside them",
         "- keep each sub-agent's report SHORT: max 5 grounded claims, each one line with file:line",
@@ -31,7 +32,8 @@ def _subagent_block(graph_leads: dict | None) -> list[str]:
         "- tag every merged claim with its origin cluster as a leading [cN] (e.g. `[c3] Router routes by command string [core/router.py:16]`)",
         "- a cluster that yields nothing relevant: say so under that cluster, do not pad it",
         "- list the clusters you actually dispatched on the `subagents:` line",
-        "- NO spawn tool available -> read the clusters yourself in order and write `subagents: none (no spawn tool)`. Do NOT claim fan-out you did not perform",
+        "- ONLY if your tool list genuinely has no such tool: write `subagents: none (no spawn tool; tools: <name, name, ...>)` naming EVERY tool you do have, then read the clusters yourself in order. Claiming 'no spawn tool' without that list is not an acceptable answer",
+        "- never report fan-out you did not perform; an honest sequential read is a valid result, a false claim is not",
     ]
     for cluster in clusters:
         members = ", ".join(cluster.get("files") or [])
