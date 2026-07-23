@@ -44,6 +44,63 @@ git --version
 
 ---
 
+## Install (v3.4.0)
+
+Clone → jalankan satu script → terkonfigurasi. Menggantikan setup lama yang menempelkan prompt 45 KB ke agent dan berharap ia menulis file yang benar.
+
+```bash
+git clone <repo> && cd agent-workflow
+python install.py            # DRY RUN — tampilkan semua perubahan, tulis nol
+python install.py --apply    # baru menulis
+python install.py --apply --init-project .   # sekalian scaffold .workflow/ di sini
+```
+
+**Dry run adalah default, disengaja.** Script ini menulis ke config agent global — dibaca setiap project di mesin itu. Kesalahan di sini tidak terkurung dalam satu repo.
+
+Yang dilakukan `--apply`:
+
+| Target | Strategi |
+|---|---|
+| `~/.claude/CLAUDE.md` | ganti isi **di antara marker** `WORKFLOW-MAIN-AGENT` — tulisan tangan di luar marker selamat |
+| `~/.claude/skills/*.md` | replace (template) |
+| `~/.claude/hooks/*` | replace |
+| `~/.claude/settings.json` | **hanya menambah key yang belum ada**; nilai yang sudah kamu set tak pernah ditimpa diam-diam, hanya dilaporkan |
+| `~/.config/opencode/AGENTS.md` | ganti isi di antara marker `WORKFLOW-SECOND-AGENT` |
+
+Semua yang akan tertimpa di-backup dulu ke `~/.claude/backups/install_<timestamp>/`.
+
+### Extractor (sisi maintainer)
+
+`dist/` dihasilkan dari config live maintainer:
+
+```bash
+python tools/extract_config.py --dry-run
+python tools/extract_config.py
+```
+
+Postur keamanannya, berurutan menurut kepentingan:
+
+1. **Allowlist, bukan blocklist.** Home agent berisi `.credentials.json`, `history.jsonl` ratusan KB, transkrip sesi, dan path project. Blocklist mengirimkan apa pun yang lupa disebut; allowlist hanya mengirim yang disebut.
+2. **Gagal-tutup pada rahasia.** Setiap byte dipindai pola kredensial. Satu temuan **membatalkan seluruh run dan menulis nol** — peringatan akan dibaca, diabaikan, lalu ter-commit. Rahasia di git history praktis tak bisa dicabut.
+3. **Read-only.** Extractor tak pernah menulis di luar `dist/`.
+
+Path absolut diredaksi jadi `{{HOME}}` / `{{PROJECT_ROOT}}`; installer yang mengembalikannya.
+
+### E2E
+
+```bash
+python tools/e2e.py          # lokal + installer: nol opencode, nol kuota, hitungan detik
+python tools/e2e.py --full   # plus command delegated: menit + kuota nyata
+```
+
+`--full` opt-in. Command delegated memakai anggaran rate-limit yang sama dengan yang dibutuhkan workflow itu sendiri; suite yang membakarnya diam-diam lebih buruk daripada tak ada suite.
+
+Installer diuji terhadap **HOME sementara**, bukan mesin yang menghasilkan `dist/` — meng-install ke mesin asal hanya membuktikan idempotensi, tak pernah menjalankan jalur *create* yang dihadapi user baru.
+
+`SKIPPED` bukan `PASS`, dan dilaporkan terpisah.
+
+---
+
 ## Bootstrap
 
 `main.py` tinggal di repo ini, **bukan** di project target. Untuk init pertama, runtime perlu tahu letaknya. Sesudah init, `.workflow/config.json` menyimpan path absolutnya, jadi `AGENT_PATH` tak wajib lagi.

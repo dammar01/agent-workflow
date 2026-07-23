@@ -1,0 +1,142 @@
+{
+  "version": "3.4.0",
+  "generated_on": "nt",
+  "files": [
+    {
+      "path": "claude/CLAUDE.md",
+      "sha256": "71ce227dd8eceb46a8a2910990258fd0a9d67695c1748e8d0d32ec49bfba815a",
+      "bytes": 32178,
+      "merge": "merge"
+    },
+    {
+      "path": "claude/skills/analyze.md",
+      "sha256": "9ac91d4581f98c4b62084a46483420fb4cfe513be2cf7cbe4c5265635a24bbcd",
+      "bytes": 1526,
+      "merge": "replace"
+    },
+    {
+      "path": "claude/skills/caveman.md",
+      "sha256": "3fe5b32b6ead9581515ca48542ce5b90ec40f9ceb0ede70a48e81d765b0aea5e",
+      "bytes": 426,
+      "merge": "replace"
+    },
+    {
+      "path": "claude/skills/commit.md",
+      "sha256": "dabc419f982abd510d5503baf9318a257864ce0059c93bdf8cac003eff39681c",
+      "bytes": 492,
+      "merge": "replace"
+    },
+    {
+      "path": "claude/skills/compress.md",
+      "sha256": "2c5c4c3a7af913c7525ef88ca11a9ff489d6e77d32574c938c2b1dfc66a0cbc7",
+      "bytes": 502,
+      "merge": "replace"
+    },
+    {
+      "path": "claude/skills/doctor.md",
+      "sha256": "a857f4cc41d666750beff86e0d7f76eb329560fc23288e7fdcaf8bd90e2311c4",
+      "bytes": 1438,
+      "merge": "replace"
+    },
+    {
+      "path": "claude/skills/execute.md",
+      "sha256": "101e18ea229d27656cbf8f3f015c4a7548632398843246b3e5f8edc8a7f555a2",
+      "bytes": 598,
+      "merge": "replace"
+    },
+    {
+      "path": "claude/skills/explore.md",
+      "sha256": "16427c5829fc0dbe1bdfa3e02b61d007c507c60c96f85f4afccf2b337b7d3a45",
+      "bytes": 1276,
+      "merge": "replace"
+    },
+    {
+      "path": "claude/skills/help.md",
+      "sha256": "6b46465f1a2c53241df81575b381c84d699316942e96570e24f96804fd3809a3",
+      "bytes": 1227,
+      "merge": "replace"
+    },
+    {
+      "path": "claude/skills/init.md",
+      "sha256": "5136d91652ee32ffb6e775a4cc8685621415d5601b268bea34604b8d5232f424",
+      "bytes": 1694,
+      "merge": "replace"
+    },
+    {
+      "path": "claude/skills/local.md",
+      "sha256": "b424fccdfe4947a857e52825f9bef82d99072221f6a22541b47615ef72ba5c20",
+      "bytes": 1015,
+      "merge": "replace"
+    },
+    {
+      "path": "claude/skills/memory.md",
+      "sha256": "1245b24cf2158db4cc5ea714beb99773d66a0608e3c12c12e5c04e790a4cf00e",
+      "bytes": 528,
+      "merge": "replace"
+    },
+    {
+      "path": "claude/skills/plan.md",
+      "sha256": "894f0db531026008a359220dfa2a1d3bfaab332a8ed33f2c8cb3fc44e356d658",
+      "bytes": 4631,
+      "merge": "replace"
+    },
+    {
+      "path": "claude/skills/refactor.md",
+      "sha256": "1fcd1fdc753d3fc056c0210d580469ffc2c641fdb3c5e60b42fd0a2d4ef07731",
+      "bytes": 286,
+      "merge": "replace"
+    },
+    {
+      "path": "claude/skills/review.md",
+      "sha256": "ce1f47b762fe64fda6d56f2e6902cd69a5a3560875b6485b7066105a9a2501e5",
+      "bytes": 517,
+      "merge": "replace"
+    },
+    {
+      "path": "claude/skills/sweep.md",
+      "sha256": "bec6ea31a9bf260bd02dc184422bffef4e857b5c050c074faa648742e2c97fcf",
+      "bytes": 691,
+      "merge": "replace"
+    },
+    {
+      "path": "claude/skills/verify.md",
+      "sha256": "be6a0aba30cb84b0c50654c9897924f4e5c7dcf6fc463f3b6ade7643b755d4eb",
+      "bytes": 618,
+      "merge": "replace"
+    },
+    {
+      "path": "claude/hooks/session-bind.ps1",
+      "sha256": "ce7fc4e2d5cd5cc0986645f058a0ecc2766953777cfa4ff7715c84f6276114e1",
+      "bytes": 3637,
+      "merge": "replace"
+    },
+    {
+      "path": "opencode/AGENTS.md",
+      "sha256": "cc38f39eaa82ce2c1618eaeeb01b40813d03cc1f2f7b1bccdfe51bf588d59556",
+      "bytes": 7459,
+      "merge": "merge"
+    },
+    {
+      "path": "claude/settings.template.json",
+      "sha256": "b0c0e105bcfbd0502b43c047acf0187705acdc2780be1c426bc34878f50e6db9",
+      "bytes": 831,
+      "merge": "merge",
+      "dropped_keys": [
+        "agentPushNotifEnabled",
+        "autoCompactEnabled",
+        "skipAutoPermissionPrompt",
+        "skipDangerousModePermissionPrompt",
+        "tui",
+        "verbose",
+        "worktree"
+      ]
+    }
+  ],
+  "targets": {
+    "claude/CLAUDE.md": "{{HOME}}/.claude/CLAUDE.md",
+    "claude/skills": "{{HOME}}/.claude/skills",
+    "claude/hooks": "{{HOME}}/.claude/hooks",
+    "claude/settings.template.json": "{{HOME}}/.claude/settings.json",
+    "opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md"
+  }
+}

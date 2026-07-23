@@ -7,9 +7,9 @@
   "probe_timeout_seconds": 45,
   "job_max_runtime_seconds": 5400,
   "routes": {
-    "explore": { "model": "provider_id/model_id" },
-    "plan": { "model": "provider_id/model_id" },
-    "analyze": { "model": "provider_id/model_id" },
+    "explore": { "model": null },
+    "plan": { "model": null },
+    "analyze": { "model": null },
     "verify": { "model": null },
     "sweep": { "model": null }
   }

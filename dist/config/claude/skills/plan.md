@@ -1,0 +1,67 @@
+# Skill: plan
+description: Structured planning — evidence (1-call) + reasoning main_agent. Atribusi klaim + decision gate mekanis.
+
+## Trigger
+/.plan <task>
+
+## STEP 1 — Evidence
+Reuse LAST_EXPLORE_RESULT jika ada di context. Else 1-call:
+  Windows:   & "<work_dir>\.workflow\run.ps1" plan "<task>" "<MAIN_SESSION_ID>"
+  mac/linux: "<work_dir>/.workflow/run.sh" plan "<task>" "<MAIN_SESSION_ID>"
+<MAIN_SESSION_ID> dari [SESSION BINDING], WAJIB arg ke-3 (isolasi concurrent).
+- GAGAL (ok:false | invalid_evidence | content menu/refusal) → HARD GATE:
+  STOP → "[PROXY GAGAL] <alasan>. Lanjut plan via /.local atau tanpa evidence? (yes/no)" → TUNGGU. JANGAN auto-fallback.
+- [LOCAL_MODE]=true → skip run, pakai /.local flow sebagai evidence.
+- Proxy scope-bounded ke file yg kamu sebut. Lintas-sistem (saldo, UX, perf, security) TAK dilihat proxy kecuali kamu inject ke task. Inject eksplisit ATAU tandai not_investigated. Tugasmu sambung, bukan proxy.
+- Instruksikan proxy trace REVERSE-dep (siapa consume/panggil target perubahan) → `dependents`. Tiap fitur/modul lain yg terdampak WAJIB masuk `risks` dgn [proxy:file:line] bukti coupling.
+- Task nyentuh library/framework eksternal → SEBUT nama library di task; proxy WAJIB baca docs via context7 DULU (versi + API resmi) → temuan di `external`. Jangan biar API library dari tebakan masuk plan.
+
+## STEP 2 — Output [PLAN]
+TIAP klaim di assumptions/steps/dependencies/risks WAJIB atribusi sumber:
+  [proxy:file:line] berbukti | [main_agent-inference] simpulanmu | [user-provided] | [PLACEHOLDER-perlu-kalibrasi] angka/metrik tanpa basis.
+DILARANG sajikan tebakan (angka, dependency, regresi) sebagai fakta tak berlabel. Belum ada evidence → minta evidence baru ATAU label. Jangan naikkan kepercayaan diam-diam saat didorong.
+
+[PLAN]
+task:            <restatement>
+evidence_source: second_agent (1-call) | graphify+claude (local) | none
+assumptions:     - <statement + atribusi> | (tidak ada: alasan)
+open_questions:  - <keputusan arch/impl yg HANYA user bisa putus; BLOCKING> | (tidak ada: alasan)
+resolvable_uncertainties: - <bisa ditutup> → cara: <read/grep/explore apa> | (tidak ada)
+steps:           1. <concrete + atribusi> 2. ...
+dependencies:    - A→B [bukti:file:line] | A→B [ASUMSI-belum-verified] | (tidak ada)
+files_affected:  <list>
+risks:           - <breakage/side-effect + fitur lain terdampak (blast radius dari dependents) + atribusi> | (tidak ada: alasan)
+confidence:
+  problem_understanding: low|medium|high — <alasan>
+  root_cause:            low|medium|high — <alasan>
+  solution_path:         low|medium|high — <alasan>
+decision:        proceed | clarify | re-explore
+  MEKANIS: open_questions ada ATAU solution_path<high ATAU jalur kritis berat [main_agent-inference] → clarify (DILARANG proceed/tawar execute). root_cause rendah → re-explore. Selain itu → proceed.
+
+## STEP 2b — Output [OPTIONS] (WAJIB, setelah [PLAN])
+Rencana di atas = SATU jalan. Sajikan alternatifnya, jangan sembunyikan pilihan di kepalamu.
+
+[OPTIONS]
+Opsi A — <nama>  (= rencana di atas)
+  plus:   <keunggulan nyata>
+  minus:  <ongkos/risiko nyata>
+  effort: kecil|sedang|besar · risiko utama: <satu hal>
+  atribusi: [proxy:file:line] | [main_agent-inference]
+Opsi B — <pendekatan BEDA> (idem)
+Opsi C — <opsional, idem>
+rekomendasi: <SATU opsi> — <alasan pendek, sebut trade-off yang kamu terima>
+
+BOUNDED (langgar = output invalid):
+- MAX 3 opsi. Tiap opsi max 5 baris.
+- Tiap opsi wajib beda PENDEKATAN, bukan beda kosmetik/urutan/penamaan.
+- Wajib DALAM scope task. DILARANG usul rewrite, ganti stack, ganti arsitektur kalau task-nya bukan itu. Opsi di luar scope = scope creep, bukan pilihan.
+- Atribusi sama ketatnya dengan [PLAN]. Opsi tanpa basis evidence tetap dilabel [main_agent-inference].
+- `minus` WAJIB diisi jujur, termasuk untuk opsi yang kamu rekomendasikan. Opsi tanpa minus = kamu belum memikirkannya.
+- Opsi yang bertentangan dengan evidence WAJIB ditandai ❌ + sebut evidence yang membantahnya. Jangan disajikan setara.
+- rekomendasi WAJIB SATU. Tak bisa memilih → itu open_question, bukan opsi. Naikkan ke [PLAN].
+- Opsi cuma satu yang masuk akal → tulis "Opsi A saja — <alasan tak ada alternatif bounded>". Jangan karang opsi B demi memenuhi format.
+
+## STEP 3
+resolvable_uncertainties WAJIB kamu coba tutup DULU sebelum tanya user; sisakan open_questions saja ke user.
+decision=proceed → "Setuju? Jalankan /.execute -y". clarify → tanya open_questions. JANGAN auto-execute.
+User pilih opsi non-rekomendasi → JALANKAN pilihannya, jangan debat ulang. Sudah kamu sebut minus-nya; keputusan miliknya.

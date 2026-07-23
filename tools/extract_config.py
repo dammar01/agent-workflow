@@ -1,0 +1,263 @@
+"""Extract the maintainer's live agent config into dist/ so it can ship with the repo.
+
+Runs on the DEV machine. Reads the live agent directories, copies an explicit allowlist
+into `dist/config/`, redacts machine-specific paths, and writes a manifest the installer
+consumes.
+
+Security posture, in order of importance:
+
+1. **Allowlist, never blocklist.** The agent home holds `.credentials.json`, an
+   879KB `history.jsonl`, session transcripts and project paths. A blocklist ships
+   whatever it forgot to name; an allowlist ships only what was named. Anything not
+   listed here does not leave the machine.
+2. **Fail closed on secrets.** Every extracted byte is scanned for credential-shaped
+   content. A hit ABORTS the run and writes nothing — a warning would be read, ignored,
+   and committed anyway. Secrets in git history are not removable in practice.
+3. **Read-only.** This tool never writes outside `dist/`.
+
+Usage:
+    python tools/extract_config.py                 # extract into dist/
+    python tools/extract_config.py --dry-run       # report only, write nothing
+"""
+import argparse
+import hashlib
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DIST_DIR = REPO_ROOT / "dist" / "config"
+MANIFEST = REPO_ROOT / "dist" / "manifest.json"
+
+# Only these leave the machine. Adding an entry is a deliberate act; forgetting one
+# costs a missing feature, whereas a stray glob costs a leaked credential.
+ALLOWLIST = [
+    # (source relative to home, dest relative to dist/config, kind)
+    (".claude/CLAUDE.md", "claude/CLAUDE.md", "file"),
+    (".claude/skills", "claude/skills", "dir:*.md"),
+    (".claude/hooks", "claude/hooks", "dir:*.ps1,*.sh"),
+    (".config/opencode/AGENTS.md", "opencode/AGENTS.md", "file"),
+]
+
+# settings.json is filtered key-wise rather than copied: the file mixes shareable
+# workflow wiring with machine-local state.
+SETTINGS_SOURCE = ".claude/settings.json"
+SETTINGS_DEST = "claude/settings.template.json"
+SETTINGS_KEEP_KEYS = (
+    "hooks",
+    "enabledPlugins",
+    "extraKnownMarketplaces",
+    "model",
+    "effortLevel",
+    "permissions",
+)
+
+# Never copied, even if some future allowlist entry would sweep them in.
+DENY_NAMES = {
+    ".credentials.json",
+    "history.jsonl",
+    "session_registry.json",
+    "stats-cache.json",
+    ".last-update-result.json",
+}
+DENY_DIR_PARTS = {
+    "projects", "sessions", "session-env", "shell-snapshots", "debug",
+    "cache", "tmp", "paste-cache", "file-history", "backups", "downloads",
+    "jobs", "daemon", "gateway", "ide", "plugins", "node_modules", "__pycache__",
+}
+
+# Credential-shaped content. Deliberately broad: a false positive costs one manual
+# look, a false negative costs a permanent leak.
+SECRET_PATTERNS = [
+    (re.compile(r"sk-[A-Za-z0-9_\-]{16,}"), "openai-style key"),
+    (re.compile(r"\bghp_[A-Za-z0-9]{20,}"), "github token"),
+    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "github token"),
+    (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"), "slack token"),
+    (re.compile(r"AKIA[0-9A-Z]{16}"), "aws access key"),
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), "private key"),
+    (re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-]{20,}"), "bearer token"),
+    (
+        re.compile(r"(?i)\"?(api[_-]?key|secret|password|access[_-]?token)\"?\s*[:=]\s*\"[^\"]{12,}\""),
+        "inline credential",
+    ),
+]
+
+HOME = Path.home()
+
+
+def _redact(text: str) -> str:
+    """Replace machine-specific absolute paths with installer placeholders.
+
+    Not a security control — the secret scan is. This keeps the shipped config from
+    hard-coding one machine's layout, and keeps the maintainer's username out of the
+    published files.
+    """
+    home = str(HOME)
+    repo = str(REPO_ROOT)
+    for src, token in ((repo, "{{PROJECT_ROOT}}"), (home, "{{HOME}}")):
+        text = text.replace(src, token)
+        text = text.replace(src.replace("\\", "\\\\"), token)
+        text = text.replace(src.replace("\\", "/"), token)
+    return text
+
+
+def _scan_secrets(text: str, label: str) -> list[str]:
+    return [
+        f"{label}: {why}"
+        for pattern, why in SECRET_PATTERNS
+        if pattern.search(text)
+    ]
+
+
+def _denied(path: Path) -> str | None:
+    if path.name in DENY_NAMES:
+        return f"denylisted file name: {path.name}"
+    hit = DENY_DIR_PARTS.intersection(path.parts)
+    if hit:
+        return f"denylisted directory: {sorted(hit)[0]}"
+    return None
+
+
+def _collect() -> tuple[list[dict], list[str]]:
+    """Gather allowlisted files. Returns (entries, problems)."""
+    entries: list[dict] = []
+    problems: list[str] = []
+
+    for rel_src, rel_dest, kind in ALLOWLIST:
+        source = HOME / rel_src
+        if not source.exists():
+            problems.append(f"missing (skipped): {rel_src}")
+            continue
+
+        if kind == "file":
+            candidates = [(source, rel_dest)]
+        else:
+            patterns = kind.split(":", 1)[1].split(",")
+            candidates = []
+            for pattern in patterns:
+                for found in sorted(source.glob(pattern)):
+                    if found.is_file():
+                        candidates.append((found, f"{rel_dest}/{found.name}"))
+
+        for path, dest in candidates:
+            reason = _denied(path)
+            if reason:
+                problems.append(f"REFUSED {path.name}: {reason}")
+                continue
+            try:
+                raw = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                problems.append(f"unreadable (skipped): {path} — {exc}")
+                continue
+            entries.append({"dest": dest, "text": _redact(raw), "source": str(path)})
+
+    settings = HOME / SETTINGS_SOURCE
+    if settings.exists():
+        try:
+            loaded = json.loads(settings.read_text(encoding="utf-8"))
+            kept = {k: v for k, v in loaded.items() if k in SETTINGS_KEEP_KEYS}
+            dropped = sorted(set(loaded) - set(kept))
+            entries.append(
+                {
+                    "dest": SETTINGS_DEST,
+                    "text": _redact(json.dumps(kept, indent=2) + "\n"),
+                    "source": str(settings),
+                    "dropped_keys": dropped,
+                }
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            problems.append(f"settings.json unreadable: {exc}")
+
+    return entries, problems
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Extract live agent config into dist/")
+    parser.add_argument("--dry-run", action="store_true", help="report only, write nothing")
+    args = parser.parse_args()
+
+    entries, problems = _collect()
+    if not entries:
+        print("[EXTRACT] nothing to extract")
+        for problem in problems:
+            print(f"  - {problem}")
+        return 1
+
+    # Fail closed: one credential hit stops everything. Publishing is irreversible.
+    findings: list[str] = []
+    for entry in entries:
+        findings.extend(_scan_secrets(entry["text"], entry["dest"]))
+    if findings:
+        print("[EXTRACT] ABORTED — credential-shaped content found:")
+        for finding in findings:
+            print(f"  !! {finding}")
+        print("Nothing was written. Remove the secret or narrow the allowlist, then rerun.")
+        return 2
+
+    leaked_home = [e["dest"] for e in entries if str(HOME) in e["text"]]
+    if leaked_home:
+        print("[EXTRACT] ABORTED — absolute home paths survived redaction:")
+        for dest in leaked_home:
+            print(f"  !! {dest}")
+        return 3
+
+    files_meta = []
+    for entry in entries:
+        digest = hashlib.sha256(entry["text"].encode("utf-8")).hexdigest()
+        files_meta.append(
+            {
+                "path": entry["dest"],
+                "sha256": digest,
+                "bytes": len(entry["text"].encode("utf-8")),
+                "merge": "replace" if "/skills/" in entry["dest"] or entry["dest"].endswith(".ps1") or entry["dest"].endswith(".sh") else "merge",
+                **({"dropped_keys": entry["dropped_keys"]} if "dropped_keys" in entry else {}),
+            }
+        )
+
+    print(f"[EXTRACT] {'DRY RUN — ' if args.dry_run else ''}{len(entries)} file(s)")
+    for meta in files_meta:
+        extra = f" (dropped {len(meta['dropped_keys'])} local key(s))" if meta.get("dropped_keys") else ""
+        print(f"  {meta['merge']:8} {meta['path']:44} {meta['bytes']:>7}B{extra}")
+    for problem in problems:
+        print(f"  - {problem}")
+
+    if args.dry_run:
+        print("[EXTRACT] dry run — nothing written")
+        return 0
+
+    for entry in entries:
+        target = DIST_DIR / entry["dest"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(entry["text"], encoding="utf-8")
+
+    from config.settings import TOOL_VERSION
+
+    MANIFEST.parent.mkdir(parents=True, exist_ok=True)
+    MANIFEST.write_text(
+        json.dumps(
+            {
+                "version": TOOL_VERSION,
+                "generated_on": os.name,
+                "files": files_meta,
+                "targets": {
+                    "claude/CLAUDE.md": "{{HOME}}/.claude/CLAUDE.md",
+                    "claude/skills": "{{HOME}}/.claude/skills",
+                    "claude/hooks": "{{HOME}}/.claude/hooks",
+                    "claude/settings.template.json": "{{HOME}}/.claude/settings.json",
+                    "opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",
+                },
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    print(f"[EXTRACT] wrote {DIST_DIR} + {MANIFEST.name}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.path.insert(0, str(REPO_ROOT))
+    raise SystemExit(main())

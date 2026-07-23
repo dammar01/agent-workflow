@@ -38,11 +38,12 @@ class JobManager:
     def create_job(
         self,
         workflow_command: str,
-        task: str,
+        task: str | None,
         session_id: str,
         work_dir: str | None,
         model: str | None,
     ) -> dict:
+        task = task or ""
         request_hash = self._request_hash(workflow_command, task, session_id, work_dir)
 
         # Idempotency: identical request already active on this session → reuse it.
@@ -425,8 +426,13 @@ class JobManager:
         return "unknown"
 
     @staticmethod
-    def _request_hash(command: str, task: str, session_id: str, work_dir: str | None) -> str:
-        raw = "|".join([command.strip().lower(), task.strip(), session_id, work_dir or ""])
+    def _request_hash(command: str, task: str | None, session_id: str, work_dir: str | None) -> str:
+        # `task` is genuinely optional for some commands (sweep scans the git diff and
+        # needs no prompt). Treating None as a crash turned a valid invocation into a
+        # raw AttributeError traceback instead of a structured result.
+        raw = "|".join(
+            [(command or "").strip().lower(), (task or "").strip(), session_id, work_dir or ""]
+        )
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
     @staticmethod

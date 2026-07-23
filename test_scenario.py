@@ -603,6 +603,36 @@ def run_tests() -> None:
             "an unreadable config must leave fan-out off",
         )
 
+        # The shipped example is what a FRESH CLONE gets: config/opencode.json is
+        # gitignored by design, so init falls back to the example. Placeholder model
+        # strings there reach `opencode -m` verbatim and fail on the very first
+        # delegated call — `null` correctly means "use opencode's own default".
+        import json as _json
+
+        example = Path(__file__).resolve().parent / "config" / "opencode.example.json"
+        shipped = _json.loads(example.read_text(encoding="utf-8"))
+        models = [shipped.get("default_model")] + [
+            r.get("model") for r in (shipped.get("routes") or {}).values()
+        ]
+        assert_true(
+            all(m is None for m in models),
+            f"shipped example must not carry placeholder models: {models}",
+        )
+        assert_true(
+            shipped.get("timeout_seconds", 0) > 0,
+            "shipped example must carry a real timeout, not an unbounded wait",
+        )
+
+        # Some commands legitimately carry no task (sweep scans the git diff). A missing
+        # task used to reach `task.strip()` and surface as a raw AttributeError traceback
+        # instead of a result.
+        taskless = main.JOB_MANAGER.create_job("sweep", None, "taskless-session", work_dir, None)
+        assert_true(
+            taskless["task"] == "" and taskless["request_hash"],
+            "a job with no task must be created normally, not crash",
+        )
+        main.JOB_MANAGER.fail_job(taskless["job_id"], "cleanup")
+
         print("test_scenario: success")
     finally:
         main.subprocess.Popen = original_popen
