@@ -8,8 +8,8 @@
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "fcc1d2a1e1107b98bbf32a29f89da69c66566b93ea9154f3502e2c5e273a0a53",
-      "bytes": 13204,
+      "sha256": "20f8a5790218e55a186d0cf9d5552160fd6b9e8c2677661ff09aad1f3681d5f1",
+      "bytes": 15056,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -92,8 +92,8 @@
     },
     {
       "path": "claude/skills/plan.md",
-      "sha256": "894f0db531026008a359220dfa2a1d3bfaab332a8ed33f2c8cb3fc44e356d658",
-      "bytes": 4631,
+      "sha256": "86fee4b42191281f755a25c74089083d310a7341a5079f7dc5d56b6f6c70c4a9",
+      "bytes": 4998,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -141,8 +141,8 @@
     },
     {
       "path": "opencode/AGENTS.md",
-      "sha256": "fe6a6188007fdd7e3a8e453c797b60cbd479286e574b785972e418bfd7d02964",
-      "bytes": 9721,
+      "sha256": "a854aa342639bb0fc31a91b4f422ce8583ee1671f020a07e3638099f725cc018",
+      "bytes": 11239,
       "merge": "merge",
       "component": "prompt_bundle"
     },
