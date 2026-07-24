@@ -199,10 +199,7 @@ def run_tests() -> None:
         assert_true(worker_status["status"] == "completed", "worker must persist completed state")
 
         # 9. check.py status/result payloads
-        # The queued job was submitted with a PID that does not exist. check.py used to
-        # read the job record directly and report `pending` forever for exactly this
-        # case — an attached `--wait` polling a corpse. It now goes through get_result,
-        # which is where liveness runs, so a dead worker is reaped instead.
+        # Status lookup runs liveness checks and reaps a worker whose PID is gone.
         pending_status = check._status_payload(queued["job_id"])
         assert_true(
             pending_status["status"] == "failed",
@@ -262,7 +259,7 @@ def run_tests() -> None:
         assert_true(timeout_status["status"] == "pending", "timed out status must preserve current job state")
         assert_true(timeout_status.get("timed_out") is True, "timed out wait must mark timed_out")
 
-        # 11. v3.3.0 — structured errors, idempotency, reaper, digest, guard, router
+        # 11. Structured errors, idempotency, reaper, digest, guard, router
         from core.contract import extract_digest, make_error
         from core.router import Router
         from utils import osutil, path_guard
@@ -337,7 +334,7 @@ def run_tests() -> None:
         assert_true(rich_res["meta"].get("error_type") == "invalid_evidence", "job path must preserve error_type")
         assert_true(rich_res["meta"].get("next_action") == "STOP, ask user", "job path must preserve next_action")
 
-        # 12. v3.4.0 reliability: liveness tri-state, heartbeat, runtime ceiling, probe
+        # 12. Liveness tri-state, heartbeat, runtime ceiling, probe
         from core import fact_store, graph_index, job_manager as jm_mod
 
         # Stall detection and the runtime ceiling are separate managers on purpose: the
@@ -435,8 +432,7 @@ def run_tests() -> None:
             "a job past the runtime ceiling must fail as expired, distinct from worker_died",
         )
 
-        # Tolerant fact parsing: the old parser stopped at the first non-bullet line, so a
-        # blank line or a nested bullet silently emptied the section (and ingest hid it).
+        # Tolerant fact parsing preserves blank lines, nested bullets, and continuations.
         messy = (
             "grounded:\n\n- claim A [main.py:1]\n  * nested detail\n"
             "- claim B [core/x.py:2]\n  wrapped tail\n\nassumptions:\n- guess\n"
@@ -456,9 +452,7 @@ def run_tests() -> None:
             == ["a [x.py:1]", "b [y.py:2]"],
             "the pre-3.4.0 flat format must keep parsing identically",
         )
-        # A section header carrying trailing text ends the block. Real second_agent output
-        # writes `external: none (...)`, and gluing that onto the last bullet corrupts the
-        # claim text — which is what the recurrence key is computed from.
+        # A top-level `key: value` line ends the current block.
         assert_true(
             fact_store._parse_block(
                 "dependents:\n- calls X [a.py:1]\nexternal: none (no external libs)\n", "dependents"
@@ -509,8 +503,7 @@ def run_tests() -> None:
                 "leads must be framed as starting points, never as findings",
             )
 
-        # Timeout is on by default now: an unbounded wait is how a rate-limited agent
-        # used to hang a job forever.
+        # Delegated runs have a finite default timeout.
         default_adapter = OpenCodeAdapter()
         assert_true(
             not default_adapter.no_timeout and default_adapter.timeout_seconds > 0,
@@ -534,7 +527,7 @@ def run_tests() -> None:
             "pruning a job must take its heartbeat/probe side files with it",
         )
 
-        # 13. v3.4.0-b sub-agent fan-out: instruction gating + honest usage detection
+        # 13. Sub-agent fan-out: instruction gating and honest usage detection
         from core.contract import detect_subagent_usage
         from core.workflow_runtime import subagent_fanout_enabled
 
@@ -600,9 +593,7 @@ def run_tests() -> None:
             "a declared fan-out with no tagged claims must be flagged, not counted as success",
         )
 
-        # Observed for real: the agent read sequentially but still tagged every claim.
-        # Cluster coverage must NOT be reported as fan-out — that reads as proof of work
-        # nobody did.
+        # Tagged cluster coverage alone is not proof that fan-out occurred.
         honest = (
             "subagents: none (no spawn tool; tools: read, grep)\n"
             "grounded:\n- [c1] X [a.py:1]\n- [c3] Y [b.py:2]\n"
@@ -621,8 +612,7 @@ def run_tests() -> None:
             "output with no subagents line must not register as fan-out",
         )
 
-        # Default ON. The previous fail-closed default meant an unreadable config
-        # silently downgraded every call to a serial read with nothing saying so.
+        # Fan-out defaults to on, including when config is unreadable.
         assert_true(
             subagent_fanout_enabled(temp_root) is True,
             "fan-out must default to on",
@@ -632,10 +622,7 @@ def run_tests() -> None:
             "an unreadable config must fall back to the default, not to off",
         )
 
-        # The shipped example is what a FRESH CLONE gets: config/opencode.json is
-        # gitignored by design, so init falls back to the example. Placeholder model
-        # strings there reach `opencode -m` verbatim and fail on the very first
-        # delegated call — `null` correctly means "use opencode's own default".
+        # Fresh init uses the example config; null delegates model selection to OpenCode.
         import json as _json
 
         example = Path(__file__).resolve().parent / "config" / "opencode.example.json"
@@ -652,9 +639,7 @@ def run_tests() -> None:
             "shipped example must carry a real timeout, not an unbounded wait",
         )
 
-        # Some commands legitimately carry no task (sweep scans the git diff). A missing
-        # task used to reach `task.strip()` and surface as a raw AttributeError traceback
-        # instead of a result.
+        # sweep accepts an empty task because it derives work from the git diff.
         taskless = main.JOB_MANAGER.create_job("sweep", None, "taskless-session", work_dir, None)
         assert_true(
             taskless["task"] == "" and taskless["request_hash"],

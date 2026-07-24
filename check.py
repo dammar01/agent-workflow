@@ -18,18 +18,14 @@ _PROBE_RECHECK_SECONDS = float(DEFAULT_PROBE_RECHECK_SECONDS)
 
 
 def _status_payload(job_id: str) -> dict:
-    # Routed through get_result, not the raw record: get_result is where liveness runs
-    # and where a dead or over-budget worker gets reaped. Reading the record directly
-    # meant an attached `--wait` polled a corpse forever, because nothing in this path
-    # ever asked whether the worker was still alive.
+    # Use get_result so attach polling also runs liveness checks and reaping.
     result = JOB_MANAGER.get_result(job_id)
     status = result.get("status") or "unknown"
     payload = {
         "ok": status == "completed",
         "job_id": job_id,
         "status": status,
-        # not_found is terminal: there is no record and none is coming. Leaving it out
-        # told a caller polling on `done` to keep waiting for a job that does not exist.
+        # not_found is terminal because no record can later complete.
         "done": status in {"completed", "failed", "not_found"},
     }
     error_type = (result.get("meta") or {}).get("error_type")

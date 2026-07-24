@@ -355,7 +355,7 @@ def check_stalled_job(
         pass
 
     if probe.get("alive"):
-        return None  # both checks pass: silent but healthy, keep waiting
+        return None
 
     if probe.get("rate_limited") or probe.get("reason") == "probe_rate_limited":
         return JOB_MANAGER.reap_stalled(
@@ -373,11 +373,7 @@ def check_stalled_job(
         )
 
     if probe.get("stream_failed") or probe.get("reason") == "probe_stream_failed":
-        # The probe reached the provider and the answer started before the connection
-        # dropped, so the second agent is NOT down — reporting this as
-        # `second_agent_unavailable` sent the caller to check their login for what is a
-        # transient network event. The job is still reaped: it is genuinely stalled, and
-        # a flaky provider stream is a reason to resubmit, not to keep waiting.
+        # A partial provider stream is transient; reap the stalled job for resubmission.
         return JOB_MANAGER.reap_stalled(
             job_id,
             "streaming_failed",
@@ -582,10 +578,7 @@ def _spawn_worker(job_id: str, work_dir: str | None = None) -> dict:
         "--job-id",
         job_id,
     ]
-    # Capture the detached worker's stdout+stderr to a per-job file. Without this
-    # an uncaught crash before run_worker's try (import error, env fault, OS kill)
-    # goes to DEVNULL and only a synthetic "reaped" message survives — the real
-    # traceback is lost, making such failures impossible to diagnose after the fact.
+    # Preserve detached-worker tracebacks, including pre-handler crashes.
     log_path = JOB_MANAGER.job_dir / "logs" / f"{job_id}.log"
     log_handle = subprocess.DEVNULL
     try:

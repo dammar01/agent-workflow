@@ -1,8 +1,7 @@
 """Install the agent-workflow config onto this machine.
 
 Consumes `dist/` (produced by tools/extract_config.py) and applies it to the local
-agent directories. Replaces the old prompt-driven setup: no pasting a 45KB prompt into
-an agent and hoping it writes the right files.
+agent directories.
 
     python install.py              # DRY RUN — show every change, write nothing
     python install.py --apply      # actually write
@@ -43,8 +42,7 @@ MARKERS = {
     "opencode/AGENTS.md": ("WORKFLOW-SECOND-AGENT:START", "WORKFLOW-SECOND-AGENT:END"),
 }
 
-# settings.json keys the workflow actually needs to function. Everything else in the
-# template is the maintainer's taste and is only offered when the user has no value.
+# settings.json keys required by the workflow; other template values stay optional.
 SETTINGS_REQUIRED = ("hooks",)
 
 
@@ -182,11 +180,7 @@ def _install_settings(
     added = [k for k in template if k not in current]
     differing = [k for k in template if k in current and current[k] != template[k]]
 
-    # `hooks` gets a nested additive merge instead of the whole-key treatment. A shipped
-    # hook EVENT (Stop, PreToolUse, ...) must be able to land on a machine that already
-    # has a hooks block for some OTHER event (SessionStart). Treating hooks as one opaque
-    # value froze the entire block the moment it differed, so every new hook this tool
-    # shipped was copied to disk as a file and then never registered — installed and inert.
+    # Merge hooks additively per event so unrelated user events remain untouched.
     hook_events_added: list[str] = []
     if "hooks" in differing:
         differing.remove("hooks")
@@ -384,10 +378,7 @@ def main() -> int:
         )
 
     if project_root:
-        # An existing .workflow/ is upgraded, not re-scaffolded. ensure_workflow_workspace
-        # only writes files that are MISSING, so on a workspace from an older build it
-        # leaves stale run scripts and never backfills new opencode.json keys — the exact
-        # drift that made every fix in this repo stop at the repo it was written in.
+        # Upgrade an existing workspace; scaffold only when .workflow/ is absent.
         existing = (project_root / ".workflow").exists()
         sys.path.insert(0, str(REPO_ROOT))
         from core.workflow_runtime import (

@@ -59,7 +59,6 @@ def validate_scope(task: str, project_root: str | Path) -> tuple[bool, list[str]
         except (OSError, ValueError):
             continue
 
-    # De-dup, keep order.
     seen: set[str] = set()
     unique = [b for b in blocked if b and not (b in seen or seen.add(b))]
     return (len(unique) == 0, unique)

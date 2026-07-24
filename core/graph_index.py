@@ -1,12 +1,7 @@
 """Read-only index over `graphify-out/graph.json`.
 
-Graphify was already produced for this project but only ever read as a file by the
-second agent. This turns it into something queryable so a delegated call can start
-from a ranked shortlist of files instead of from nothing.
-
 Deliberately parses graph.json directly rather than shelling out to `graphify query`
-or running its MCP server: no extra process, no PATH dependency, and the file is small
-(~65KB / 62 nodes for this repo) so a per-call parse is cheaper than a cache would be.
+or running its MCP server, avoiding an extra process and a PATH dependency.
 
 Edge confidence is honored: graphify tags every edge EXTRACTED (read from source),
 INFERRED, or AMBIGUOUS. Treating an inferred edge as strong as an extracted one is
@@ -216,18 +211,13 @@ def top_files(
 ) -> list[dict]:
     """Files ranked by keyword overlap with `hint`, then by weighted degree.
 
-    Two things here are deliberate, and both exist because the earlier ranking returned
-    almost the same shortlist for every hint:
+    Two ranking rules keep keyword relevance ahead of connectivity:
 
-    1. Degree is NORMALISED before it is added. Raw weighted degree runs to ~50 on the
-       hub of a mid-sized repo while a filename can only ever supply a handful of
-       keyword matches — so the hub outranked the file the hint literally named. Scaled
-       to the same 0-10 band as one keyword match, connectivity becomes the tiebreaker
-       it was meant to be instead of the answer.
+    1. Degree is normalised to the same 0-10 band as one keyword match, so
+       connectivity remains a tiebreaker.
     2. Matches are aggregated ACROSS a file's nodes rather than taken from its single
        best one. graph.json carries no file contents; symbol labels (`JobManager`,
-       `reap_stalled`) are the only semantic signal it has, and scoring one node at a
-       time threw away every match after the first.
+       `reap_stalled`) are its semantic signal.
 
     With no hint this degrades to pure connectivity ranking, which is still a far
     better starting point than an alphabetical directory listing.
@@ -299,8 +289,7 @@ def leads(project_root, hint: str = "", limit: int = MAX_LEADS) -> dict | None:
 
     Shape: {'files': [...], 'communities': [...], 'stale': bool|None, 'node_count': int}
     """
-    # Parsed once and threaded through: this runs on every delegated call, and the
-    # graph grows with the repo (313 nodes here already, up from 62).
+    # Parse once and pass the graph to helpers used by this delegated call.
     graph = load_graph(project_root)
     if not graph:
         return None

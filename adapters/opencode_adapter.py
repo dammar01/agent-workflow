@@ -135,8 +135,8 @@ class OpenCodeAdapter:
     ) -> dict:
         """Run `args`, draining stdout/stderr on threads while the main loop polls.
 
-        Replaces subprocess.run so the worker gets a tick between polls (heartbeat)
-        and so a timeout can kill the whole process tree rather than just the shim.
+        Threaded draining allows heartbeat polling and whole-process-tree termination
+        on timeout.
 
         Returns {'returncode', 'stdout', 'stderr', 'timed_out', 'duration_seconds',
                  'pid', 'kill'} — never raises for timeout.
@@ -230,10 +230,8 @@ class OpenCodeAdapter:
     def _tick(self, phase: str, elapsed: float, idle: float = 0.0) -> None:
         """Emit one liveness beat. Never let a bad callback kill the run.
 
-        `idle_seconds` is the part that matters downstream. The beat itself only proves
-        this loop is turning — it turns identically while opencode sits on a rate limit,
-        which is exactly how a hung job used to read as healthy. The idle figure is the
-        one signal that separates "producing output" from "waiting".
+        A heartbeat only proves this loop is turning; `idle_seconds` distinguishes
+        active output from waiting.
         """
         if not self.on_progress:
             return
@@ -274,8 +272,7 @@ class OpenCodeAdapter:
         if workflow_session_id:
             meta["workflow_session_id"] = workflow_session_id
 
-        # Bootstrap gets its OWN (shorter) budget: a hung `opencode run` here used to
-        # wait forever because communicate(timeout=None) was hardcoded.
+        # Bootstrap uses a separate budget so a hung init cannot wait indefinitely.
         budget = self.bootstrap_timeout_seconds
         if budget is not None and budget <= 0:
             budget = None
@@ -346,7 +343,7 @@ class OpenCodeAdapter:
             opencode_session_id, bootstrap_meta = self.init_session(
                 model, work_dir, workflow_session_id=session.get("session_id")
             )
-            if not opencode_session_id:  # one retry — capture is the flaky step
+            if not opencode_session_id:
                 opencode_session_id, bootstrap_meta = self.init_session(
                     model, work_dir, workflow_session_id=session.get("session_id")
                 )

@@ -155,11 +155,8 @@ _BULLET = re.compile(r"^[-*•]\s*")
 def _parse_block(content: str, header: str) -> list[str]:
     """Bullet lines under `header:`, up to the next section header.
 
-    Tolerant on purpose. The previous version stopped at the FIRST line that did not
-    start with "-", so a blank line, an indented sub-bullet, a fenced code block or a
-    "*" bullet silently truncated the section to nothing — and since ingest swallowed
-    exceptions, that looked exactly like "the run had no facts". Anything the second
-    agent plausibly emits should still parse; only a genuine new section ends the block.
+    Blank lines, sub-bullets, fenced blocks, and alternate bullet markers do not end
+    the section; only a genuine new section does.
     """
     out: list[str] = []
     collecting = False

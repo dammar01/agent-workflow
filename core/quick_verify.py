@@ -67,8 +67,7 @@ def _git_lines(argv: list[str], project_root: Path) -> list[str]:
 def changed_files(project_root: Path) -> list[str]:
     """Tracked modifications plus untracked new files, relative to project_root.
 
-    Untracked files are included on purpose: a brand-new file with a syntax error is
-    the most common thing a fresh implementation step leaves behind.
+    Untracked files are included so newly created files are verified too.
     """
     tracked = _git_lines(["git", "diff", "--name-only", "HEAD"], project_root)
     if not tracked:

@@ -70,7 +70,6 @@ def workflow_paths(
         else workflow_dir
     )
     runtime_dir = session_dir / "runtime"
-    # Per-run archive lives inside the session so each flow's evidence trail is isolated.
     logs_dir = (session_dir / "logs") if session_id else (workflow_dir / "logs")
     sweep_report = (
         session_dir / "reports" / "sweep.last.md"
@@ -1082,7 +1081,6 @@ def write_prompt_handoff(
     prompt_tmp.replace(loaded["paths"]["prompt"])
     prompt_meta_tmp.replace(loaded["paths"]["prompt_meta"])
 
-    # Per-run archive (rolling): prompt + checksum, keyed by prompt_id.
     _archive_prompt(loaded["paths"]["logs_dir"], prompt_id, prompt)
 
     state["guards"]["last_prompt_id"] = prompt_id

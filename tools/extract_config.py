@@ -6,10 +6,8 @@ consumes.
 
 Security posture, in order of importance:
 
-1. **Allowlist, never blocklist.** The agent home holds `.credentials.json`, an
-   879KB `history.jsonl`, session transcripts and project paths. A blocklist ships
-   whatever it forgot to name; an allowlist ships only what was named. Anything not
-   listed here does not leave the machine.
+1. **Allowlist, never blocklist.** Agent homes contain credentials, history, session
+   transcripts, and project paths. Anything not explicitly listed here stays local.
 2. **Fail closed on secrets.** Every extracted byte is scanned for credential-shaped
    content. A hit ABORTS the run and writes nothing — a warning would be read, ignored,
    and committed anyway. Secrets in git history are not removable in practice.
@@ -193,7 +191,7 @@ def _clobber_risks(entries: list[dict]) -> list[str]:
             continue
         try:
             if target.read_text(encoding="utf-8") == entry["text"]:
-                continue  # identical: nothing to lose
+                continue
             source_mtime = Path(entry["source"]).stat().st_mtime
             if target.stat().st_mtime > source_mtime:
                 risks.append(entry["dest"])

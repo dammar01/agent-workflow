@@ -156,8 +156,7 @@ class Executor:
         finally:
             release_runtime_lock(handoff["paths"]["lock"])
             self.opencode.on_progress = None
-            # Record what the call actually did (exit code, duration, kill, stderr tail).
-            # Without this, "opencode behaves oddly under rate limits" stays folklore.
+            # Archive exit, duration, kill, and stderr metadata for failure diagnosis.
             write_call_meta(
                 project_root,
                 handoff.get("meta", {}).get("prompt_id"),
@@ -240,9 +239,7 @@ class Executor:
                 )
 
         if route["role"] in ("exploration", "reasoning"):
-            # Ingest stays best-effort — it must never fail a delegated call — but the
-            # failure is now REPORTED. Swallowing it silently let the fact store stop
-            # accepting facts for days without a single visible symptom.
+            # Fact ingestion is best-effort, but its failure remains visible.
             try:
                 added = fact_store.ingest(
                     project_root, result.get("content") or "", session_id

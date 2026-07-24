@@ -14,9 +14,7 @@ TOOL_VERSION = "3.4.0"
 MAIN_PY = BASE_DIR / "main.py"
 CHECK_PY = BASE_DIR / "check.py"
 
-# A delegated call that has produced nothing for this long is not working, it is hung.
-# 0 still means "no limit", but it is no longer the DEFAULT — an unbounded wait is how
-# a rate-limited second agent used to hang a job forever.
+# Overall delegated-call timeout; 0 disables it.
 DEFAULT_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_TIMEOUT_SECONDS", "1800"))
 # Bootstrap only says "READY"; it must never inherit the long task budget.
 DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS = int(
@@ -30,15 +28,10 @@ DEFAULT_POLL_INTERVAL_SECONDS = float(
 DEFAULT_STALL_THRESHOLD_SECONDS = int(
     os.getenv("AI_PROXY_STALL_THRESHOLD_SECONDS", "360")
 )
-# Separate from the heartbeat threshold on purpose. The heartbeat only proves the poll
-# loop is turning, which it does whether or not opencode is producing anything — a
-# rate-limited agent keeps beating forever. This one measures the STREAM: no byte on
-# stdout/stderr for this long means waiting, not working. It must never be folded into
-# stall_threshold; ten other call sites read that value for a different question.
+# Unlike heartbeat age, this measures how long the output stream has been idle.
 DEFAULT_IDLE_STALL_SECONDS = int(os.getenv("AI_PROXY_IDLE_STALL_SECONDS", "240"))
 DEFAULT_PROBE_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_PROBE_TIMEOUT_SECONDS", "45"))
-# A stalled job is re-probed on this cadence. Probing once per job was enough to
-# classify a stall but not to catch one that starts after the single probe landed.
+# Cadence for re-probing a stalled job.
 DEFAULT_PROBE_RECHECK_SECONDS = int(os.getenv("AI_PROXY_PROBE_RECHECK_SECONDS", "120"))
 # Hard ceiling: a job running past this is failed even if its PID looks alive.
 # Backstop for the OOM case, where the worker dies in a way PID checks miss.

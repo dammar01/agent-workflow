@@ -43,9 +43,8 @@ def _subagent_block(graph_leads: dict | None) -> list[str]:
     the one where a serial read costs the most, so falling back to no fan-out at all
     optimised the wrong case.
 
-    Output stays deliberately terse. Large structured responses have been observed to
-    die mid-stream, and fan-out multiplies output volume, so per-slice findings are
-    capped and slice attribution is a two-character tag rather than a prose field.
+    Output stays terse because fan-out multiplies response volume; per-slice findings
+    are capped and attribution uses compact tags.
     """
     clusters = (graph_leads or {}).get("communities") or []
 
@@ -135,11 +134,7 @@ _CHANGED_FILES_MAX = 25
 def _changed_files_block(project_root: str | None) -> list[str]:
     """The files under verification, resolved from git instead of asked for.
 
-    Verification used to open with "verify the change" and no statement of what the
-    change WAS, so the second agent spent its first tool calls rediscovering it — on one
-    observed run, 18 reads before it reached the actual question. Every one of those is
-    time on a provider stream that has been seen to drop mid-answer, so this is a
-    reliability fix as much as a clarity one.
+    Resolving changed files here gives the verifier an explicit scope immediately.
 
     Silent on failure by design: no git, no repo, or a detached worktree just means the
     verifier falls back to reading. Announcing an empty list would be worse than saying

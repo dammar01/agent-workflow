@@ -14,7 +14,6 @@ from config.settings import (
 )
 from utils import osutil
 
-# Worker liveness, in increasing order of trouble.
 ALIVE_PROGRESSING = "alive-progressing"  # PID up, heartbeat fresh, stream producing
 ALIVE_STALLED = "alive-stalled"  # PID up but silent -> probe before judging
 DEAD = "dead"  # PID gone
@@ -281,8 +280,6 @@ class JobManager:
                 continue
         return {"removed": removed, "kept": min(len(files), keep_last)}
 
-    # --- internals -------------------------------------------------------
-
     def _worker_dead(self, job: dict) -> bool:
         return self.liveness(job) == DEAD
 
@@ -299,9 +296,8 @@ class JobManager:
         3. Heartbeat stale     -> ALIVE_STALLED. Catches a worker that stopped beating
            entirely (crashed loop, blocked thread) rather than one that beats emptily.
 
-        Signal 2 is checked BEFORE signal 3 on purpose: a fresh heartbeat used to
-        outrank everything, so a job stuck on a quota wall reported alive-progressing
-        until the 1.5h runtime backstop finally fired.
+        Stream idleness is checked before heartbeat age because a polling loop can
+        keep emitting fresh heartbeats while provider output is stalled.
         """
         pid = job.get("worker_pid")
         if pid is None:
@@ -376,8 +372,7 @@ class JobManager:
         return age is not None and age > self.max_runtime_seconds
 
     def record_probe(self, job_id: str, probe: dict) -> dict:
-        """Attach a liveness-probe verdict. A stalled-but-answering agent is NOT reaped:
-        its work may still land once the limit resets.
+        """Attach a liveness-probe verdict without mutating the job record.
 
         Side file for the same reason as the heartbeat: the worker may complete the job
         at any moment, and a probe written into the job record could overwrite that.
@@ -418,14 +413,7 @@ class JobManager:
 
         job = self.get_job(job_id) or {}
 
-        # Claim the job BEFORE killing anything, and put `status` and `reaped` into ONE
-        # atomic write. The previous order was kill -> fail_job -> mark reaped, which left
-        # two gaps a finishing worker could land in: after the kill but before `fail_job`
-        # (record still `running`), and after `fail_job` but before the mark (`failed` but
-        # not `reaped`). In either one the `complete_job` guard saw an unclaimed record and
-        # flipped the job back to completed — resurrecting work the caller had already been
-        # told was dead. Claiming first closes both: whatever the worker does from here, it
-        # finds the job already claimed.
+        # Claim atomically before killing so a concurrent completion becomes late output.
         try:
             record = self._load(job_id)
             record["status"] = "failed"
@@ -575,9 +563,7 @@ class JobManager:
     def _request_hash(
         command: str, task: str | None, session_id: str, work_dir: str | None
     ) -> str:
-        # `task` is genuinely optional for some commands (sweep scans the git diff and
-        # needs no prompt). Treating None as a crash turned a valid invocation into a
-        # raw AttributeError traceback instead of a structured result.
+        # task is optional for commands such as sweep; normalize None before hashing.
         raw = "|".join(
             [
                 (command or "").strip().lower(),

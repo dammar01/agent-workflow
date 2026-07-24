@@ -208,10 +208,7 @@ def delegated_checks(report: Report, session_id: str) -> None:
         report.record("delegated commands", SKIP, "no .workflow/run script")
         return
 
-    # `sweep` is dispatched locally by run_sweep() (main.py) and never reaches opencode,
-    # so it carries a git-diff report rather than an evidence block. Asserting the
-    # evidence contract on it tests the wrong thing — and passing it would have meant
-    # the assertion was too loose to catch anything.
+    # sweep is local and returns a git-diff report, not delegated evidence.
     cases = [
         ("explore", "Sebutkan entry point utama. Maksimal 3 baris.", "evidence"),
         ("sweep", "scan git diff, identify impact", "local-report"),
