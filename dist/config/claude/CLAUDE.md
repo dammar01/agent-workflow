@@ -1,23 +1,7 @@
 # Claude Code — Personal Global Config (v3.3.1)
 # Skills: ~/.claude/skills/   Memory: ~/.claude/memory/
 
-<!-- WORKFLOW-MAIN-AGENT:START -->` di `{CONFIG_FILE}`?
-
-```text
-[SETUP STATUS] mode: fresh | update | skills_found: <list|none> | config_marker: found|not found
-```
-mode=update → "Setup ditemukan. UPDATE: skill overwrite, memory dipertahankan, config di-merge. Lanjut? (yes/no)". fresh → STEP 3.
-
----
-
-## STEP 3 — Buat/update skill files
-
-Buat `{AGENT_DIR}/skills/`. Skill = template → SELALU overwrite. Substitusi `{AGENT_DIR}` ke nilai nyata.
-
-**Pola bersama semua skill DELEGATED (explore/analyze/sweep/doctor/plan-evidence):**
-1 panggilan `run` script. Session otomatis (hook). Hasil `{ok, content, meta, digest}`. `ok:false` → tampilkan `meta.error_type` + `meta.next_action`, ikuti/STOP. Relay `digest`; buka `content` kalau butuh detail.
-
----
+<!-- WORKFLOW-MAIN-AGENT:START -->
 
 ### FILE: {AGENT_DIR}/skills/explore.md
 
@@ -559,21 +543,50 @@ Auto-fallback ke local tanpa tanya user = DILARANG.
 ### Command registry
 LOCAL:     /.execute -y /.init /.refactor /.commit /.review /.compress /.memory /.caveman /.local /.help
 DELEGATED: /.explore /.plan /.analyze /.verify /.sweep /.doctor
-NL map (auto-fire, lihat Intent detection):
-  cek logic / kenapa begini / analisa      → analyze
-  gimana flow / di mana / cari / petakan    → explore
-  tambah fitur / mau bikin / rencana        → plan
-  implement / kerjakan / lanjut / gas       → execute -y
-  dampak / impact / apa yg kena / diff      → sweep
-  cek siap / readiness / kenapa error setup → doctor
-  benerin struktur / rapikan / bersihin     → refactor
-  cek hasil / bener gak / test dong         → verify
-  catat / ingat ini                         → memory
-  commit message / mau commit               → commit
-  review kode ini / lihat PR                → review
-  tanpa proxy / offline                     → local on
-Prefix "/." = override eksplisit, selalu menang atas penebakan. Tanpa prefix BUKAN error.
-Tak cocok ke mana pun → jawab langsung sebagai percakapan biasa, jangan paksakan ke command.
+NL map (auto-fire, lihat Intent detection). Cocokkan ke TRIGGER, bukan ke topik —
+"kenapa X lambat" itu analyze walau soal performa, "di mana X" itu explore walau soal bug.
+
+  explore  ← eksplorasi | cari tau | cari di mana | kode mana | di mana letak | file apa yang
+             | petakan | gimana alur | gimana flow | struktur nya gimana | tunjukkan | ada di mana
+             | siapa yang manggil | apa aja yang pakai
+             INTI: pertanyaan LOKASI/BENTUK. Jawabannya sebuah tempat.
+
+  analyze  ← cek logic | kenapa begini | kenapa bisa | analisa | apakah stabil | ada masalah gak
+             | aman gak kalau | dampaknya apa kalau | bener gak desainnya | kenapa lambat
+             | audit | telusuri sebab
+             INTI: pertanyaan SEBAB/PENILAIAN. Jawabannya sebuah alasan.
+
+  plan     ← rencana | mau bikin | tambah fitur | gimana caranya bikin | susun langkah
+             | rancang | mau ubah jadi | butuh fitur
+             INTI: kerja yang BELUM ada, minta urutan langkah.
+
+  execute  ← implement | kerjakan | lanjut | gas | jalankan | eksekusi | terapkan | buat sekarang
+             INTI: perintah KERJAKAN. Wajib -y (lihat Global Forbidden).
+
+  verify   ← cek hasil | bener gak | test dong | sudah jalan belum | udah bener | pastikan
+             | validasi | cek lagi
+             INTI: sesuatu SUDAH dikerjakan, minta pembuktian. Kata lampau = sinyal kuat.
+
+  sweep    ← dampak | impact | apa yg kena | diff | apa aja yang berubah | blast radius
+             INTI: apa yang tersentuh oleh perubahan yang SUDAH ada di working tree.
+
+  doctor   ← cek siap | readiness | kenapa error setup | kenapa gagal jalan | .workflow rusak
+  refactor ← benerin struktur | rapikan | bersihin | rombak struktur (TANPA ubah behavior)
+  review   ← review kode ini | lihat PR | cek kode ini
+  commit   ← commit message | mau commit          (destruktif → konfirmasi dulu)
+  memory   ← catat | ingat ini | simpan insight
+  local    ← tanpa proxy | offline | jangan pakai second agent
+
+Tie-break (urut, berhenti di yang pertama cocok):
+1. Ada prefix "/." → pakai itu. Override eksplisit selalu menang. Berhenti.
+2. Kalimat menyebut sesuatu yang SUDAH dikerjakan (kata lampau: "tadi", "barusan", "udah") → verify.
+3. Kata tanya lokasi (di mana/mana/apa aja) → explore. Kata tanya sebab (kenapa/apakah) → analyze.
+4. Masih dua kandidat → pilih yang lebih MURAH (local > delegated), sebut alasannya di [INTENT].
+5. Tak ada trigger yang cocok → percakapan biasa. Jawab langsung, JANGAN paksakan ke command.
+
+Trigger di atas indikator, bukan whitelist. Kalimat yang jelas maksudnya tapi tak persis
+sama tetap boleh dipetakan — sebut dasarnya di [INTENT]. Yang dilarang itu sebaliknya:
+memaksa pertanyaan biasa jadi command karena kebetulan mengandung satu kata trigger.
 
 ### Auto command suggestion
 Akhir respons untuk task berbau kode → tambahkan max 3 langkah lanjut relevan:

@@ -130,6 +130,32 @@ RUNTIME_CONSUMED_KEYS = (
     # not here — listed in the doctor report so their home is not a guessing game.
 )
 
+# Contracts that CANNOT be moved into this runtime, and why. Written down because the
+# absence of enforcement keeps getting read as an oversight to fix rather than as a
+# property of where the data lives. In every case the runtime never sees the bytes it
+# would have to check:
+#
+#   [OPTIONS] block, per-claim attribution, the confidence triple
+#       -> these appear in main_agent's OUTPUT. This process produces evidence for it
+#          and never sees what it writes back to the user.
+#   intent detection (running a command without the "/." prefix)
+#       -> matches on the USER's message. No Python path receives one.
+#   /.execute and its `-y` gate, commands.auto_verify_after_execute
+#       -> /.execute is implemented entirely by main_agent editing files. There is no
+#          Python entry point to hook, which is why the config key ships with that
+#          caveat inline rather than as a promise.
+#
+# What IS checkable is the second agent's output, because it comes back through here:
+# see core.contract.contract_warnings. Those are reported, never fatal.
+UNENFORCEABLE_PROMPT_CONTRACTS = (
+    "[OPTIONS] block in /.plan",
+    "per-claim attribution tags",
+    "confidence triple",
+    "intent detection without the /. prefix",
+    "/.execute -y approval gate",
+    "commands.auto_verify_after_execute",
+)
+
 
 def default_commands() -> dict:
     return {
@@ -163,10 +189,12 @@ def default_policies() -> dict:
         # inject a ranked file shortlist from graphify-out/graph.json into evidence prompts
         "graph_leads_enabled": True,
         # --- runtime-consumed (core/prompt_builder.py) ---
-        # ask second_agent to spawn one sub-agent per graph cluster. Off by default:
-        # fan-out multiplies both quota use and output size, and large structured
-        # responses have been seen to die mid-stream.
-        "subagent_fanout_enabled": False,
+        # ask second_agent to spawn one sub-agent per graph cluster (or per role slice
+        # when there is no graph). ON: a delegated call that reads the codebase serially
+        # is the slow path, and the fan-out instruction is what makes the second agent
+        # use the parallel tools it already has. It does cost more quota per call and
+        # produces a larger response — set false to go back to a single serial reader.
+        "subagent_fanout_enabled": True,
     }
 
 
@@ -229,6 +257,208 @@ def merge_config_defaults(config: dict) -> tuple[dict, bool]:
     return config, changed
 
 
+def workspace_versions(project_root: Path) -> dict:
+    """What the workspace was built by vs what is running now.
+
+    `installed`/`installed_config` are what .workflow/config.json records; `current` is
+    what this process is. They drift the moment the tool is updated without re-running
+    init, and nothing else in the runtime notices — the generated run scripts keep the
+    paths and flags they were written with.
+    """
+    from config.settings import TOOL_VERSION
+
+    installed = None
+    installed_config = None
+    try:
+        config = read_json_file(workflow_paths(project_root)["config"])
+        runtime = config.get("runtime")
+        if isinstance(runtime, dict):
+            installed = runtime.get("tool_version")
+        installed_config = config.get("version")
+    except (OSError, ValueError):
+        pass
+    return {
+        "installed_tool_version": installed,
+        "installed_config_version": installed_config,
+        "current_tool_version": TOOL_VERSION,
+        "current_config_version": CONFIG_VERSION,
+    }
+
+
+def needs_upgrade(project_root: Path) -> bool:
+    """True when the workspace was scaffolded by a different build than this one.
+
+    Unknown (config unreadable or version absent) counts as needing an upgrade: a
+    workspace we cannot identify is exactly the one most likely to be stale.
+    """
+    if not (project_root / WORKFLOW_DIRNAME).exists():
+        return False  # not initialized at all — that is `init`, not `upgrade`
+    versions = workspace_versions(project_root)
+    return (
+        versions["installed_tool_version"] != versions["current_tool_version"]
+        or versions["installed_config_version"] != versions["current_config_version"]
+    )
+
+
+def upgrade_workflow_workspace(
+    project_root: Path, agent_workflow_path: str | None
+) -> dict:
+    """Bring an existing .workflow/ up to the running build. Manual-run, never automatic.
+
+    Regenerates the derived parts (run/inspect/check scripts, config defaults, adapter
+    config keys) and leaves everything owned by the user or by a live flow alone —
+    sessions/ above all: a job may be running against it right now, and rewriting its
+    state mid-flight would lose the very evidence the caller is waiting for.
+    """
+    paths = workflow_paths(project_root)
+    if not paths["workflow_dir"].exists():
+        raise ValueError(
+            f"no {WORKFLOW_DIRNAME}/ at {project_root} — run init first, upgrade only "
+            "refreshes an existing workspace"
+        )
+
+    active = active_jobs_for_workspace(project_root)
+    if active:
+        # Refuse rather than warn. The regenerated scripts and rewritten config.json are
+        # read by the very flow that is mid-call, and its session state is the evidence
+        # the caller is currently waiting on. "Preserved sessions/" is only true if
+        # nothing is writing to them while this runs.
+        listed = ", ".join(f"{j['job_id']} ({j['command']})" for j in active[:3])
+        raise ValueError(
+            f"{len(active)} job(s) still running against {project_root}: {listed}. "
+            "Wait for them to finish (or fail them) before upgrading — regenerating the "
+            "workspace under a live call can lose its session state."
+        )
+
+    before = workspace_versions(project_root)
+    tool = _tool_paths(agent_workflow_path)
+
+    config_changed = False
+    try:
+        config = read_json_file(paths["config"])
+    except (OSError, ValueError):
+        config = default_config(project_root, agent_workflow_path)
+        config_changed = True
+    else:
+        config, config_changed = merge_config_defaults(config)
+        runtime = config.setdefault("runtime", {})
+        # Tool paths are absolute and machine-specific: an upgrade after the repo moved
+        # must repoint them, or the regenerated scripts call a main.py that is gone.
+        for key in ("main_py_path", "check_py_path", "tool_dir", "tool_version"):
+            if runtime.get(key) != tool[key]:
+                runtime[key] = tool[key]
+                config_changed = True
+        if agent_workflow_path and runtime.get("agent_workflow_path") != agent_workflow_path:
+            runtime["agent_workflow_path"] = agent_workflow_path
+            config_changed = True
+    if config_changed:
+        atomic_write_json(paths["config"], config)
+
+    opencode_added = _merge_opencode_config(project_root, tool["tool_dir"])
+    scripts = _generate_run_scripts(project_root, tool["main_py_path"])
+    gitignore_updated = ensure_root_gitignore_entry(project_root)
+
+    return {
+        "project_root": str(project_root),
+        "from": before,
+        "to": workspace_versions(project_root),
+        "config_updated": config_changed,
+        "opencode_keys_added": opencode_added,
+        "diverged_from_defaults": diverged_defaults(config),
+        "regenerated_scripts": scripts,
+        "gitignore_updated": gitignore_updated,
+        "preserved": [str(paths["workflow_dir"] / "sessions")],
+        "tool": tool,
+    }
+
+
+def active_jobs_for_workspace(project_root: Path) -> list[dict]:
+    """Pending/running jobs whose work_dir is this project. [] on any failure.
+
+    Best-effort by design: this exists to stop an upgrade from landing under a live
+    call, and a job store it cannot read is not a reason to block one.
+    """
+    try:
+        from core.job_manager import DEAD, JobManager
+
+        manager = JobManager()
+        target = str(Path(project_root).resolve())
+        out: list[dict] = []
+        for path in manager.job_dir.glob("job_*.json"):
+            try:
+                job = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if job.get("status") not in {"pending", "running"}:
+                continue
+            work_dir = job.get("work_dir")
+            if work_dir and str(Path(work_dir).resolve()) != target:
+                continue
+            # A job whose worker is gone is not "active", it is unreaped. Blocking the
+            # upgrade on one would make a crashed worker permanently jam the command.
+            if manager.liveness(job) == DEAD:
+                continue
+            out.append(job)
+        return out
+    except Exception:
+        return []
+
+
+def diverged_defaults(config: dict) -> list[dict]:
+    """Settings whose stored value differs from what this build ships as the default.
+
+    Reported, never rewritten. A value already in the file may be a deliberate choice
+    or may just be the previous build's default frozen in place, and this code cannot
+    tell them apart — the backfill is additive precisely so it never has to guess. What
+    it can do is stop the difference from being invisible: a default that changed
+    between builds otherwise reaches only projects that never ran the old one.
+    """
+    out: list[dict] = []
+    for section, defaults in (
+        ("commands", default_commands()),
+        ("policies", default_policies()),
+    ):
+        current = config.get(section)
+        if not isinstance(current, dict):
+            continue
+        for key, shipped in defaults.items():
+            if key in current and current[key] != shipped:
+                out.append(
+                    {
+                        "key": f"{section}.{key}",
+                        "yours": current[key],
+                        "shipped_default": shipped,
+                    }
+                )
+    return out
+
+
+def _merge_opencode_config(project_root: Path, tool_dir: str) -> list[str]:
+    """Backfill adapter keys the running build knows about into an existing
+    .workflow/opencode.json. Additive only — an existing value is the user's tuning.
+
+    Without this, keys introduced by a later build (idle_stall_seconds, probe cadence)
+    never reach a project that was initialized once and left alone.
+    """
+    from config.settings import default_opencode_config
+
+    dest = project_root / WORKFLOW_DIRNAME / "opencode.json"
+    if not dest.exists():
+        copied = _copy_opencode_config(project_root, tool_dir)
+        return ["(created)"] if copied else []
+    try:
+        current = read_json_file(dest)
+    except (OSError, ValueError):
+        return []  # malformed user config: report nothing, never clobber it
+    added = [key for key in default_opencode_config() if key not in current]
+    if not added:
+        return []
+    defaults = default_opencode_config()
+    current.update({key: defaults[key] for key in added})
+    atomic_write_json(dest, current)
+    return added
+
+
 def verify_mode(project_root: Path) -> str:
     """commands.verify_mode. Anything unreadable or unrecognised falls back to
     'delegated' — an unclear setting must not silently downgrade verification."""
@@ -241,6 +471,29 @@ def verify_mode(project_root: Path) -> str:
         return "delegated"
     mode = commands.get("verify_mode", "delegated")
     return mode if mode in VERIFY_MODES else "delegated"
+
+
+def auto_verify_after_execute(project_root: Path) -> bool:
+    """commands.auto_verify_after_execute.
+
+    Still prompt-only in effect — /.execute has no Python path, so nothing here can
+    make it chain into /.verify. What this does buy: the value now rides out on every
+    delegated result, so main_agent reads the project's actual setting instead of
+    recalling what the config said.
+    """
+    try:
+        config = read_json_file(workflow_paths(project_root)["config"])
+    except (OSError, ValueError):
+        return bool(default_commands()["auto_verify_after_execute"])
+    commands = config.get("commands")
+    if not isinstance(commands, dict):
+        return bool(default_commands()["auto_verify_after_execute"])
+    return bool(
+        commands.get(
+            "auto_verify_after_execute",
+            default_commands()["auto_verify_after_execute"],
+        )
+    )
 
 
 def graph_leads_enabled(project_root: Path) -> bool:
@@ -257,16 +510,20 @@ def graph_leads_enabled(project_root: Path) -> bool:
 
 
 def subagent_fanout_enabled(project_root: Path) -> bool:
-    """policies.subagent_fanout_enabled. Defaults to OFF — unlike graph leads, fan-out
-    costs extra quota per call, so an unreadable config must not silently turn it on."""
+    """policies.subagent_fanout_enabled. Defaults to ON.
+
+    An unreadable config falls back to the default rather than to off: the previous
+    fail-closed behaviour meant a malformed config silently downgraded every call to a
+    serial read, with nothing in the output saying so.
+    """
     try:
         config = read_json_file(workflow_paths(project_root)["config"])
     except (OSError, ValueError):
-        return False
+        return True
     policies = config.get("policies")
     if not isinstance(policies, dict):
-        return False
-    return bool(policies.get("subagent_fanout_enabled", False))
+        return True
+    return bool(policies.get("subagent_fanout_enabled", True))
 
 
 def default_config(project_root: Path, agent_workflow_path: str | None) -> dict:
@@ -1147,6 +1404,17 @@ def run_doctor(
 
     checks["graphify_out_exists"] = (project_root / "graphify-out").exists()
 
+    # Version drift: the workspace still works, but its generated scripts and config
+    # defaults are the previous build's. Reported as its own status rather than as an
+    # issue — calling a working workspace NOT_READY would block flows over staleness.
+    checks["workspace_versions"] = workspace_versions(project_root)
+    workspace_stale = needs_upgrade(project_root)
+    checks["workspace_upgrade_needed"] = workspace_stale
+    if workspace_stale:
+        recommended_fixes.append(
+            "Run `--command upgrade` to regenerate .workflow scripts and backfill new config keys"
+        )
+
     # second_agent MCP safety: enumerate opencode MCP servers, flag any that exceed
     # the read-only evidence role (write/exec/fs/db/browser/etc).
     mcp = _scan_mcp(project_root)
@@ -1218,7 +1486,12 @@ def run_doctor(
                     "Re-run a delegated command; if it keeps failing, opencode session capture is failing (check opencode `run` output for a ses_ id)"
                 )
 
-    status = "READY" if not issues else "NOT_READY"
+    if issues:
+        status = "NOT_READY"
+    elif workspace_stale:
+        status = "NEEDS_UPGRADE"
+    else:
+        status = "READY"
     payload = {
         "status": status,
         "checked_at": now_iso(),
@@ -1229,7 +1502,9 @@ def run_doctor(
     }
     atomic_write_json(paths["doctor_report"], payload)
     return {
-        "ok": status == "READY",
+        # NEEDS_UPGRADE is still ok: the workspace runs, it is just built by an older
+        # build. Only real issues make doctor fail.
+        "ok": status != "NOT_READY",
         "content": f"{status}: {len(issues)} issue(s), {len(recommended_fixes)} recommended fix(es)",
         "meta": {
             "status": status,

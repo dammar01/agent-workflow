@@ -30,7 +30,16 @@ DEFAULT_POLL_INTERVAL_SECONDS = float(
 DEFAULT_STALL_THRESHOLD_SECONDS = int(
     os.getenv("AI_PROXY_STALL_THRESHOLD_SECONDS", "360")
 )
+# Separate from the heartbeat threshold on purpose. The heartbeat only proves the poll
+# loop is turning, which it does whether or not opencode is producing anything — a
+# rate-limited agent keeps beating forever. This one measures the STREAM: no byte on
+# stdout/stderr for this long means waiting, not working. It must never be folded into
+# stall_threshold; ten other call sites read that value for a different question.
+DEFAULT_IDLE_STALL_SECONDS = int(os.getenv("AI_PROXY_IDLE_STALL_SECONDS", "240"))
 DEFAULT_PROBE_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_PROBE_TIMEOUT_SECONDS", "45"))
+# A stalled job is re-probed on this cadence. Probing once per job was enough to
+# classify a stall but not to catch one that starts after the single probe landed.
+DEFAULT_PROBE_RECHECK_SECONDS = int(os.getenv("AI_PROXY_PROBE_RECHECK_SECONDS", "120"))
 # Hard ceiling: a job running past this is failed even if its PID looks alive.
 # Backstop for the OOM case, where the worker dies in a way PID checks miss.
 DEFAULT_JOB_MAX_RUNTIME_SECONDS = int(
@@ -48,7 +57,9 @@ def default_opencode_config() -> dict:
         "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
         "bootstrap_timeout_seconds": DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,
         "stall_threshold_seconds": DEFAULT_STALL_THRESHOLD_SECONDS,
+        "idle_stall_seconds": DEFAULT_IDLE_STALL_SECONDS,
         "probe_timeout_seconds": DEFAULT_PROBE_TIMEOUT_SECONDS,
+        "probe_recheck_seconds": DEFAULT_PROBE_RECHECK_SECONDS,
         "job_max_runtime_seconds": DEFAULT_JOB_MAX_RUNTIME_SECONDS,
         "job_poll_interval_seconds": DEFAULT_JOB_POLL_INTERVAL_SECONDS,
         "job_poll_timeout_seconds": DEFAULT_JOB_POLL_TIMEOUT_SECONDS,

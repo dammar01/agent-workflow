@@ -173,9 +173,43 @@ def _collect() -> tuple[list[dict], list[str]]:
     return entries, problems
 
 
+def _clobber_risks(entries: list[dict]) -> list[str]:
+    """dist/ files that were edited directly and would be silently overwritten.
+
+    This tool copies one direction only: ~/.claude -> dist/. That is fine while dist/ is
+    purely a build output, but it is also the place someone reasonably edits when they
+    want a config change to land in the repo without touching their own machine. Those
+    edits look identical to stale build output, and the copy would erase them with no
+    diff, no prompt, and no trace.
+
+    The signal is deliberately conservative: content differs AND the dist/ file is newer
+    than the home file it came from. Same content is not a conflict, and a dist/ file
+    older than its source is exactly what a normal rebuild looks like.
+    """
+    risks: list[str] = []
+    for entry in entries:
+        target = DIST_DIR / entry["dest"]
+        if not target.exists():
+            continue
+        try:
+            if target.read_text(encoding="utf-8") == entry["text"]:
+                continue  # identical: nothing to lose
+            source_mtime = Path(entry["source"]).stat().st_mtime
+            if target.stat().st_mtime > source_mtime:
+                risks.append(entry["dest"])
+        except OSError:
+            continue
+    return risks
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Extract live agent config into dist/")
     parser.add_argument("--dry-run", action="store_true", help="report only, write nothing")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="overwrite dist/ files that were edited directly (see the abort message)",
+    )
     args = parser.parse_args()
 
     entries, problems = _collect()
@@ -202,6 +236,22 @@ def main() -> int:
         for dest in leaked_home:
             print(f"  !! {dest}")
         return 3
+
+    clobber = _clobber_risks(entries)
+    if clobber and not args.force:
+        print("[EXTRACT] ABORTED — these dist/ files are NEWER than the ~/.claude files")
+        print("          they would be overwritten with, and their content differs:")
+        for dest in clobber:
+            print(f"  !! {dest}")
+        print(
+            "\nThat pattern means the change was authored in dist/ directly, and copying\n"
+            "over it would erase it silently. Pick one:\n"
+            "  - keep the dist/ version: install it first (python install.py --apply),\n"
+            "    then rerun this to extract it back as a normal build\n"
+            "  - discard the dist/ version: rerun with --force\n"
+            "Nothing was written."
+        )
+        return 4
 
     files_meta = []
     for entry in entries:

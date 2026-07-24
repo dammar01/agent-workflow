@@ -14,6 +14,17 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"{{HOME}}\\.claude\\hooks\\graph-refresh.ps1\"",
+            "timeout": 60
+          }
+        ]
+      }
     ]
   },
   "enabledPlugins": {

@@ -17,7 +17,14 @@ ERROR_TYPES = {
     "command_not_found",
     "routing_error",
     "worker_died",
-    "worker_stalled",  # PID alive, no progress — probe before judging, never reap blind
+    "worker_stalled",  # PID alive, no progress — probe before judging
+    "rate_limited",  # provider refused on quota: waiting fixes it, retrying does not
+    "prompt_too_long",  # the shell rejected the command line before opencode ran
+    # The provider stream died mid-answer. The opposite advice to rate_limited: this one
+    # IS worth retrying, and waiting does nothing for it. Left as `unknown` it collected
+    # the useless "inspect the logs and rerun" next_action.
+    "streaming_failed",
+    "second_agent_unavailable",  # probe in a FRESH session could not get an answer either
     "job_expired",  # ran past the hard runtime ceiling (OOM backstop)
     "fact_ingest_failed",
     "workflow_init_error",
@@ -101,6 +108,72 @@ def validate_fields(command: str, content: str) -> list[str]:
     required = REQUIRED_FIELDS.get(command, ())
     lowered = (content or "").lower()
     return [field for field in required if field not in lowered]
+
+
+_FILE_LINE = re.compile(r"[\w./\\-]+\.\w+:\d+")
+_SECTION_HEAD = re.compile(r"^\s*([a-z_]+)\s*:\s*$", re.MULTILINE)
+
+
+def _section(content: str, name: str) -> list[str]:
+    """Bullet lines under a `name:` heading, up to the next heading."""
+    lines = (content or "").splitlines()
+    out: list[str] = []
+    collecting = False
+    for line in lines:
+        head = _SECTION_HEAD.match(line)
+        if head:
+            if collecting:
+                break
+            collecting = head.group(1).lower() == name
+            continue
+        if collecting and line.strip().startswith("-"):
+            out.append(line.strip().lstrip("-").strip())
+    return out
+
+
+def contract_warnings(command: str, content: str) -> list[dict]:
+    """Where the second agent's output does not match the contract it was given.
+
+    Warnings only. Nothing here fails a call: the runtime can see the shape of this
+    output, but it cannot see whether the CLAIMS are right, and rejecting a usable
+    result over a formatting miss trades a real answer for a clean one.
+
+    Scope is honest about what is checkable here. The contracts main_agent owns —
+    [OPTIONS], per-claim attribution, the confidence triple, intent detection — are
+    written in ITS output, which this process never sees. They stay prompt-only, and
+    listing them here would only make enforcement look broader than it is.
+    """
+    warnings: list[dict] = []
+    body = content or ""
+
+    missing = validate_fields(command, body)
+    if missing:
+        warnings.append(
+            {
+                "kind": "missing_fields",
+                "detail": f"required section(s) absent: {', '.join(missing)}",
+            }
+        )
+
+    grounded = _section(body, "grounded")
+    unbacked = [
+        claim
+        for claim in grounded
+        if claim.lower() not in {"none", "(none)"} and not _FILE_LINE.search(claim)
+    ]
+    if unbacked:
+        # `grounded` is the one section the prompt defines by its evidence, not by its
+        # topic: a claim there without a file:line is an assumption wearing the label
+        # that makes main_agent trust it.
+        warnings.append(
+            {
+                "kind": "grounded_without_evidence",
+                "detail": f"{len(unbacked)} grounded claim(s) carry no file:line",
+                "samples": unbacked[:3],
+            }
+        )
+
+    return warnings
 
 
 def extract_digest(content: str) -> dict | None:

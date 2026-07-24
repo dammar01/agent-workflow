@@ -8,38 +8,68 @@ from config.roles import (
 _EVIDENCE_ROLES = {ROLE_EXPLORATION, ROLE_REASONING}
 
 
-def _subagent_block(graph_leads: dict | None) -> list[str]:
-    """Explicit fan-out instruction: one sub-agent per graph cluster.
+# Shared by both fan-out shapes. Kept in one place so the graph and no-graph plans
+# cannot drift into giving the second agent two different sets of rules.
+_SUBAGENT_RULES = [
+    "- FIRST check your own tool list for a sub-agent/task/dispatch tool. If one exists, using it is MANDATORY — reading the slices yourself instead is a failed instruction, not a shortcut",
+    "- spawn ONE sub-agent per slice below, all at once, not one after another",
+    "- each sub-agent is scope-bounded to ITS OWN slice; it must not read outside it",
+    "- keep each sub-agent's report SHORT: max 5 grounded claims, each one line with file:line",
+    "- you merge the reports; sub-agent text is raw material, not the answer",
+    "- tag every merged claim with its origin slice as a leading [cN] (e.g. `[c3] Router routes by command string [core/router.py:16]`)",
+    "- a slice that yields nothing relevant: say so under that slice, do not pad it",
+    "- list the slices you actually dispatched on the `subagents:` line",
+    "- ONLY if your tool list genuinely has no such tool: write `subagents: none (no spawn tool; tools: <name, name, ...>)` naming EVERY tool you do have, then read the slices yourself in order. Claiming 'no spawn tool' without that list is not an acceptable answer",
+    "- never report fan-out you did not perform; an honest sequential read is a valid result, a false claim is not",
+]
 
-    Only emitted when the graph gives at least two clusters — dispatching a single
-    sub-agent costs a round trip and buys nothing over reading the files directly.
+# Graph-free partition. Deliberately by INVESTIGATION ANGLE rather than by directory:
+# the second agent does not know the layout before it reads, so "src/ vs lib/" is a
+# guess, while "entry points vs callers vs config" is answerable in any repo.
+_BLIND_SLICES = [
+    "c1: entry points and command/request routing — how execution starts and where it is dispatched",
+    "c2: the core modules that do the work for this task, and the data they pass between them",
+    "c3: callers and consumers of those modules — who would break if they changed (reverse dependencies)",
+    "c4: configuration, defaults, and tests that pin the behaviour under discussion",
+]
+
+
+def _subagent_block(graph_leads: dict | None) -> list[str]:
+    """Explicit fan-out instruction: one sub-agent per slice of the codebase.
+
+    Two shapes. With at least two graph clusters, the clusters ARE the slices — that is
+    the better partition, because it comes from the actual import graph. Without them
+    the work is split by investigation angle instead: a repo with no graphify output is
+    the one where a serial read costs the most, so falling back to no fan-out at all
+    optimised the wrong case.
 
     Output stays deliberately terse. Large structured responses have been observed to
-    die mid-stream, and fan-out multiplies output volume, so per-cluster findings are
-    capped and cluster attribution is a two-character tag rather than a prose field.
+    die mid-stream, and fan-out multiplies output volume, so per-slice findings are
+    capped and slice attribution is a two-character tag rather than a prose field.
     """
     clusters = (graph_leads or {}).get("communities") or []
-    if len(clusters) < 2:
-        return []
 
-    lines = [
+    if len(clusters) >= 2:
+        lines = [
+            "[SUBAGENT_PLAN — dispatch these in parallel, then merge]",
+            *_SUBAGENT_RULES,
+        ]
+        for cluster in clusters:
+            members = ", ".join(cluster.get("files") or [])
+            lines.append(f"- c{cluster['community']}: {members}")
+        lines.append("")
+        return lines
+
+    return [
         "[SUBAGENT_PLAN — dispatch these in parallel, then merge]",
-        "- FIRST check your own tool list for a sub-agent/task/dispatch tool. If one exists, using it is MANDATORY — reading the clusters yourself instead is a failed instruction, not a shortcut",
-        "- spawn ONE sub-agent per cluster below, all at once, not one after another",
-        "- each sub-agent is scope-bounded to ITS OWN cluster's files; it must not read outside them",
-        "- keep each sub-agent's report SHORT: max 5 grounded claims, each one line with file:line",
-        "- you merge the reports; sub-agent text is raw material, not the answer",
-        "- tag every merged claim with its origin cluster as a leading [cN] (e.g. `[c3] Router routes by command string [core/router.py:16]`)",
-        "- a cluster that yields nothing relevant: say so under that cluster, do not pad it",
-        "- list the clusters you actually dispatched on the `subagents:` line",
-        "- ONLY if your tool list genuinely has no such tool: write `subagents: none (no spawn tool; tools: <name, name, ...>)` naming EVERY tool you do have, then read the clusters yourself in order. Claiming 'no spawn tool' without that list is not an acceptable answer",
-        "- never report fan-out you did not perform; an honest sequential read is a valid result, a false claim is not",
+        "- no dependency graph is available for this project, so the slices below are by"
+        " investigation angle, not by file. Each sub-agent finds its own files.",
+        *_SUBAGENT_RULES,
+        *(f"- {slice_}" for slice_ in _BLIND_SLICES),
+        "- a slice that turns out not to apply to this task: report it empty, do not"
+        " invent scope for it",
+        "",
     ]
-    for cluster in clusters:
-        members = ", ".join(cluster.get("files") or [])
-        lines.append(f"- c{cluster['community']}: {members}")
-    lines.append("")
-    return lines
 
 
 def _graph_block(graph_leads: dict | None) -> list[str]:
@@ -76,6 +106,74 @@ def _graph_block(graph_leads: dict | None) -> list[str]:
 
     lines.append("")
     return lines
+
+
+def _compact_leads(graph_leads: dict | None, max_files: int = 6) -> dict | None:
+    """A shorter lead list, clusters dropped.
+
+    The whole prompt travels as one command-line argument and the Windows shell caps
+    that at 8191 characters. Verification prompts are already the longest scaffolding
+    in this file (the severity/origin/routing contract), so the leads they carry have
+    to be the short form — and clusters are the part verification does not use, since
+    it is not fanning out.
+    """
+    if not graph_leads or not graph_leads.get("files"):
+        return graph_leads
+    return {
+        **graph_leads,
+        "files": graph_leads["files"][:max_files],
+        "communities": [],
+    }
+
+
+# Bounds, not preferences. The whole prompt is one command-line argument capped at 8191
+# characters on Windows, so an unbounded file list would push a verification prompt past
+# the shell limit and fail before opencode ran.
+_CHANGED_FILES_MAX = 25
+
+
+def _changed_files_block(project_root: str | None) -> list[str]:
+    """The files under verification, resolved from git instead of asked for.
+
+    Verification used to open with "verify the change" and no statement of what the
+    change WAS, so the second agent spent its first tool calls rediscovering it — on one
+    observed run, 18 reads before it reached the actual question. Every one of those is
+    time on a provider stream that has been seen to drop mid-answer, so this is a
+    reliability fix as much as a clarity one.
+
+    Silent on failure by design: no git, no repo, or a detached worktree just means the
+    verifier falls back to reading. Announcing an empty list would be worse than saying
+    nothing, since "nothing changed" is a claim this cannot support.
+    """
+    if not project_root:
+        return []
+    try:
+        from pathlib import Path
+
+        from core.quick_verify import _run, changed_files
+
+        root = Path(project_root)
+        files = changed_files(root)
+        if not files:
+            return []
+        shown = files[:_CHANGED_FILES_MAX]
+        lines = [
+            "[CHANGED_FILES — resolved from git; THIS is the change under verification]",
+            *(f"- {rel}" for rel in shown),
+        ]
+        if len(files) > len(shown):
+            lines.append(
+                f"- ...and {len(files) - len(shown)} more (list truncated, not the change)"
+            )
+        # Only the summary line of --stat: it carries the magnitude of the change in one
+        # line, where the per-file breakdown would repeat the list above at length.
+        code, out = _run(["git", "diff", "--shortstat", "HEAD"], root)
+        if code == 0 and out.strip():
+            lines.append(f"scale: {out.strip().splitlines()[0].strip()}")
+        lines.append("")
+        return lines
+    except Exception:
+        return []
 
 
 def build_prompt(
@@ -168,43 +266,42 @@ def build_prompt(
         return "\n".join(
             [
                 *header,
+                *_changed_files_block(project_root),
+                *_graph_block(_compact_leads(graph_leads)),
                 "[CONSTRAINTS]",
-                "- do not implement, do not modify files; report only",
-                "- no scope expansion beyond the change under verification",
-                "- every finding MUST carry ALL THREE tags — severity, origin, scope_relation:",
-                "    severity:       critical | high | medium | low",
-                "    origin:         introduced | regression | pre_existing | unknown",
-                "    scope_relation: in_scope | out_of_scope",
-                "- severity scale (apply literally, do not inflate to draw attention nor deflate to pass):",
-                "    critical = data loss, security hole, silently wrong result, or every command broken",
-                "    high     = normal path of a feature broken, existing caller regressed, stated contract violated",
-                "    medium   = edge case, degraded behaviour, or a real defect with an available workaround",
-                "    low      = naming/style/doc drift, or a hypothetical with no demonstrated trigger",
-                "- origin scale: introduced = this change created it; regression = this change broke"
-                " something that used to work; pre_existing = present beforehand, this change did not"
-                " touch it; unknown = you could not establish which",
-                "- scope_relation: in_scope = inside what this change was meant to touch;"
-                " out_of_scope = outside it (an out_of_scope `introduced` finding IS a scope violation,"
-                " report it as such)",
-                "- severity ALONE does not decide blocking. Route every finding by this table:",
+                "- report only: do not implement, do not modify files, do not ask the user"
+                " questions (questions are main_agent's domain)",
+                "- verify the changed files above and who consumes them; no scope expansion past that",
+                "- graph leads are for finding CONSUMERS of the change (blast radius), NOT for"
+                " widening what you verify",
+                "- tag EVERY finding with all three, then route it by the table below. Severity"
+                " ALONE does not decide blocking:",
+                "    severity: critical (data loss | security hole | silently wrong result | every"
+                " command broken) | high (feature's normal path broken | existing caller regressed |"
+                " stated contract violated) | medium (edge case | degraded | real defect with a"
+                " workaround) | low (naming/style/doc drift | hypothetical with no demonstrated trigger)",
+                "    origin: introduced (this change created it) | regression (this change broke what"
+                " used to work) | pre_existing (already there, untouched by this change) | unknown"
+                " (could not establish which)",
+                "    scope_relation: in_scope (inside what this change meant to touch) | out_of_scope"
+                " (outside it — an out_of_scope `introduced` finding IS a scope violation, report it as such)",
                 "    introduced/regression + in_scope      + critical|high -> blocking_findings",
                 "    introduced/regression + out_of_scope  + critical|high -> blocking_findings (+ scope violation)",
                 "    introduced/regression + out_of_scope  + medium|low    -> escalations",
                 "    unknown               + any           + critical|high -> blocking_findings (fail closed)",
                 "    pre_existing          + any           + critical|high -> escalations",
                 "    anything else                                        -> notes",
-                "- `unknown` is not an escape hatch: to move a finding off unknown, cite the evidence"
-                " (diff, git history, prior version). If you cannot, it stays unknown and it blocks",
-                "- `escalations` do NOT change the verdict, but they are NOT notes: they are real"
-                " critical/high problems the user must decide about. Never bury one in notes",
-                "- a finding without a file:line and a concrete failing scenario is NOT critical/high;"
-                " demote it to a note and say what evidence is missing",
-                "- that rule is about evidence quality, NOT about suppressing systemic problems:"
-                " a defect spanning many sites stays critical/high — cite representative file:line"
-                " occurrences and state how widespread it is",
-                "- state what you actually ran or read under `checks_run`, and what you could NOT"
-                " verify under `not_verified` — an unrun check is never a pass",
-                "- do NOT ask the user questions; that is main_agent's domain",
+                "- do not inflate severity to draw attention, nor deflate it to pass",
+                "- `unknown` is not an escape hatch: cite the evidence (diff, git history, prior"
+                " version) to move a finding off it, otherwise it stays unknown and it blocks",
+                "- `escalations` do NOT change the verdict but are NOT notes: real critical/high"
+                " problems the user must decide about. Never bury one in notes",
+                "- no file:line + concrete failing scenario => NOT critical/high; demote to a note and"
+                " say what evidence is missing. That is about evidence quality, NOT about suppressing"
+                " systemic problems — a defect spanning many sites stays critical/high, cite"
+                " representative file:line occurrences and state how widespread it is",
+                "- `checks_run`: what you actually ran or read. `not_verified`: what you could not"
+                " check and why. An unrun check is never a pass",
                 "",
                 "[TASK]",
                 task.strip(),

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from config.settings import (
+    DEFAULT_IDLE_STALL_SECONDS,
     DEFAULT_JOB_MAX_RUNTIME_SECONDS,
     DEFAULT_STALL_THRESHOLD_SECONDS,
     JOB_DIR,
@@ -14,8 +15,8 @@ from config.settings import (
 from utils import osutil
 
 # Worker liveness, in increasing order of trouble.
-ALIVE_PROGRESSING = "alive-progressing"  # PID up, heartbeat fresh
-ALIVE_STALLED = "alive-stalled"  # PID up, heartbeat stale -> probe before judging
+ALIVE_PROGRESSING = "alive-progressing"  # PID up, heartbeat fresh, stream producing
+ALIVE_STALLED = "alive-stalled"  # PID up but silent -> probe before judging
 DEAD = "dead"  # PID gone
 
 
@@ -25,6 +26,7 @@ class JobManager:
         job_dir: Path = JOB_DIR,
         stall_threshold_seconds: int = DEFAULT_STALL_THRESHOLD_SECONDS,
         max_runtime_seconds: int = DEFAULT_JOB_MAX_RUNTIME_SECONDS,
+        idle_stall_seconds: int = DEFAULT_IDLE_STALL_SECONDS,
     ) -> None:
         self.job_dir = Path(job_dir)
         self.lock_dir = self.job_dir / "locks"
@@ -34,6 +36,7 @@ class JobManager:
         self.beat_dir.mkdir(parents=True, exist_ok=True)
         self.stall_threshold_seconds = stall_threshold_seconds
         self.max_runtime_seconds = max_runtime_seconds
+        self.idle_stall_seconds = idle_stall_seconds
 
     def create_job(
         self,
@@ -111,6 +114,19 @@ class JobManager:
 
     def complete_job(self, job_id: str, output: dict) -> dict:
         job = self._load(job_id)
+        if job.get("reaped"):
+            # The job was reaped while this worker was still running (rate limit, dead
+            # probe). Letting the late finish flip it back to completed would undo a
+            # decision the caller has already acted on. The payload is kept rather than
+            # dropped: it is real work, just no longer the answer to anyone's question.
+            #
+            # `reaped` alone, not `status == "failed" and reaped`: the flag IS the claim,
+            # and pairing it with a status made the guard depend on two fields landing
+            # together. `reap_stalled` writes both in one atomic save, so a record that
+            # carries the flag has been claimed no matter what its status currently reads.
+            job["late_output"] = output
+            self._save(job)
+            return job
         job["status"] = "completed"
         job["completed_at"] = self._now()
         job["output"] = output
@@ -175,6 +191,7 @@ class JobManager:
                         ),
                         "worker_pid": job.get("worker_pid"),
                         "last_heartbeat": beat.get("at"),
+                        "idle_seconds": self._idle_seconds(job),
                         "progress": beat.get("progress"),
                         "probe": probe.get("probe"),
                     },
@@ -251,15 +268,34 @@ class JobManager:
     def liveness(self, job: dict) -> str | None:
         """Tri-state worker health, or None when there is nothing to judge yet.
 
-        PID liveness alone cannot tell "working" from "hung on a rate limit" — the
-        process is up in both cases. The heartbeat, emitted from the adapter's poll
-        loop, is what separates them.
+        Three signals, in order of how much they can be trusted:
+
+        1. PID gone            -> DEAD. Unambiguous.
+        2. Stream idle         -> ALIVE_STALLED. The adapter reports how long it has
+           been since opencode emitted a byte. This is the only one that catches a
+           rate-limited agent: its PID is up and its heartbeat is fresh, because the
+           poll loop that emits the beat keeps turning while nothing comes back.
+        3. Heartbeat stale     -> ALIVE_STALLED. Catches a worker that stopped beating
+           entirely (crashed loop, blocked thread) rather than one that beats emptily.
+
+        Signal 2 is checked BEFORE signal 3 on purpose: a fresh heartbeat used to
+        outrank everything, so a job stuck on a quota wall reported alive-progressing
+        until the 1.5h runtime backstop finally fired.
         """
         pid = job.get("worker_pid")
         if pid is None:
             return None  # not yet spawned; nothing to reap
         if not osutil.process_alive(pid):
             return DEAD
+
+        idle = self._idle_seconds(job)
+        if (
+            self.idle_stall_seconds
+            and idle is not None
+            and idle > self.idle_stall_seconds
+        ):
+            return ALIVE_STALLED
+
         age = self._heartbeat_age_seconds(job)
         if age is None:
             # No beat yet: fall back to how long the job has been running, so a worker
@@ -268,6 +304,29 @@ class JobManager:
         if age is not None and age > self.stall_threshold_seconds:
             return ALIVE_STALLED
         return ALIVE_PROGRESSING
+
+    def _idle_seconds(self, job: dict) -> float | None:
+        """Seconds since opencode last produced output, per the latest beat.
+
+        None when the beat predates this field (a worker still running from an older
+        build) — absence must not be read as zero, or an old worker would look busy.
+        """
+        beat = self.read_heartbeat(job.get("job_id") or "")
+        progress = (beat or {}).get("progress")
+        if not isinstance(progress, dict):
+            return None
+        idle = progress.get("idle_seconds")
+        if idle is None:
+            return None
+        try:
+            reported = float(idle)
+        except (TypeError, ValueError):
+            return None
+        # The beat itself may be stale; the idle window has kept growing since it was
+        # written. Add that gap, otherwise a worker that stopped beating mid-wait looks
+        # like it is only as idle as it was at its last beat.
+        drift = self._age_seconds((beat or {}).get("at")) or 0.0
+        return reported + max(0.0, drift)
 
     def _heartbeat_age_seconds(self, job: dict) -> float | None:
         beat = self.read_heartbeat(job.get("job_id") or "")
@@ -315,6 +374,61 @@ class JobManager:
 
     def read_probe(self, job_id: str) -> dict | None:
         return self._read_side(self._probe_path(job_id))
+
+    def reap_stalled(
+        self,
+        job_id: str,
+        error_type: str,
+        message: str,
+        next_action: str,
+        probe: dict | None = None,
+    ) -> dict:
+        """Terminate a stalled worker and fail its job with a typed reason.
+
+        The kill is not optional. `fail_job` releases the session lock, so without it
+        the detached worker keeps burning quota against a job nobody is waiting for,
+        and a later `complete_job` would resurrect a record the caller already treated
+        as terminal. Best-effort: an unkillable worker still gets its job failed —
+        reporting a stall the caller can act on beats blocking on a process kill.
+        """
+        from core.contract import make_error
+
+        job = self.get_job(job_id) or {}
+
+        # Claim the job BEFORE killing anything, and put `status` and `reaped` into ONE
+        # atomic write. The previous order was kill -> fail_job -> mark reaped, which left
+        # two gaps a finishing worker could land in: after the kill but before `fail_job`
+        # (record still `running`), and after `fail_job` but before the mark (`failed` but
+        # not `reaped`). In either one the `complete_job` guard saw an unclaimed record and
+        # flipped the job back to completed — resurrecting work the caller had already been
+        # told was dead. Claiming first closes both: whatever the worker does from here, it
+        # finds the job already claimed.
+        try:
+            record = self._load(job_id)
+            record["status"] = "failed"
+            record["reaped"] = True
+            self._save(record)
+        except (OSError, ValueError, KeyError):
+            # Best effort. An unwritable record must not stop the kill below: a worker
+            # left running burns quota against a job nobody is waiting for.
+            pass
+
+        kill = osutil.terminate_tree(None, pid=job.get("worker_pid"))
+        meta = {
+            "worker_pid": job.get("worker_pid"),
+            "kill": kill,
+            "idle_seconds": self._idle_seconds(job),
+            "stall_threshold_seconds": self.stall_threshold_seconds,
+            "idle_stall_seconds": self.idle_stall_seconds,
+        }
+        if probe is not None:
+            meta["probe"] = probe
+        output = make_error(error_type, message, next_action=next_action, meta=meta)
+
+        # Attaches the typed error and releases the session lock. `fail_job` reloads the
+        # record, so the `reaped` flag claimed above survives this write.
+        failed = self.fail_job(job_id, message, output=output)
+        return {**output, "job_id": job_id, "status": failed.get("status", "failed")}
 
     def active_job_for_session(self, session_id: str) -> dict | None:
         lock_path = self._lock_path(session_id)

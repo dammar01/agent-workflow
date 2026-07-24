@@ -62,6 +62,13 @@ def load_graph(project_root) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
+# (project_root, graph_mtime) -> verdict. The check walks every .py in the repo, and
+# it runs on every delegated call; without this the same full-tree scan is repeated for
+# a graph that has not moved. Keyed on the graph's mtime so a regenerated graph is
+# always re-evaluated. Process-local and tiny — a worker handles one call and exits.
+_STALE_CACHE: dict[tuple[str, float], bool | None] = {}
+
+
 def is_stale(project_root) -> bool | None:
     """True when the graph is older than the newest tracked source file.
 
@@ -75,6 +82,10 @@ def is_stale(project_root) -> bool | None:
         graph_mtime = path.stat().st_mtime
     except OSError:
         return None
+
+    cache_key = (str(project_root), graph_mtime)
+    if cache_key in _STALE_CACHE:
+        return _STALE_CACHE[cache_key]
 
     newest = 0.0
     root = Path(project_root)
@@ -92,7 +103,9 @@ def is_stale(project_root) -> bool | None:
         return None
     if not newest:
         return None
-    return newest > graph_mtime
+    verdict = newest > graph_mtime
+    _STALE_CACHE[cache_key] = verdict
+    return verdict
 
 
 def _relative_source(source_file: str | None, project_root) -> str | None:
@@ -203,6 +216,19 @@ def top_files(
 ) -> list[dict]:
     """Files ranked by keyword overlap with `hint`, then by weighted degree.
 
+    Two things here are deliberate, and both exist because the earlier ranking returned
+    almost the same shortlist for every hint:
+
+    1. Degree is NORMALISED before it is added. Raw weighted degree runs to ~50 on the
+       hub of a mid-sized repo while a filename can only ever supply a handful of
+       keyword matches — so the hub outranked the file the hint literally named. Scaled
+       to the same 0-10 band as one keyword match, connectivity becomes the tiebreaker
+       it was meant to be instead of the answer.
+    2. Matches are aggregated ACROSS a file's nodes rather than taken from its single
+       best one. graph.json carries no file contents; symbol labels (`JobManager`,
+       `reap_stalled`) are the only semantic signal it has, and scoring one node at a
+       time threw away every match after the first.
+
     With no hint this degrades to pure connectivity ranking, which is still a far
     better starting point than an alphabetical directory listing.
     """
@@ -211,27 +237,51 @@ def top_files(
         return []
     degrees = _degrees(graph)
     wanted = _keywords(hint)
+    max_degree = max(degrees.values(), default=0.0) or 1.0
 
-    best: dict[str, dict] = {}
+    files: dict[str, dict] = {}
     for node in _nodes(graph):
         rel = _relative_source(node.get("source_file"), project_root)
         if not rel:
             continue
         label = str(node.get("label") or node.get("norm_label") or "")
-        overlap = len(wanted & (_keywords(label) | _keywords(rel))) if wanted else 0
+        matched = (wanted & (_keywords(label) | _keywords(rel))) if wanted else set()
         degree = degrees.get(str(node.get("id")), 0.0)
-        score = overlap * 10 + degree
-        current = best.get(rel)
-        if current is None or score > current["score"]:
-            best[rel] = {
+
+        row = files.get(rel)
+        if row is None:
+            row = {
                 "file": rel,
-                "score": round(score, 2),
-                "matched": overlap,
+                "matched_terms": set(),
+                "degree": 0.0,
                 "community": node.get("community"),
                 "label": label,
             }
+            files[rel] = row
+        row["matched_terms"] |= matched
+        if degree > row["degree"]:
+            # Keep the community and label of the file's most connected node: that is
+            # the one whose cluster membership actually describes the file.
+            row["degree"] = degree
+            row["community"] = node.get("community")
+            row["label"] = label
 
-    ranked = sorted(best.values(), key=lambda r: r["score"], reverse=True)
+    ranked: list[dict] = []
+    for row in files.values():
+        overlap = len(row["matched_terms"])
+        score = overlap * 10 + 10 * (row["degree"] / max_degree)
+        ranked.append(
+            {
+                "file": row["file"],
+                "score": round(score, 2),
+                "matched": overlap,
+                "matched_terms": sorted(row["matched_terms"])[:6],
+                "community": row["community"],
+                "label": row["label"],
+            }
+        )
+
+    ranked.sort(key=lambda r: r["score"], reverse=True)
     return ranked[:limit]
 
 

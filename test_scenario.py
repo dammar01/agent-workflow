@@ -199,9 +199,31 @@ def run_tests() -> None:
         assert_true(worker_status["status"] == "completed", "worker must persist completed state")
 
         # 9. check.py status/result payloads
+        # The queued job was submitted with a PID that does not exist. check.py used to
+        # read the job record directly and report `pending` forever for exactly this
+        # case — an attached `--wait` polling a corpse. It now goes through get_result,
+        # which is where liveness runs, so a dead worker is reaped instead.
         pending_status = check._status_payload(queued["job_id"])
-        assert_true(pending_status["status"] == "pending", "check status must expose pending job")
-        assert_true(pending_status["done"] is False, "pending job must not be done")
+        assert_true(
+            pending_status["status"] == "failed",
+            f"check status must reap a job whose worker PID is gone: {pending_status}",
+        )
+        assert_true(
+            pending_status.get("error_type") == "worker_died",
+            f"a reaped-on-attach job must say why: {pending_status}",
+        )
+
+        # ...and a job whose worker IS alive still reports as running. Use this very
+        # process as the stand-in worker: it is guaranteed alive for the assertion.
+        live_job = main.JOB_MANAGER.create_job("explore", "live worker", "live-session", work_dir, None)
+        main.JOB_MANAGER.set_worker_pid(live_job["job_id"], os.getpid())
+        main.JOB_MANAGER.mark_running(live_job["job_id"])
+        main.JOB_MANAGER.touch_heartbeat(live_job["job_id"], {"phase": "agent", "idle_seconds": 0})
+        live_status = check._status_payload(live_job["job_id"])
+        assert_true(
+            live_status["status"] == "running" and live_status["done"] is False,
+            f"a job with a live worker and a fresh beat must not be reaped: {live_status}",
+        )
 
         complete_job = main.JOB_MANAGER.create_job("execute", "done task", "result-session", work_dir, None)
         main.JOB_MANAGER.complete_job(complete_job["job_id"], {"ok": True, "content": "clean output", "meta": {}})
@@ -539,19 +561,26 @@ def run_tests() -> None:
             "subagents:" in _p(two_clusters, True),
             "the output format must ask which clusters were dispatched",
         )
-        # One cluster is not a fan-out: a single sub-agent costs a round trip and buys
-        # nothing over reading the files directly.
+        # Too few clusters to partition by is no longer a reason to skip fan-out: the
+        # plan falls back to slicing by investigation angle, because a repo with no
+        # usable graph is the one where a serial read costs the most.
+        for leads, why in (
+            (one_cluster, "a single cluster must fall back to angle-based slices"),
+            (None, "no graph must fall back to angle-based slices"),
+        ):
+            prompt = _p(leads, True)
+            assert_true("[SUBAGENT_PLAN" in prompt, why)
+            assert_true(
+                "no dependency graph is available" in prompt,
+                f"the fallback must say WHY its slices are not file-based: {why}",
+            )
         assert_true(
-            "[SUBAGENT_PLAN" not in _p(one_cluster, True),
-            "a single cluster must not trigger fan-out",
+            "c1: entry points" in _p(None, True),
+            "the graph-free plan must still name concrete slices",
         )
         assert_true(
             "[SUBAGENT_PLAN" not in _p(two_clusters, False),
-            "fan-out must stay off unless explicitly enabled",
-        )
-        assert_true(
-            "[SUBAGENT_PLAN" not in _p(None, True),
-            "no graph means no clusters to fan out over",
+            "fan-out must stay off when the policy is off",
         )
 
         # Detection needs BOTH signals to agree — a declaration alone is a claim of work,
@@ -592,15 +621,15 @@ def run_tests() -> None:
             "output with no subagents line must not register as fan-out",
         )
 
-        # Default OFF: fan-out spends extra quota per call, so an unreadable or silent
-        # config must never turn it on by itself.
+        # Default ON. The previous fail-closed default meant an unreadable config
+        # silently downgraded every call to a serial read with nothing saying so.
         assert_true(
-            subagent_fanout_enabled(temp_root) is False,
-            "fan-out must default to off",
+            subagent_fanout_enabled(temp_root) is True,
+            "fan-out must default to on",
         )
         assert_true(
-            subagent_fanout_enabled(temp_root / "does-not-exist") is False,
-            "an unreadable config must leave fan-out off",
+            subagent_fanout_enabled(temp_root / "does-not-exist") is True,
+            "an unreadable config must fall back to the default, not to off",
         )
 
         # The shipped example is what a FRESH CLONE gets: config/opencode.json is
