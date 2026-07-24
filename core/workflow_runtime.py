@@ -99,7 +99,7 @@ def workflow_paths(
 
 def _tool_paths(agent_workflow_path: str | None) -> dict:
     """Resolve absolute tool paths (main.py/check.py) so .workflow is self-contained."""
-    from config.settings import CHECK_PY, MAIN_PY, TOOL_VERSION
+    from config.settings import CHECK_PY, COMPONENT_VERSIONS, MAIN_PY, TOOL_VERSION
 
     main_py = Path(agent_workflow_path).resolve() if agent_workflow_path else MAIN_PY
     tool_dir = main_py.parent
@@ -111,6 +111,7 @@ def _tool_paths(agent_workflow_path: str | None) -> dict:
         "check_py_path": str(check_py),
         "tool_dir": str(tool_dir),
         "tool_version": TOOL_VERSION,
+        "runtime_version": COMPONENT_VERSIONS["runtime"],
     }
 
 
@@ -247,12 +248,18 @@ def merge_config_defaults(config: dict) -> tuple[dict, bool]:
     # tool_version is derived, not a user setting: left alone it pins an upgraded
     # workspace to the version that first wrote it, and `doctor` then reports a
     # tool version the runtime is no longer running.
-    from config.settings import TOOL_VERSION
+    from config.settings import COMPONENT_VERSIONS, TOOL_VERSION
 
     runtime = config.get("runtime")
-    if isinstance(runtime, dict) and runtime.get("tool_version") != TOOL_VERSION:
-        runtime["tool_version"] = TOOL_VERSION
-        changed = True
+    if isinstance(runtime, dict):
+        if runtime.get("tool_version") != TOOL_VERSION:
+            runtime["tool_version"] = TOOL_VERSION
+            changed = True
+        # runtime_version is derived like tool_version; backfill so an existing config
+        # gains the component stamp the lazy-upgrade gate reads.
+        if runtime.get("runtime_version") != COMPONENT_VERSIONS["runtime"]:
+            runtime["runtime_version"] = COMPONENT_VERSIONS["runtime"]
+            changed = True
     return config, changed
 
 
@@ -264,23 +271,27 @@ def workspace_versions(project_root: Path) -> dict:
     init, and nothing else in the runtime notices — the generated run scripts keep the
     paths and flags they were written with.
     """
-    from config.settings import TOOL_VERSION
+    from config.settings import COMPONENT_VERSIONS, TOOL_VERSION
 
     installed = None
     installed_config = None
+    installed_runtime = None
     try:
         config = read_json_file(workflow_paths(project_root)["config"])
         runtime = config.get("runtime")
         if isinstance(runtime, dict):
             installed = runtime.get("tool_version")
+            installed_runtime = runtime.get("runtime_version")
         installed_config = config.get("version")
     except (OSError, ValueError):
         pass
     return {
         "installed_tool_version": installed,
         "installed_config_version": installed_config,
+        "installed_runtime_version": installed_runtime,
         "current_tool_version": TOOL_VERSION,
         "current_config_version": CONFIG_VERSION,
+        "current_runtime_version": COMPONENT_VERSIONS["runtime"],
     }
 
 
@@ -333,17 +344,23 @@ def upgrade_workflow_workspace(
     tool = _tool_paths(agent_workflow_path)
 
     config_changed = False
+    fresh_config = False
+    main_py_changed = False
     try:
         config = read_json_file(paths["config"])
     except (OSError, ValueError):
         config = default_config(project_root, agent_workflow_path)
         config_changed = True
+        fresh_config = True
     else:
         config, config_changed = merge_config_defaults(config)
         runtime = config.setdefault("runtime", {})
+        # Scripts embed main_py_path; a repo move must regenerate them even when the
+        # runtime component version did not bump.
+        main_py_changed = runtime.get("main_py_path") != tool["main_py_path"]
         # Tool paths are absolute and machine-specific: an upgrade after the repo moved
         # must repoint them, or the regenerated scripts call a main.py that is gone.
-        for key in ("main_py_path", "check_py_path", "tool_dir", "tool_version"):
+        for key in ("main_py_path", "check_py_path", "tool_dir", "tool_version", "runtime_version"):
             if runtime.get(key) != tool[key]:
                 runtime[key] = tool[key]
                 config_changed = True
@@ -354,7 +371,16 @@ def upgrade_workflow_workspace(
         atomic_write_json(paths["config"], config)
 
     opencode_added = _merge_opencode_config(project_root, tool["tool_dir"])
-    scripts = _generate_run_scripts(project_root, tool["main_py_path"])
+
+    # Lazy runtime component (P0.7): the run/inspect/check scripts are a pure function of
+    # main_py_path + platform + the generator's version. Regenerate only when one of those
+    # could have moved — the runtime component bumped, the repo relocated, or the config was
+    # created fresh — instead of rewriting identical files on every upgrade.
+    runtime_bumped = before.get("installed_runtime_version") != tool["runtime_version"]
+    if fresh_config or main_py_changed or runtime_bumped:
+        scripts = _generate_run_scripts(project_root, tool["main_py_path"])
+    else:
+        scripts = []
     gitignore_updated = ensure_root_gitignore_entry(project_root)
 
     return {
@@ -430,6 +456,86 @@ def diverged_defaults(config: dict) -> list[dict]:
                     }
                 )
     return out
+
+
+def _capabilities_path(project_root: Path) -> Path:
+    return workflow_paths(project_root)["workflow_dir"] / "capabilities.json"
+
+
+def fanout_capability(project_root: Path) -> bool | None:
+    """Learned opencode fan-out capability for this project (P1.6).
+
+    True/False once a delegated run has revealed it; None while unprobed. Default fan-out
+    stays ON — this only flips it OFF after opencode itself reports no spawn tool, so the
+    prompt stops carrying a fan-out plan opencode cannot execute.
+    """
+    try:
+        data = read_json_file(_capabilities_path(project_root))
+    except (OSError, ValueError):
+        return None
+    value = data.get("subagent_fanout_capable") if isinstance(data, dict) else None
+    return value if isinstance(value, bool) else None
+
+
+def set_fanout_capability(project_root: Path, capable: bool) -> None:
+    """Persist the observed fan-out capability. No-op when unchanged (avoids churn)."""
+    path = _capabilities_path(project_root)
+    try:
+        data = read_json_file(path)
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, ValueError):
+        data = {}
+    if data.get("subagent_fanout_capable") == capable:
+        return
+    data["subagent_fanout_capable"] = capable
+    data["subagent_fanout_capable_at"] = now_iso()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(path, data)
+
+
+def validate_config(config: dict) -> list[str]:
+    """Structural sanity of config.json's user-tunable sections (P0.10).
+
+    Two silent failure modes this surfaces: an UNKNOWN key (a misspelled knob does nothing,
+    yet reads as "configured"), and a TYPE mismatch (a bool knob set to a string is ignored
+    by the reader that expects a bool, again silently). Reported, never fatal or rewritten —
+    same posture as diverged_defaults; the runtime readers all fall back safely. Only
+    commands/ and policies/ are user knobs; version/project/runtime are structural.
+    """
+    warnings: list[str] = []
+    for section, section_defaults in (
+        ("commands", default_commands()),
+        ("policies", default_policies()),
+    ):
+        current = config.get(section)
+        if current is None:
+            continue  # an absent section is backfilled by merge_config_defaults, not an error
+        if not isinstance(current, dict):
+            warnings.append(f"{section}: {type(current).__name__}, expected object")
+            continue
+        for key, value in current.items():
+            if key not in section_defaults:
+                warnings.append(f"{section}.{key}: unknown key (typo? the runtime ignores it)")
+                continue
+            default = section_defaults[key]
+            # bool is a subclass of int, so an int knob set to True (or a bool knob set to
+            # 0/1) would slip past a plain isinstance — compare bool-ness explicitly.
+            if isinstance(default, bool):
+                if not isinstance(value, bool):
+                    warnings.append(f"{section}.{key}: {type(value).__name__}, expected bool")
+            elif isinstance(value, bool) or not isinstance(value, type(default)):
+                warnings.append(
+                    f"{section}.{key}: {type(value).__name__}, expected {type(default).__name__}"
+                )
+    commands = config.get("commands")
+    if isinstance(commands, dict):
+        mode = commands.get("verify_mode")
+        if mode is not None and mode not in VERIFY_MODES:
+            warnings.append(
+                f"commands.verify_mode: '{mode}' not in {VERIFY_MODES} (falls back to delegated)"
+            )
+    return warnings
 
 
 def _merge_opencode_config(project_root: Path, tool_dir: str) -> list[str]:
@@ -541,6 +647,7 @@ def default_config(project_root: Path, agent_workflow_path: str | None) -> dict:
             "check_py_path": tool["check_py_path"],
             "tool_dir": tool["tool_dir"],
             "tool_version": tool["tool_version"],
+            "runtime_version": tool["runtime_version"],
             "second_agent": "opencode",
             "main_agent": "agnostic",
             "opencode_config": ".workflow/opencode.json",
@@ -1401,6 +1508,23 @@ def run_doctor(
         )
 
     checks["graphify_out_exists"] = (project_root / "graphify-out").exists()
+
+    # Config knob sanity: unknown keys / wrong types silently do nothing. Surfaced as a
+    # recommended fix, not an issue — the runtime readers fall back safely, so a typo must
+    # not make an otherwise-working workspace report NOT_READY.
+    try:
+        parsed_config = read_json_file(paths["config"])
+    except (OSError, ValueError):
+        parsed_config = None
+    config_warnings = (
+        validate_config(parsed_config) if isinstance(parsed_config, dict) else []
+    )
+    checks["config_warnings"] = config_warnings or "none"
+    if config_warnings:
+        recommended_fixes.append(
+            f"Review .workflow/config.json: {len(config_warnings)} knob warning(s) "
+            "(unknown key or wrong type — silently ignored)"
+        )
 
     # Version drift: the workspace still works, but its generated scripts and config
     # defaults are the previous build's. Reported as its own status rather than as an

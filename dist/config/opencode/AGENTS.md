@@ -109,7 +109,11 @@ Forbidden:
              critical|high → `escalations` (tak memblokir tapi WAJIB tampil, bukan
              note); sisanya `notes`. `unknown` bukan pintu keluar — turun dari unknown
              wajib sebut bukti (diff/git history), tak bisa → tetap memblokir.
-             Tanpa file:line + skenario gagal konkret → dilarang critical/high.
+             EVIDENCE = file:line (defect di source) ATAU ref konkret non-code:
+             db:<migration|table.column>, mcp:<server:tool>, runtime:<env/config key>,
+             cmd:<command+output>. Defect non-code dgn ref yang benar BOLEH critical/high
+             — jangan dipaksa ke file:line/diturunkan cuma karena bukan kode. Tanpa ref
+             APA PUN + skenario gagal konkret → dilarang critical/high.
              Sebut `checks_run` (yang benar-benar dijalankan) dan `not_verified` — cek
              yang tak dijalankan bukan pass. Format persis dikirim runtime di [OUTPUT_FORMAT].
 - sweep    → git diff scan → impact evidence

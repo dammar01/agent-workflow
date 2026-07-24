@@ -2,10 +2,12 @@
 
 BOOTSTRAP-ONLY. dist/ is the canonical, Git-reviewed bundle; this tool only *seeds* it
 from a maintainer's live ~/.claude the first time (or when deliberately re-importing home
-edits). Routine changes are made in dist/ directly, then propagated with
-`tools/sync_skills.py` (CLAUDE.md -> skills/*.md) and `tools/gen_manifest.py` (rebuild the
-manifest from dist/). Do NOT run this to refresh the manifest after editing dist/ — it
-would overwrite dist/ with home-dir content and abort on the clobber guard.
+edits). Routine changes are made in dist/ directly. Skill bodies live ONLY in
+`dist/config/claude/skills/*.md` (CLAUDE.md no longer embeds them — see P1.5);
+`tools/sync_skills.py --check` verifies those files still match CLAUDE.md's command
+registry, and `tools/gen_manifest.py` rebuilds the manifest from dist/. Do NOT run this to
+refresh the manifest after editing dist/ — it would overwrite dist/ with home-dir content
+and abort on the clobber guard.
 
 Runs on the DEV machine. Reads the live agent directories, copies an explicit allowlist
 into `dist/config/`, redacts machine-specific paths, and writes a manifest the installer

@@ -46,7 +46,11 @@ def _subagent_block(graph_leads: dict | None) -> list[str]:
     Output stays terse because fan-out multiplies response volume; per-slice findings
     are capped and attribution uses compact tags.
     """
-    clusters = (graph_leads or {}).get("communities") or []
+    clusters = (
+        []
+        if (graph_leads or {}).get("stale")
+        else ((graph_leads or {}).get("communities") or [])
+    )
 
     if len(clusters) >= 2:
         lines = [
@@ -81,23 +85,28 @@ def _graph_block(graph_leads: dict | None) -> list[str]:
     if not graph_leads or not graph_leads.get("files"):
         return []
 
-    lines = [
-        "[GRAPH_LEADS — from graphify-out/graph.json; ranked STARTING POINTS, not evidence]",
-        "- open these first, then follow the code; a graph edge is never a substitute for reading the file",
-        "- a file listed here that turns out to be irrelevant is expected — say so rather than forcing it into the answer",
-    ]
-    if graph_leads.get("stale"):
-        lines.append(
-            "- WARNING: the graph is older than the current sources; treat every lead as possibly outdated"
-        )
+    stale = graph_leads.get("stale")
+    if stale:
+        lines = [
+            "[GRAPH_HINT — from graphify-out/graph.json, but the graph is OLDER than the current sources]",
+            "- treat these as a WEAK hint only, NOT the current structure: files may be renamed, moved, or deleted",
+            "- confirm each still exists and is relevant by reading it; if the graph looks wrong, ignore it and traverse from the task directly",
+        ]
+    else:
+        lines = [
+            "[GRAPH_LEADS — from graphify-out/graph.json; ranked STARTING POINTS, not evidence]",
+            "- open these first, then follow the code; a graph edge is never a substitute for reading the file",
+            "- a file listed here that turns out to be irrelevant is expected — say so rather than forcing it into the answer",
+        ]
 
     lines.append("candidate_files:")
     for row in graph_leads["files"]:
         community = row.get("community")
-        suffix = f" [community {community}]" if community is not None else ""
+        # A stale graph's community numbers are as suspect as its edges — omit them.
+        suffix = "" if stale or community is None else f" [community {community}]"
         lines.append(f"- {row['file']}{suffix}")
 
-    if graph_leads.get("communities"):
+    if not stale and graph_leads.get("communities"):
         lines.append("clusters:")
         for cluster in graph_leads["communities"]:
             members = ", ".join(cluster.get("files") or [])
@@ -291,10 +300,16 @@ def build_prompt(
                 " version) to move a finding off it, otherwise it stays unknown and it blocks",
                 "- `escalations` do NOT change the verdict but are NOT notes: real critical/high"
                 " problems the user must decide about. Never bury one in notes",
-                "- no file:line + concrete failing scenario => NOT critical/high; demote to a note and"
-                " say what evidence is missing. That is about evidence quality, NOT about suppressing"
-                " systemic problems — a defect spanning many sites stays critical/high, cite"
-                " representative file:line occurrences and state how widespread it is",
+                "- EVIDENCE is a `file:line` for a source defect, OR an equivalent concrete"
+                " reference when the defect is not in source: db:<migration|table.column>,"
+                " mcp:<server:tool>, runtime:<env/config key>, or cmd:<command + its output>."
+                " A non-code defect with the RIGHT non-code evidence can be critical/high —"
+                " do not force it into a file:line or demote it just because it is not in code",
+                "- no evidence reference of ANY kind + no concrete failing scenario => NOT"
+                " critical/high; demote to a note and say what evidence is missing. That is about"
+                " evidence quality, NOT about suppressing systemic problems — a defect spanning"
+                " many sites stays critical/high, cite representative occurrences and state how"
+                " widespread it is",
                 "- `checks_run`: what you actually ran or read. `not_verified`: what you could not"
                 " check and why. An unrun check is never a pass",
                 "",
@@ -374,7 +389,7 @@ def _verification_format() -> list[str]:
         "blocking_findings:   # routed here by the table above, not by severity alone",
         "- severity: <critical|high> | origin: <introduced|regression|unknown>"
         " | scope_relation: <in_scope|out_of_scope>",
-        "  problem: <what is wrong> [file:line]",
+        "  problem: <what is wrong> [file:line | db:<obj> | mcp:<server:tool> | runtime:<key> | cmd:<output>]",
         "  trigger: <concrete input/state that makes it fail>",
         "  impact: <what breaks for the user>",
         "  fix: <specific change>",
@@ -383,7 +398,7 @@ def _verification_format() -> list[str]:
         "escalations:         # critical/high that does NOT block this verdict — user decides",
         "- severity: <critical|high> | origin: <pre_existing|introduced|regression>"
         " | scope_relation: <in_scope|out_of_scope>",
-        "  problem: <what is wrong> [file:line]",
+        "  problem: <what is wrong> [file:line | db:<obj> | mcp:<server:tool> | runtime:<key> | cmd:<output>]",
         "  why_not_blocking: <which routing rule sent it here>",
         "- none",
         "",

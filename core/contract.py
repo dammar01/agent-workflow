@@ -62,6 +62,20 @@ def make_error(error_type: str, message: str, next_action: str, meta: dict | Non
 
 _SUBAGENT_LINE = re.compile(r"^\s*subagents\s*:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
 _CLUSTER_TAG = re.compile(r"\[c(\d+)\]")
+# The honest-fallback line the fan-out instruction asks for when opencode has no spawn tool:
+# `subagents: none (no spawn tool; tools: ...)`.
+_NO_SPAWN_RE = re.compile(
+    r"^\s*subagents\s*:\s*none\b.*no\s+spawn\s+tool", re.IGNORECASE | re.MULTILINE
+)
+
+
+def reported_no_spawn_tool(content: str) -> bool:
+    """True when the second agent explicitly reported it has no sub-agent/spawn tool.
+
+    A capability signal, not a contract miss: observed once, it means opencode here cannot
+    fan out, so the runtime can stop paying prompt space for a plan it will never run.
+    """
+    return bool(_NO_SPAWN_RE.search(content or ""))
 
 
 def detect_subagent_usage(content: str) -> dict:

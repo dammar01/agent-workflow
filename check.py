@@ -6,6 +6,7 @@ import time
 from config.settings import (
     DEFAULT_JOB_POLL_INTERVAL_SECONDS,
     DEFAULT_JOB_POLL_TIMEOUT_SECONDS,
+    DEFAULT_MAX_PROBES,
     DEFAULT_PROBE_RECHECK_SECONDS,
 )
 from core.job_manager import JobManager
@@ -15,6 +16,10 @@ JOB_MANAGER = JobManager()
 # Attach-path cadence for the stall checks. Fixed rather than per-project: check.py is
 # handed a job id and nothing else, so there is no config to read before the first poll.
 _PROBE_RECHECK_SECONDS = float(DEFAULT_PROBE_RECHECK_SECONDS)
+# Same probe budget as the await path: cap the number of quota-spending probes for one
+# stalled job, and back off between them. Past the budget, stop probing — job_max_runtime
+# still reaps a job that never returns.
+_MAX_PROBES = DEFAULT_MAX_PROBES
 
 
 def _status_payload(job_id: str) -> dict:
@@ -74,6 +79,8 @@ def _wait_for_status(job_id: str, poll_interval: float, poll_timeout: int) -> di
     started_at = time.monotonic()
     interval = poll_interval if poll_interval > 0 else DEFAULT_JOB_POLL_INTERVAL_SECONDS
     last_probe_at: float | None = None
+    probe_count = 0
+    recheck = _PROBE_RECHECK_SECONDS
 
     while True:
         payload = _status_payload(job_id)
@@ -81,11 +88,15 @@ def _wait_for_status(job_id: str, poll_interval: float, poll_timeout: int) -> di
             return payload
 
         now = time.monotonic()
-        if last_probe_at is None or (now - last_probe_at) >= _PROBE_RECHECK_SECONDS:
+        if probe_count < _MAX_PROBES and (
+            last_probe_at is None or (now - last_probe_at) >= recheck
+        ):
             last_probe_at = now
+            probe_count += 1
             reaped = _reap_if_stalled(job_id, payload)
             if reaped is not None:
                 return reaped
+            recheck = min(recheck * 2, _PROBE_RECHECK_SECONDS * 8)
 
         if poll_timeout > 0 and (time.monotonic() - started_at) >= poll_timeout:
             return {
@@ -103,6 +114,8 @@ def _wait_for_result(job_id: str, poll_interval: float, poll_timeout: int):
     started_at = time.monotonic()
     interval = poll_interval if poll_interval > 0 else DEFAULT_JOB_POLL_INTERVAL_SECONDS
     last_probe_at: float | None = None
+    probe_count = 0
+    recheck = _PROBE_RECHECK_SECONDS
 
     while True:
         ok, payload = _result_payload(job_id)
@@ -112,10 +125,14 @@ def _wait_for_result(job_id: str, poll_interval: float, poll_timeout: int):
             return False, payload
 
         now = time.monotonic()
-        if last_probe_at is None or (now - last_probe_at) >= _PROBE_RECHECK_SECONDS:
+        if probe_count < _MAX_PROBES and (
+            last_probe_at is None or (now - last_probe_at) >= recheck
+        ):
             last_probe_at = now
+            probe_count += 1
             if _reap_if_stalled(job_id, _status_payload(job_id)) is not None:
                 return False, _status_payload(job_id)
+            recheck = min(recheck * 2, _PROBE_RECHECK_SECONDS * 8)
 
         if poll_timeout > 0 and (time.monotonic() - started_at) >= poll_timeout:
             payload["timed_out"] = True

@@ -10,7 +10,9 @@ Raw per-run logs keep everything; this store keeps only the durable/recurring su
 """
 import hashlib
 import json
+import os
 import re
+import time
 from pathlib import Path
 
 from core.workflow_runtime import (
@@ -21,8 +23,20 @@ from core.workflow_runtime import (
 )
 
 FACTS_FILENAME = "facts.jsonl"
-RECURRENCE_THRESHOLD = 5   # distinct OTHER sessions a grounded claim must appear in to auto-promote
+LOCK_FILENAME = "facts.jsonl.lock"
+# A held lock older than this is presumed orphaned (the writer crashed) and stolen. ingest
+# is sub-second, so any lock older than this window is not a live writer; the generous
+# margin only avoids stealing from a writer swapped out under heavy load.
+LOCK_TTL_SECONDS = 30
+RECURRENCE_THRESHOLD = 3   # distinct OTHER sessions a grounded claim must appear in to auto-promote
 MAX_FACTS = 500
+
+# Provenance of a stored fact. Only `discovered` (a run read code and grounded the claim)
+# may raise cross-session recurrence; a fact that merely got injected and echoed back must
+# never re-promote itself. user_provided is reserved for facts a human asserts directly.
+ORIGIN_DISCOVERED = "discovered"
+ORIGIN_MEMORY_INJECTED = "memory_injected"
+ORIGIN_USER_PROVIDED = "user_provided"
 RELEVANT_LIMIT = 3
 # Two claims anchored to the SAME file are treated as one when their word sets
 # overlap this much — proxies rephrase the same fact every run, and the plain
@@ -49,6 +63,60 @@ _NEGATION = re.compile(
 
 def _facts_path(project_root: Path) -> Path:
     return workflow_paths(project_root)["workflow_dir"] / FACTS_FILENAME
+
+
+class _FactLock:
+    """Cross-process advisory lock around the facts.jsonl read-modify-write.
+
+    ingest/prune both load the whole store, mutate it, and rewrite it. Two sessions doing
+    that at once (the norm for one project) would each save their own view, and the second
+    write would silently drop the first's additions. An O_EXCL lock-file serialises them.
+
+    Failure posture is best-effort, never blocking forever: a lock older than LOCK_TTL is
+    treated as orphaned and stolen, and if the lock is still not free by the deadline the
+    stale one is removed and re-created. Facts are recoverable best-effort memory; a stuck
+    lock starving every future ingest would be worse than a rare lost update. On Windows a
+    LIVE holder's file cannot be unlinked (its handle is open), so a real writer is never
+    stolen from — only a genuinely dead one is.
+    """
+
+    def __init__(self, project_root: Path):
+        self.path = _facts_path(project_root).with_name(LOCK_FILENAME)
+        self.fd: int | None = None
+
+    def __enter__(self) -> "_FactLock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.time() + LOCK_TTL_SECONDS
+        while True:
+            try:
+                self.fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(self.fd, f"{os.getpid()} {time.time()}".encode("utf-8"))
+                return self
+            except FileExistsError:
+                if self._is_orphaned() or time.time() > deadline:
+                    self._steal()
+                time.sleep(0.05)
+
+    def _is_orphaned(self) -> bool:
+        try:
+            return time.time() - self.path.stat().st_mtime > LOCK_TTL_SECONDS
+        except OSError:
+            return True  # vanished between EEXIST and stat -> free to retry
+
+    def _steal(self) -> None:
+        try:
+            self.path.unlink()
+        except OSError:
+            pass  # live holder on Windows, or already gone — retry the O_EXCL open
+
+    def __exit__(self, *exc) -> None:
+        if self.fd is not None:
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+            self.fd = None
+        self._steal()
 
 
 def _policies(project_root: Path) -> dict:
@@ -271,7 +339,10 @@ def _save_facts(project_root: Path, facts: list[dict]) -> None:
     path = _facts_path(project_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     facts = _dedupe(facts)[-MAX_FACTS:]
-    tmp = path.with_suffix(".tmp")
+    # Per-writer tmp name: a fixed ".tmp" would let two concurrent savers clobber each
+    # other's staging file before the atomic replace. The lock serialises the real writers,
+    # but this keeps the swap safe even if a save ever runs outside the lock.
+    tmp = path.with_suffix(f".{os.getpid()}.tmp")
     tmp.write_text(
         "\n".join(json.dumps(f, ensure_ascii=False) for f in facts) + ("\n" if facts else ""),
         encoding="utf-8",
@@ -280,18 +351,26 @@ def _save_facts(project_root: Path, facts: list[dict]) -> None:
 
 
 def _recurrence_counts(
-    project_root: Path, exclude_session_id: str | None = None
+    project_root: Path,
+    exclude_session_id: str | None = None,
+    injected: set[str] | None = None,
 ) -> dict[str, int]:
     """normalized grounded claim -> number of DISTINCT sessions whose logs contain it.
 
     The CURRENT session is excluded: its output.raw.md is written before ingest runs,
     so counting it lets a fact that was injected as a KNOWN_FACT (and merely echoed
     back by second_agent) raise its own recurrence — evidence laundering, not support.
+
+    `injected` extends that guard ACROSS sessions: any claim already in the store gets
+    injected as a KNOWN_FACT into every later run, so its reappearance in those runs'
+    `grounded` blocks is an echo, not independent support. Such claims are skipped in all
+    sessions, not just the current one.
     """
     sessions = workflow_paths(project_root)["workflow_dir"] / "sessions"
     if not sessions.exists():
         return {}
     excluded = _safe_component(exclude_session_id) if exclude_session_id else None
+    injected_norms = injected or set()
     per_claim: dict[str, set[str]] = {}
     for sdir in sessions.iterdir():
         logs = sdir / "logs"
@@ -310,7 +389,7 @@ def _recurrence_counts(
                 continue
             for claim in _parse_block(content, "grounded"):
                 norm = _normalize(claim)
-                if norm:
+                if norm and norm not in injected_norms:
                     seen.add(norm)
         for norm in seen:
             per_claim.setdefault(norm, set()).add(sdir.name)
@@ -318,59 +397,74 @@ def _recurrence_counts(
 
 
 def ingest(project_root: Path, content: str, session_id: str) -> int:
-    """Promote qualifying claims from one run's output into the fact store. Returns count added."""
-    loaded = _load_facts(project_root)
-    existing = _dedupe(loaded)
-    collapsed = len(loaded) - len(existing)
-    seen: dict[str | None, list[dict]] = {}
-    for fact in existing:
-        sig = _fact_signature(fact)
-        if sig["words"]:
-            seen.setdefault(fact.get("file"), []).append(sig)
-    added = 0
+    """Promote qualifying claims from one run's output into the fact store. Returns count added.
 
-    def _try_add(raw_claim: str, category: str) -> None:
-        nonlocal added
-        file, line = _extract_fileline(raw_claim)
-        anchor = _anchor_hash(project_root, file, line)
-        if anchor is None:
-            return  # ingest-time verify: anchor gone/invalid → skip stale-at-birth
-        claim = _CATEGORY.sub("", raw_claim).strip()
-        sig = _signature(claim, category, anchor, line)
-        if not sig["words"]:
-            return
-        if _is_duplicate(sig, seen.get(file, [])):
-            return
-        seen.setdefault(file, []).append(sig)
-        existing.append(
-            {
-                "claim": claim,
-                "category": category,
-                "file": file,
-                "line": line,
-                "anchor_hash": anchor,
-                "captured_at": now_iso(),
-                "session": session_id,
-            }
+    The whole read-modify-write runs under _FactLock so a concurrent ingest in another
+    session cannot overwrite this one's additions.
+    """
+    with _FactLock(project_root):
+        loaded = _load_facts(project_root)
+        existing = _dedupe(loaded)
+        collapsed = len(loaded) - len(existing)
+        seen: dict[str | None, list[dict]] = {}
+        for fact in existing:
+            sig = _fact_signature(fact)
+            if sig["words"]:
+                seen.setdefault(fact.get("file"), []).append(sig)
+        added = 0
+
+        def _try_add(
+            raw_claim: str, category: str, origin: str = ORIGIN_DISCOVERED
+        ) -> None:
+            nonlocal added
+            file, line = _extract_fileline(raw_claim)
+            anchor = _anchor_hash(project_root, file, line)
+            if anchor is None:
+                return  # ingest-time verify: anchor gone/invalid → skip stale-at-birth
+            claim = _CATEGORY.sub("", raw_claim).strip()
+            sig = _signature(claim, category, anchor, line)
+            if not sig["words"]:
+                return
+            if _is_duplicate(sig, seen.get(file, [])):
+                return
+            seen.setdefault(file, []).append(sig)
+            existing.append(
+                {
+                    "claim": claim,
+                    "category": category,
+                    "file": file,
+                    "line": line,
+                    "anchor_hash": anchor,
+                    "origin": origin,
+                    "captured_at": now_iso(),
+                    "session": session_id,
+                }
+            )
+            added += 1
+
+        # Everything already stored is exactly what load_relevant injects as a KNOWN_FACT
+        # into later runs, so its reappearance in their `grounded` is an echo, not support.
+        # Feed that set to recurrence so an injected fact can never re-promote itself.
+        injected = {_normalize(f.get("claim", "")) for f in existing}
+
+        # 1) explicit durable facts (config/pattern/invariant) — read from THIS run's output
+        for item in _parse_block(content, "durable_facts"):
+            _try_add(item, _extract_category(item) or "invariant")
+
+        # 2) grounded claims recurring across >= threshold distinct OTHER sessions
+        threshold = _policy_int(
+            project_root, "fact_recurrence_threshold", RECURRENCE_THRESHOLD
         )
-        added += 1
+        counts = _recurrence_counts(
+            project_root, exclude_session_id=session_id, injected=injected
+        )
+        for claim in _parse_block(content, "grounded"):
+            if counts.get(_normalize(claim), 0) >= threshold:
+                _try_add(claim, "recurring")
 
-    # 1) explicit durable facts (config/pattern/invariant)
-    for item in _parse_block(content, "durable_facts"):
-        _try_add(item, _extract_category(item) or "invariant")
-
-    # 2) grounded claims recurring across >= threshold distinct OTHER sessions
-    threshold = _policy_int(
-        project_root, "fact_recurrence_threshold", RECURRENCE_THRESHOLD
-    )
-    counts = _recurrence_counts(project_root, exclude_session_id=session_id)
-    for claim in _parse_block(content, "grounded"):
-        if counts.get(_normalize(claim), 0) >= threshold:
-            _try_add(claim, "recurring")
-
-    if added or collapsed:
-        _save_facts(project_root, existing)
-    return added
+        if added or collapsed:
+            _save_facts(project_root, existing)
+        return added
 
 
 def load_relevant(
@@ -398,18 +492,19 @@ def load_relevant(
 
 def prune(project_root: Path) -> dict:
     """Drop stale/invalid facts (anchored line changed or vanished) and collapse duplicates."""
-    facts = _load_facts(project_root)
-    fresh = [
-        f
-        for f in facts
-        if _anchor_hash(project_root, f.get("file"), f.get("line")) == f.get("anchor_hash")
-        and f.get("anchor_hash") is not None
-    ]
-    deduped = _dedupe(fresh)
-    if len(deduped) != len(facts):
-        _save_facts(project_root, deduped)
-    return {
-        "kept": len(deduped),
-        "removed": len(facts) - len(fresh),
-        "duplicates_collapsed": len(fresh) - len(deduped),
-    }
+    with _FactLock(project_root):
+        facts = _load_facts(project_root)
+        fresh = [
+            f
+            for f in facts
+            if _anchor_hash(project_root, f.get("file"), f.get("line")) == f.get("anchor_hash")
+            and f.get("anchor_hash") is not None
+        ]
+        deduped = _dedupe(fresh)
+        if len(deduped) != len(facts):
+            _save_facts(project_root, deduped)
+        return {
+            "kept": len(deduped),
+            "removed": len(facts) - len(fresh),
+            "duplicates_collapsed": len(fresh) - len(deduped),
+        }

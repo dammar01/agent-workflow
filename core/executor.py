@@ -4,6 +4,7 @@ from core.contract import (
     detect_subagent_usage,
     extract_digest,
     make_error,
+    reported_no_spawn_tool,
 )
 from core import fact_store
 from core import graph_index
@@ -15,8 +16,10 @@ from core.workflow_runtime import (
     auto_verify_after_execute,
     bind_session,
     detect_project_root,
+    fanout_capability,
     graph_leads_enabled,
     release_runtime_lock,
+    set_fanout_capability,
     subagent_fanout_enabled,
     run_sweep,
     update_command_cache,
@@ -94,24 +97,19 @@ class Executor:
         known_facts = None
         graph_leads = None
         fanout = False
-        # Graph-first: hand the second agent a ranked shortlist before it starts
-        # reading. These are LEADS, not findings — the prompt says so, because a
-        # graph edge is not evidence until the file backs it up. Verification gets
-        # them too: knowing which files consume the changed ones is exactly the
-        # question "did this break anything else" turns into.
         if graph_leads_enabled(project_root):
             graph_leads = graph_index.leads(project_root, task)
         if route["role"] in ("exploration", "reasoning"):
             facts = fact_store.load_relevant(project_root, task)
             known_facts = [
-                f"{f['claim']} [{f['file']}:{f['line']}]" for f in facts if f.get("file")
+                f"{f['claim']} [{f['file']}:{f['line']}]"
+                for f in facts
+                if f.get("file")
             ] or None
-            # No longer gated on the graph. Clusters give the best partition, but a
-            # repo with no graphify output is precisely the one where a serial read is
-            # slowest — prompt_builder falls back to slicing the task itself there.
-            # Not extended to verification: a verify run is scoped to one diff, and
-            # splitting it across sub-agents loses the single reviewer's whole-change view.
-            fanout = subagent_fanout_enabled(project_root)
+            fanout = (
+                subagent_fanout_enabled(project_root)
+                and fanout_capability(project_root) is not False
+            )
 
         prompt = build_prompt(
             role=route["role"],
@@ -227,7 +225,8 @@ class Executor:
             # Report what actually happened, not what was asked for. A run that was told
             # to fan out and did not is still a usable result — but calling it a fan-out
             # would make the next decision rest on work nobody did.
-            usage = detect_subagent_usage(result.get("content") or "")
+            content = result.get("content") or ""
+            usage = detect_subagent_usage(content)
             meta = result.setdefault("meta", {})
             meta["subagent_used"] = usage["used"]
             meta["subagent_fanout_clusters"] = usage["fanout_clusters"]
@@ -237,6 +236,16 @@ class Executor:
                     "second_agent declared sub-agents but tagged no claims with [cN]; "
                     "treat the fan-out as unconfirmed"
                 )
+            # Learn opencode's fan-out capability from what it just reported (P1.6): a
+            # "no spawn tool" fallback flips it OFF for next time; a real fan-out confirms
+            # ON (in case a prior probe was wrong). Best-effort — never fail the run on it.
+            try:
+                if reported_no_spawn_tool(content):
+                    set_fanout_capability(project_root, False)
+                elif usage["used"]:
+                    set_fanout_capability(project_root, True)
+            except Exception:
+                pass
 
         if route["role"] in ("exploration", "reasoning"):
             # Fact ingestion is best-effort, but its failure remains visible.

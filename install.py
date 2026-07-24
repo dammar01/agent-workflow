@@ -385,6 +385,17 @@ def _run_check(manifest: dict) -> int:
         for key in installed_missing:
             print(f"    - MISSING {key}")
 
+    # Per-component rollup (P0.7): which component drifted, not just how many files.
+    versions = manifest.get("versions") or {}
+    if versions:
+        changed_keys = set(bundle_stale) | set(installed_drift) | set(installed_missing)
+        print("  components:")
+        for comp, ver in versions.items():
+            comp_keys = [k for k, e in by_path.items() if e.get("component") == comp]
+            drifted = [k for k in comp_keys if k in changed_keys]
+            state = "OK" if not drifted else f"CHANGED ({len(drifted)})"
+            print(f"    {comp} v{ver}: {state}")
+
     if bundle_stale:
         status = "STALE"
     elif installed_issues:

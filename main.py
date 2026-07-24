@@ -25,6 +25,7 @@ from config.settings import (
     DEFAULT_IDLE_STALL_SECONDS,
     DEFAULT_JOB_POLL_INTERVAL_SECONDS,
     DEFAULT_JOB_POLL_TIMEOUT_SECONDS,
+    DEFAULT_MAX_PROBES,
     DEFAULT_PROBE_RECHECK_SECONDS,
     DEFAULT_PROBE_TIMEOUT_SECONDS,
     DEFAULT_STALL_THRESHOLD_SECONDS,
@@ -274,6 +275,16 @@ def _probe_recheck_seconds(work_dir: str | None) -> float:
         return float(DEFAULT_PROBE_RECHECK_SECONDS)
 
 
+def _max_probes(work_dir: str | None) -> int:
+    try:
+        return max(
+            1,
+            int(_job_config(work_dir).get("max_probes", DEFAULT_MAX_PROBES)),
+        )
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_PROBES
+
+
 def _warn_if_workspace_stale(work_dir: str | None) -> None:
     """One stderr line when .workflow/ was scaffolded by a different build.
 
@@ -421,30 +432,34 @@ def await_job(
     job_id = submitted["job_id"]
     started_at = time.monotonic()
     interval = poll_interval if poll_interval > 0 else DEFAULT_JOB_POLL_INTERVAL_SECONDS
-    recheck = _probe_recheck_seconds(work_dir)
+    recheck_base = _probe_recheck_seconds(work_dir)
+    max_probes = _max_probes(work_dir)
     last_probe_at: float | None = None
+    probe_count = 0
+    recheck = recheck_base
 
     while True:
         result = get_result(job_id)
-
-        # Alive but silent past the stall threshold. Run both checks (PID + fresh-session
-        # probe) and reap on either failure, rather than reporting the stall and waiting.
-        # Re-probed on a cadence instead of once per job: a single probe only sees the
-        # moment it fired, and a limit that starts after it went out was never noticed.
         if (result.get("meta") or {}).get("error_type") == "worker_stalled":
             now = time.monotonic()
-            if last_probe_at is None or (now - last_probe_at) >= recheck:
+            if probe_count < max_probes and (
+                last_probe_at is None or (now - last_probe_at) >= recheck
+            ):
                 last_probe_at = now
+                probe_count += 1
                 reaped = check_stalled_job(job_id, work_dir, model)
                 if reaped is not None:
                     meta = dict(reaped.get("meta") or {})
                     meta.setdefault("job_id", job_id)
                     meta.setdefault("submitted_at", submitted.get("submitted_at"))
+                    meta.setdefault("probe_count", probe_count)
                     return {
                         "ok": False,
                         "content": reaped.get("content") or f"job {job_id} reaped",
                         "meta": meta,
                     }
+                # Probe came back alive: back off before spending the next one.
+                recheck = min(recheck * 2, recheck_base * 8)
         if result.get("status") == "completed":
             output = result.get("output") or {}
             if isinstance(output, dict):

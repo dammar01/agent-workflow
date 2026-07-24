@@ -14,6 +14,17 @@ TOOL_VERSION = "3.4.0"
 MAIN_PY = BASE_DIR / "main.py"
 CHECK_PY = BASE_DIR / "check.py"
 
+# Per-component versions for lazy upgrades (P0.7). Both derive from TOOL_VERSION; a
+# maintainer bumps ONE entry when only that component changed, so an upgrade re-applies
+# just that part instead of rewriting the whole workspace / install.
+#   prompt_bundle : LLM-facing contract shipped to ~/.claude (CLAUDE.md, skills, AGENTS.md)
+#   runtime       : machine wiring in .workflow (run/inspect/check scripts, config schema,
+#                   opencode adapter) + shipped hooks/settings
+COMPONENT_VERSIONS = {
+    "prompt_bundle": TOOL_VERSION,
+    "runtime": TOOL_VERSION,
+}
+
 # Overall delegated-call timeout; 0 disables it.
 DEFAULT_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_TIMEOUT_SECONDS", "1800"))
 # Bootstrap only says "READY"; it must never inherit the long task budget.
@@ -33,6 +44,11 @@ DEFAULT_IDLE_STALL_SECONDS = int(os.getenv("AI_PROXY_IDLE_STALL_SECONDS", "240")
 DEFAULT_PROBE_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_PROBE_TIMEOUT_SECONDS", "45"))
 # Cadence for re-probing a stalled job.
 DEFAULT_PROBE_RECHECK_SECONDS = int(os.getenv("AI_PROXY_PROBE_RECHECK_SECONDS", "120"))
+# Max fresh-session probes for one stalled job before probing stops entirely. Each probe
+# spends quota, so a job that stays alive-but-silent must not re-probe forever — after the
+# budget the job_max_runtime backstop is what ends it. The recheck interval also backs off
+# (doubles) between probes so the budget is not spent in one tight burst.
+DEFAULT_MAX_PROBES = int(os.getenv("AI_PROXY_MAX_PROBES", "3"))
 # Hard ceiling: a job running past this is failed even if its PID looks alive.
 # Backstop for the OOM case, where the worker dies in a way PID checks miss.
 DEFAULT_JOB_MAX_RUNTIME_SECONDS = int(
@@ -53,6 +69,7 @@ def default_opencode_config() -> dict:
         "idle_stall_seconds": DEFAULT_IDLE_STALL_SECONDS,
         "probe_timeout_seconds": DEFAULT_PROBE_TIMEOUT_SECONDS,
         "probe_recheck_seconds": DEFAULT_PROBE_RECHECK_SECONDS,
+        "max_probes": DEFAULT_MAX_PROBES,
         "job_max_runtime_seconds": DEFAULT_JOB_MAX_RUNTIME_SECONDS,
         "job_poll_interval_seconds": DEFAULT_JOB_POLL_INTERVAL_SECONDS,
         "job_poll_timeout_seconds": DEFAULT_JOB_POLL_TIMEOUT_SECONDS,

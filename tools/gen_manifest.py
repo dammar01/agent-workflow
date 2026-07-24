@@ -57,9 +57,20 @@ def _merge_kind(rel: str) -> str:
     return "replace" if "/skills/" in rel or rel.endswith((".ps1", ".sh")) else "merge"
 
 
+def _component(rel: str) -> str:
+    """Which upgrade component a shipped file belongs to (P0.7).
+
+    prompt_bundle = the LLM-facing contract (CLAUDE.md, skills, AGENTS.md); runtime =
+    everything that is machine wiring (hooks, settings template).
+    """
+    if "/skills/" in rel or rel in ("claude/CLAUDE.md", "opencode/AGENTS.md"):
+        return "prompt_bundle"
+    return "runtime"
+
+
 def _build() -> dict:
     sys.path.insert(0, str(REPO_ROOT))
-    from config.settings import TOOL_VERSION
+    from config.settings import COMPONENT_VERSIONS, TOOL_VERSION
 
     files_meta = []
     for rel in _dist_files():
@@ -71,12 +82,14 @@ def _build() -> dict:
                 "sha256": hashlib.sha256(blob).hexdigest(),
                 "bytes": len(blob),
                 "merge": _merge_kind(rel),
+                "component": _component(rel),
             }
         )
     import os
 
     return {
         "version": TOOL_VERSION,
+        "versions": dict(COMPONENT_VERSIONS),
         "generated_on": os.name,
         "files": files_meta,
         "targets": TARGETS,
