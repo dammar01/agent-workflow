@@ -4,8 +4,27 @@ from config.roles import (
     ROLE_VERIFICATION,
     VALID_ROLES,
 )
+from config.settings import DEFAULT_MAX_TASK_CHARS
 
 _EVIDENCE_ROLES = {ROLE_EXPLORATION, ROLE_REASONING}
+
+
+def _cap_task(task: str) -> str:
+    """Cap the task string before it becomes part of the one-arg CLI prompt.
+
+    Scaffolding is fixed cost; the task is the only caller-controlled size. Truncating
+    it visibly here turns a would-be `prompt_too_long` call failure into a degraded-but-
+    delivered prompt. The marker is explicit so main_agent sees the task was cut.
+    """
+    task = task.strip()
+    if len(task) <= DEFAULT_MAX_TASK_CHARS:
+        return task
+    keep = DEFAULT_MAX_TASK_CHARS
+    return (
+        task[:keep]
+        + f"\n…[task truncated: {len(task) - keep} chars over {DEFAULT_MAX_TASK_CHARS}-char cap;"
+        " split into narrower delegated calls if detail was lost]"
+    )
 
 
 # Shared by both fan-out shapes. Kept in one place so the graph and no-graph plans
@@ -194,6 +213,8 @@ def build_prompt(
     if role not in VALID_ROLES:
         raise ValueError(f"unsupported role: {role}")
 
+    task = _cap_task(task)
+
     header = [
         "[WORKFLOW_AGENT]",
         "source: second_agent",
@@ -226,11 +247,12 @@ def build_prompt(
                 "- read-only evidence; no implement/plan/file-writes; you are the PRIMARY worker — do most of the exploration yourself",
                 "- grounded needs file:line; numbers/dependencies without proof go to `assumptions` ([needs-calibration]/[unverified]); external-tool/MCP findings go to `external`, never mixed into codebase `grounded`",
                 "- for plan/analyze: trace REVERSE deps (grep the symbol project-wide) into `dependents` = blast radius; if the task touches an external lib, read context7 docs FIRST and put findings under `external`",
+                "- task needs DATA/DB evidence (rows, schema, counts, live config) AND a read-only DB MCP is available (laravel-boost or similar) → USE it: query via a READ-ONLY tool, put findings under `external` tagged [EXTERNAL:mcp:<server:tool>|db:<table.column>]. NEVER call write/exec tools (tinker/migrate/seed/eval). DB evidence is your job, not a limitation",
                 "- `durable_facts` = only [config|pattern|invariant] that persist across changes, with file:line; skip volatile line-level detail",
                 "- flag uncertainties; state `scope_covered` vs `scope_not_covered`; if evidence conflicts, say so — do NOT emit open_questions (main_agent's domain)",
                 "",
                 "[TASK]",
-                task.strip(),
+                task,
                 "",
                 "[OUTPUT_FORMAT]",
                 "Return ONLY this structure:",
@@ -269,12 +291,37 @@ def build_prompt(
                 "- `checks_run` = what you actually ran/read; `not_verified` = what you couldn't check + why; an unrun check is never a pass",
                 "",
                 "[TASK]",
-                task.strip(),
+                task,
                 "",
                 "[OUTPUT_FORMAT]",
                 "Return ONLY this structure:",
                 "",
                 *_verification_format(),
+                "",
+                *_digest_format(),
+            ]
+        )
+
+    if command == "sweep":
+        return "\n".join(
+            [
+                *header,
+                *_changed_files_block(project_root),
+                *_graph_block(_compact_leads(graph_leads)),
+                "[CONSTRAINTS — sweep = blast-radius EVIDENCE gathering, not judgement]",
+                "- read-only; no file writes, no user questions (main_agent's domain)",
+                "- for EACH changed file/symbol above: grep the symbol project-wide → list who CONSUMES/CALLS it (reverse deps) = blast radius. This is bulk gathering — cover breadth, do NOT stop at the first hit",
+                "- flag risk files by name/content (config, auth, payment, schema, migration, env, secret) — these amplify blast radius",
+                "- DB-touching change (migration/model/schema) + laravel-boost or similar DB MCP available → inspect affected table/column via a READ-ONLY tool, put under `external`; never call write/exec tools",
+                "- gather evidence only; main_agent judges severity/blocking. State what you could NOT reach in `scope_not_covered`",
+                "",
+                "[TASK]",
+                task,
+                "",
+                "[OUTPUT_FORMAT]",
+                "Return ONLY this structure:",
+                "",
+                *_sweep_format(),
                 "",
                 *_digest_format(),
             ]
@@ -290,7 +337,7 @@ def build_prompt(
             "- output must be structured if possible",
             "",
             "[TASK]",
-            task.strip(),
+            task,
             "",
             "Return the requested result only.",
         ]
@@ -321,7 +368,7 @@ def _exploration_format() -> list[str]:
         "- <inference/guess without direct evidence> [unverified]",
         "",
         "external:",
-        "- [EXTERNAL:<source>] <finding from MCP/docs, not this codebase> | none",
+        "- [EXTERNAL:<source>] <finding from MCP/docs/DB, not this codebase — e.g. mcp:laravel-boost:database-query, db:<table.column>, context7> | none",
         "",
         "scope_covered:",
         "- <files/areas actually inspected>",
@@ -372,6 +419,34 @@ def _verification_format() -> list[str]:
     ]
 
 
+def _sweep_format() -> list[str]:
+    return [
+        "[SWEEP IMPACT]",
+        "confidence: low | medium | high — <reason>",
+        "",
+        "changed_files:",
+        "- <file from CHANGED_FILES + one-line what changed> | none",
+        "",
+        "blast_radius:",
+        "- <consumer/caller that would break if the change is wrong> [file:line] (grep the symbol; list breadth, not one example) | none",
+        "",
+        "risk_hits:",
+        "- <changed file matching config/auth/payment/schema/migration/env/secret + why it amplifies impact> | none",
+        "",
+        "external:",
+        "- [EXTERNAL:mcp:<server:tool>|db:<table.column>] <DB/data-inspection finding for a schema/data change, read-only> | none",
+        "",
+        "scope_covered:",
+        "- <files/symbols actually traced>",
+        "",
+        "scope_not_covered:",
+        "- <changed surface not traced + why> | none",
+        "",
+        "uncertainties:",
+        "- <list>",
+    ]
+
+
 def _digest_format() -> list[str]:
     return [
         "[DIGEST]",
@@ -406,7 +481,7 @@ def _reasoning_format() -> list[str]:
         "- <other feature/module that CONSUMES or CALLS the change target — grep the symbol across the codebase> [file:line] | none",
         "",
         "external:",
-        "- [EXTERNAL:<source>] <finding from MCP/docs, not this codebase> | none",
+        "- [EXTERNAL:<source>] <finding from MCP/docs/DB, not this codebase — e.g. mcp:laravel-boost:database-query, db:<table.column>, context7> | none",
         "",
         "scope_covered:",
         "- <files/areas actually inspected>",

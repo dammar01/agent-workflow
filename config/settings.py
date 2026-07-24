@@ -54,6 +54,11 @@ DEFAULT_MAX_PROBES = int(os.getenv("AI_PROXY_MAX_PROBES", "3"))
 DEFAULT_JOB_MAX_RUNTIME_SECONDS = int(
     os.getenv("AI_PROXY_JOB_MAX_RUNTIME_SECONDS", "5400")
 )
+# The delegated prompt is passed as ONE CLI arg (Windows caps argv at 8191 chars; the
+# adapter's _too_long_for_cmd is the hard backstop). Scaffolding is fixed cost, so the
+# task string is the only variable-size part worth capping here — cap it before assembly
+# so a long task degrades to a visible truncation instead of a deterministic call failure.
+DEFAULT_MAX_TASK_CHARS = int(os.getenv("AI_PROXY_MAX_TASK_CHARS", "3000"))
 OPENCODE_COMMAND = os.getenv("OPENCODE_COMMAND", "opencode")
 DEFAULT_JOB_POLL_INTERVAL_SECONDS = float(os.getenv("AI_PROXY_JOB_POLL_INTERVAL_SECONDS", "2"))
 DEFAULT_JOB_POLL_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_JOB_POLL_TIMEOUT_SECONDS", "0"))

@@ -47,6 +47,19 @@ WAJIB teruskan nilainya ke run script (arg ke-3) tiap delegated call — hook ta
 Hook absent → generate main_<slug>_<ts_ms>_<pid> (state per-session di sessions/<id>/, nol root state.json untuk fallback).
 Jangan reuse session lintas project root. Detail lifecycle: skill/hook, bukan sini.
 
+### Division of Labor (main_agent ⇄ second_agent) — FRAME UTAMA
+Ini frame yg mengatur SEMUA keputusan delegate-vs-direct. Aturan lain tunduk ke sini.
+- second_agent = KUANTITAS: kumpul data massal + INSPEKSI (code + DB via laravel-boost/MCP read-only). Luas, banyak, murah. second_agent memang KUAT di volume — delegate agresif untuk bulk-gather.
+- main_agent = KUALITAS: "otak" — reasoning, verifikasi mekanisme kritis, atribusi file:line, sintesis, keputusan ubah-kode. Ini TAK didelegasi.
+Split ini merukunkan dua aturan yg dulu bentrok (jangan campur):
+- Kerja KUANTITAS (map "di mana X", kumpul consumer/blast-radius, inspeksi schema/rows, sapu banyak file) → second_agent. Friction "local>delegated" + "ragu→tanya" TIDAK berlaku di sini — DILARANG tahan bulk-gather; delegate.
+- Kerja KUALITAS (analisa kausal, verifikasi klaim mekanisme kritis, plan ubah-kode) → main_agent, presisi/direct. DI SINI "local>delegated" + konfirmasi-baca berlaku (proxy digest bisa salah — lihat verdict).
+Native subagent (Task/Agent Claude, mis. cavecrew):
+- DEFAULT evidence = second_agent (proxy gratis + context terpisah). Native subagent BUKAN default.
+- Native BOLEH cuma: (a) [LOCAL_MODE] / proxy gagal, ATAU (b) slice KUALITAS presisi-tinggi yg second_agent struktural tak cukup. WAJIB sebut alasan di output.
+- Native ≠ gratis: bayar kuota Claude + hasil tetap masuk context. Bukan jalan "hemat context".
+- DILARANG native-subagent untuk breadth/mapping yg proxy sanggup. Pola benar = HYBRID: proxy breadth → direct/native verify HANYA slice presisi. Full-native buat peta = anti-pola (bayar dua kali).
+
 ### Delegated commands — 1-call (NON-NEGOTIABLE)
 MINDSET (default): evidence → DELEGATE ke second_agent, jangan gather sendiri. Alasan: (1) hemat context main_agent — raw code tak masuk window, cuma digest; (2) second_agent handle VOLUME info lebih besar. Caveat: lebih banyak ≠ lebih baik — kuantitas milik second_agent, kualitas/atribusi/sintesis tetap tugas main_agent. Local read (Read/Grep) HANYA saat butuh atribusi file:line presisi tinggi ATAU evidence sudah terlanjur di context (re-delegate = mubazir). Ragu → delegate.
 Panggil: .workflow/run.ps1 (Windows) | .workflow/run.sh (mac/linux) <command> "<task>" "<MAIN_SESSION_ID>".

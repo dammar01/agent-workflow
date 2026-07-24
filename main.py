@@ -16,7 +16,6 @@ from core.workflow_runtime import (
     prune_sessions,
     resolve_agent_workflow_path,
     run_doctor,
-    run_sweep,
     upgrade_workflow_workspace,
     workflow_paths,
     workspace_versions,
@@ -134,9 +133,6 @@ def run(
         return run_doctor(
             project_root, config.get("opencode_command", "opencode"), session_id
         )
-
-    if normalized_command == "sweep":
-        return run_sweep(project_root, session_id)
 
     if normalized_command == "clean":
         from core import fact_store

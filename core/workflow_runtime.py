@@ -1293,6 +1293,14 @@ _MCP_RISK = (
     "docker",
     "ssh",
 )
+# DB/data-inspection families that ARE permitted for second_agent (read-only evidence
+# extended to DB). Matched by NAME so a scoped inspector like laravel-boost is not caught
+# by the generic mysql/postgres RISK keywords. Permission is behavioral: the AGENTS.md
+# contract restricts second_agent to read queries + forbids the write tools below — same
+# way file-write is forbidden by prompt, not sandbox.
+_MCP_INSPECT = ("laravel-boost", "laravel_boost", "laravelboost")
+# Write/exec tools that force RISK even inside an inspect family: they break read-only.
+_MCP_WRITE_TOOLS = ("tinker", "migrate", "seed", "db:wipe", "eval")
 
 
 def _mcp_config_candidates(project_root: Path) -> list[Path]:
@@ -1312,12 +1320,35 @@ def _mcp_config_candidates(project_root: Path) -> list[Path]:
 
 
 def _classify_mcp(name: str, spec) -> tuple[str, bool, str]:
-    """Classify one MCP server for second_agent (read-only evidence) safety."""
+    """Classify one MCP server for second_agent (read-only evidence) safety.
+
+    Tiers: risk (write/exec — disable), inspect (read-only DB/data — PERMITTED), safe
+    (docs/search), unknown (review). Order matters: a write TOOL forces risk even for an
+    inspect family, and the inspect family is checked BEFORE the generic mysql/postgres
+    RISK keywords so a scoped inspector is not mislabelled by a keyword its command names.
+    """
     enabled = (
         bool(spec["enabled"]) if isinstance(spec, dict) and "enabled" in spec else True
     )
     payload = json.dumps(spec) if isinstance(spec, (dict, list)) else str(spec)
     blob = f"{name} {payload}".lower()
+    # (1) A write/exec tool named in the spec breaks read-only regardless of family.
+    wtool = next((k for k in _MCP_WRITE_TOOLS if k in blob), None)
+    if wtool:
+        return (
+            "risk",
+            enabled,
+            f"exposes write/exec tool '{wtool}' — exceeds read-only role (disable it or the server)",
+        )
+    # (2) Named DB/data-inspection family — permitted, behavioral read-only contract.
+    if any(k in name.lower() for k in _MCP_INSPECT):
+        return (
+            "inspect",
+            enabled,
+            "read-only DB/data inspection (laravel-boost family) — PERMITTED for second_agent; "
+            "AGENTS.md contract limits it to read queries + forbids tinker/migrate/seed",
+        )
+    # (3) Generic write/exec/raw-DB keyword — still risk (an unscoped SQL MCP can write).
     risk = next((k for k in _MCP_RISK if k in blob), None)
     if risk:
         return (
@@ -1328,6 +1359,31 @@ def _classify_mcp(name: str, spec) -> tuple[str, bool, str]:
     if any(k in blob for k in _MCP_SAFE):
         return "safe", enabled, "read-only (docs/search)"
     return "unknown", enabled, "capability unknown — review manually"
+
+
+def _mcp_reachable(spec) -> tuple[bool | None, str]:
+    """Light liveness for one MCP server: is its launch command resolvable on PATH?
+
+    A real signal short of invoking the server (which spends quota and can hang): a local
+    server whose command is missing can never answer, so doctor should say so. Remote
+    servers and command-less specs are reported unprobed, never faked as reachable — an
+    unrun check is not a pass.
+    """
+    if not isinstance(spec, dict):
+        return None, "spec not an object — cannot resolve command"
+    if spec.get("type") == "remote" or spec.get("url"):
+        return None, "remote server (liveness not probed)"
+    cmd = spec.get("command")
+    if isinstance(cmd, list) and cmd:
+        exe = str(cmd[0])
+    elif isinstance(cmd, str) and cmd.strip():
+        exe = cmd.split()[0]
+    else:
+        return None, "no launch command in spec — cannot probe"
+    resolved = shutil.which(exe) or shutil.which(f"{exe}.cmd")
+    if resolved:
+        return True, resolved
+    return False, f"'{exe}' not found on PATH — second_agent cannot start this server"
 
 
 def _scan_mcp(project_root: Path) -> dict:
@@ -1353,12 +1409,15 @@ def _scan_mcp(project_root: Path) -> dict:
                 continue
             seen.add(name)
             cls, enabled, reason = _classify_mcp(name, spec)
+            reachable, reach_detail = _mcp_reachable(spec)
             servers.append(
                 {
                     "name": name,
                     "enabled": enabled,
                     "classification": cls,
                     "reason": reason,
+                    "reachable": reachable,
+                    "reachable_detail": reach_detail,
                 }
             )
     active = [s for s in servers if s["enabled"]]
@@ -1564,6 +1623,28 @@ def run_doctor(
         )
         recommended_fixes.append(
             "Review the flagged MCP server(s); ensure second_agent stays read-only"
+        )
+    # Permitted DB/data-inspection servers (laravel-boost family) — reported, not flagged:
+    # second_agent MAY use these for read-only DB evidence.
+    active_inspect = [
+        s["name"]
+        for s in mcp["servers"]
+        if s["enabled"] and s["classification"] == "inspect"
+    ]
+    if active_inspect:
+        checks["mcp_inspect_permitted"] = active_inspect
+    # Liveness: an enabled server whose launch command is missing can never answer.
+    unreachable = [
+        s["name"]
+        for s in mcp["servers"]
+        if s["enabled"] and s.get("reachable") is False
+    ]
+    if unreachable:
+        issues.append(
+            f"second_agent MCP unreachable: {', '.join(unreachable)} — declared but launch command not on PATH"
+        )
+        recommended_fixes.append(
+            "Install/fix the server command, or remove the dead MCP entry from opencode config"
         )
 
     # Session continuation: is the current main session linked to an opencode session?
