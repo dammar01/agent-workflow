@@ -53,7 +53,7 @@ rekomendasi: <SATU opsi> — <alasan pendek, sebut trade-off yang kamu terima>
 
 BOUNDED (langgar = output invalid):
 - MAX 3 opsi. Tiap opsi max 5 baris.
-- Tiap opsi wajib beda PENDEKATAN, bukan beda kosmetik/urutan/penamaan.
+- Opsi hanya SAH kalau beda ARSITEKTUR, beda DEPENDENCY, atau beda ARAH IMPLEMENTASI keseluruhan. Beda kosmetik/urutan/penamaan = BUKAN opsi. Varian sejenis / subset / parametrik dari rencana yang sama juga BUKAN opsi (mis. "rencana penuh" vs "setengah rencana", "nilai cap 3000 vs 4000" = satu rencana, bukan dua arah). Tak ada fork arah yang nyata → satu opsi saja (lihat bawah), JANGAN pecah rencana jadi opsi semu demi mengisi blok.
 - Wajib DALAM scope task. DILARANG usul rewrite, ganti stack, ganti arsitektur kalau task-nya bukan itu. Opsi di luar scope = scope creep, bukan pilihan.
 - Atribusi sama ketatnya dengan [PLAN]. Opsi tanpa basis evidence tetap dilabel [main_agent-inference].
 - `minus` WAJIB diisi jujur, termasuk untuk opsi yang kamu rekomendasikan. Opsi tanpa minus = kamu belum memikirkannya.
