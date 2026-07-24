@@ -1,5 +1,12 @@
 """Extract the maintainer's live agent config into dist/ so it can ship with the repo.
 
+BOOTSTRAP-ONLY. dist/ is the canonical, Git-reviewed bundle; this tool only *seeds* it
+from a maintainer's live ~/.claude the first time (or when deliberately re-importing home
+edits). Routine changes are made in dist/ directly, then propagated with
+`tools/sync_skills.py` (CLAUDE.md -> skills/*.md) and `tools/gen_manifest.py` (rebuild the
+manifest from dist/). Do NOT run this to refresh the manifest after editing dist/ — it
+would overwrite dist/ with home-dir content and abort on the clobber guard.
+
 Runs on the DEV machine. Reads the live agent directories, copies an explicit allowlist
 into `dist/config/`, redacts machine-specific paths, and writes a manifest the installer
 consumes.

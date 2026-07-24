@@ -1,11 +1,11 @@
 # Skill: help
-description: Command reference v3.3.0
+description: Command reference v3.4.0
 
 ## Trigger
 /.help
 
 ## Output
-[COMMAND GUIDE — v3.3.0]
+[COMMAND GUIDE — v3.4.0]
 
 LOCAL (main_agent langsung):
   /.execute -y      implement code (wajib -y)
@@ -29,4 +29,4 @@ DELEGATED (1-call .workflow/run script → second_agent):
 
 [WORKFLOW] /.explore → /.plan → /.execute -y → /.verify
 [SESSION CACHE] LAST_EXPLORE_RESULT → /.plan,/.analyze | LAST_PLAN_RESULT → /.execute | LAST_EXECUTE_DIFF → /.verify,/.sweep
-Prefix "/." wajib. Tanpa prefix → INVALID.
+[INTENT] Prefix "/." OPSIONAL sejak v3.4.0 — bahasa natural auto-detect lalu langsung jalan ("cek logic X", "gimana flow Y", "kerjakan"). Prefix tetap dipakai sebagai override eksplisit saat tebakan meleset.

@@ -74,9 +74,33 @@ confidence:
 decision:        proceed | clarify | re-explore
   MEKANIS: open_questions ada ATAU solution_path<high ATAU jalur kritis berat [main_agent-inference] → clarify (DILARANG proceed/tawar execute). root_cause rendah → re-explore. Selain itu → proceed.
 
+## STEP 2b — Output [OPTIONS] (WAJIB, setelah [PLAN])
+Rencana di atas = SATU jalan. Sajikan alternatifnya, jangan sembunyikan pilihan di kepalamu.
+
+[OPTIONS]
+Opsi A — <nama>  (= rencana di atas)
+  plus:   <keunggulan nyata>
+  minus:  <ongkos/risiko nyata>
+  effort: kecil|sedang|besar · risiko utama: <satu hal>
+  atribusi: [proxy:file:line] | [main_agent-inference]
+Opsi B — <pendekatan BEDA> (idem)
+Opsi C — <opsional, idem>
+rekomendasi: <SATU opsi> — <alasan pendek, sebut trade-off yang kamu terima>
+
+BOUNDED (langgar = output invalid):
+- MAX 3 opsi. Tiap opsi max 5 baris.
+- Tiap opsi wajib beda PENDEKATAN, bukan beda kosmetik/urutan/penamaan.
+- Wajib DALAM scope task. DILARANG usul rewrite, ganti stack, ganti arsitektur kalau task-nya bukan itu. Opsi di luar scope = scope creep, bukan pilihan.
+- Atribusi sama ketatnya dengan [PLAN]. Opsi tanpa basis evidence tetap dilabel [main_agent-inference].
+- `minus` WAJIB diisi jujur, termasuk untuk opsi yang kamu rekomendasikan. Opsi tanpa minus = kamu belum memikirkannya.
+- Opsi yang bertentangan dengan evidence WAJIB ditandai ❌ + sebut evidence yang membantahnya. Jangan disajikan setara.
+- rekomendasi WAJIB SATU. Tak bisa memilih → itu open_question, bukan opsi. Naikkan ke [PLAN].
+- Opsi cuma satu yang masuk akal → tulis "Opsi A saja — <alasan tak ada alternatif bounded>". Jangan karang opsi B demi memenuhi format.
+
 ## STEP 3
 resolvable_uncertainties WAJIB kamu coba tutup DULU sebelum tanya user; sisakan open_questions saja ke user.
 decision=proceed → "Setuju? Jalankan /.execute -y". clarify → tanya open_questions. JANGAN auto-execute.
+User pilih opsi non-rekomendasi → JALANKAN pilihannya, jangan debat ulang. Sudah kamu sebut minus-nya; keputusan miliknya.
 
 ---
 
@@ -154,6 +178,7 @@ description: .workflow readiness check. 1-call bila .workflow ada, else local ch
 $AGENT_PATH         : SET (<path>, exists) | NOT SET
 .workflow/config.json : v3.4.0 (main_py_path set) | old | MISSING
 graphify-out/       : EXISTS | MISSING
+bundle (~/.claude)  : READY | DRIFTED | not_checked — `python "<dir($AGENT_PATH)>/install.py" --check` (skills/CLAUDE.md/AGENTS.md vs shipped dist bundle; DRIFTED → `install.py --apply`)
 second_agent MCP    : SAFE | RISK (<server>) | REVIEW (<server>) | NONE — scan opencode config mcp (context7=safe read-only; write/exec/fs/db/browser=risk)
 
 ## Output
@@ -602,7 +627,7 @@ Relay-tag: teruskan tag grounded/assumption dari proxy apa adanya; JANGAN re-sum
 [OPTIONS]: /.plan WAJIB tutup dengan blok [OPTIONS] (max 3 opsi, tiap opsi plus+minus+effort+risiko, satu rekomendasi). BOUNDED: wajib beda pendekatan, wajib dalam scope task, dilarang usul rewrite/ganti stack kalau task-nya bukan itu. `minus` wajib jujur termasuk untuk yang kamu rekomendasikan. Opsi yang dibantah evidence → tandai ❌ + sebut evidence-nya, jangan sajikan setara. Detail: skill plan STEP 2b.
 
 ### Execution rules
-/.execute -y: ada plan aktif (LAST_PLAN_RESULT) → edit HANYA execution scope → auto /.verify → jangan declare done sebelum verify. Jangan commit kecuali user minta.
+/.execute -y: ada plan aktif (LAST_PLAN_RESULT) → edit HANYA execution scope → verify SESUAI `commands.auto_verify_after_execute`: `true` → auto /.verify, jangan declare done sebelum verify selesai; `false` (default) → status `implemented`, `verification: not_run`, DILARANG bilang "done", tawarkan "/.verify sekarang?". Jangan commit kecuali user minta.
 /.init: bootstrap dari $AGENT_PATH (main.py di repo agent-workflow, BUKAN di project/pip/npm). `python "$env:AGENT_PATH" --command init --work-dir <root>`. $AGENT_PATH kosong → minta set dulu (lihat skill init). Regenerate scripts+config+opencode.json. Cek $AGENT_PATH SEBELUM simpul "package missing".
 
 ### Session cache (valid dalam MAIN_SESSION_ID + project root sama)

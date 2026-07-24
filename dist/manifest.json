@@ -4,8 +4,8 @@
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "bfc2cc17c9958fdfcf7d2b9bdff431ebadc0591dee594abd097dec00125e0d96",
-      "bytes": 33371,
+      "sha256": "9c1b8c9511b1b0633038ada061b55e95e20f63a50c1ec02a5988f15c66a8ebb8",
+      "bytes": 35278,
       "merge": "merge"
     },
     {
@@ -34,8 +34,8 @@
     },
     {
       "path": "claude/skills/doctor.md",
-      "sha256": "a857f4cc41d666750beff86e0d7f76eb329560fc23288e7fdcaf8bd90e2311c4",
-      "bytes": 1438,
+      "sha256": "2733128db44769a14c854463e00f261e65b06aaadbe8bbdeaeb6b63c8e6faa97",
+      "bytes": 1629,
       "merge": "replace"
     },
     {
@@ -52,13 +52,13 @@
     },
     {
       "path": "claude/skills/help.md",
-      "sha256": "6b46465f1a2c53241df81575b381c84d699316942e96570e24f96804fd3809a3",
-      "bytes": 1227,
+      "sha256": "552b784d550f9b4bed63ef08efe6e4e578405aaf6a99a80d70e4a27a32c2e116",
+      "bytes": 1392,
       "merge": "replace"
     },
     {
       "path": "claude/skills/init.md",
-      "sha256": "5136d91652ee32ffb6e775a4cc8685621415d5601b268bea34604b8d5232f424",
+      "sha256": "59cad035345d8693c8269453dde5618faa2ae836cda9b955134af46d448307d4",
       "bytes": 1694,
       "merge": "replace"
     },
@@ -70,8 +70,8 @@
     },
     {
       "path": "claude/skills/memory.md",
-      "sha256": "1245b24cf2158db4cc5ea714beb99773d66a0608e3c12c12e5c04e790a4cf00e",
-      "bytes": 528,
+      "sha256": "44a1907724c397035e2073b02f0e6db40cac68f5dd869f66e13a8b87823adbdd",
+      "bytes": 523,
       "merge": "replace"
     },
     {
@@ -100,8 +100,14 @@
     },
     {
       "path": "claude/skills/verify.md",
-      "sha256": "be6a0aba30cb84b0c50654c9897924f4e5c7dcf6fc463f3b6ade7643b755d4eb",
-      "bytes": 618,
+      "sha256": "fb7284434412605795bda4fcd0def02f4f9b0b594f2fdb6dd741537906aa4cfd",
+      "bytes": 3488,
+      "merge": "replace"
+    },
+    {
+      "path": "claude/hooks/graph-refresh.ps1",
+      "sha256": "e90c7b805d53b483c9ccf83dbf5b49b660304883f2788a79dd4ac76fec35b195",
+      "bytes": 5353,
       "merge": "replace"
     },
     {
@@ -112,24 +118,15 @@
     },
     {
       "path": "opencode/AGENTS.md",
-      "sha256": "cc38f39eaa82ce2c1618eaeeb01b40813d03cc1f2f7b1bccdfe51bf588d59556",
-      "bytes": 7459,
+      "sha256": "5a6021ff30cfd53179fd371a04df51fba4cd74b1f9e6403488d7a2b673af2295",
+      "bytes": 8420,
       "merge": "merge"
     },
     {
       "path": "claude/settings.template.json",
       "sha256": "6903fcd02ee764edfc41bc76bbd54f4dd862d7cc29a7d638d2dc1b37486e4e64",
       "bytes": 1104,
-      "merge": "merge",
-      "dropped_keys": [
-        "agentPushNotifEnabled",
-        "autoCompactEnabled",
-        "skipAutoPermissionPrompt",
-        "skipDangerousModePermissionPrompt",
-        "tui",
-        "verbose",
-        "worktree"
-      ]
+      "merge": "merge"
     }
   ],
   "targets": {

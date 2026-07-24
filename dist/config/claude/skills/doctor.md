@@ -15,8 +15,9 @@ description: .workflow readiness check. 1-call bila .workflow ada, else local ch
 .workflow/run.*     : EXISTS | MISSING
 .gitignore          : CONTAINS .workflow/ | MISSING
 $AGENT_PATH         : SET (<path>, exists) | NOT SET
-.workflow/config.json : v3.3.0 (main_py_path set) | old | MISSING
+.workflow/config.json : v3.4.0 (main_py_path set) | old | MISSING
 graphify-out/       : EXISTS | MISSING
+bundle (~/.claude)  : READY | DRIFTED | not_checked — `python "<dir($AGENT_PATH)>/install.py" --check` (skills/CLAUDE.md/AGENTS.md vs shipped dist bundle; DRIFTED → `install.py --apply`)
 second_agent MCP    : SAFE | RISK (<server>) | REVIEW (<server>) | NONE — scan opencode config mcp (context7=safe read-only; write/exec/fs/db/browser=risk)
 
 ## Output

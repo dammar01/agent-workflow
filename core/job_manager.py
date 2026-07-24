@@ -177,12 +177,14 @@ class JobManager:
                 # The one path that can race a live worker: the backstop fires on age while
                 # the PID is still up (or was reused), so the worker may finish and call
                 # complete_job right after this. reaped=True makes that finish land as
-                # late_output instead of resurrecting the job.
+                # late_output instead of resurrecting the job; terminate_tree then stops the
+                # worker from running to completion and burning quota after we stopped waiting.
                 job = self.fail_job(
                     job_id,
                     f"job exceeded max runtime {self.max_runtime_seconds}s (reaped)",
                     reaped=True,
                 )
+                osutil.terminate_tree(None, pid=job.get("worker_pid"))
             elif state == ALIVE_STALLED:
                 # Alive but silent. Report it — never reap on suspicion alone.
                 beat = self.read_heartbeat(job_id) or {}
@@ -517,10 +519,16 @@ class JobManager:
                         "worker process died before completing (reaped)",
                     )
                 elif self._exceeded_max_runtime(existing_job):
+                    # Same live-worker race as get_result's backstop: the existing worker
+                    # may be hung past max runtime yet still alive. Claim with reaped=True so
+                    # a late complete_job cannot resurrect it, and kill the tree so it stops
+                    # burning quota while the new job takes the lock.
                     self.fail_job(
                         existing_job["job_id"],
                         f"job exceeded max runtime {self.max_runtime_seconds}s (reaped)",
+                        reaped=True,
                     )
+                    osutil.terminate_tree(None, pid=existing_job.get("worker_pid"))
                 else:
                     raise ValueError(
                         f"session {session_id} already has active job {existing_job['job_id']}"

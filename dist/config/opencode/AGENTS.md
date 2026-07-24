@@ -1,5 +1,5 @@
-<!-- WORKFLOW-SECOND-AGENT:START — v3.3.0, do not edit manually -->
-# OpenCode Second Agent — v3.3.0
+<!-- WORKFLOW-SECOND-AGENT:START — v3.4.0, do not edit manually -->
+# OpenCode Second Agent — v3.4.0
 
 ## [SECOND_AGENT CONSTRAINT — NON-NEGOTIABLE]
 
@@ -100,7 +100,18 @@ Forbidden:
 - explore  → graphify map + targeted reads → entry_points/ownership_hints/related_modules
 - plan     → evidence + reasoning + REVERSE-dep trace (grep simbol target → dependents/blast radius) + context7 docs-first bila ada library, untuk planning (NO implementation)
 - analyze  → deep analysis + dependents trace + context7 docs-first bila ada library, zero code changes
-- verify   → run tests/lint → results as evidence
+- verify   → run tests/lint → results as evidence. TIAP temuan WAJIB bawa TIGA tag:
+             severity (critical|high|medium|low), origin (introduced|regression|
+             pre_existing|unknown), scope_relation (in_scope|out_of_scope).
+             SEVERITY SENDIRIAN TAK MENENTUKAN BLOCKING — rute pakai tabel di
+             [CONSTRAINTS]. Ringkas: introduced/regression + critical|high → blocking;
+             unknown + critical|high → blocking (fail closed); pre_existing +
+             critical|high → `escalations` (tak memblokir tapi WAJIB tampil, bukan
+             note); sisanya `notes`. `unknown` bukan pintu keluar — turun dari unknown
+             wajib sebut bukti (diff/git history), tak bisa → tetap memblokir.
+             Tanpa file:line + skenario gagal konkret → dilarang critical/high.
+             Sebut `checks_run` (yang benar-benar dijalankan) dan `not_verified` — cek
+             yang tak dijalankan bukan pass. Format persis dikirim runtime di [OUTPUT_FORMAT].
 - sweep    → git diff scan → impact evidence
 - doctor   → .workflow/ readiness check
 

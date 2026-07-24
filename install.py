@@ -22,6 +22,7 @@ Safety:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -320,6 +321,82 @@ def _targets() -> list[tuple[Path, Path, str]]:
     return [(s, d, k) for s, d, k in mapping if s.exists()]
 
 
+def _hash(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _run_check(manifest: dict) -> int:
+    """Report drift without writing anything.
+
+    Two independent questions: (1) does dist/ still match its manifest — catches a dist
+    edit that skipped `python tools/gen_manifest.py`; (2) does the installed ~/.claude match
+    dist/ — catches a stale or hand-edited install. Full-overwrite targets (skills, hooks)
+    compare whole-file; managed targets (CLAUDE.md, AGENTS.md) compare only the marker block,
+    since the rest of those files is legitimately the user's own content.
+    """
+    by_path = {f["path"]: f for f in manifest.get("files", [])}
+    bundle_stale: list[str] = []
+    installed_drift: list[str] = []
+    installed_missing: list[str] = []
+
+    checks = list(_targets())
+    settings_src = DIST_CONFIG / "claude" / "settings.template.json"
+    if settings_src.exists():
+        # settings.json is a key-wise JSON merge, not a copy — bundle-check only.
+        checks.append((settings_src, None, "claude/settings.template.json"))
+
+    for source, dest, key in checks:
+        dist_text = source.read_text(encoding="utf-8")
+        entry = by_path.get(key)
+        if entry and _hash(dist_text) != entry.get("sha256"):
+            bundle_stale.append(key)
+        if dest is None:
+            continue
+        resolved = _resolve_placeholders(dist_text, None)
+        if not dest.exists():
+            installed_missing.append(key)
+            continue
+        installed = dest.read_text(encoding="utf-8")
+        if key in MARKERS:
+            start, end = MARKERS[key]
+            want = _managed_block(resolved, start, end)
+            have = _managed_block(installed, start, end)
+            if want is None or have is None or want != have:
+                installed_drift.append(key)
+        elif installed != resolved:
+            installed_drift.append(key)
+
+    print("[INSTALL CHECK]")
+    print(
+        f"  bundle (dist vs manifest): {'OK' if not bundle_stale else f'STALE ({len(bundle_stale)})'}"
+    )
+    for key in bundle_stale:
+        print(f"    - {key}")
+    installed_issues = len(installed_drift) + len(installed_missing)
+    if installed_issues == 0:
+        print("  installed (~/.claude vs dist): READY")
+    else:
+        print(
+            f"  installed (~/.claude vs dist): DRIFTED "
+            f"(drift {len(installed_drift)}, missing {len(installed_missing)})"
+        )
+        for key in installed_drift:
+            print(f"    - DRIFTED {key}")
+        for key in installed_missing:
+            print(f"    - MISSING {key}")
+
+    if bundle_stale:
+        status = "STALE"
+    elif installed_issues:
+        status = "DRIFTED"
+    else:
+        status = "READY"
+    print(f"  status: {status}")
+    if status != "READY":
+        print("  fix: python tools/gen_manifest.py (bundle) | python install.py --apply (installed)")
+    return 0 if status == "READY" else 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Install agent-workflow config")
     parser.add_argument(
@@ -335,15 +412,23 @@ def main() -> int:
         action="store_true",
         help="register the context-mode plugin in the opencode CLI config (global; opt-in)",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="report drift (installed ~/.claude vs bundle, dist vs manifest); no writes",
+    )
     args = parser.parse_args()
     apply = args.apply
 
     if not MANIFEST.exists():
         print(
-            "[INSTALL] dist/manifest.json missing — run tools/extract_config.py first"
+            "[INSTALL] dist/manifest.json missing — run tools/gen_manifest.py first"
         )
         return 1
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+
+    if args.check:
+        return _run_check(manifest)
 
     project_root = Path(args.init_project).resolve() if args.init_project else None
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
