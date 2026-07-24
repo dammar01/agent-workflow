@@ -25,6 +25,7 @@ Output = structured evidence blocks + [DIGEST]. Caveman ultra default: telegraph
 
 - Concise. Direct. Evidence-driven: search first, assume on evidence, minimize uncertainties.
 - Bounded scope only. Flag uncertainties explicitly after exhaustive search.
+- PRIMARY worker utk command ini — kerjakan mayoritas eksplorasi sendiri. Evidence konflik → sebut jelas, jangan tebak.
 - WAJIB output hasil. Tidak boleh diam.
 
 ## [WORKFLOW_AGENT] Evidence Protocol
@@ -100,24 +101,36 @@ Forbidden:
 - explore  → graphify map + targeted reads → entry_points/ownership_hints/related_modules
 - plan     → evidence + reasoning + REVERSE-dep trace (grep simbol target → dependents/blast radius) + context7 docs-first bila ada library, untuk planning (NO implementation)
 - analyze  → deep analysis + dependents trace + context7 docs-first bila ada library, zero code changes
-- verify   → run tests/lint → results as evidence. TIAP temuan WAJIB bawa TIGA tag:
-             severity (critical|high|medium|low), origin (introduced|regression|
-             pre_existing|unknown), scope_relation (in_scope|out_of_scope).
-             SEVERITY SENDIRIAN TAK MENENTUKAN BLOCKING — rute pakai tabel di
-             [CONSTRAINTS]. Ringkas: introduced/regression + critical|high → blocking;
-             unknown + critical|high → blocking (fail closed); pre_existing +
-             critical|high → `escalations` (tak memblokir tapi WAJIB tampil, bukan
-             note); sisanya `notes`. `unknown` bukan pintu keluar — turun dari unknown
-             wajib sebut bukti (diff/git history), tak bisa → tetap memblokir.
-             EVIDENCE = file:line (defect di source) ATAU ref konkret non-code:
-             db:<migration|table.column>, mcp:<server:tool>, runtime:<env/config key>,
-             cmd:<command+output>. Defect non-code dgn ref yang benar BOLEH critical/high
-             — jangan dipaksa ke file:line/diturunkan cuma karena bukan kode. Tanpa ref
-             APA PUN + skenario gagal konkret → dilarang critical/high.
-             Sebut `checks_run` (yang benar-benar dijalankan) dan `not_verified` — cek
-             yang tak dijalankan bukan pass. Format persis dikirim runtime di [OUTPUT_FORMAT].
+- verify   → run tests/lint → results as evidence. Routing FULL di section [Verify Routing] bawah.
+             Runtime cuma kirim OUTPUT_FORMAT skeleton + anchor; tabel lengkap ADA DI SINI.
 - sweep    → git diff scan → impact evidence
 - doctor   → .workflow/ readiness check
+
+## Verify Routing (canonical — runtime prompt cuma kirim anchor, tabel penuh DI SINI)
+
+Command = verify. TIAP temuan bawa 3 tag lalu rute pakai tabel. SEVERITY SENDIRI tak menentukan blocking.
+
+severity:
+- critical = data loss | security hole | hasil salah diam-diam | semua command rusak
+- high     = jalur normal fitur rusak | caller existing regresi | kontrak dilanggar
+- medium   = edge case | degradasi | defect ada workaround
+- low      = naming/style/doc drift | hipotetis tanpa trigger
+origin:         introduced | regression | pre_existing | unknown
+scope_relation: in_scope | out_of_scope
+
+Routing table:
+- introduced/regression + in_scope     + critical|high → blocking_findings
+- introduced/regression + out_of_scope + critical|high → blocking_findings (+ scope violation)
+- introduced/regression + out_of_scope + medium|low    → escalations
+- unknown              + apa pun       + critical|high → blocking_findings (fail closed)
+- pre_existing         + apa pun       + critical|high → escalations
+- selain itu                                           → notes
+
+- `unknown` bukan pintu keluar: turun wajib sebut bukti (diff/git history/versi lama), tak bisa → tetap blocking.
+- `escalations` tak ubah verdict TAPI bukan note — critical/high nyata, user putus. Jangan dikubur di notes.
+- Jangan naikkan severity biar diperhatikan / turunkan biar lolos. Defect tersebar banyak tempat TETAP critical/high — kutip perwakilan + sebut luasnya.
+- EVIDENCE = file:line (defect di source) ATAU ref konkret non-code: db:<migration|table.column>, mcp:<server:tool>, runtime:<env/config key>, cmd:<command+output>. Non-code dgn ref benar BOLEH critical/high — jangan dipaksa ke file:line. Tanpa ref APA PUN + skenario gagal konkret → dilarang critical/high (turun ke note, sebut bukti kurang).
+- `checks_run` = yang benar-benar dijalankan/dibaca. `not_verified` = yang tak bisa dicek + alasan. Cek tak jalan bukan pass. Format persis dikirim runtime di [OUTPUT_FORMAT].
 
 ## Explore Output Contract
 

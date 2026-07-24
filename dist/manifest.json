@@ -141,8 +141,8 @@
     },
     {
       "path": "opencode/AGENTS.md",
-      "sha256": "0e0808ee18e0fbea5e826c720c1243336b59391ffc2549c4401ebf6864151e3b",
-      "bytes": 8759,
+      "sha256": "fe6a6188007fdd7e3a8e453c797b60cbd479286e574b785972e418bfd7d02964",
+      "bytes": 9721,
       "merge": "merge",
       "component": "prompt_bundle"
     },

@@ -630,6 +630,32 @@ def _spawn_worker(job_id: str, work_dir: str | None = None) -> dict:
     return {"ok": True, "content": "worker started", "meta": meta}
 
 
+# The heavy diagnostic keys: the echoed prompt argv and the full (unbounded) opencode
+# logs. On a successful run these are noise the main_agent never reads — but they are
+# the bulk of the payload (100KB+ on a long verify). The full meta is already archived
+# to .workflow by write_call_meta, so dropping them from stdout loses nothing.
+_HEAVY_META_KEYS = frozenset(
+    {"args", "stderr", "stderr_tail", "stdout", "cwd", "raw", "bootstrap"}
+)
+
+
+def _slim_result(result: dict) -> dict:
+    """Trim the stdout payload to what the main_agent actually consumes.
+
+    Only on success, and only the heavy diagnostic keys inside meta: top-level keys
+    (content, digest, job_id, status, session_id) and the small actionable meta
+    (policy, session_reset, ...) are kept, so submit/status/result payloads stay intact.
+    Failures pass through untouched — their stderr/args/next_action IS the diagnosis.
+    """
+    if not isinstance(result, dict) or not result.get("ok"):
+        return result
+    meta = result.get("meta")
+    if not isinstance(meta, dict):
+        return result
+    slim_meta = {k: v for k, v in meta.items() if k not in _HEAVY_META_KEYS}
+    return {**result, "meta": slim_meta}
+
+
 if __name__ == "__main__":
     import argparse
     import json
@@ -753,4 +779,5 @@ if __name__ == "__main__":
         result = submit(args.command, prompt, effective_session, work_dir, args.model)
     else:
         result = run(args.command, prompt, effective_session, work_dir, args.model)
+    result = _slim_result(result)
     print(json.dumps(result, indent=2) if args.pretty else json.dumps(result))

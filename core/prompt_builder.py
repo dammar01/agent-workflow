@@ -222,23 +222,12 @@ def build_prompt(
                 *facts_block,
                 *graph_block,
                 *subagent_block,
-                "[CONSTRAINTS]",
-                "- do not implement, do not plan, do not modify files",
-                "- flag all uncertainties explicitly",
-                "- bounded scope only — no expansion",
-                "- you are the primary worker for this command; do most of the exploration work",
-                "- read graphify output first, then inspect only the most relevant source files",
-                "- provide scoped reasoning grounded in evidence, not just file lists",
-                "- if evidence conflicts, say so clearly instead of guessing",
-                "- do NOT emit open_questions or any question to the user; that is main_agent's domain",
-                "- tag every claim: put it under `grounded` ONLY with a file:line reference; anything without direct evidence (numbers, dependencies, guesses) goes under `assumptions`",
-                "- a number/metric with no basis in the code is an assumption — mark it `[needs-calibration]`, never state it as fact",
-                "- a dependency A->B belongs in `grounded` only with the file:line that proves the coupling; otherwise `assumptions` as `[unverified]`",
-                "- findings from external tools/MCP (context7, docs, web) go under `external` with the source tag — never mix them into codebase `grounded`",
-                "- state `scope_covered` vs `scope_not_covered` explicitly; cross-system surfaces you were not asked to inspect are `scope_not_covered`, not silent gaps",
-                "- for plan/analyze: trace REVERSE dependencies of the change target (grep the symbol/module project-wide for callers/consumers) and list them under `dependents` with file:line — this is the blast radius the main_agent turns into risks",
-                "- under `durable_facts`, promote ONLY facts that persist across code changes — config values, code patterns, architectural invariants — each tagged [config|pattern|invariant] with file:line; skip volatile line-level details (they seed a reusable fact store, so wrong/transient ones poison it)",
-                "- for plan/analyze: if the task touches an external library/framework/SDK/API (detect from imports or the package manifest), read its docs FIRST via context7 (resolve-library-id -> query-docs), capture the library version, and put doc-derived facts under `external` as [EXTERNAL:context7 <lib>@<version>] — do NOT guess a library API from memory. No external lib involved -> skip (do not fetch docs for internal-only work).",
+                "[CONSTRAINTS — full evidence protocol in AGENTS.md; anchors only here]",
+                "- read-only evidence; no implement/plan/file-writes; you are the PRIMARY worker — do most of the exploration yourself",
+                "- grounded needs file:line; numbers/dependencies without proof go to `assumptions` ([needs-calibration]/[unverified]); external-tool/MCP findings go to `external`, never mixed into codebase `grounded`",
+                "- for plan/analyze: trace REVERSE deps (grep the symbol project-wide) into `dependents` = blast radius; if the task touches an external lib, read context7 docs FIRST and put findings under `external`",
+                "- `durable_facts` = only [config|pattern|invariant] that persist across changes, with file:line; skip volatile line-level detail",
+                "- flag uncertainties; state `scope_covered` vs `scope_not_covered`; if evidence conflicts, say so — do NOT emit open_questions (main_agent's domain)",
                 "",
                 "[TASK]",
                 task.strip(),
@@ -272,46 +261,12 @@ def build_prompt(
                 *header,
                 *_changed_files_block(project_root),
                 *_graph_block(_compact_leads(graph_leads)),
-                "[CONSTRAINTS]",
-                "- report only: do not implement, do not modify files, do not ask the user"
-                " questions (questions are main_agent's domain)",
-                "- verify the changed files above and who consumes them; no scope expansion past that",
-                "- graph leads are for finding CONSUMERS of the change (blast radius), NOT for"
-                " widening what you verify",
-                "- tag EVERY finding with all three, then route it by the table below. Severity"
-                " ALONE does not decide blocking:",
-                "    severity: critical (data loss | security hole | silently wrong result | every"
-                " command broken) | high (feature's normal path broken | existing caller regressed |"
-                " stated contract violated) | medium (edge case | degraded | real defect with a"
-                " workaround) | low (naming/style/doc drift | hypothetical with no demonstrated trigger)",
-                "    origin: introduced (this change created it) | regression (this change broke what"
-                " used to work) | pre_existing (already there, untouched by this change) | unknown"
-                " (could not establish which)",
-                "    scope_relation: in_scope (inside what this change meant to touch) | out_of_scope"
-                " (outside it — an out_of_scope `introduced` finding IS a scope violation, report it as such)",
-                "    introduced/regression + in_scope      + critical|high -> blocking_findings",
-                "    introduced/regression + out_of_scope  + critical|high -> blocking_findings (+ scope violation)",
-                "    introduced/regression + out_of_scope  + medium|low    -> escalations",
-                "    unknown               + any           + critical|high -> blocking_findings (fail closed)",
-                "    pre_existing          + any           + critical|high -> escalations",
-                "    anything else                                        -> notes",
-                "- do not inflate severity to draw attention, nor deflate it to pass",
-                "- `unknown` is not an escape hatch: cite the evidence (diff, git history, prior"
-                " version) to move a finding off it, otherwise it stays unknown and it blocks",
-                "- `escalations` do NOT change the verdict but are NOT notes: real critical/high"
-                " problems the user must decide about. Never bury one in notes",
-                "- EVIDENCE is a `file:line` for a source defect, OR an equivalent concrete"
-                " reference when the defect is not in source: db:<migration|table.column>,"
-                " mcp:<server:tool>, runtime:<env/config key>, or cmd:<command + its output>."
-                " A non-code defect with the RIGHT non-code evidence can be critical/high —"
-                " do not force it into a file:line or demote it just because it is not in code",
-                "- no evidence reference of ANY kind + no concrete failing scenario => NOT"
-                " critical/high; demote to a note and say what evidence is missing. That is about"
-                " evidence quality, NOT about suppressing systemic problems — a defect spanning"
-                " many sites stays critical/high, cite representative occurrences and state how"
-                " widespread it is",
-                "- `checks_run`: what you actually ran or read. `not_verified`: what you could not"
-                " check and why. An unrun check is never a pass",
+                "[CONSTRAINTS — full severity defs + routing table in AGENTS.md 'Verify Routing'; anchors only here]",
+                "- report only: no file writes, no user questions (main_agent's domain)",
+                "- verify ONLY the changed files above and their consumers (blast radius); no scope expansion; graph leads locate consumers, they do not widen scope",
+                "- tag EVERY finding severity/origin/scope_relation and route per the Verify Routing table in AGENTS.md — severity ALONE does not decide blocking; `unknown` blocks until evidence moves it off it; do not inflate or deflate",
+                "- EVIDENCE = file:line (source) OR non-code ref (db:/mcp:/runtime:/cmd:); no ref of any kind + no concrete failing scenario => NOT critical/high (demote to note, say what's missing)",
+                "- `checks_run` = what you actually ran/read; `not_verified` = what you couldn't check + why; an unrun check is never a pass",
                 "",
                 "[TASK]",
                 task.strip(),

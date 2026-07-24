@@ -252,6 +252,83 @@ def integrity_checks(report: Report) -> None:
         "investigation angle" in stale_fan and "investigation angle" not in fresh_fan,
     )
 
+    # --- Option A: CONSTRAINTS deduped to AGENTS.md, OUTPUT_FORMAT kept ---
+    from config.roles import ROLE_EXPLORATION
+    from core.prompt_builder import build_prompt
+
+    explore_prompt = build_prompt(
+        role=ROLE_EXPLORATION,
+        task="find the router",
+        session_id="e2e",
+        command="explore",
+        project_root=str(REPO_ROOT),
+    )
+    verify_prompt = build_prompt(
+        role="verification",
+        task="verify the change",
+        session_id="e2e",
+        command="verify",
+        project_root=str(REPO_ROOT),
+    )
+    # The verbose routing table moved OUT of the per-call prompt into AGENTS.md; only
+    # the anchor + a pointer to AGENTS.md remain. If the full table leaks back into the
+    # prompt the dedupe has regressed.
+    report.check(
+        "OptionA: verify prompt drops the full routing table, points to AGENTS.md",
+        "introduced/regression + in_scope" not in verify_prompt
+        and "AGENTS.md" in verify_prompt,
+    )
+    report.check(
+        "OptionA: evidence prompt drops the verbose rulebook, points to AGENTS.md",
+        "AGENTS.md" in explore_prompt
+        and "never mix them into codebase" not in explore_prompt,
+    )
+    # OUTPUT_FORMAT is the structural contract executor.py enforces (marker scan). It
+    # must survive the trim, or every delegated call fails invalid_evidence.
+    report.check(
+        "OptionA: OUTPUT_FORMAT skeleton kept (executor marker contract intact)",
+        "[EVIDENCE]" in explore_prompt and "[DIGEST]" in explore_prompt
+        and "[VERIFICATION]" in verify_prompt,
+    )
+    report.check(
+        "OptionA: verify prompt stays under the Windows 8191-char argv cap",
+        len(verify_prompt) < 8191,
+        f"{len(verify_prompt)} chars",
+    )
+
+    # --- stdout slimming: drop heavy diagnostic meta on success only ---
+    from main import _slim_result
+
+    success = {
+        "ok": True,
+        "content": "evidence",
+        "digest": {"summary": "x"},
+        "meta": {
+            "args": ["opencode", "run", "huge prompt"],
+            "stderr": "kilobytes of opencode logs",
+            "bootstrap": {"args": ["..."]},
+            "policy": {"verify_mode": "delegated"},
+            "session_reset": False,
+            "job_id": "job_1",
+        },
+    }
+    slim = _slim_result(success)
+    report.check(
+        "slim: success drops heavy meta (args/stderr/bootstrap)",
+        all(k not in slim["meta"] for k in ("args", "stderr", "bootstrap")),
+    )
+    report.check(
+        "slim: success keeps content, digest, and actionable meta (policy/session_reset)",
+        slim["content"] == "evidence" and "digest" in slim
+        and slim["meta"]["policy"]["verify_mode"] == "delegated"
+        and slim["meta"]["job_id"] == "job_1",
+    )
+    failure = {"ok": False, "content": "boom", "meta": {"stderr": "trace", "args": ["x"]}}
+    report.check(
+        "slim: failure passes through untouched (stderr/args = diagnosis)",
+        _slim_result(failure) == failure,
+    )
+
 
 def installer_checks(report: Report) -> None:
     """Install into a throwaway HOME. Installing onto the machine that produced dist/
