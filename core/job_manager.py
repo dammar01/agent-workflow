@@ -439,8 +439,11 @@ class JobManager:
         output = make_error(error_type, message, next_action=next_action, meta=meta)
 
         # Attaches the typed error and releases the session lock. `fail_job` reloads the
-        # record, so the `reaped` flag claimed above survives this write.
-        failed = self.fail_job(job_id, message, output=output)
+        # record, so the `reaped` flag claimed above survives this write. Pass reaped=True
+        # too as a backstop: if the atomic claim's _save above threw (disk full, permission),
+        # the flag was never persisted, and only setting it here keeps a late complete_job
+        # from resurrecting the job.
+        failed = self.fail_job(job_id, message, output=output, reaped=True)
         return {**output, "job_id": job_id, "status": failed.get("status", "failed")}
 
     def active_job_for_session(self, session_id: str) -> dict | None:
