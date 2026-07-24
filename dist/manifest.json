@@ -4,8 +4,8 @@
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "71ce227dd8eceb46a8a2910990258fd0a9d67695c1748e8d0d32ec49bfba815a",
-      "bytes": 32178,
+      "sha256": "bfc2cc17c9958fdfcf7d2b9bdff431ebadc0591dee594abd097dec00125e0d96",
+      "bytes": 33371,
       "merge": "merge"
     },
     {
@@ -40,8 +40,8 @@
     },
     {
       "path": "claude/skills/execute.md",
-      "sha256": "101e18ea229d27656cbf8f3f015c4a7548632398843246b3e5f8edc8a7f555a2",
-      "bytes": 598,
+      "sha256": "3419520df987b73ce5cdf7de19977c9ccd5525692c675788368e46a330cbd2d8",
+      "bytes": 1100,
       "merge": "replace"
     },
     {
@@ -118,8 +118,8 @@
     },
     {
       "path": "claude/settings.template.json",
-      "sha256": "b0c0e105bcfbd0502b43c047acf0187705acdc2780be1c426bc34878f50e6db9",
-      "bytes": 831,
+      "sha256": "6903fcd02ee764edfc41bc76bbd54f4dd862d7cc29a7d638d2dc1b37486e4e64",
+      "bytes": 1104,
       "merge": "merge",
       "dropped_keys": [
         "agentPushNotifEnabled",

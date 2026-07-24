@@ -1,4 +1,4 @@
-# Claude Code — Personal Global Config (v3.3.1)
+# Claude Code — Personal Global Config (v3.4.0)
 # Skills: ~/.claude/skills/   Memory: ~/.claude/memory/
 
 <!-- WORKFLOW-MAIN-AGENT:START -->
@@ -152,7 +152,7 @@ description: .workflow readiness check. 1-call bila .workflow ada, else local ch
 .workflow/run.*     : EXISTS | MISSING
 .gitignore          : CONTAINS .workflow/ | MISSING
 $AGENT_PATH         : SET (<path>, exists) | NOT SET
-.workflow/config.json : v3.3.1 (main_py_path set) | old | MISSING
+.workflow/config.json : v3.4.0 (main_py_path set) | old | MISSING
 graphify-out/       : EXISTS | MISSING
 second_agent MCP    : SAFE | RISK (<server>) | REVIEW (<server>) | NONE — scan opencode config mcp (context7=safe read-only; write/exec/fs/db/browser=risk)
 
@@ -196,7 +196,7 @@ init otomatis: generate scripts (run/inspect/check) + config abs-path + copy ope
 ## Output
 [INIT]
 bootstrap: $AGENT_PATH = <path>
-generated: run/inspect/check.{ps1,sh} + config.json (v3.3.1, main_py_path abs) + opencode.json (copy) + sessions/ (state/scope/cache/logs/runtime per-session, lazy)
+generated: run/inspect/check.{ps1,sh} + config.json (v3.4.0, main_py_path abs) + opencode.json (copy) + sessions/ (state/scope/cache/logs/runtime per-session, lazy)
 gitignore: .workflow/ ok
 status: READY
 ".workflow siap. Coba /.explore atau /.doctor."
@@ -381,13 +381,13 @@ JANGAN write memory mid-session tanpa konfirmasi.
 ### FILE: {AGENT_DIR}/skills/help.md
 
 # Skill: help
-description: Command reference v3.3.1
+description: Command reference v3.4.0
 
 ## Trigger
 /.help
 
 ## Output
-[COMMAND GUIDE — v3.3.1]
+[COMMAND GUIDE — v3.4.0]
 
 LOCAL (main_agent langsung):
   /.execute -y      implement code (wajib -y)
@@ -475,9 +475,9 @@ Buat `{AGENT_DIR}/memory/`. Memory = data user → JANGAN overwrite jika ada.
 
 Target `{CONFIG_FILE}`. Marker ada → ganti antara START/END. Tidak ada → append. Substitusi `{AGENT_DIR}`.
 
-<!-- WORKFLOW-MAIN-AGENT:START — v3.3.1, do not edit manually -->
+<!-- WORKFLOW-MAIN-AGENT:START — v3.4.0, do not edit manually -->
 
-## Workflow Main Agent — v3.3.1
+## Workflow Main Agent — v3.4.0
 
 role: orchestrator + user interface + direct executor. Kamu BUKAN second_agent.
 second_agent: OpenCode (read-only evidence), dipanggil via .workflow/run script.

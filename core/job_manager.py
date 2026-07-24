@@ -135,13 +135,21 @@ class JobManager:
         self._release_session_lock(job)
         return job
 
-    def fail_job(self, job_id: str, error: str, output: dict | None = None) -> dict:
+    def fail_job(
+        self,
+        job_id: str,
+        error: str,
+        output: dict | None = None,
+        reaped: bool = False,
+    ) -> dict:
         job = self._load(job_id)
         job["status"] = "failed"
         job["completed_at"] = self._now()
         job["error"] = error
         if output is not None:
-            job["output"] = output  # preserve rich error (error_type, next_action, meta)
+            job["output"] = output
+        if reaped:
+            job["reaped"] = True
         self._save(job)
         self._release_session_lock(job)
         return job
@@ -164,11 +172,17 @@ class JobManager:
                 job = self.fail_job(
                     job_id,
                     "worker process died before completing (reaped)",
+                    reaped=True,
                 )
             elif self._exceeded_max_runtime(job):
+                # The one path that can race a live worker: the backstop fires on age while
+                # the PID is still up (or was reused), so the worker may finish and call
+                # complete_job right after this. reaped=True makes that finish land as
+                # late_output instead of resurrecting the job.
                 job = self.fail_job(
                     job_id,
                     f"job exceeded max runtime {self.max_runtime_seconds}s (reaped)",
+                    reaped=True,
                 )
             elif state == ALIVE_STALLED:
                 # Alive but silent. Report it — never reap on suspicion alone.
@@ -198,7 +212,12 @@ class JobManager:
                 }
 
         if job["status"] == "completed":
-            return {"ok": True, "job_id": job_id, "status": "completed", "output": job["output"]}
+            return {
+                "ok": True,
+                "job_id": job_id,
+                "status": "completed",
+                "output": job["output"],
+            }
         if job["status"] == "failed":
             stored = job.get("output")
             if isinstance(stored, dict) and stored.get("meta"):
@@ -206,7 +225,9 @@ class JobManager:
                     "ok": False,
                     "job_id": job_id,
                     "status": "failed",
-                    "content": stored.get("content") or job.get("error") or "job failed",
+                    "content": stored.get("content")
+                    or job.get("error")
+                    or "job failed",
                     "meta": dict(stored.get("meta") or {}),
                 }
             return {
@@ -363,7 +384,9 @@ class JobManager:
         """
         payload = {
             "probe": probe,
-            "liveness": "stalled_no_progress" if probe.get("alive") else "stalled_on_limit",
+            "liveness": (
+                "stalled_no_progress" if probe.get("alive") else "stalled_on_limit"
+            ),
             "at": self._now(),
         }
         try:
@@ -485,17 +508,26 @@ class JobManager:
     def _acquire_session_lock(self, session_id: str, job_id: str) -> None:
         lock_path = self._lock_path(session_id)
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"session_id": session_id, "job_id": job_id, "created_at": self._now()}
+        payload = {
+            "session_id": session_id,
+            "job_id": job_id,
+            "created_at": self._now(),
+        }
 
         try:
             fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
             existing = self._read_lock(lock_path)
-            existing_job = self.get_job(existing.get("job_id", "")) if existing else None
+            existing_job = (
+                self.get_job(existing.get("job_id", "")) if existing else None
+            )
             if existing_job and existing_job.get("status") in {"pending", "running"}:
                 # Reap a dead worker instead of blocking forever.
                 if self._worker_dead(existing_job):
-                    self.fail_job(existing_job["job_id"], "worker process died before completing (reaped)")
+                    self.fail_job(
+                        existing_job["job_id"],
+                        "worker process died before completing (reaped)",
+                    )
                 elif self._exceeded_max_runtime(existing_job):
                     self.fail_job(
                         existing_job["job_id"],
@@ -540,12 +572,19 @@ class JobManager:
         return "unknown"
 
     @staticmethod
-    def _request_hash(command: str, task: str | None, session_id: str, work_dir: str | None) -> str:
+    def _request_hash(
+        command: str, task: str | None, session_id: str, work_dir: str | None
+    ) -> str:
         # `task` is genuinely optional for some commands (sweep scans the git diff and
         # needs no prompt). Treating None as a crash turned a valid invocation into a
         # raw AttributeError traceback instead of a structured result.
         raw = "|".join(
-            [(command or "").strip().lower(), (task or "").strip(), session_id, work_dir or ""]
+            [
+                (command or "").strip().lower(),
+                (task or "").strip(),
+                session_id,
+                work_dir or "",
+            ]
         )
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 

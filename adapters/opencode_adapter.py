@@ -20,12 +20,15 @@ from utils.parser import (
 )
 
 # Substrings that signal opencode refused a path rather than a real crash.
-_PERMISSION_SIGNS = ("permission denied", "eacces", "not permitted", "access is denied", "outside", "forbidden")
+_PERMISSION_SIGNS = (
+    "permission denied",
+    "eacces",
+    "not permitted",
+    "access is denied",
+    "outside",
+    "forbidden",
+)
 
-# Substrings that mean the provider refused on QUOTA, not on the request. Kept separate
-# from _PERMISSION_SIGNS because the two need opposite advice: a permission error is
-# fixed by changing the call, a rate limit is fixed by waiting. Folded together, every
-# exhausted quota came back as "unknown — inspect the logs".
 _RATE_LIMIT_SIGNS = (
     "rate limit",
     "rate_limit",
@@ -47,12 +50,6 @@ def _is_rate_limited(*texts: str) -> bool:
     return any(sign in blob for sign in _RATE_LIMIT_SIGNS)
 
 
-# The provider hung up mid-answer. opencode streams the model response over a long-lived
-# connection; when it drops, opencode prints its own error and exits non-zero after
-# having done real work. Distinct from _RATE_LIMIT_SIGNS because the advice inverts:
-# a quota wall clears by WAITING and retrying makes it worse, a dead stream clears by
-# RETRYING and waiting does nothing. Folded into `unknown`, every dropped stream came
-# back as "inspect the logs and rerun" — which is neither the cause nor the fix.
 _STREAM_FAIL_SIGNS = (
     "streaming response failed",
     "stream closed",
@@ -63,9 +60,6 @@ _STREAM_FAIL_SIGNS = (
     "premature close",
     "econnreset",
     "epipe",
-    # Deliberately NOT here: bare "aborted" / "cancelled". They show up in user-initiated
-    # stops and permission refusals too, and a misfire would tell the caller to retry a
-    # call that was refused on purpose.
 )
 
 
@@ -75,8 +69,16 @@ def _is_stream_failure(*texts: str) -> bool:
     return any(sign in blob for sign in _STREAM_FAIL_SIGNS)
 
 
-# Advice string kept in one place: the probe and the run path must not hand out two
-# different fixes for the same failure.
+_ERROR_TAIL_CHARS = 1600
+
+
+def _error_tail(*texts: str) -> str:
+    """The trailing slice of the combined error text — opencode's own terminal error,
+    isolated from the agent transcript that precedes it."""
+    blob = "\n".join(t for t in texts if t)
+    return blob[-_ERROR_TAIL_CHARS:]
+
+
 _STREAM_FAIL_NEXT_ACTION = (
     "Transient — the provider stream dropped mid-answer, the request itself was fine. "
     "Retry once; if it dies again, split the task into two narrower delegated calls. "
@@ -84,13 +86,8 @@ _STREAM_FAIL_NEXT_ACTION = (
 )
 
 
-# The prompt travels as a single argv entry. `opencode` resolves to opencode.cmd on
-# Windows, and a .cmd is launched through cmd.exe, whose whole command line caps at
-# 8191 characters — not the 32767 of CreateProcess. Past it the run dies with
-# "The command line is too long." before opencode sees anything, which surfaced as a
-# generic `unknown` error with no hint that the TASK TEXT was what had to shrink.
 _CMD_LINE_LIMIT = 8191
-_CMD_LINE_HEADROOM = 400  # exe path, flags, session id, quoting
+_CMD_LINE_HEADROOM = 400
 _CMD_LINE_SIGNS = ("command line is too long", "the input line is too long")
 
 
@@ -123,9 +120,6 @@ class OpenCodeAdapter:
         self.command = command
         self.timeout_seconds = timeout_seconds
         self.no_timeout = timeout_seconds is None or timeout_seconds <= 0
-        # Called once per poll tick while opencode runs. The worker is otherwise
-        # fully blocked on the subprocess, so this is the ONLY place a liveness
-        # heartbeat can be emitted from. Set by the caller (worker/executor).
         self.on_progress = on_progress
         self.poll_interval = DEFAULT_POLL_INTERVAL_SECONDS
         self.bootstrap_timeout_seconds = DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS
@@ -161,9 +155,6 @@ class OpenCodeAdapter:
         )
 
         chunks: dict[str, list[str]] = {"stdout": [], "stderr": []}
-        # Last moment either stream produced a byte. The reader threads write it, the
-        # poll loop reads it. A float assignment is atomic under the GIL, so no lock:
-        # a torn read here would cost one tick of accuracy, not correctness.
         last_output = {"at": started}
 
         def _drain(stream, key: str) -> None:
@@ -200,9 +191,6 @@ class OpenCodeAdapter:
             self._tick(phase, now - started, now - last_output["at"])
             time.sleep(interval)
 
-        # If the kill failed the child is still holding the pipes open, the drain threads
-        # are still blocked in readline, and the captured output below is whatever landed
-        # so far. Surface that instead of returning a quietly truncated result.
         drained = True
         for reader in readers:
             reader.join(timeout=10)
@@ -336,10 +324,6 @@ class OpenCodeAdapter:
     ) -> dict:
         """Spawn workflow agent in existing session."""
         command = self._resolve_command()
-        # opencode `run` truncates a multiline arg at the first newline (only line 1
-        # reaches the agent). Flatten to a single line with visible \n markers so the
-        # whole prompt survives. The multiline original stays archived in
-        # .workflow/sessions/<session>/logs + runtime/prompt.txt for audit — only the wire form is flattened.
         safe_prompt = prompt.replace("\n", " \\n ")
         args = [command, "run", safe_prompt]
         args.extend(["--agent", "plan"])
@@ -426,17 +410,12 @@ class OpenCodeAdapter:
                 "timed_out": False,
             }
 
-        rate_limited = _is_rate_limited(outcome["stderr"], outcome["stdout"])
-        stream_failed = _is_stream_failure(outcome["stderr"], outcome["stdout"])
+        probe_tail = _error_tail(outcome["stderr"], outcome["stdout"])
+        rate_limited = _is_rate_limited(probe_tail)
+        stream_failed = _is_stream_failure(probe_tail)
         if rate_limited:
-            # Checked before the timeout branch: a quota refusal that also ran long is
-            # still a quota refusal, and "timeout" would send the caller to the wrong fix.
             reason = "probe_rate_limited"
         elif stream_failed:
-            # The probe reached the provider and got an answer started — the second agent
-            # is NOT gone. Without this branch the caller read a dropped stream as
-            # `probe_error` and reaped the job as `second_agent_unavailable`: a transient
-            # network event reported as a dead agent, pointing at the wrong fix.
             reason = "probe_stream_failed"
         elif outcome["timed_out"]:
             reason = "probe_timeout"
@@ -469,7 +448,11 @@ class OpenCodeAdapter:
                     "The prompt scaffolding (constraints, graph leads, output format) is "
                     "fixed cost; only the task is yours to trim."
                 ),
-                meta={"command_line_chars": oversize, "limit": _CMD_LINE_LIMIT, "cwd": work_dir},
+                meta={
+                    "command_line_chars": oversize,
+                    "limit": _CMD_LINE_LIMIT,
+                    "cwd": work_dir,
+                },
             )
 
         env = os.environ.copy()
@@ -510,11 +493,7 @@ class OpenCodeAdapter:
                 "idle_seconds": outcome.get("idle_seconds"),
                 "kill": outcome["kill"],
             }
-            # A run that hit the ceiling while the provider was refusing on quota is a
-            # rate limit that happened to run long, not a task that needs more budget.
-            # Reported as `timeout` it sent the user to raise timeout_seconds, which
-            # only makes the next exhausted-quota run wait longer before saying so.
-            if _is_rate_limited(outcome["stderr"], outcome["stdout"]):
+            if _is_rate_limited(_error_tail(outcome["stderr"], outcome["stdout"])):
                 return make_error(
                     "rate_limited",
                     clean_opencode_output(raw) or "opencode hit a provider rate limit",
@@ -550,14 +529,13 @@ class OpenCodeAdapter:
         cleaned = clean_opencode_output(raw)
 
         if outcome["returncode"] != 0:
-            stderr_low = meta["stderr"].lower()
-            # Quota first: a 429 body often also contains the word "forbidden", which
-            # would otherwise be classified as a permission problem and sent to the
-            # wrong fix ("grant access to the path") for a problem about credits.
-            if _is_rate_limited(meta["stderr"], cleaned):
+            err_tail = _error_tail(meta["stderr"])
+            tail_low = err_tail.lower()
+            if _is_rate_limited(err_tail):
                 return make_error(
                     "rate_limited",
-                    cleaned or "opencode refused: provider rate limit / quota exhausted",
+                    cleaned
+                    or "opencode refused: provider rate limit / quota exhausted",
                     next_action=(
                         "Second agent is out of quota. Wait for the limit to reset, switch "
                         "model in .workflow/opencode.json, or check the provider account — "
@@ -565,21 +543,14 @@ class OpenCodeAdapter:
                     ),
                     meta=meta,
                 )
-            if _is_stream_failure(meta["stderr"], cleaned):
-                # After the quota check on purpose: a provider that drops the stream
-                # BECAUSE it is out of capacity says so, and "retry now" is the wrong
-                # advice for that. Quota wins the tie.
+            if _is_stream_failure(err_tail):
                 return make_error(
                     "streaming_failed",
                     cleaned or "opencode lost the provider stream mid-response",
                     next_action=_STREAM_FAIL_NEXT_ACTION,
                     meta=meta,
                 )
-            if any(
-                sign in stderr_low or sign in cleaned.lower() for sign in _CMD_LINE_SIGNS
-            ):
-                # Belt and braces: the pre-flight check above uses an estimate, so a
-                # near-limit prompt can still be refused by the shell.
+            if any(sign in tail_low for sign in _CMD_LINE_SIGNS):
                 return make_error(
                     "prompt_too_long",
                     cleaned or "the shell refused the command line as too long",
@@ -588,7 +559,7 @@ class OpenCodeAdapter:
                     ),
                     meta=meta,
                 )
-            if any(sign in stderr_low or sign in cleaned.lower() for sign in _PERMISSION_SIGNS):
+            if any(sign in tail_low for sign in _PERMISSION_SIGNS):
                 return make_error(
                     "permission_denied",
                     cleaned or "opencode refused access",
