@@ -30,6 +30,7 @@ MANIFEST = DIST_DIR / "manifest.json"
 TARGETS = {
     "claude/CLAUDE.md": "{{HOME}}/.claude/CLAUDE.md",
     "claude/skills": "{{HOME}}/.claude/skills",
+    "claude/commands": "{{HOME}}/.claude/commands",
     "claude/hooks": "{{HOME}}/.claude/hooks",
     "claude/settings.template.json": "{{HOME}}/.claude/settings.json",
     "opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",
@@ -43,6 +44,9 @@ def _dist_files() -> list[str]:
     skills = DIST_CONFIG / "claude" / "skills"
     if skills.is_dir():
         paths += [f"claude/skills/{p.name}" for p in sorted(skills.glob("*.md")) if p.is_file()]
+    commands = DIST_CONFIG / "claude" / "commands"
+    if commands.is_dir():
+        paths += [f"claude/commands/{p.name}" for p in sorted(commands.glob("*.md")) if p.is_file()]
     hooks = DIST_CONFIG / "claude" / "hooks"
     if hooks.is_dir():
         found = sorted(p for p in hooks.iterdir() if p.suffix in {".ps1", ".sh"} and p.is_file())
@@ -57,7 +61,11 @@ def _dist_files() -> list[str]:
 
 
 def _merge_kind(rel: str) -> str:
-    return "replace" if "/skills/" in rel or rel.endswith((".ps1", ".sh")) else "merge"
+    return (
+        "replace"
+        if "/skills/" in rel or "/commands/" in rel or rel.endswith((".ps1", ".sh"))
+        else "merge"
+    )
 
 
 def _component(rel: str) -> str:
@@ -66,7 +74,11 @@ def _component(rel: str) -> str:
     prompt_bundle = the LLM-facing contract (CLAUDE.md, skills, AGENTS.md); runtime =
     everything that is machine wiring (hooks, settings template).
     """
-    if "/skills/" in rel or rel in ("claude/CLAUDE.md", "opencode/AGENTS.md"):
+    if (
+        "/skills/" in rel
+        or "/commands/" in rel
+        or rel in ("claude/CLAUDE.md", "opencode/AGENTS.md")
+    ):
         return "prompt_bundle"
     return "runtime"
 

@@ -8,8 +8,8 @@
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "390f6199a9b3163c6c8c8891d5d8b30e7e67169ef6af87e8c269a322befc4449",
-      "bytes": 18821,
+      "sha256": "d5965ba1200724a0e8a06bceaa344fd3dede844d007f3236a4dcf72be96618d2",
+      "bytes": 19691,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -126,6 +126,118 @@
       "component": "prompt_bundle"
     },
     {
+      "path": "claude/commands/.analyze.md",
+      "sha256": "df38460201e60160d693879b9ec29de453ad79265aad60d6e43d41e3d4f34519",
+      "bytes": 203,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "claude/commands/.caveman.md",
+      "sha256": "5ac246ae93b8e37db506cfc14e1c8116b48b33e95ba95d28a394935465fa5729",
+      "bytes": 203,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "claude/commands/.commit.md",
+      "sha256": "38ccda298c4dc09759b03d85424948c323e3fae130c64a78cc95a61ff272ef6e",
+      "bytes": 200,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "claude/commands/.compress.md",
+      "sha256": "5870030425fd7f1dd71aaeb6eba44f99eece1370c73a32ce44fb09c9dfbb6339",
+      "bytes": 206,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "claude/commands/.doctor.md",
+      "sha256": "ecef01793634a378e761ccd21401ffa7081d523591bc7be24c8f1217004fa900",
+      "bytes": 200,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "claude/commands/.execute.md",
+      "sha256": "b91b98816c40343b59878fe8644685a60ca4490bba071770101dba0b05a73aee",
+      "bytes": 203,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "claude/commands/.explore.md",
+      "sha256": "086c913c25174dd7a31f70ebe212ce0923d33e7c0f896043074f3085726ac09f",
+      "bytes": 203,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "claude/commands/.help.md",
+      "sha256": "b68fcf420e6962830a979ab88099115dc7bff4576d323e9b94cc1379367b0d26",
+      "bytes": 194,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "claude/commands/.init.md",
+      "sha256": "46c8d8d8510989fd199da496c7a834f23ea189da3701849f7921c8396abbcfcc",
+      "bytes": 194,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "claude/commands/.local.md",
+      "sha256": "a9e42fd552aee18cf99127a7c360e17299e7323b0e594f2cbe837ff26a4da9f9",
+      "bytes": 197,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "claude/commands/.memory.md",
+      "sha256": "5c05a8993a974d0d659dba17f80a0c6d1f1f75c7541f57ffaf9added386d309e",
+      "bytes": 200,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "claude/commands/.plan.md",
+      "sha256": "979ca09d4b1a70035e3f066b96b47dc62481240dc7f866ca57d4da4c277c915c",
+      "bytes": 194,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "claude/commands/.refactor.md",
+      "sha256": "d0064be290f6a359e23c80ca3ef409256bf54a6ac0a45e88a38cb7398378474a",
+      "bytes": 206,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "claude/commands/.review.md",
+      "sha256": "1c887cf4de87ce397434d456586cef2d8df9b33ade3b8cba8bb3dd7489c27622",
+      "bytes": 200,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "claude/commands/.sweep.md",
+      "sha256": "9cf6a92d850014ff69f424fa661d4bb658431df889a924a13f46081ff7eee707",
+      "bytes": 197,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "claude/commands/.verify.md",
+      "sha256": "642fcf250d4e8a90c93abc029820063dcee492bcb4b82757bb54364b98e75ecf",
+      "bytes": 200,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
       "path": "claude/hooks/graph-refresh.ps1",
       "sha256": "e90c7b805d53b483c9ccf83dbf5b49b660304883f2788a79dd4ac76fec35b195",
       "bytes": 5353,
@@ -134,8 +246,8 @@
     },
     {
       "path": "claude/hooks/intent-gate-check.ps1",
-      "sha256": "1dd2f9b768f0c11acd7d9008d1c0a6dcbd881481a74d9a06e72fcbdc3e297b34",
-      "bytes": 2862,
+      "sha256": "b885e3d161b794a176213546e9a4a6acbc26b5f0d3206ba98b1f8f6d42f69b09",
+      "bytes": 3981,
       "merge": "replace",
       "component": "runtime"
     },
@@ -162,8 +274,8 @@
     },
     {
       "path": "claude/settings.template.json",
-      "sha256": "c9445f1092570073e110611701f88a3343925d68932a87e0553d938cd487073f",
-      "bytes": 1719,
+      "sha256": "d9e3daabb332d4e50a84397ca6cb402e030796b018ea72dfff5206c6b15b41da",
+      "bytes": 1724,
       "merge": "merge",
       "component": "runtime"
     },
@@ -178,6 +290,7 @@
   "targets": {
     "claude/CLAUDE.md": "{{HOME}}/.claude/CLAUDE.md",
     "claude/skills": "{{HOME}}/.claude/skills",
+    "claude/commands": "{{HOME}}/.claude/commands",
     "claude/hooks": "{{HOME}}/.claude/hooks",
     "claude/settings.template.json": "{{HOME}}/.claude/settings.json",
     "opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",

@@ -241,6 +241,50 @@ def _install_text(
         dest.write_text(incoming, encoding="utf-8")
 
 
+def _hook_script_ids(entry: dict) -> set[str]:
+    """Filenames of the hook scripts an entry invokes (e.g. intent-gate-check.ps1).
+
+    These identify an entry as OURS: we ship these scripts, so an entry that runs one is a
+    shipped hook we may refresh — not a user's foreign hook to preserve.
+    """
+    ids: set[str] = set()
+    hooks = entry.get("hooks", []) if isinstance(entry, dict) else []
+    for h in hooks if isinstance(hooks, list) else []:
+        cmd = h.get("command", "") if isinstance(h, dict) else ""
+        ids.update(m.lower() for m in re.findall(r"[\w.-]+\.(?:ps1|sh)", cmd))
+    return ids
+
+
+def _merge_hook_entries(cur_entries: list, tmpl_entries: list) -> tuple[list, int]:
+    """Refresh OUR shipped hook entries (identified by the script they call), append any
+    shipped entry we don't yet have, and leave every foreign entry untouched.
+
+    This is what lets a shipped matcher change (e.g. adding Bash to the Pre-flight gate)
+    reach an existing install: the old policy kept the whole event whenever it differed,
+    which froze our own hook at its previous matcher. Ownership is by script filename, so a
+    hook the user added that runs none of our scripts is never modified.
+    """
+    result = list(cur_entries)
+    updated = 0
+    for tmpl_entry in tmpl_entries:
+        tids = _hook_script_ids(tmpl_entry)
+        if not tids:
+            if tmpl_entry not in result:
+                result.append(tmpl_entry)
+                updated += 1
+            continue
+        idx = next(
+            (i for i, e in enumerate(result) if _hook_script_ids(e) & tids), None
+        )
+        if idx is None:
+            result.append(tmpl_entry)
+            updated += 1
+        elif result[idx] != tmpl_entry:
+            result[idx] = tmpl_entry
+            updated += 1
+    return result, updated
+
+
 def _install_settings(
     src: Path, dest: Path, plan: Plan, apply: bool, backup_root: Path
 ) -> None:
@@ -264,22 +308,38 @@ def _install_settings(
     added = [k for k in template if k not in current]
     differing = [k for k in template if k in current and current[k] != template[k]]
 
-    # Merge hooks additively per event so unrelated user events remain untouched.
-    hook_events_added: list[str] = []
+    # Merge hooks per event AND per entry: unrelated user events/entries stay untouched, but
+    # OUR OWN shipped hook entries (identified by the script they call) are refreshed so a
+    # shipped matcher change actually reaches an existing install.
+    hook_changes: list[str] = []
+    merged_hooks: dict | None = None
     if "hooks" in differing:
         differing.remove("hooks")
         tmpl_hooks = template.get("hooks") if isinstance(template.get("hooks"), dict) else {}
         cur_hooks = current.get("hooks") if isinstance(current.get("hooks"), dict) else {}
-        for event, spec in (tmpl_hooks or {}).items():
+        merged_hooks = dict(cur_hooks or {})
+        for event, tmpl_entries in (tmpl_hooks or {}).items():
             if event not in (cur_hooks or {}):
-                hook_events_added.append(event)
-            elif cur_hooks[event] != spec:
-                # An event the user already customised is their decision, per the same
-                # rule that governs the top-level keys — reported, never overwritten.
-                plan.warn(
-                    f"settings.json[hooks.{event}] differs from the shipped template — "
-                    "kept yours (your hook wins)"
+                merged_hooks[event] = tmpl_entries
+                hook_changes.append(f"hooks.{event} (added)")
+                continue
+            if not isinstance(tmpl_entries, list) or not isinstance(cur_hooks[event], list):
+                # Non-list shape we do not understand: keep the user's, report it.
+                if cur_hooks[event] != tmpl_entries:
+                    plan.warn(
+                        f"settings.json[hooks.{event}] differs from the shipped template — "
+                        "kept yours (your hook wins)"
+                    )
+                continue
+            new_entries, updated = _merge_hook_entries(cur_hooks[event], tmpl_entries)
+            if updated:
+                merged_hooks[event] = new_entries
+                hook_changes.append(
+                    f"hooks.{event} (refreshed {updated} shipped entr"
+                    f"{'y' if updated == 1 else 'ies'})"
                 )
+        if merged_hooks == (cur_hooks or {}):
+            merged_hooks = None
 
     for key in differing:
         level = "REQUIRED" if key in SETTINGS_REQUIRED else "kept"
@@ -288,21 +348,16 @@ def _install_settings(
             f"({'the workflow may not bind sessions without the shipped hook' if key in SETTINGS_REQUIRED else 'your value wins'})"
         )
 
-    if not added and not hook_events_added:
+    if not added and not hook_changes:
         plan.add("unchanged", dest, "no missing keys")
         return
 
     _backup(dest, backup_root, plan, apply)
-    detail = ", ".join(
-        [*added, *(f"hooks.{e}" for e in hook_events_added)]
-    )
+    detail = ", ".join([*added, *hook_changes])
     plan.add("merge", dest, f"add {detail}")
     if apply:
         current.update({k: template[k] for k in added})
-        if hook_events_added:
-            merged_hooks = dict(current.get("hooks") or {})
-            for event in hook_events_added:
-                merged_hooks[event] = template["hooks"][event]
+        if merged_hooks is not None:
             current["hooks"] = merged_hooks
         dest.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
 
@@ -509,6 +564,7 @@ def _targets() -> list[tuple[Path, Path, str]]:
     ]
     for sub, dest_dir in (
         ("skills", HOME / ".claude" / "skills"),
+        ("commands", HOME / ".claude" / "commands"),
         ("hooks", HOME / ".claude" / "hooks"),
     ):
         source_dir = DIST_CONFIG / "claude" / sub

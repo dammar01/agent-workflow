@@ -168,6 +168,7 @@ class Executor:
                 and fanout_capability(project_root) is not False
             )
 
+        prompt_meta: dict = {}
         prompt = build_prompt(
             role=route["role"],
             task=task,
@@ -177,6 +178,7 @@ class Executor:
             known_facts=known_facts,
             graph_leads=graph_leads,
             subagent_fanout=fanout,
+            meta_sink=prompt_meta,
         )
 
         bound = bind_session(project_root, session_id)
@@ -211,15 +213,32 @@ class Executor:
         finally:
             release_runtime_lock(handoff["paths"]["lock"], session_id)
             self.opencode.on_progress = None
-            # Archive exit, duration, kill, and stderr metadata for failure diagnosis.
+            # Archive exit, duration, kill, and stderr metadata for failure diagnosis,
+            # plus minimal cost telemetry. Char counts are exact; token counts are
+            # rough len/4 estimates and are labelled token_source=estimated so they are
+            # never confused with provider-reported actuals (those would land in
+            # actual_input_tokens/actual_output_tokens with token_source=provider).
+            _result = locals().get("result")
+            _content = _result.get("content") if isinstance(_result, dict) else None
+            _prompt_chars = len(prompt)
+            _resp_chars = len(_content) if isinstance(_content, str) else None
             write_call_meta(
                 project_root,
                 handoff.get("meta", {}).get("prompt_id"),
                 session_id,
                 {
                     "command": normalized_command,
+                    "role": route.get("role"),
                     "model": route.get("model"),
                     "timeout_seconds": self.opencode.timeout_seconds,
+                    "prompt_chars": _prompt_chars,
+                    "response_chars": _resp_chars,
+                    "estimated_input_tokens": _prompt_chars // 4,
+                    "estimated_output_tokens": (
+                        _resp_chars // 4 if _resp_chars is not None else None
+                    ),
+                    "token_source": "estimated",
+                    **prompt_meta,
                     **(getattr(self.opencode, "last_call_meta", None) or {}),
                 },
             )

@@ -89,6 +89,60 @@ def assert_true(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def _test_facts_concurrency() -> None:
+    """Concurrent ingest must not lose updates and must leave valid JSONL.
+
+    N threads each ingest one distinct, file:line-anchored fact into the same store. The
+    _FactLock read-modify-write serialises them, so all N must survive (an unlocked store
+    would let the last writer clobber earlier additions), and every line must still parse.
+    """
+    import json as _json
+    import shutil as _shutil
+
+    from core import fact_store
+    from core.workflow_runtime import workflow_paths
+
+    root = Path(tempfile.mkdtemp(prefix="facts-conc-"))
+    try:
+        wf = workflow_paths(root)["workflow_dir"]
+        wf.mkdir(parents=True, exist_ok=True)
+        src = root / "src.py"
+        src.write_text(
+            "\n".join(f"line_{i} = {i}" for i in range(20)) + "\n", encoding="utf-8"
+        )
+
+        n = 8
+        errors: list[Exception] = []
+
+        def worker(i: int) -> None:
+            try:
+                fact_store.ingest(
+                    root,
+                    f"durable_facts:\n- [config] fact number {i} distinct value [src.py:{i + 1}]\n",
+                    f"sess-{i}",
+                )
+            except Exception as exc:  # noqa: BLE001 - surfaced via errors list
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert_true(not errors, f"concurrent ingest raised: {errors}")
+        facts = fact_store._load_facts(root)
+        assert_true(
+            len(facts) == n,
+            f"concurrent ingest lost updates: expected {n} facts, got {len(facts)}",
+        )
+        for line in (wf / "facts.jsonl").read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                _json.loads(line)  # raises if the atomic rewrite ever left a torn line
+    finally:
+        _shutil.rmtree(root, ignore_errors=True)
+
+
 def run_tests() -> None:
     fake_opencode = FakeOpenCodeAdapter()
     temp_root = Path(tempfile.mkdtemp(prefix="agent-workflow-test-"))
@@ -110,7 +164,12 @@ def run_tests() -> None:
             project_root=str(temp_root),
         )
         assert_true("[WORKFLOW_AGENT]" in prompt, "prompt must tag workflow-agent context")
-        assert_true("read graphify output first" in prompt, "prompt must require graphify-first exploration")
+        # The full evidence protocol (graphify-first included) was relocated to AGENTS.md in
+        # the slim-prompt refactor; the prompt now anchors to it instead of inlining the rule.
+        assert_true(
+            "full evidence protocol in AGENTS.md" in prompt,
+            "evidence prompt must anchor the full protocol (graphify-first) to AGENTS.md",
+        )
 
         # 2. Bootstrap flow
         recording_opencode = RecordingOpenCodeAdapter()
@@ -422,6 +481,9 @@ def run_tests() -> None:
             temp_root / "jobs", stall_threshold_seconds=3600, max_runtime_seconds=1
         )
         expired = ceiling.create_job("plan", "expired", "expired-session", work_dir, None)
+        # os.getpid() is a guaranteed-alive pid so the ceiling takes the job_expired branch
+        # (a dead pid would classify as worker_died instead). _kill_worker's self-pid guard
+        # skips the actual kill, so reaping this job cannot take the test process down.
         ceiling.set_worker_pid(expired["job_id"], os.getpid())
         ceiling.mark_running(expired["job_id"])
         ceiling.touch_heartbeat(expired["job_id"], {"phase": "agent"})
@@ -489,13 +551,17 @@ def run_tests() -> None:
                 all("\\" not in row["file"] for row in repo_leads["files"]),
                 "lead paths must be repo-relative POSIX so they mean the same on any machine",
             )
+            # Force the fresh framing so this assertion is deterministic regardless of the
+            # checkout's graph age (a stale graph downgrades to GRAPH_HINT — that path is
+            # covered separately). Staleness is a flag on the leads dict, not a re-stat.
+            fresh_leads = {**repo_leads, "stale": False}
             leads_prompt = build_prompt(
                 role="reasoning",
                 task="session manager",
                 session_id="leads",
                 command="plan",
                 project_root=str(repo_root),
-                graph_leads=repo_leads,
+                graph_leads=fresh_leads,
             )
             assert_true("[GRAPH_LEADS" in leads_prompt, "leads must reach the prompt")
             assert_true(
@@ -646,6 +712,8 @@ def run_tests() -> None:
             "a job with no task must be created normally, not crash",
         )
         main.JOB_MANAGER.fail_job(taskless["job_id"], "cleanup")
+
+        _test_facts_concurrency()
 
         print("test_scenario: success")
     finally:

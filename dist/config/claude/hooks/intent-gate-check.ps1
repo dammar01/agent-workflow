@@ -1,9 +1,14 @@
 # intent-gate-check.ps1 - PreToolUse hook (Pre-flight gate: CHECK side)
 #
-# Fires for gather tools (matcher in settings.json: mcp__.*|Read|Grep|Glob).
+# Fires for gather tools (matcher in settings.json: mcp__.*|Read|Grep|Glob|Bash).
 # If a DELEGATED marker is pending (set by intent-gate-set.ps1, not yet cleared by
 # .workflow/run) -> HARD-block the tool: exit 2 with the reason on stderr (Claude Code
 # feeds stderr back to the agent as the block reason).
+#
+# Bash is matched too so `cat`/`rg`/`git show` cannot bypass the gate. The runner scripts
+# (.workflow/run|check|inspect) ARE invoked via Bash and stay allowed, but ONLY when the
+# command line is a clean runner call with no shell metacharacters that could chain a
+# gather command onto it (e.g. `.workflow/run ... && cat x`).
 #
 # Escape hatches (allow despite marker):
 #   - env  WORKFLOW_LOCAL_MODE=1
@@ -49,13 +54,25 @@ try {
     # no pending delegation -> allow
     if (-not (Test-Path -LiteralPath $marker)) { exit 0 }
 
+    # Bash allowlist: permit ONLY a clean .workflow/{run,check,inspect} invocation. A command
+    # carrying &, ;, |, backtick, $(...), redirect, or a newline could smuggle a gather step
+    # past the gate, so any of those forces the block path below even for a runner call.
+    if ($toolName -eq 'Bash') {
+        $bashCmd = [string]$payload.tool_input.command
+        $chained = ($bashCmd -match '[&;|`]') -or ($bashCmd -match '\$\(') -or ($bashCmd -match '[<>]') -or ($bashCmd -match "`n")
+        if ((-not $chained) -and ($bashCmd -match '(^|[\\/])\.workflow[\\/](run|check|inspect)\.(ps1|sh)\b')) {
+            exit 0
+        }
+    }
+
     # pending DELEGATED + gather tool -> HARD block
     $cmd = "?"
     try { $cmd = ([string]((Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json).command)) } catch { }
 
+    $what = if ($toolName -eq 'Bash') { "a shell read (cat/rg/grep/git show) -- reading the codebase is second_agent's job" } else { "a bulk-gather tool" }
     $reason = @"
 [PRE-FLIGHT GATE] intent=DELEGATED ($cmd) but .workflow/run has NOT run this turn.
-Tool '$toolName' is a bulk-gather tool -- FORBIDDEN before delegation (Division of Labor: gather = second_agent).
+Tool '$toolName' is $what -- FORBIDDEN before delegation (Division of Labor: gather = second_agent).
 Do this instead: .workflow/run.ps1 $cmd "<task>" "$mainId"
 That routes evidence to second_agent AND clears this gate.
 False positive? Escapes: set `$env:WORKFLOW_LOCAL_MODE=1, create $localFlag, or delete $marker.

@@ -100,9 +100,13 @@ def local_checks(report: Report) -> None:
 
         code, out = _run_cli("--command", "doctor", "--work-dir", str(project), "--pretty")
         payload = _json_from(out) or {}
+        # A well-formed run emits one of the three real statuses. Which one depends on the
+        # install/bundle state of the HOME this runs against (release-integrity can make it
+        # NOT_READY when the installed bundle drifts from the manifest), so we assert doctor
+        # produces a VALID status, not a specifically green one.
         report.check(
             "doctor reports a status",
-            payload.get("meta", {}).get("status") in {"READY", "NEEDS SETUP"},
+            payload.get("meta", {}).get("status") in {"READY", "NEEDS_UPGRADE", "NOT_READY"},
             payload.get("meta", {}).get("status", "?"),
         )
 

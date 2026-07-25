@@ -9,14 +9,12 @@ from core.job_manager import JobManager
 from core.session_manager import SessionManager
 from utils import osutil
 from core.workflow_runtime import (
-    active_jobs_for_workspace,
     detect_project_root,
     ensure_workflow_workspace,
     needs_upgrade,
     prune_sessions,
     resolve_agent_workflow_path,
     run_doctor,
-    upgrade_workflow_workspace,
     workflow_paths,
     workspace_versions,
 )
@@ -80,53 +78,6 @@ def run(
                 },
             }
         return {"ok": True, "content": "workflow workspace initialized", "meta": meta}
-
-    if normalized_command == "upgrade":
-        active = active_jobs_for_workspace(project_root)
-        if active:
-            return make_error(
-                "job_already_running",
-                f"{len(active)} job(s) still running against {project_root}; "
-                "upgrading now can lose their session state",
-                next_action=(
-                    "Wait for the active job(s) to finish, or attach with "
-                    f".workflow/check.{osutil.script_ext()} <job_id> --wait, then rerun upgrade."
-                ),
-                meta={"project_root": str(project_root)},
-                active_job_ids=[job["job_id"] for job in active],
-            )
-        resolver = resolve_agent_workflow_path(project_root)
-        try:
-            meta = upgrade_workflow_workspace(project_root, resolver.get("path"))
-        except ValueError as exc:
-            return {
-                "ok": False,
-                "content": str(exc),
-                "meta": {
-                    "project_root": str(project_root),
-                    "error_type": "workflow_init_error",
-                    "next_action": "Run `--command init` to scaffold .workflow/ first.",
-                },
-            }
-        moved = (
-            meta["from"]["installed_tool_version"]
-            != meta["to"]["installed_tool_version"]
-        )
-        lines = [
-            (
-                f"workflow workspace upgraded "
-                f"{meta['from']['installed_tool_version']} -> {meta['to']['installed_tool_version']}"
-                if moved
-                else f"workflow workspace already at {meta['to']['installed_tool_version']} "
-                f"(scripts and config keys refreshed)"
-            )
-        ]
-        for row in meta["diverged_from_defaults"]:
-            lines.append(
-                f"  kept your {row['key']}={row['yours']} "
-                f"(this build ships {row['shipped_default']})"
-            )
-        return {"ok": True, "content": "\n".join(lines), "meta": meta}
 
     if normalized_command == "doctor":
         config = load_opencode_config()
@@ -297,8 +248,8 @@ def _warn_if_workspace_stale(work_dir: str | None) -> None:
     """One stderr line when .workflow/ was scaffolded by a different build.
 
     Warn, never act. Regenerating scripts under a caller that is mid-flow is exactly
-    the kind of surprise the workflow exists to avoid — so the fix (`--command upgrade`)
-    stays a thing the user runs deliberately. Emitted from Python rather than from the
+    the kind of surprise the workflow exists to avoid — so upgrading stays a thing the
+    user runs deliberately, via the installer. Emitted from Python rather than from the
     generated shell scripts so both OSes report it identically, and so a workspace whose
     scripts are themselves outdated still gets the warning.
     """
@@ -313,7 +264,7 @@ def _warn_if_workspace_stale(work_dir: str | None) -> None:
         f"[workflow] WARN: .workflow was built by tool "
         f"{versions['installed_tool_version']} / config {versions['installed_config_version']}, "
         f"running {versions['current_tool_version']} / {versions['current_config_version']} — "
-        f'run: python main.py --command upgrade --work-dir "{project_root}"',
+        f'upgrade via installer: python install.py --apply --init-project "{project_root}"',
         file=sys.stderr,
     )
 
@@ -695,7 +646,6 @@ if __name__ == "__main__":
         required=True,
         choices=[
             "init",
-            "upgrade",
             "doctor",
             "explore",
             "plan",

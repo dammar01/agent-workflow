@@ -44,6 +44,7 @@ ALLOWLIST = [
     # (source relative to home, dest relative to dist/config, kind)
     (".claude/CLAUDE.md", "claude/CLAUDE.md", "file"),
     (".claude/skills", "claude/skills", "dir:*.md"),
+    (".claude/commands", "claude/commands", "dir:*.md"),
     (".claude/hooks", "claude/hooks", "dir:*.ps1,*.sh"),
     (".config/opencode/AGENTS.md", "opencode/AGENTS.md", "file"),
 ]
@@ -301,6 +302,7 @@ def main() -> int:
                 "targets": {
                     "claude/CLAUDE.md": "{{HOME}}/.claude/CLAUDE.md",
                     "claude/skills": "{{HOME}}/.claude/skills",
+                    "claude/commands": "{{HOME}}/.claude/commands",
                     "claude/hooks": "{{HOME}}/.claude/hooks",
                     "claude/settings.template.json": "{{HOME}}/.claude/settings.json",
                     "opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",

@@ -758,6 +758,8 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
     gets the exact interpreter; the cross-OS script gets a generic name (python/python3)
     resolved via PATH on the target machine — so a project copied across OSes still runs.
     """
+    from config.settings import DEFAULT_MAX_TASK_CHARS
+
     ps_py = osutil.python_exe() if osutil.IS_WINDOWS else "python"
     sh_py = osutil.python_exe() if not osutil.IS_WINDOWS else "python3"
     check_py = str(Path(main_py).parent / "check.py")
@@ -772,6 +774,10 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         "[string]$Session=$env:MAIN_SESSION_ID)\n"
         'if (-not $Session) { $Session = "default" }\n'
         'if ($Session -eq "default") { [Console]::Error.WriteLine("[workflow] WARN: session=default - pass MAIN_SESSION_ID (arg 3) for concurrent-safe isolation") }\n'
+        # Pre-dispatch task-size warning: the runtime truncates the task at
+        # DEFAULT_MAX_TASK_CHARS, silently. Surface it BEFORE dispatch so main_agent shortens
+        # the instruction instead of blindly pre-splitting into two calls.
+        f'if ($Task.Length -gt {DEFAULT_MAX_TASK_CHARS}) {{ [Console]::Error.WriteLine("[workflow] WARN: task is $($Task.Length) chars > {DEFAULT_MAX_TASK_CHARS}-char cap; it WILL be truncated. Shorten the instruction (do not paste evidence into the task) rather than pre-splitting into multiple calls.") }}\n'
         "$bg = @('explore','plan','analyze','verify','sweep')\n"
         "if ($bg -contains $Command) {\n"
         # Pre-flight gate: dispatching a delegated run satisfies the gate -> clear the marker
@@ -791,6 +797,7 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         'TASK="${2:-}"\n'
         'SESSION="${3:-${MAIN_SESSION_ID:-default}}"\n'
         '[ "$SESSION" = "default" ] && echo "[workflow] WARN: session=default - pass MAIN_SESSION_ID for concurrent-safe isolation" >&2\n'
+        f'[ "${{#TASK}}" -gt {DEFAULT_MAX_TASK_CHARS} ] && echo "[workflow] WARN: task is ${{#TASK}} chars > {DEFAULT_MAX_TASK_CHARS}-char cap; it WILL be truncated. Shorten the instruction rather than pre-splitting." >&2\n'
         'case " explore plan analyze verify sweep " in\n'
         '  *" $COMMAND "*)\n'
         # Pre-flight gate: clear the marker before dispatching (delegation satisfies the gate).
@@ -1451,6 +1458,95 @@ def _scan_mcp(project_root: Path) -> dict:
     return {"sources": sources, "servers": servers, "verdict": verdict}
 
 
+def _expand_home(template: str) -> str:
+    return str(template).replace("{{HOME}}", os.path.expanduser("~"))
+
+
+def _installed_path_for(rel: str, targets: dict) -> Path | None:
+    """Map a manifest dist-relative path to its installed location via the targets map.
+
+    A targets key is either an exact file (claude/CLAUDE.md) or a directory (claude/skills).
+    The longest matching key wins, so a file under a mapped dir resolves to
+    <target_dir>/<remainder>.
+    """
+    if rel in targets:
+        return Path(_expand_home(str(targets[rel])))
+    best_key = None
+    for key in targets:
+        if rel == key or rel.startswith(key + "/"):
+            if best_key is None or len(key) > len(best_key):
+                best_key = key
+    if best_key is None:
+        return None
+    remainder = rel[len(best_key):].lstrip("/")
+    return Path(_expand_home(str(targets[best_key]))) / remainder
+
+
+def _bundle_integrity(dist_config_dir: Path, manifest_path: Path) -> dict:
+    """Verify the installed bundle matches dist/manifest.json (release-integrity).
+
+    For each file the manifest records, hash the INSTALLED copy the same way gen_manifest
+    does (sha256 of read_text().encode(), CRLF-normalised by universal newlines) and compare.
+    Also flags a manifest older than its dist sources (stale) and any missing required hook.
+    """
+    result: dict = {
+        "manifest": str(manifest_path),
+        "checked": 0,
+        "mismatched": [],
+        "missing": [],
+        "manifest_fresh": None,
+        "hooks_installed": None,
+    }
+    try:
+        manifest = read_json_file(manifest_path)
+    except (OSError, ValueError):
+        result["error"] = "manifest missing or invalid"
+        return result
+    files = manifest.get("files") if isinstance(manifest, dict) else None
+    targets = manifest.get("targets") if isinstance(manifest, dict) else None
+    if not isinstance(files, list) or not isinstance(targets, dict):
+        result["error"] = "manifest has no files/targets"
+        return result
+
+    for entry in files:
+        rel = entry.get("path")
+        installed = _installed_path_for(rel, targets)
+        if installed is None or not installed.is_file():
+            result["missing"].append(rel)
+            continue
+        # *.template.json is installed via {{HOME}} placeholder substitution + key-merge
+        # into the user's settings.json/opencode.json, so its bytes legitimately diverge
+        # from the shipped template. Verify presence only — an exact hash would false-alarm.
+        if str(rel).endswith(".template.json"):
+            result["checked"] += 1
+            continue
+        try:
+            blob = installed.read_text(encoding="utf-8").encode("utf-8")
+        except OSError:
+            result["missing"].append(rel)
+            continue
+        result["checked"] += 1
+        if hashlib.sha256(blob).hexdigest() != entry.get("sha256"):
+            result["mismatched"].append(rel)
+
+    try:
+        newest_src = max(
+            (p.stat().st_mtime for p in dist_config_dir.rglob("*") if p.is_file()),
+            default=0.0,
+        )
+        result["manifest_fresh"] = manifest_path.stat().st_mtime >= newest_src
+    except OSError:
+        result["manifest_fresh"] = None
+
+    required_hooks = ["session-bind.ps1", "intent-gate-set.ps1", "intent-gate-check.ps1"]
+    hook_target = _installed_path_for("claude/hooks", targets)
+    if hook_target is not None:
+        result["hooks_installed"] = all(
+            (hook_target / h).is_file() for h in required_hooks
+        )
+    return result
+
+
 def run_doctor(
     project_root: Path, opencode_command: str, session_id: str | None = None
 ) -> dict:
@@ -1707,6 +1803,47 @@ def run_doctor(
                 recommended_fixes.append(
                     "Re-run a delegated command; if it keeps failing, opencode session capture is failing (check opencode `run` output for a ses_ id)"
                 )
+
+    # Release integrity: the installed bundle must match dist/manifest.json exactly, the
+    # manifest must not be older than its dist sources, and required hooks must be installed.
+    # A drifted/stale/incomplete bundle still "runs" but ships behaviour nobody reviewed.
+    integrity: object = "skipped: agent path unresolved"
+    if resolver.get("ok") and resolver.get("path"):
+        repo_root = Path(resolver["path"]).parent
+        integrity = _bundle_integrity(
+            repo_root / "dist" / "config", repo_root / "dist" / "manifest.json"
+        )
+    checks["bundle_integrity"] = integrity
+    if isinstance(integrity, dict):
+        if integrity.get("error"):
+            issues.append(f"bundle integrity uncheckable: {integrity['error']}")
+            recommended_fixes.append(
+                "Regenerate the manifest: python tools/gen_manifest.py"
+            )
+        if integrity.get("mismatched"):
+            issues.append(
+                f"bundle drift: {len(integrity['mismatched'])} installed file(s) differ from manifest "
+                f"({', '.join(integrity['mismatched'][:5])})"
+            )
+            recommended_fixes.append(
+                "Re-run install/upgrade to reinstall the shipped bundle; if dist/ changed on "
+                "purpose, regenerate the manifest (python tools/gen_manifest.py)"
+            )
+        if integrity.get("missing"):
+            issues.append(
+                f"bundle incomplete: {len(integrity['missing'])} manifest file(s) not installed "
+                f"({', '.join(integrity['missing'][:5])})"
+            )
+            recommended_fixes.append("Re-run install to place the missing bundle files")
+        if integrity.get("manifest_fresh") is False:
+            issues.append("stale manifest: dist/ sources are newer than dist/manifest.json")
+            recommended_fixes.append("Run: python tools/gen_manifest.py")
+        if integrity.get("hooks_installed") is False:
+            issues.append(
+                "required hooks missing from install "
+                "(session-bind/intent-gate-set/intent-gate-check)"
+            )
+            recommended_fixes.append("Re-run install to place the hook scripts")
 
     if issues:
         status = "NOT_READY"

@@ -97,6 +97,11 @@ class JobManager:
         mismatch is reported as a skipped kill rather than taking out an innocent process.
         """
         pid = job.get("worker_pid")
+        if pid and pid == os.getpid():
+            # Never terminate the current process. A worker_pid set to (or recycled into)
+            # this runtime's own PID must not let a reap take the runtime down — and on
+            # Windows terminate_tree runs `taskkill /T`, which would also kill our children.
+            return {"method": "skipped", "ok": False, "reason": "self_pid", "pid": pid}
         if pid and osutil.pid_reused(pid, job.get("worker_create_time")):
             return {"method": "skipped", "ok": False, "reason": "pid_reuse_detected", "pid": pid}
         return osutil.terminate_tree(None, pid=pid)

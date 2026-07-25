@@ -9,22 +9,32 @@ from config.settings import DEFAULT_MAX_TASK_CHARS
 _EVIDENCE_ROLES = {ROLE_EXPLORATION, ROLE_REASONING}
 
 
-def _cap_task(task: str) -> str:
+def _cap_task(task: str) -> tuple[str, dict | None]:
     """Cap the task string before it becomes part of the one-arg CLI prompt.
 
     Scaffolding is fixed cost; the task is the only caller-controlled size. Truncating
     it visibly here turns a would-be `prompt_too_long` call failure into a degraded-but-
-    delivered prompt. The marker is explicit so main_agent sees the task was cut.
+    delivered prompt. The in-band marker is explicit, but it lands INSIDE the truncated
+    task; the returned info dict is the out-of-band signal so a caller can surface
+    `task_truncated` in the response meta BEFORE main_agent reads the (silently cut) task.
+
+    Returns (capped_task, info) where info is None when no truncation happened.
     """
     task = task.strip()
-    if len(task) <= DEFAULT_MAX_TASK_CHARS:
-        return task
+    original = len(task)
+    if original <= DEFAULT_MAX_TASK_CHARS:
+        return task, None
     keep = DEFAULT_MAX_TASK_CHARS
-    return (
+    capped = (
         task[:keep]
-        + f"\n…[task truncated: {len(task) - keep} chars over {DEFAULT_MAX_TASK_CHARS}-char cap;"
+        + f"\n…[task truncated: {original - keep} chars over {DEFAULT_MAX_TASK_CHARS}-char cap;"
         " split into narrower delegated calls if detail was lost]"
     )
+    return capped, {
+        "task_truncated": True,
+        "task_original_chars": original,
+        "task_kept_chars": keep,
+    }
 
 
 # Shared by both fan-out shapes. Kept in one place so the graph and no-graph plans
@@ -209,11 +219,14 @@ def build_prompt(
     known_facts: list[str] | None = None,
     graph_leads: dict | None = None,
     subagent_fanout: bool = False,
+    meta_sink: dict | None = None,
 ) -> str:
     if role not in VALID_ROLES:
         raise ValueError(f"unsupported role: {role}")
 
-    task = _cap_task(task)
+    task, trunc_info = _cap_task(task)
+    if trunc_info and meta_sink is not None:
+        meta_sink.update(trunc_info)
 
     header = [
         "[WORKFLOW_AGENT]",

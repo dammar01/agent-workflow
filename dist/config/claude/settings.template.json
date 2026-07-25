@@ -39,7 +39,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "mcp__.*|Read|Grep|Glob",
+        "matcher": "mcp__.*|Read|Grep|Glob|Bash",
         "hooks": [
           {
             "type": "command",
