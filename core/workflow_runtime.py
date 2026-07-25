@@ -364,11 +364,20 @@ def upgrade_workflow_workspace(
         main_py_changed = runtime.get("main_py_path") != tool["main_py_path"]
         # Tool paths are absolute and machine-specific: an upgrade after the repo moved
         # must repoint them, or the regenerated scripts call a main.py that is gone.
-        for key in ("main_py_path", "check_py_path", "tool_dir", "tool_version", "runtime_version"):
+        for key in (
+            "main_py_path",
+            "check_py_path",
+            "tool_dir",
+            "tool_version",
+            "runtime_version",
+        ):
             if runtime.get(key) != tool[key]:
                 runtime[key] = tool[key]
                 config_changed = True
-        if agent_workflow_path and runtime.get("agent_workflow_path") != agent_workflow_path:
+        if (
+            agent_workflow_path
+            and runtime.get("agent_workflow_path") != agent_workflow_path
+        ):
             runtime["agent_workflow_path"] = agent_workflow_path
             config_changed = True
     if config_changed:
@@ -520,14 +529,18 @@ def validate_config(config: dict) -> list[str]:
             continue
         for key, value in current.items():
             if key not in section_defaults:
-                warnings.append(f"{section}.{key}: unknown key (typo? the runtime ignores it)")
+                warnings.append(
+                    f"{section}.{key}: unknown key (typo? the runtime ignores it)"
+                )
                 continue
             default = section_defaults[key]
             # bool is a subclass of int, so an int knob set to True (or a bool knob set to
             # 0/1) would slip past a plain isinstance — compare bool-ness explicitly.
             if isinstance(default, bool):
                 if not isinstance(value, bool):
-                    warnings.append(f"{section}.{key}: {type(value).__name__}, expected bool")
+                    warnings.append(
+                        f"{section}.{key}: {type(value).__name__}, expected bool"
+                    )
             elif isinstance(value, bool) or not isinstance(value, type(default)):
                 warnings.append(
                     f"{section}.{key}: {type(value).__name__}, expected {type(default).__name__}"
@@ -787,7 +800,7 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         # Pre-flight gate: dispatching a delegated run satisfies the gate -> clear the marker
         # so the PreToolUse hook stops blocking gather tools for the rest of this turn.
         f'  $mk = Join-Path "{root}" ".workflow\\sessions\\$Session\\runtime\\delegated.marker"\n'
-        '  if (Test-Path -LiteralPath $mk) { Remove-Item -LiteralPath $mk -Force -ErrorAction SilentlyContinue }\n'
+        "  if (Test-Path -LiteralPath $mk) { Remove-Item -LiteralPath $mk -Force -ErrorAction SilentlyContinue }\n"
         f'  & "{ps_py}" "{main_py}" --command await --job-command $Command '
         f'--prompt $Task --session $Session --work-dir "{root}" --pretty\n'
         "} else {\n"
@@ -1146,7 +1159,10 @@ def release_runtime_lock(lock_path: Path, session_id: str | None = None) -> None
             payload = read_json_file(lock_path)
         except (ValueError, FileNotFoundError, OSError):
             payload = None
-        if isinstance(payload, dict) and payload.get("session_id") not in (None, session_id):
+        if isinstance(payload, dict) and payload.get("session_id") not in (
+            None,
+            session_id,
+        ):
             return  # not our lock — leave it for its owner / the TTL stealer
     try:
         lock_path.unlink()
@@ -1508,7 +1524,7 @@ def _installed_path_for(rel: str, targets: dict) -> Path | None:
                 best_key = key
     if best_key is None:
         return None
-    remainder = rel[len(best_key):].lstrip("/")
+    remainder = rel[len(best_key) :].lstrip("/")
     return Path(_expand_home(str(targets[best_key]))) / remainder
 
 
@@ -1541,6 +1557,10 @@ def _bundle_integrity(dist_config_dir: Path, manifest_path: Path) -> dict:
     for entry in files:
         rel = entry.get("path")
         installed = _installed_path_for(rel, targets)
+        if installed is not None and installed.name == "opencode.json":
+            jsonc = installed.with_name("opencode.jsonc")
+            if jsonc.is_file():
+                installed = jsonc
         if installed is None or not installed.is_file():
             result["missing"].append(rel)
             continue
@@ -1568,7 +1588,11 @@ def _bundle_integrity(dist_config_dir: Path, manifest_path: Path) -> dict:
     except OSError:
         result["manifest_fresh"] = None
 
-    required_hooks = ["session-bind.ps1", "intent-gate-set.ps1", "intent-gate-check.ps1"]
+    required_hooks = [
+        "session-bind.ps1",
+        "intent-gate-set.ps1",
+        "intent-gate-check.ps1",
+    ]
     hook_target = _installed_path_for("claude/hooks", targets)
     if hook_target is not None:
         result["hooks_installed"] = all(
@@ -1866,7 +1890,9 @@ def run_doctor(
             )
             recommended_fixes.append("Re-run install to place the missing bundle files")
         if integrity.get("manifest_fresh") is False:
-            issues.append("stale manifest: dist/ sources are newer than dist/manifest.json")
+            issues.append(
+                "stale manifest: dist/ sources are newer than dist/manifest.json"
+            )
             recommended_fixes.append("Run: python tools/gen_manifest.py")
         if integrity.get("hooks_installed") is False:
             issues.append(
