@@ -25,6 +25,29 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"{{HOME}}\\.claude\\hooks\\intent-gate-set.ps1\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__.*|Read|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"{{HOME}}\\.claude\\hooks\\intent-gate-check.ps1\"",
+            "timeout": 15
+          }
+        ]
+      }
     ]
   },
   "enabledPlugins": {

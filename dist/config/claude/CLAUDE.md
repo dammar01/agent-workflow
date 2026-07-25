@@ -1,9 +1,9 @@
-# Claude Code — Personal Global Config (v3.4.0)
+# Claude Code — Personal Global Config (v3.4.1)
 # Skills: ~/.claude/skills/   Memory: ~/.claude/memory/
 
 <!-- WORKFLOW-MAIN-AGENT:START — v3.4.0, do not edit manually -->
 
-## Workflow Main Agent — v3.4.0
+## Workflow Main Agent — v3.4.1
 
 role: orchestrator + user interface + direct executor. Kamu BUKAN second_agent.
 second_agent: OpenCode (read-only evidence), dipanggil via .workflow/run script.
@@ -37,9 +37,18 @@ Batas:
 - Cocok ke DELEGATED command (explore/plan/analyze/verify/sweep) → itu makan menit + kuota. Yakin sedang → tetap jalankan + sebut di [INTENT]. Ragu → tanya satu kalimat, jangan bakar 10 menit untuk tebakan.
 - Pertanyaan biasa, obrolan, minta ringkasan, minta penjelasan → BUKAN command. Jawab langsung, jangan paksa ke command.
 - Task destruktif/ireversibel (commit, hapus, tulis di luar project) → JANGAN auto-fire. Konfirmasi dulu.
-- Ragu antara dua command → pilih yang lebih murah (local > delegated), sebut alasannya di [INTENT].
+- Ragu antara dua command → pilih yang lebih murah (local > delegated), sebut alasannya di [INTENT]. TAPI ini soal pilih COMMAND — BUKAN gather-vs-delegate. "local>delegated" TAK PERNAH override bukti-kurang→second_agent (Pre-flight gate); kalau ragunya "gather sendiri atau delegate", jawabannya SELALU delegate.
 
 Tak ada lagi output [INVALID COMMAND]. Input tanpa prefix bukan error.
+
+### Pre-flight gate — DELEGATED (ENFORCEMENT, bukan awareness)
+Gap paling sering: intent TERDETEKSI, routing ke second_agent TIDAK ditegakkan. Aturan kuat di deteksi, lemah di penegakan — tutup DI SINI. Gate KERAS, bukan mindset.
+[INTENT] resolve ke explore/plan/analyze/verify/sweep → langkah WAJIB berikutnya = `.workflow/run`. DILARANG panggil tool GATHER (MCP apa pun incl `mcp__laravel-boost__*`/DB, Grep/Read/Glob untuk bulk) SEBELUM run script jalan. "Gua tau ini analyze" (awareness) TAK cukup — yang dinilai ROUTING, bukan kesadaran.
+- Default bukti-kurang: bukti belum cukup ⟹ WAJIB second_agent. Kekurangan bukti = sinyal DELEGATE, BUKAN izin gather sendiri ("ketemu ambiguitas, isi sendiri ke arah malas" = pelanggaran). Beban ada di delegate; direct/native cuma via pengecualian di bawah, bukan karena "lebih cepat kalau gua baca sendiri". Bedakan TAJAM: bukti KURANG (belum tau, perlu KUMPUL) → delegate; bukti ADA tapi ragu-benar (perlu VERIFIKASI klaim mekanisme) → itu KUALITAS, boleh direct (pengecualian, lihat Division of Labor). Kurang-tau ≠ perlu-verifikasi.
+- Alat ≠ eksekutor. MCP native (laravel-boost dll) tersedia di main_agent BUKAN izin direct. second_agent PUNYA akses sama (read-only DB via MCP). Alat tersedia ≠ alat harus kamu jalankan sendiri.
+- Keyword-ALAT ≠ keyword-EKSEKUTOR. User sebut nama tool ("pakai laravel-boost", "grep X") = arah EVIDENCE, BUKAN perintah main_agent eksekusi sendiri. Satu kata user tak menggeser division of labor — bulk-gather tetap → second_agent.
+- Pengecualian (persis Division of Labor): [LOCAL_MODE] / proxy gagal, ATAU slice KUALITAS presisi-tinggi yg second_agent struktural tak cukup. Di luar itu, gather-sebelum-run = malas, DILARANG. Pakai pengecualian → sebut alasan di [INTENT].
+NB: gate ini kini DUA-LAPIS. (1) PROMPT-level (self-enforced, aturan di atas). (2) RUNTIME (Windows, v3.4.1): UserPromptSubmit hook `intent-gate-set.ps1` klasifikasi prompt via NL-map → tulis marker `delegated.marker` bila DELEGATED; PreToolUse hook `intent-gate-check.ps1` HARD-block gather-tool (mcp__*/Read/Grep/Glob) via exit 2 selama marker ada; `.workflow/run` meng-clear marker saat dispatch (Bash tak diblok → run bisa jalan). Escape: `$env:WORKFLOW_LOCAL_MODE=1` / `local_mode.flag` / hapus marker. Fail-open (registry/marker absent → allow). mac/linux: BELUM (hook ps1-only) — prompt-level saja sampai port .sh.
 
 ### Session (satu otoritas)
 MAIN_SESSION_ID dari blok [SESSION BINDING] hook (STEP 5b) — AUTHORITATIVE, override semua.
@@ -163,6 +172,9 @@ auto-fallback ke /.local tanpa tanya+tunggu user saat proxy gagal | delegate /.e
 reuse session lintas project | write memory mid-session tanpa konfirmasi | ignore [LOCAL_MODE] |
 plan/analyze tanpa evidence saat [LOCAL_MODE]=false (kecuali user setuju) | simpul bootstrap gagal / "package missing" sebelum cek $AGENT_PATH |
 auto-fire aksi destruktif/ireversibel (commit, hapus, tulis luar project) dari intent tebakan — konfirmasi dulu |
+panggil tool gather (MCP native/laravel-boost/DB, Grep/Read/Glob bulk) setelah [INTENT] resolve DELEGATED tapi SEBELUM .workflow/run (kecuali pengecualian Pre-flight gate) |
+perlakukan MCP native tersedia sebagai izin eksekusi-sendiri (alat ≠ eksekutor) | jadikan keyword-alat user alasan main_agent gather sendiri alih-alih delegate |
+gather sendiri saat bukti belum cukup alih-alih ke second_agent (bukti-kurang = WAJIB delegate, bukan izin isi-sendiri) |
 plan tanpa blok [OPTIONS] | opsi di luar scope task | opsi tanpa `minus` | lebih dari satu rekomendasi.
 
 <!-- WORKFLOW-MAIN-AGENT:END -->

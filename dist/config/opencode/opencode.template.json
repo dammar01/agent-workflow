@@ -1,0 +1,19 @@
+{
+  "agent": {
+    "plan": {
+      "permission": {
+        "write": "deny",
+        "edit": "deny",
+        "bash": {
+          "git *": "allow",
+          "ls *": "allow",
+          "cat *": "allow",
+          "rg *": "allow",
+          "grep *": "allow",
+          "find *": "allow",
+          "*": "deny"
+        }
+      }
+    }
+  }
+}

@@ -33,6 +33,7 @@ TARGETS = {
     "claude/hooks": "{{HOME}}/.claude/hooks",
     "claude/settings.template.json": "{{HOME}}/.claude/settings.json",
     "opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",
+    "opencode/opencode.template.json": "{{HOME}}/.config/opencode/opencode.json",
 }
 
 
@@ -50,6 +51,8 @@ def _dist_files() -> list[str]:
         paths.append("opencode/AGENTS.md")
     if (DIST_CONFIG / "claude" / "settings.template.json").is_file():
         paths.append("claude/settings.template.json")
+    if (DIST_CONFIG / "opencode" / "opencode.template.json").is_file():
+        paths.append("opencode/opencode.template.json")
     return paths
 
 

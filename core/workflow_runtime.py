@@ -774,6 +774,10 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         'if ($Session -eq "default") { [Console]::Error.WriteLine("[workflow] WARN: session=default - pass MAIN_SESSION_ID (arg 3) for concurrent-safe isolation") }\n'
         "$bg = @('explore','plan','analyze','verify','sweep')\n"
         "if ($bg -contains $Command) {\n"
+        # Pre-flight gate: dispatching a delegated run satisfies the gate -> clear the marker
+        # so the PreToolUse hook stops blocking gather tools for the rest of this turn.
+        f'  $mk = Join-Path "{root}" ".workflow\\sessions\\$Session\\runtime\\delegated.marker"\n'
+        '  if (Test-Path -LiteralPath $mk) { Remove-Item -LiteralPath $mk -Force -ErrorAction SilentlyContinue }\n'
         f'  & "{ps_py}" "{main_py}" --command await --job-command $Command '
         f'--prompt $Task --session $Session --work-dir "{root}" --pretty\n'
         "} else {\n"
@@ -789,6 +793,9 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         '[ "$SESSION" = "default" ] && echo "[workflow] WARN: session=default - pass MAIN_SESSION_ID for concurrent-safe isolation" >&2\n'
         'case " explore plan analyze verify sweep " in\n'
         '  *" $COMMAND "*)\n'
+        # Pre-flight gate: clear the marker before dispatching (delegation satisfies the gate).
+        f'    MK="{root}/.workflow/sessions/$SESSION/runtime/delegated.marker"\n'
+        '    [ -f "$MK" ] && rm -f "$MK"\n'
         f'    exec "{sh_py}" "{main_py}" --command await --job-command "$COMMAND" '
         f'--prompt "$TASK" --session "$SESSION" --work-dir "{root}" --pretty ;;\n'
         "  *)\n"

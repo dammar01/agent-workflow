@@ -36,7 +36,13 @@ REPO_ROOT = Path(__file__).resolve().parent
 DIST = REPO_ROOT / "dist"
 DIST_CONFIG = DIST / "config"
 MANIFEST = DIST / "manifest.json"
-HOME = Path.home()
+# Install target root. AGENT_HOME lets a fresh machine reproduce the environment into a
+# chosen location instead of the real profile; unset falls back to the actual home.
+HOME = (
+    Path(os.environ["AGENT_HOME"]).expanduser()
+    if os.environ.get("AGENT_HOME")
+    else Path.home()
+)
 
 MARKERS = {
     "claude/CLAUDE.md": ("WORKFLOW-MAIN-AGENT:START", "WORKFLOW-MAIN-AGENT:END"),
@@ -61,11 +67,88 @@ class Plan:
         self.warnings.append(message)
 
 
+_ENV_CACHE: dict | None = None
+_MISSING_ENV: set[str] = set()
+_ENV_PLACEHOLDER = re.compile(r"\{\{ENV:([A-Za-z0-9_]+)\}\}")
+
+
+def _load_env_file() -> dict:
+    """KEY=VALUE pairs from the install .env (no python-dotenv dependency).
+
+    Location precedence: $AGENT_ENV_FILE, else <repo>/.env, else <HOME>/.claude/.env.
+    First existing file wins; a missing file is not an error (returns {}). Values may be
+    wrapped in single or double quotes. This file holds the machine's secrets and must
+    NEVER be committed — only .env.example ships in the repo.
+    """
+    candidates: list[Path] = []
+    explicit = os.environ.get("AGENT_ENV_FILE")
+    if explicit:
+        candidates.append(Path(explicit).expanduser())
+    candidates.append(REPO_ROOT / ".env")
+    candidates.append(HOME / ".claude" / ".env")
+    for path in candidates:
+        if not path.is_file():
+            continue
+        data: dict = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or "=" not in stripped:
+                continue
+            key, _, value = stripped.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key:
+                data.setdefault(key, value)
+        return data
+    return {}
+
+
+def _env_values() -> dict:
+    """Resolution table for {{ENV:NAME}}: the real environment wins over the .env file."""
+    global _ENV_CACHE
+    if _ENV_CACHE is None:
+        _ENV_CACHE = {**_load_env_file(), **os.environ}
+    return _ENV_CACHE
+
+
 def _resolve_placeholders(text: str, project_root: Path | None) -> str:
     text = text.replace("{{HOME}}", str(HOME))
     if project_root:
         text = text.replace("{{PROJECT_ROOT}}", str(project_root))
-    return text
+    env = _env_values()
+
+    def _sub(match: "re.Match") -> str:
+        name = match.group(1)
+        if name in env:
+            return env[name]
+        _MISSING_ENV.add(name)  # left intact; main() aborts before any write
+        return match.group(0)
+
+    return _ENV_PLACEHOLDER.sub(_sub, text)
+
+
+def _scan_missing_env() -> set[str]:
+    """{{ENV:NAME}} names referenced by shipped files that don't resolve.
+
+    A preflight so a missing secret aborts the WHOLE install before the first write —
+    a half-applied second_agent config (some files env-substituted, some not) is worse
+    than none. Every source that _targets/settings install would write is scanned.
+    """
+    env = _env_values()
+    missing: set[str] = set()
+    sources = [src for src, _dest, _key in _targets()]
+    settings_src = DIST_CONFIG / "claude" / "settings.template.json"
+    if settings_src.exists():
+        sources.append(settings_src)
+    for source in sources:
+        try:
+            text = source.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for match in _ENV_PLACEHOLDER.finditer(text):
+            if match.group(1) not in env:
+                missing.add(match.group(1))
+    return missing
 
 
 def _resolve_in_json(value, project_root: Path | None):
@@ -270,6 +353,123 @@ def _enable_context_mode(plan: Plan, apply: bool, backup_root: Path) -> None:
         dest.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
 
 
+def _strip_jsonc(text: str) -> str:
+    """Remove // and /* */ comments from JSONC, string-aware so a `//` inside a URL
+    (e.g. "https://...") or a `/*` inside a value is preserved. Trailing commas dropped."""
+    out: list[str] = []
+    i, n = 0, len(text)
+    in_str = esc = False
+    while i < n:
+        char = text[i]
+        if in_str:
+            out.append(char)
+            if esc:
+                esc = False
+            elif char == "\\":
+                esc = True
+            elif char == '"':
+                in_str = False
+            i += 1
+            continue
+        if char == '"':
+            in_str = True
+            out.append(char)
+            i += 1
+            continue
+        if char == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        if char == "/" and i + 1 < n and text[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                i += 1
+            i += 2
+            continue
+        out.append(char)
+        i += 1
+    return re.sub(r",(\s*[}\]])", r"\1", "".join(out))
+
+
+def _load_json_or_jsonc(path: Path) -> dict:
+    """Parse a config that may carry comments (opencode.jsonc) or be plain JSON."""
+    text = path.read_text(encoding="utf-8")
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return json.loads(_strip_jsonc(text))
+
+
+def _opencode_config_path() -> Path:
+    """The native opencode config file to merge into. Prefer an existing .jsonc (the
+    common opencode default), else .json. opencode reads either from this directory."""
+    directory = HOME / ".config" / "opencode"
+    jsonc = directory / "opencode.jsonc"
+    if jsonc.exists():
+        return jsonc
+    return directory / "opencode.json"
+
+
+def _deep_merge_additive(
+    base: dict, incoming: dict, path: str, plan: Plan
+) -> tuple[dict, int]:
+    """Recursively add keys from `incoming` absent in `base`; report scalar conflicts.
+
+    Same posture as _install_settings: a value the user already set is their decision,
+    never silently overwritten — reported instead. Nested dicts recurse so unrelated
+    sibling keys (the user's MCP servers, providers) are preserved untouched.
+    """
+    added = 0
+    for key, value in incoming.items():
+        sub_path = f"{path}.{key}"
+        if key not in base:
+            base[key] = value
+            added += 1
+        elif isinstance(base[key], dict) and isinstance(value, dict):
+            base[key], sub = _deep_merge_additive(base[key], value, sub_path, plan)
+            added += sub
+        elif base[key] != value:
+            plan.warn(
+                f"opencode.json[{sub_path}] differs from the workflow default — kept "
+                f"yours ({base[key]!r}); workflow wants {value!r} (read-only enforcement)"
+            )
+    return base, added
+
+
+def _install_opencode(
+    src: Path,
+    dest: Path,
+    plan: Plan,
+    apply: bool,
+    backup_root: Path,
+    project_root: Path | None,
+) -> None:
+    """Merge the workflow's opencode.json fragment (read-only second_agent permission)
+    into the user's native config additively — MCP servers, providers, and other agents
+    are preserved. Env placeholders are resolved (preflight guarantees they exist)."""
+    incoming = json.loads(_resolve_placeholders(src.read_text(encoding="utf-8"), project_root))
+    current: dict = {}
+    if dest.exists():
+        try:
+            current = _load_json_or_jsonc(dest)
+        except json.JSONDecodeError:
+            plan.warn(f"{dest} is not valid JSON/JSONC — skipped (fix or remove it, then rerun)")
+            return
+    merged = json.loads(json.dumps(current))  # deep copy
+    merged, added = _deep_merge_additive(merged, incoming, "opencode", plan)
+    if merged == current:
+        plan.add("unchanged", dest)
+        return
+    if dest.exists():
+        _backup(dest, backup_root, plan, apply)
+        plan.add("merge", dest, f"add {added} workflow key(s)")
+    else:
+        plan.add("create", dest)
+    if apply:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+
+
 def _install_deps(plan: Plan, apply: bool) -> None:
     requirements = REPO_ROOT / "requirements.txt"
     if not requirements.exists():
@@ -344,6 +544,10 @@ def _run_check(manifest: dict) -> int:
     if settings_src.exists():
         # settings.json is a key-wise JSON merge, not a copy — bundle-check only.
         checks.append((settings_src, None, "claude/settings.template.json"))
+    opencode_src = DIST_CONFIG / "opencode" / "opencode.template.json"
+    if opencode_src.exists():
+        # opencode.json is a deep additive JSON merge, not a copy — bundle-check only.
+        checks.append((opencode_src, None, "opencode/opencode.template.json"))
 
     for source, dest, key in checks:
         dist_text = source.read_text(encoding="utf-8")
@@ -454,6 +658,22 @@ def main() -> int:
     print(f"  backup: {backup_root}")
     print()
 
+    # Env-secret preflight: every {{ENV:NAME}} a shipped file references must resolve
+    # before we touch anything. Missing on --apply = abort whole run (no partial config).
+    missing_env = _scan_missing_env()
+    if missing_env:
+        if apply:
+            print("[INSTALL] ABORTED — required environment values are missing:")
+            for name in sorted(missing_env):
+                print(f"  !! {name}")
+            print(
+                "Set them in .env (see dist/.env.example) or the environment, then rerun."
+                " Nothing was written."
+            )
+            return 5
+        for name in sorted(missing_env):
+            plan.warn(f"env value not set (dry run, would block --apply): {name}")
+
     _install_deps(plan, apply)
 
     for source, dest, key in _targets():
@@ -463,6 +683,16 @@ def main() -> int:
     if settings_src.exists():
         _install_settings(
             settings_src, HOME / ".claude" / "settings.json", plan, apply, backup_root
+        )
+    opencode_src = DIST_CONFIG / "opencode" / "opencode.template.json"
+    if opencode_src.exists():
+        _install_opencode(
+            opencode_src,
+            _opencode_config_path(),
+            plan,
+            apply,
+            backup_root,
+            project_root,
         )
     if args.enable_context_mode:
         _enable_context_mode(plan, apply, backup_root)

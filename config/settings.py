@@ -10,7 +10,7 @@ CACHE_FILE = BASE_DIR / "storage" / "cache.json"
 JOB_DIR = BASE_DIR / "storage" / "jobs"
 OPENCODE_CONFIG_FILE = BASE_DIR / "config" / "opencode.json"
 
-TOOL_VERSION = "3.4.0"
+TOOL_VERSION = "3.4.1"
 MAIN_PY = BASE_DIR / "main.py"
 CHECK_PY = BASE_DIR / "check.py"
 
@@ -21,8 +21,8 @@ CHECK_PY = BASE_DIR / "check.py"
 #   runtime       : machine wiring in .workflow (run/inspect/check scripts, config schema,
 #                   opencode adapter) + shipped hooks/settings
 COMPONENT_VERSIONS = {
-    "prompt_bundle": TOOL_VERSION,
-    "runtime": TOOL_VERSION,
+    "prompt_bundle": TOOL_VERSION,  # 3.4.1: CLAUDE.md NB reflects the now-shipped PreToolUse gate
+    "runtime": TOOL_VERSION,  # 3.4.1: Pre-flight enforcement hooks + marker-clear in run scripts
 }
 
 # Overall delegated-call timeout; 0 disables it.

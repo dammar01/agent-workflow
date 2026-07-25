@@ -1,15 +1,15 @@
 {
-  "version": "3.4.0",
+  "version": "3.4.1",
   "versions": {
-    "prompt_bundle": "3.4.0",
-    "runtime": "3.4.0"
+    "prompt_bundle": "3.4.1",
+    "runtime": "3.4.1"
   },
   "generated_on": "nt",
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "20f8a5790218e55a186d0cf9d5552160fd6b9e8c2677661ff09aad1f3681d5f1",
-      "bytes": 15056,
+      "sha256": "4475cdce581e446dfcee6181e0257c22728a645da3d3b7264b5e78c6fbd609c2",
+      "bytes": 18147,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -133,6 +133,20 @@
       "component": "runtime"
     },
     {
+      "path": "claude/hooks/intent-gate-check.ps1",
+      "sha256": "1dd2f9b768f0c11acd7d9008d1c0a6dcbd881481a74d9a06e72fcbdc3e297b34",
+      "bytes": 2862,
+      "merge": "replace",
+      "component": "runtime"
+    },
+    {
+      "path": "claude/hooks/intent-gate-set.ps1",
+      "sha256": "52f397f484434fb1cfc78adb00b261298751c884198e4c4849766c34750e152e",
+      "bytes": 3573,
+      "merge": "replace",
+      "component": "runtime"
+    },
+    {
       "path": "claude/hooks/session-bind.ps1",
       "sha256": "ce7fc4e2d5cd5cc0986645f058a0ecc2766953777cfa4ff7715c84f6276114e1",
       "bytes": 3637,
@@ -148,8 +162,15 @@
     },
     {
       "path": "claude/settings.template.json",
-      "sha256": "6903fcd02ee764edfc41bc76bbd54f4dd862d7cc29a7d638d2dc1b37486e4e64",
-      "bytes": 1104,
+      "sha256": "c9445f1092570073e110611701f88a3343925d68932a87e0553d938cd487073f",
+      "bytes": 1719,
+      "merge": "merge",
+      "component": "runtime"
+    },
+    {
+      "path": "opencode/opencode.template.json",
+      "sha256": "47f3deb17e60449e1cf1bd46eab81d9bfb09127b132d56a2532505873b87bbde",
+      "bytes": 338,
       "merge": "merge",
       "component": "runtime"
     }
@@ -159,6 +180,7 @@
     "claude/skills": "{{HOME}}/.claude/skills",
     "claude/hooks": "{{HOME}}/.claude/hooks",
     "claude/settings.template.json": "{{HOME}}/.claude/settings.json",
-    "opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md"
+    "opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",
+    "opencode/opencode.template.json": "{{HOME}}/.config/opencode/opencode.json"
   }
 }

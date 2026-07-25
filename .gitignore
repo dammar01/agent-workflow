@@ -4,3 +4,6 @@ storage
 .kimi
 opencode.json
 .workflow/
+# Install secrets live here (read at install time); only the example ships.
+.env
+!dist/.env.example
