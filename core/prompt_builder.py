@@ -209,6 +209,47 @@ def _changed_files_block(project_root: str | None) -> list[str]:
         return []
 
 
+def _sidecar_block(
+    runtime_dir: str | None,
+    *,
+    has_leads: bool,
+    has_facts: bool,
+    fanout: bool,
+) -> list[str]:
+    """Anchor pointing the second agent at the runtime evidence files.
+
+    The ranked leads and cached facts no longer ride in the command-line prompt (that
+    argv is capped at 8191 chars on Windows, and an uncapped lead list is what blew past
+    it). They are written to runtime files the second agent reads itself; this block only
+    NAMES those files. The reading rules and the fan-out protocol live in AGENTS.md so
+    they cost zero prompt bytes per call.
+    """
+    if not runtime_dir:
+        return []
+    lead_note = (
+        "task-ranked graph starting points (files + communities); WEAK hints, verify by reading"
+        if has_leads
+        else "null/empty this call → traverse from the task directly, no graph shortlist"
+    )
+    fact_note = (
+        "cached claims from prior runs; treat as LEADS to verify, NOT ground truth"
+        if has_facts
+        else "empty this call → no cached facts to reuse"
+    )
+    lines = [
+        "[EVIDENCE_SIDECARS — READ these files yourself before answering; full protocol in AGENTS.md]",
+        f"- leads: {runtime_dir}/leads.json — {lead_note}",
+        f"- facts: {runtime_dir}/facts.json — {fact_note}",
+    ]
+    if fanout:
+        lines.append(
+            "- FAN-OUT call: dispatch one sub-agent per community in leads.json, then merge;"
+            " fan-out rules in AGENTS.md"
+        )
+    lines.append("")
+    return lines
+
+
 def build_prompt(
     *,
     role: str,
@@ -216,8 +257,9 @@ def build_prompt(
     session_id: str,
     command: str,
     project_root: str,
-    known_facts: list[str] | None = None,
-    graph_leads: dict | None = None,
+    runtime_dir: str | None = None,
+    has_facts: bool = False,
+    has_leads: bool = False,
     subagent_fanout: bool = False,
     meta_sink: dict | None = None,
 ) -> str:
@@ -238,31 +280,21 @@ def build_prompt(
         "",
     ]
 
-    facts_block: list[str] = []
-    if known_facts:
-        facts_block = [
-            "[KNOWN_FACTS — cached from prior runs; treat as LEADS to verify, NOT ground truth]",
-            *(f"- {fact}" for fact in known_facts),
-            "",
-        ]
-
-    graph_block = _graph_block(graph_leads)
-    subagent_block = _subagent_block(graph_leads) if subagent_fanout else []
+    sidecar_block = _sidecar_block(
+        runtime_dir,
+        has_leads=has_leads,
+        has_facts=has_facts,
+        fanout=subagent_fanout and role in _EVIDENCE_ROLES,
+    )
 
     if role in _EVIDENCE_ROLES:
         return "\n".join(
             [
                 *header,
-                *facts_block,
-                *graph_block,
-                *subagent_block,
+                *sidecar_block,
                 "[CONSTRAINTS — full evidence protocol in AGENTS.md; anchors only here]",
-                "- read-only evidence; no implement/plan/file-writes; you are the PRIMARY worker — do most of the exploration yourself",
-                "- grounded needs file:line; numbers/dependencies without proof go to `assumptions` ([needs-calibration]/[unverified]); external-tool/MCP findings go to `external`, never mixed into codebase `grounded`",
-                "- for plan/analyze: trace REVERSE deps (grep the symbol project-wide) into `dependents` = blast radius; if the task touches an external lib, read context7 docs FIRST and put findings under `external`",
-                "- task needs DATA/DB evidence (rows, schema, counts, live config) AND a read-only DB MCP is available (laravel-boost or similar) → USE it: query via a READ-ONLY tool, put findings under `external` tagged [EXTERNAL:mcp:<server:tool>|db:<table.column>]. NEVER call write/exec tools (tinker/migrate/seed/eval). DB evidence is your job, not a limitation",
-                "- `durable_facts` = only [config|pattern|invariant] that persist across changes, with file:line; skip volatile line-level detail",
-                "- flag uncertainties; state `scope_covered` vs `scope_not_covered`; if evidence conflicts, say so — do NOT emit open_questions (main_agent's domain)",
+                "- read-only evidence; grounded claims need file:line; unproven numbers/deps → `assumptions`; DB/MCP findings → `external`",
+                "- you are the PRIMARY worker: do the exploration yourself, trace reverse deps into `dependents`, state `scope_covered` vs `scope_not_covered`",
                 "",
                 "[TASK]",
                 task,
@@ -280,7 +312,7 @@ def build_prompt(
                         "",
                         "subagents: c<N>, c<N> (clusters you actually dispatched) | none (<reason>)",
                     ]
-                    if subagent_block
+                    if (subagent_fanout and role in _EVIDENCE_ROLES)
                     else []
                 ),
                 "",
@@ -295,13 +327,13 @@ def build_prompt(
             [
                 *header,
                 *_changed_files_block(project_root),
-                *_graph_block(_compact_leads(graph_leads)),
+                *sidecar_block,
                 "[CONSTRAINTS — full severity defs + routing table in AGENTS.md 'Verify Routing'; anchors only here]",
                 "- report only: no file writes, no user questions (main_agent's domain)",
-                "- verify ONLY the changed files above and their consumers (blast radius); no scope expansion; graph leads locate consumers, they do not widen scope",
-                "- tag EVERY finding severity/origin/scope_relation and route per the Verify Routing table in AGENTS.md — severity ALONE does not decide blocking; `unknown` blocks until evidence moves it off it; do not inflate or deflate",
-                "- EVIDENCE = file:line (source) OR non-code ref (db:/mcp:/runtime:/cmd:); no ref of any kind + no concrete failing scenario => NOT critical/high (demote to note, say what's missing)",
-                "- `checks_run` = what you actually ran/read; `not_verified` = what you couldn't check + why; an unrun check is never a pass",
+                "- verify ONLY the changed files above and their consumers (blast radius); no scope expansion",
+                "- tag EVERY finding severity/origin/scope_relation and route per the Verify Routing table in AGENTS.md; `unknown` blocks until evidence moves it off it",
+                "- EVIDENCE = file:line OR non-code ref (db:/mcp:/runtime:/cmd:); no ref + no concrete failing scenario => NOT critical/high",
+                "- `checks_run` = what you actually ran/read; an unrun check is never a pass",
                 "",
                 "[TASK]",
                 task,
@@ -320,13 +352,13 @@ def build_prompt(
             [
                 *header,
                 *_changed_files_block(project_root),
-                *_graph_block(_compact_leads(graph_leads)),
+                *sidecar_block,
                 "[CONSTRAINTS — sweep = blast-radius EVIDENCE gathering, not judgement]",
                 "- read-only; no file writes, no user questions (main_agent's domain)",
-                "- for EACH changed file/symbol above: grep the symbol project-wide → list who CONSUMES/CALLS it (reverse deps) = blast radius. This is bulk gathering — cover breadth, do NOT stop at the first hit",
-                "- flag risk files by name/content (config, auth, payment, schema, migration, env, secret) — these amplify blast radius",
-                "- DB-touching change (migration/model/schema) + laravel-boost or similar DB MCP available → inspect affected table/column via a READ-ONLY tool, put under `external`; never call write/exec tools",
-                "- gather evidence only; main_agent judges severity/blocking. State what you could NOT reach in `scope_not_covered`",
+                "- for EACH changed file/symbol above: grep the symbol project-wide → list who CONSUMES/CALLS it = blast radius; cover breadth, do NOT stop at the first hit",
+                "- flag risk files (config, auth, payment, schema, migration, env, secret) — they amplify blast radius",
+                "- DB-touching change + read-only DB MCP available → inspect affected table/column, put under `external`; never call write/exec tools",
+                "- gather evidence only; main_agent judges severity. State what you could NOT reach in `scope_not_covered`",
                 "",
                 "[TASK]",
                 task,

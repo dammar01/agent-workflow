@@ -89,6 +89,10 @@ def workflow_paths(
         "prompt": runtime_dir / "prompt.txt",
         "prompt_meta": runtime_dir / "prompt.meta.json",
         "response_last": runtime_dir / "response.last.md",
+        # Evidence sidecars: dynamic leads/facts the second agent reads for itself,
+        # instead of them riding in the (8191-capped) command-line prompt.
+        "leads": runtime_dir / "leads.json",
+        "facts": runtime_dir / "facts.json",
         "lock": runtime_dir / "lock",
         "reports_dir": reports_dir,
         "doctor_report": reports_dir / "doctor.json",
@@ -1219,6 +1223,32 @@ def write_prompt_handoff(
     state["guards"]["last_prompt_id"] = prompt_id
     atomic_write_json(loaded["paths"]["state"], state)
     return {"ok": True, "meta": meta, "paths": loaded["paths"]}
+
+
+def write_evidence_sidecars(
+    project_root: Path,
+    session_id: str | None,
+    graph_leads: dict | None,
+    known_facts: list[str] | None,
+) -> dict:
+    """Persist the task-ranked leads and facts to runtime files for the second agent.
+
+    These used to be injected into the command-line prompt; on Windows that prompt is
+    one argv capped at 8191 chars, and an uncapped graph-lead list is what pushed real
+    calls over it. The ranking is still computed here (main_agent's runtime), only the
+    TRANSPORT moves: the second agent reads leads.json/facts.json itself, keeping the
+    prompt focused on the task.
+
+    Overwrites unconditionally every call — a stale file from a prior task must never
+    be read as this task's leads. Returns the two paths that were written.
+    """
+    paths = workflow_paths(project_root, session_id)
+    paths["runtime_dir"].mkdir(parents=True, exist_ok=True)
+    # `null`/`[]` are meaningful: they say "computed, nothing relevant", which the
+    # second agent must be able to tell apart from a leftover file.
+    atomic_write_json(paths["leads"], graph_leads)
+    atomic_write_json(paths["facts"], known_facts or [])
+    return {"leads": str(paths["leads"]), "facts": str(paths["facts"])}
 
 
 def write_response_snapshot(

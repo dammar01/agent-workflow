@@ -31,6 +31,7 @@ from core.workflow_runtime import (
     verify_mode,
     workflow_paths,
     write_call_meta,
+    write_evidence_sidecars,
     write_prompt_handoff,
     write_response_snapshot,
 )
@@ -168,6 +169,15 @@ class Executor:
                 and fanout_capability(project_root) is not False
             )
 
+        # Transport split: the ranked leads/facts go to runtime files the second agent
+        # reads for itself; only the task (plus an anchor telling it where the files are)
+        # rides in the 8191-capped command-line prompt. build_prompt gets the runtime dir
+        # and booleans, not the payloads it used to inline.
+        write_evidence_sidecars(
+            project_root, session["session_id"], graph_leads, known_facts
+        )
+        runtime_dir = str(workflow_paths(project_root, session["session_id"])["runtime_dir"])
+
         prompt_meta: dict = {}
         prompt = build_prompt(
             role=route["role"],
@@ -175,8 +185,9 @@ class Executor:
             session_id=session["session_id"],
             command=normalized_command,
             project_root=str(project_root),
-            known_facts=known_facts,
-            graph_leads=graph_leads,
+            runtime_dir=runtime_dir,
+            has_facts=bool(known_facts),
+            has_leads=bool(graph_leads and graph_leads.get("files")),
             subagent_fanout=fanout,
             meta_sink=prompt_meta,
         )

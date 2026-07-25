@@ -354,6 +354,19 @@ class OpenCodeAdapter:
         args.extend(["-s", session_id])
         return self._run_args(args, work_dir)
 
+    def _prospective_agent_args(self, prompt: str, model: str | None) -> list[str]:
+        """The argv run_agent WILL build, with the same `\\n` expansion, so a length
+        check here measures the real command line — not the pre-expansion prompt."""
+        command = self._resolve_command()
+        safe_prompt = prompt.replace("\n", " \\n ")
+        args = [command, "run", safe_prompt, "--agent", "plan"]
+        if model:
+            args.extend(["-m", model])
+        # `-s <ses_id>` is appended once the session exists; a real id is ~30 chars.
+        # Include a stand-in so the pre-bootstrap measurement matches the final argv.
+        args.extend(["-s", "ses_" + "0" * 26])
+        return args
+
     def run(
         self,
         prompt: str,
@@ -361,6 +374,27 @@ class OpenCodeAdapter:
         model: str | None = None,
         work_dir: str | None = None,
     ) -> dict:
+        # Fail fast: the command-line length is knowable BEFORE bootstrap, so an
+        # oversize prompt must not first pay ~10-60s spawning an opencode session only
+        # to be rejected. Measure the real (\n-expanded) argv up front.
+        oversize = _too_long_for_cmd(self._prospective_agent_args(prompt, model))
+        if oversize is not None:
+            return make_error(
+                "prompt_too_long",
+                f"command line is {oversize} chars; the Windows shell caps it at {_CMD_LINE_LIMIT}",
+                next_action=(
+                    "Shorten the task text — split it into two narrower delegated calls. "
+                    "The prompt scaffolding is now anchored in AGENTS.md and the evidence "
+                    "sidecars, so the task is the only caller-controlled size left."
+                ),
+                meta={
+                    "command_line_chars": oversize,
+                    "limit": _CMD_LINE_LIMIT,
+                    "cwd": self._resolve_work_dir(work_dir),
+                    "checked": "pre_bootstrap",
+                },
+            )
+
         opencode_session_id = session.get("opencode_session_id")
         bootstrap_meta = None
 
@@ -460,8 +494,6 @@ class OpenCodeAdapter:
     def _run_args(self, args: list[str], work_dir: str | None = None) -> dict:
         oversize = _too_long_for_cmd(args)
         if oversize is not None:
-            # Checked before spawning: the failure is deterministic and the message the
-            # OS gives back names neither the cause nor the fix.
             return make_error(
                 "prompt_too_long",
                 f"command line is {oversize} chars; the Windows shell caps it at {_CMD_LINE_LIMIT}",

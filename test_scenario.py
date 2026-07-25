@@ -551,21 +551,22 @@ def run_tests() -> None:
                 all("\\" not in row["file"] for row in repo_leads["files"]),
                 "lead paths must be repo-relative POSIX so they mean the same on any machine",
             )
-            # Force the fresh framing so this assertion is deterministic regardless of the
-            # checkout's graph age (a stale graph downgrades to GRAPH_HINT — that path is
-            # covered separately). Staleness is a flag on the leads dict, not a re-stat.
-            fresh_leads = {**repo_leads, "stale": False}
+            # Leads no longer ride in the prompt: they are written to a runtime sidecar the
+            # second agent reads for itself, and the prompt only anchors to that file. The
+            # "starting points, not findings" framing moved to that anchor + AGENTS.md.
             leads_prompt = build_prompt(
                 role="reasoning",
                 task="session manager",
                 session_id="leads",
                 command="plan",
                 project_root=str(repo_root),
-                graph_leads=fresh_leads,
+                runtime_dir=str(repo_root / ".workflow" / "sessions" / "leads" / "runtime"),
+                has_leads=True,
             )
-            assert_true("[GRAPH_LEADS" in leads_prompt, "leads must reach the prompt")
+            assert_true("[EVIDENCE_SIDECARS" in leads_prompt, "prompt must anchor to the leads sidecar")
+            assert_true("leads.json" in leads_prompt, "leads must reach the agent via the sidecar file")
             assert_true(
-                "not evidence" in leads_prompt,
+                "WEAK hints" in leads_prompt,
                 "leads must be framed as starting points, never as findings",
             )
 
@@ -597,48 +598,30 @@ def run_tests() -> None:
         from core.contract import detect_subagent_usage
         from core.workflow_runtime import subagent_fanout_enabled
 
-        two_clusters = {
-            "files": [{"file": "a.py", "community": 1}, {"file": "b.py", "community": 2}],
-            "communities": [
-                {"community": 1, "files": ["a.py", "c.py"]},
-                {"community": 2, "files": ["b.py"]},
-            ],
-        }
-        one_cluster = {
-            "files": [{"file": "a.py", "community": 1}],
-            "communities": [{"community": 1, "files": ["a.py"]}],
-        }
-
-        def _p(leads, fanout):
+        def _p(has_leads, fanout):
             return build_prompt(
                 role="exploration", task="t", session_id="s", command="explore",
-                project_root=str(temp_root), graph_leads=leads, subagent_fanout=fanout,
+                project_root=str(temp_root),
+                runtime_dir=str(temp_root / ".workflow" / "sessions" / "s" / "runtime"),
+                has_leads=has_leads, subagent_fanout=fanout,
             )
 
-        assert_true("[SUBAGENT_PLAN" in _p(two_clusters, True), "two clusters must produce a fan-out plan")
+        # Fan-out no longer inlines a SUBAGENT_PLAN block: the per-slice rules moved to
+        # AGENTS.md and the clusters to leads.json. The prompt carries only the anchor
+        # that turns fan-out on and points at the sidecar.
+        fan = _p(True, True)
+        assert_true("FAN-OUT call" in fan, "a fan-out call must be flagged in the prompt")
+        assert_true("leads.json" in fan, "fan-out must point the agent at the leads sidecar")
         assert_true(
-            "subagents:" in _p(two_clusters, True),
+            "subagents:" in fan,
             "the output format must ask which clusters were dispatched",
         )
-        # Too few clusters to partition by is no longer a reason to skip fan-out: the
-        # plan falls back to slicing by investigation angle, because a repo with no
-        # usable graph is the one where a serial read costs the most.
-        for leads, why in (
-            (one_cluster, "a single cluster must fall back to angle-based slices"),
-            (None, "no graph must fall back to angle-based slices"),
-        ):
-            prompt = _p(leads, True)
-            assert_true("[SUBAGENT_PLAN" in prompt, why)
-            assert_true(
-                "no dependency graph is available" in prompt,
-                f"the fallback must say WHY its slices are not file-based: {why}",
-            )
         assert_true(
-            "c1: entry points" in _p(None, True),
-            "the graph-free plan must still name concrete slices",
+            "SUBAGENT_PLAN" not in fan and "no dependency graph is available" not in fan,
+            "the fan-out plan body must live in AGENTS.md, not inline in the prompt",
         )
         assert_true(
-            "[SUBAGENT_PLAN" not in _p(two_clusters, False),
+            "FAN-OUT call" not in _p(True, False),
             "fan-out must stay off when the policy is off",
         )
 

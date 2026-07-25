@@ -93,6 +93,23 @@ Forbidden:
 - Cek graphify-out/ di project root. Ada → baca graph.json + GRAPH_REPORT.md sebagai primary.
 - Tidak ada → direct traversal (glob + read + grep).
 
+## Evidence Sidecars Protocol (WAJIB baca sendiri)
+Leads & facts TIDAK lagi ikut di prompt (argv Windows capped 8191). Ditulis ke file runtime; kamu baca sendiri. Prompt cuma bawa blok `[EVIDENCE_SIDECARS]` yang menyebut path-nya.
+- Header prompt punya `runtime_dir: <path>`. Blok `[EVIDENCE_SIDECARS]` menamai dua file di sana.
+- `runtime_dir/leads.json` → shortlist graph task-ranked: `{files:[{file,score,matched_terms,community,...}], communities:[{community,files[]}], stale}`. WEAK hints, STARTING POINTS — bukan bukti. Buka file-nya, ikuti kode. `stale:true` → graph lebih tua dari source, konfirmasi tiap file masih ada. `null` / `files` kosong → nihil shortlist, traverse dari task langsung.
+- `runtime_dir/facts.json` → list string `"<claim> [file:line]"` cached dari run lampau. Treat sbg LEADS to verify, BUKAN ground truth. `[]` → tak ada cached facts.
+- Kedua file WAJIB kamu baca (Read) SEBELUM jawab bila blok `[EVIDENCE_SIDECARS]` ada. Skip = instruksi gagal, bukan shortcut. File hilang/kosong → lanjut direct traversal, JANGAN gagal.
+
+## Fan-out Protocol (blok [EVIDENCE_SIDECARS] menandai "FAN-OUT call")
+Prompt bilang FAN-OUT → clusters ada di `leads.json` `communities[]`. Satu sub-agent per community.
+- Cek tool list-mu dulu utk sub-agent/task/dispatch tool. Ada → WAJIB pakai; baca slice sendiri = instruksi gagal.
+- Spawn SEMUA sekaligus, tiap sub-agent scope-bounded ke community-nya (file di `communities[].files`), dilarang baca luar slice-nya.
+- Laporan tiap sub-agent PENDEK: max 5 grounded claim, tiap baris file:line. Kamu merge; teks sub-agent = bahan mentah, bukan jawaban.
+- Tag tiap merged claim origin community sbg leading `[cN]` (mis. `[c3] Router routes by command [core/router.py:16]`).
+- Community yang nihil → sebut kosong, jangan pad. Isi baris `subagents:` dgn community yang benar-benar di-dispatch.
+- Tak ada spawn tool → tulis `subagents: none (no spawn tool; tools: <daftar SEMUA tool-mu>)` lalu baca slice sendiri berurutan. Klaim "no spawn tool" tanpa daftar tool = tak diterima.
+- Jangan lapor fan-out yang tak kamu lakukan; sequential read jujur itu valid, klaim palsu tidak.
+
 ## Docs Protocol — context7 (plan/analyze)
 - Task nyentuh library/framework/SDK/API eksternal (deteksi dari import / package manifest: package.json, requirements.txt, go.mod, dll) → WAJIB baca docs via context7 DULU: resolve-library-id → query-docs. Catat versi library.
 - Temuan docs → `external` sbg [EXTERNAL:context7 <lib>@<versi>]. JANGAN campur ke `grounded` codebase.
