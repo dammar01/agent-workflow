@@ -1,3 +1,4 @@
+import os
 import subprocess
 import sys
 import time
@@ -128,37 +129,97 @@ def submit(
             meta={"command": command},
         )
 
-    try:
-        job = JOB_MANAGER.create_job(command, task, session_id, work_dir, model)
-    except ValueError as exc:
-        active = JOB_MANAGER.active_job_for_session(session_id)
-        active_id = active["job_id"] if active else None
-        next_action = (
-            f"Wait for {active_id} or run: .workflow/check.{osutil.script_ext()} {active_id} --wait"
-            if active_id
-            else "Wait for the active job to finish, then retry."
-        )
-        return make_error(
-            "job_already_running",
-            str(exc),
-            next_action=next_action,
-            meta={"command": command},
-            active_job_id=active_id,
-        )
+    expected_hash = JOB_MANAGER.request_hash(command, task, session_id, work_dir)
+    active = JOB_MANAGER.active_job_for_session(session_id)
+    recovering = False
 
-    if job.get("worker_pid") is not None or job.get("status") == "running":
-        return {
-            "ok": True,
-            "job_id": job["job_id"],
-            "status": job["status"],
-            "submitted_at": job["created_at"],
-            "meta": {"pid": job.get("worker_pid"), "reused": True},
-        }
+    if active:
+        if active.get("request_hash") != expected_hash:
+            active_id = active["job_id"]
+            next_action = (
+                f"Wait for {active_id} or run: "
+                f".workflow/check.{osutil.script_ext()} {active_id} --wait"
+            )
+            return make_error(
+                "job_already_running",
+                f"session {session_id} already has active job {active_id}",
+                next_action=next_action,
+                meta={"command": command},
+                active_job_id=active_id,
+            )
 
-    # Global concurrency cap: this fresh job is already counted (status=pending), so a count
-    # ABOVE the ceiling means too many. Fail it (releases the session lock) and tell the
-    # caller to retry — better than spawning an unbounded fan-out of opencode processes.
-    if JOB_MANAGER.active_worker_count() > JOB_MANAGER.max_global_workers:
+        if osutil.process_alive(active.get("worker_pid")):
+            return {
+                "ok": True,
+                "job_id": active["job_id"],
+                "status": active["status"],
+                "submitted_at": active["created_at"],
+                "meta": {
+                    "pid": active.get("worker_pid"),
+                    "reused": True,
+                    "recovery": False,
+                },
+            }
+
+        recovery = JOB_MANAGER.claim_recovery(active["job_id"])
+        action = recovery.get("action")
+        job = recovery.get("job") or active
+        if action in {"wait", "attach"}:
+            return {
+                "ok": True,
+                "job_id": job["job_id"],
+                "status": job.get("status", "recovering"),
+                "submitted_at": job["created_at"],
+                "meta": {
+                    "pid": job.get("worker_pid"),
+                    "reused": True,
+                    "recovery": action == "wait",
+                    "recovery_pending": action == "wait",
+                },
+            }
+        if action == "exhausted":
+            return make_error(
+                "worker_died",
+                f"job {job['job_id']} exhausted its single recovery attempt",
+                next_action=(
+                    "The session lock was released. Report the interruption or invoke the "
+                    "original task again as a clean run; do not send continue automatically."
+                ),
+                meta={
+                    "reason": "recovery_exhausted",
+                    "job_id": job["job_id"],
+                    "recovery_attempt": job.get("recovery_attempt", 1),
+                },
+            )
+        if action != "recover":
+            return make_error(
+                "job_submit_error",
+                f"cannot recover active job {active['job_id']}",
+                next_action="Inspect the job record, then retry the original task.",
+                meta={"reason": action or "recovery_unknown"},
+            )
+        recovering = True
+    else:
+        try:
+            job = JOB_MANAGER.create_job(command, task, session_id, work_dir, model)
+        except ValueError as exc:
+            active = JOB_MANAGER.active_job_for_session(session_id)
+            active_id = active["job_id"] if active else None
+            next_action = (
+                f"Wait for {active_id} or run: "
+                f".workflow/check.{osutil.script_ext()} {active_id} --wait"
+                if active_id
+                else "Wait for the active job to finish, then retry."
+            )
+            return make_error(
+                "job_already_running",
+                str(exc),
+                next_action=next_action,
+                meta={"command": command},
+                active_job_id=active_id,
+            )
+
+    if not recovering and JOB_MANAGER.active_worker_count() > JOB_MANAGER.max_global_workers:
         JOB_MANAGER.fail_job(job["job_id"], "global worker capacity reached")
         return make_error(
             "worker_capacity",
@@ -167,19 +228,27 @@ def submit(
             meta={"command": command, "max_global_workers": JOB_MANAGER.max_global_workers},
         )
 
-    worker = _spawn_worker(job["job_id"], work_dir)
-    if not worker["ok"]:
-        JOB_MANAGER.fail_job(job["job_id"], worker["content"])
-        return worker
-
-    JOB_MANAGER.set_worker_pid(job["job_id"], worker["meta"]["pid"])
-    return {
-        "ok": True,
-        "job_id": job["job_id"],
-        "status": job["status"],
-        "submitted_at": job["created_at"],
-        "meta": {"pid": worker["meta"]["pid"]},
-    }
+    try:
+        worker = _spawn_worker(job["job_id"], work_dir)
+        if not worker["ok"]:
+            JOB_MANAGER.fail_job(job["job_id"], worker["content"])
+            return worker
+        JOB_MANAGER.set_worker_pid(job["job_id"], worker["meta"]["pid"])
+        return {
+            "ok": True,
+            "job_id": job["job_id"],
+            "status": job["status"],
+            "submitted_at": job["created_at"],
+            "meta": {
+                "pid": worker["meta"]["pid"],
+                "reused": recovering,
+                "recovery": recovering,
+                "recovery_attempt": job.get("recovery_attempt", 0),
+            },
+        }
+    finally:
+        if recovering:
+            JOB_MANAGER.release_recovery_claim(job["job_id"])
 
 
 def get_status(job_id: str) -> dict:
@@ -399,6 +468,19 @@ def await_job(
 
     while True:
         result = get_result(job_id)
+        if (
+            (result.get("meta") or {}).get("error_type") == "worker_died"
+            and (result.get("meta") or {}).get("recoverable")
+        ):
+            return {
+                "ok": False,
+                "content": result.get("content"),
+                "meta": {
+                    **dict(result.get("meta") or {}),
+                    "job_id": job_id,
+                    "submitted_at": submitted.get("submitted_at"),
+                },
+            }
         if (result.get("meta") or {}).get("error_type") == "worker_stalled":
             now = time.monotonic()
             if probe_count < max_probes and (
@@ -446,6 +528,17 @@ def await_job(
                 "meta": meta,
             }
 
+        if result.get("status") == "pending":
+            queued = JOB_MANAGER.get_job(job_id) or {}
+            if (
+                queued.get("recovery_in_progress")
+                and queued.get("worker_pid") is None
+            ):
+                resumed = submit(command, task, session_id, work_dir, model)
+                if not resumed.get("ok"):
+                    return resumed
+                submitted = resumed
+
         if poll_timeout > 0 and (time.monotonic() - started_at) >= poll_timeout:
             return {
                 "ok": False,
@@ -484,8 +577,14 @@ def _inspect(project_root, session_id: str | None = None) -> dict:
     for path in job_files:
         try:
             job = _json.loads(path.read_text(encoding="utf-8"))
+            display_status = (
+                "recovering"
+                if job.get("recovery_in_progress")
+                else job["status"]
+            )
             lines.append(
-                f"  - {job['job_id']} [{job['status']}] {job['command']} pid={job.get('worker_pid')}"
+                f"  - {job['job_id']} [{display_status}] {job['command']} "
+                f"pid={job.get('worker_pid')} recovery={job.get('recovery_attempt', 0)}"
             )
         except (OSError, ValueError, KeyError):
             continue
@@ -510,6 +609,9 @@ def run_worker(job_id: str) -> dict:
     if not job:
         return {"ok": False, "job_id": job_id, "status": "not_found", "meta": {}}
 
+    # The worker is authoritative for its own PID. Parent-side registration is only a
+    # fast-path; this closes the small spawn-to-persist race after caller interruption.
+    JOB_MANAGER.set_worker_pid(job_id, os.getpid())
     JOB_MANAGER.mark_running(job_id)
     JOB_MANAGER.touch_heartbeat(job_id, {"phase": "starting", "elapsed_seconds": 0})
 
@@ -517,9 +619,34 @@ def run_worker(job_id: str) -> dict:
         JOB_MANAGER.touch_heartbeat(job_id, progress)
 
     try:
+        effective_task = job["task"]
+        if int(job.get("recovery_attempt") or 0) > 0:
+            session = SESSION_MANAGER.load_or_create(job["session_id"])
+            if not session.get("opencode_session_id"):
+                message = (
+                    "cannot recover interrupted job because its OpenCode session ID "
+                    "was not captured"
+                )
+                JOB_MANAGER.fail_job(job_id, message)
+                return make_error(
+                    "session_capture_failed",
+                    message,
+                    next_action=(
+                        "The session lock was released. Run the original task again as a "
+                        "clean invocation."
+                    ),
+                    meta={"reason": "recovery_session_unavailable", "job_id": job_id},
+                )
+            effective_task = (
+                f"Continue the interrupted task for job {job_id}.\n"
+                f"Original task: {job['task']}\n"
+                "Inspect the existing session state. Resume unfinished work only; "
+                "do not repeat completed findings. Return the normal evidence contract."
+            )
+
         output = run(
             job["command"],
-            job["task"],
+            effective_task,
             job["session_id"],
             job.get("work_dir"),
             job.get("model"),

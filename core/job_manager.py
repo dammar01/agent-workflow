@@ -32,9 +32,11 @@ class JobManager:
         self.job_dir = Path(job_dir)
         self.lock_dir = self.job_dir / "locks"
         self.beat_dir = self.job_dir / "beats"
+        self.recovery_dir = self.job_dir / "recovery"
         self.job_dir.mkdir(parents=True, exist_ok=True)
         self.lock_dir.mkdir(parents=True, exist_ok=True)
         self.beat_dir.mkdir(parents=True, exist_ok=True)
+        self.recovery_dir.mkdir(parents=True, exist_ok=True)
         self.stall_threshold_seconds = stall_threshold_seconds
         self.max_runtime_seconds = max_runtime_seconds
         self.idle_stall_seconds = idle_stall_seconds
@@ -68,6 +70,7 @@ class JobManager:
             "model": model,
             "status": "pending",
             "worker_pid": None,
+            "recovery_attempt": 0,
             "created_at": self._now(),
             "started_at": None,
             "completed_at": None,
@@ -79,6 +82,83 @@ class JobManager:
         }
         self._save(job)
         return job
+
+    def claim_recovery(
+        self, job_id: str, max_attempts: int = 1, stale_after_seconds: float = 30.0
+    ) -> dict:
+        """Claim one bounded restart of a dead worker without releasing its session lock."""
+        claim_path = self.recovery_dir / f"{self._safe(job_id)}.claim"
+        try:
+            fd = os.open(str(claim_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                stale = (time.time() - claim_path.stat().st_mtime) > stale_after_seconds
+            except OSError:
+                return {"action": "wait", "job": self.get_job(job_id)}
+            if not stale:
+                return {"action": "wait", "job": self.get_job(job_id)}
+            try:
+                claim_path.unlink()
+                fd = os.open(str(claim_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except (FileNotFoundError, FileExistsError, OSError):
+                return {"action": "wait", "job": self.get_job(job_id)}
+
+        payload = {"job_id": job_id, "claimed_at": self._now(), "owner_pid": os.getpid()}
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            json.dump(payload, file)
+
+        job = self.get_job(job_id)
+        if not job:
+            self.release_recovery_claim(job_id)
+            return {"action": "missing", "job": None}
+        if osutil.process_alive(job.get("worker_pid")):
+            self.release_recovery_claim(job_id)
+            return {"action": "attach", "job": job}
+
+        attempt = int(job.get("recovery_attempt") or 0)
+        # A stale claim may mean the prior caller died before spawn. Reclaim that same
+        # attempt instead of consuming another one. Once a recovery PID was persisted,
+        # however, a dead PID means that attempt really ran and exhausted the budget.
+        stale_before_spawn = (
+            job.get("recovery_in_progress") is True
+            and job.get("worker_pid") is None
+        )
+        if not stale_before_spawn:
+            if attempt >= max_attempts:
+                self.release_recovery_claim(job_id)
+                failed = self.fail_job(
+                    job_id,
+                    f"worker died again after {attempt} recovery attempt(s)",
+                    reaped=True,
+                )
+                return {"action": "exhausted", "job": failed}
+            job["recovery_attempt"] = attempt + 1
+
+        # Keep the public status `pending`: check.py from existing workspaces knows
+        # pending/running and would treat a novel `recovering` status as terminal.
+        job["status"] = "pending"
+        job["recovery_in_progress"] = True
+        job["recovery_started_at"] = self._now()
+        job["recovery_reason"] = "worker_died"
+        job["previous_worker_pid"] = job.get("worker_pid")
+        job["worker_pid"] = None
+        job["worker_create_time"] = None
+        job["error"] = None
+        job["output"] = None
+        job.pop("reaped", None)
+        self._save(job)
+        for side in (self._beat_path(job_id), self._probe_path(job_id)):
+            try:
+                side.unlink()
+            except FileNotFoundError:
+                pass
+        return {"action": "recover", "job": job}
+
+    def release_recovery_claim(self, job_id: str) -> None:
+        try:
+            (self.recovery_dir / f"{self._safe(job_id)}.claim").unlink()
+        except FileNotFoundError:
+            pass
 
     def set_worker_pid(self, job_id: str, pid: int | None) -> None:
         job = self._load(job_id)
@@ -151,6 +231,7 @@ class JobManager:
             self._save(job)
             return job
         job["status"] = "completed"
+        job.pop("recovery_in_progress", None)
         job["completed_at"] = self._now()
         job["output"] = output
         job["error"] = None
@@ -167,6 +248,7 @@ class JobManager:
     ) -> dict:
         job = self._load(job_id)
         job["status"] = "failed"
+        job.pop("recovery_in_progress", None)
         job["completed_at"] = self._now()
         job["error"] = error
         if output is not None:
@@ -191,12 +273,49 @@ class JobManager:
         if job["status"] in {"pending", "running"}:
             state = self.liveness(job)
             if state == DEAD:
-                # Reap a job whose worker died without writing a terminal state.
-                job = self.fail_job(
-                    job_id,
-                    "worker process died before completing (reaped)",
-                    reaped=True,
-                )
+                attempt = int(job.get("recovery_attempt") or 0)
+                if attempt >= 1:
+                    from core.contract import make_error
+
+                    message = (
+                        f"worker died again after {attempt} recovery attempt(s)"
+                    )
+                    output = make_error(
+                        "worker_died",
+                        message,
+                        next_action=(
+                            "The session lock was released. Report the interruption or "
+                            "start a clean run; do not continue automatically."
+                        ),
+                        meta={
+                            "reason": "recovery_exhausted",
+                            "recovery_attempt": attempt,
+                            "worker_pid": job.get("worker_pid"),
+                        },
+                    )
+                    job = self.fail_job(
+                        job_id,
+                        message,
+                        output=output,
+                        reaped=True,
+                    )
+                else:
+                    return {
+                        "ok": False,
+                        "job_id": job_id,
+                        "status": job["status"],
+                        "content": "worker process died; identical request can recover it once",
+                        "meta": {
+                            "error_type": "worker_died",
+                            "recoverable": True,
+                            "recovery_attempt": attempt,
+                            "worker_pid": job.get("worker_pid"),
+                            "next_action": (
+                                "Invoke the same runner command with the same session and task "
+                                "to resume through the saved OpenCode session."
+                            ),
+                        },
+                    }
             elif self._exceeded_max_runtime(job):
                 # The one path that can race a live worker: the backstop fires on age while
                 # the PID is still up (or was reused), so the worker may finish and call
@@ -486,7 +605,7 @@ class JobManager:
             if not isinstance(rec, dict) or rec.get("reaped"):
                 continue
             status = rec.get("status")
-            if status == "pending":
+            if status in {"pending", "recovering"}:
                 n += 1
             elif status == "running" and osutil.process_alive(rec.get("worker_pid")):
                 n += 1
@@ -500,7 +619,7 @@ class JobManager:
         if not data:
             return None
         job = self.get_job(data.get("job_id", ""))
-        if job and job.get("status") in {"pending", "running"}:
+        if job and job.get("status") in {"pending", "running", "recovering"}:
             return job
         return None
 
@@ -560,7 +679,11 @@ class JobManager:
             existing_job = (
                 self.get_job(existing.get("job_id", "")) if existing else None
             )
-            if existing_job and existing_job.get("status") in {"pending", "running"}:
+            if existing_job and existing_job.get("status") in {
+                "pending",
+                "running",
+                "recovering",
+            }:
                 # Reap a dead worker instead of blocking forever.
                 if self._worker_dead(existing_job):
                     self.fail_job(
@@ -617,7 +740,7 @@ class JobManager:
         return "unknown"
 
     @staticmethod
-    def _request_hash(
+    def request_hash(
         command: str, task: str | None, session_id: str, work_dir: str | None
     ) -> str:
         # task is optional for commands such as sweep; normalize None before hashing.
@@ -630,6 +753,8 @@ class JobManager:
             ]
         )
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+    _request_hash = request_hash
 
     @staticmethod
     def _safe(value: str) -> str:

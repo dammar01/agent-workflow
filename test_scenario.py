@@ -152,6 +152,9 @@ def run_tests() -> None:
     main.EXECUTOR = Executor(opencode=fake_opencode, session_manager=main.SESSION_MANAGER)
     check.JOB_MANAGER = main.JOB_MANAGER
     work_dir = str(temp_root)
+    # Keep project-root detection inside the fixture even when a parent temp directory
+    # happens to be a Git worktree in the host environment.
+    (temp_root / ".git").mkdir()
     ensure_workflow_workspace(temp_root, os.getenv("AGENT_PATH"))
 
     try:
@@ -169,6 +172,21 @@ def run_tests() -> None:
         assert_true(
             "full evidence protocol in AGENTS.md" in prompt,
             "evidence prompt must anchor the full protocol (graphify-first) to AGENTS.md",
+        )
+        claude_contract = (
+            Path(__file__).resolve().parent
+            / "dist"
+            / "config"
+            / "claude"
+            / "CLAUDE.md"
+        ).read_text(encoding="utf-8")
+        assert_true(
+            "run_in_background: true" in claude_contract,
+            "Claude delegated runner must use the background-task tool mode",
+        )
+        assert_true(
+            "meta.reason=recovery_exhausted" in claude_contract,
+            "Claude contract must stop bounded recovery after the second death",
         )
 
         # 2. Bootstrap flow
@@ -235,18 +253,49 @@ def run_tests() -> None:
         missing = main.get_status("missing-job")
         assert_true(not missing["ok"] and missing["status"] == "not_found", "missing status must be structured")
 
-        # 7. Submit spawns worker process and returns pending payload
+        # 7. Identical requests attach while alive and recover once after worker death.
         def fake_popen(*args, **kwargs):
-            return FakeJobProcess()
+            return FakeJobProcess(os.getpid())
 
         main.subprocess.Popen = fake_popen
         submitted = main.submit("execute", "long task", "submit-session", work_dir, None)
         assert_true(submitted["ok"], "submit must succeed")
         assert_true(submitted["status"] == "pending", "submit must return pending")
-        assert_true(submitted["meta"]["pid"] == 4242, "submit must expose worker pid")
+        attached = main.submit("execute", "long task", "submit-session", work_dir, None)
+        assert_true(
+            attached["job_id"] == submitted["job_id"]
+            and attached["meta"]["reused"]
+            and not attached["meta"]["recovery"],
+            "same request with a live worker must attach",
+        )
+        blocked = main.submit("execute", "different task", "submit-session", work_dir, None)
+        assert_true(
+            not blocked["ok"] and blocked["meta"]["error_type"] == "job_already_running",
+            "different request on the same locked session must be rejected",
+        )
+        main.JOB_MANAGER.set_worker_pid(submitted["job_id"], 999999999)
+        recovered = main.submit("execute", "long task", "submit-session", work_dir, None)
+        assert_true(
+            recovered["ok"]
+            and recovered["job_id"] == submitted["job_id"]
+            and recovered["meta"]["recovery"],
+            "dead worker must restart the same job once",
+        )
+        main.JOB_MANAGER.set_worker_pid(submitted["job_id"], 999999999)
+        exhausted = main.submit("execute", "long task", "submit-session", work_dir, None)
+        assert_true(
+            not exhausted["ok"]
+            and exhausted["meta"].get("reason") == "recovery_exhausted",
+            "a second worker death must fail terminal instead of looping",
+        )
+        assert_true(
+            main.JOB_MANAGER.active_job_for_session("submit-session") is None,
+            "recovery exhaustion must release the session lock",
+        )
 
-        queued = main.submit("explore", "inspect queued flow", "queued-session", work_dir, None)
-        assert_true(queued["ok"], "queued background submit must succeed")
+        queued = main.JOB_MANAGER.create_job(
+            "explore", "inspect queued flow", "queued-session", work_dir, None
+        )
         assert_true(main.should_run_in_background("explore"), "explore must be marked as background command")
         main.subprocess.Popen = original_popen
 
@@ -257,16 +306,42 @@ def run_tests() -> None:
         worker_status = main.get_status(worker_job["job_id"])
         assert_true(worker_status["status"] == "completed", "worker must persist completed state")
 
-        # 9. check.py status/result payloads
-        # Status lookup runs liveness checks and reaps a worker whose PID is gone.
-        pending_status = check._status_payload(queued["job_id"])
+        recovery_session = main.SESSION_MANAGER.load_or_create("recover-worker-session")
+        main.SESSION_MANAGER.update_opencode_session_id(
+            recovery_session, "ses_recover123"
+        )
+        recovery_job = main.JOB_MANAGER.create_job(
+            "explore",
+            "finish interrupted mapping",
+            "recover-worker-session",
+            work_dir,
+            None,
+        )
+        recovery_claim = main.JOB_MANAGER.claim_recovery(recovery_job["job_id"])
+        main.JOB_MANAGER.release_recovery_claim(recovery_job["job_id"])
         assert_true(
-            pending_status["status"] == "failed",
-            f"check status must reap a job whose worker PID is gone: {pending_status}",
+            recovery_claim["action"] == "recover",
+            "dead/unstarted job must enter bounded recovery",
+        )
+        recovery_output = main.run_worker(recovery_job["job_id"])
+        assert_true(recovery_output["ok"], "recovery worker must execute")
+        assert_true(
+            "Continue the interrupted task" in fake_opencode.calls[-1]["prompt"]
+            and "finish interrupted mapping" in fake_opencode.calls[-1]["prompt"],
+            "recovery prompt must carry job context and original task",
         )
         assert_true(
-            pending_status.get("error_type") == "worker_died",
-            f"a reaped-on-attach job must say why: {pending_status}",
+            fake_opencode.calls[-1]["session"].get("opencode_session_id")
+            == "ses_recover123",
+            "recovery must reuse the captured OpenCode session",
+        )
+
+        # 9. check.py status/result payloads
+        # A freshly queued job has no worker PID yet and remains attachable.
+        pending_status = check._status_payload(queued["job_id"])
+        assert_true(
+            pending_status["status"] == "pending",
+            f"queued job must remain pending before dispatch: {pending_status}",
         )
 
         # ...and a job whose worker IS alive still reports as running. Use this very
@@ -346,12 +421,17 @@ def run_tests() -> None:
         assert_true(idem_a["job_id"] == idem_b["job_id"], "identical request must reuse job")
         main.JOB_MANAGER.complete_job(idem_a["job_id"], {"ok": True, "content": "x", "meta": {}})
 
-        # reaper: running job with a dead worker pid is failed on lookup
+        # A first dead worker remains locked and advertises one bounded recovery.
         dead = main.JOB_MANAGER.create_job("explore", "dead worker", "reaper-session", work_dir, None)
         main.JOB_MANAGER.set_worker_pid(dead["job_id"], 999999999)
         main.JOB_MANAGER.mark_running(dead["job_id"])
         reaped = main.get_result(dead["job_id"])
-        assert_true(reaped["status"] == "failed", "dead-worker job must be reaped to failed")
+        assert_true(
+            reaped["status"] == "running"
+            and reaped["meta"].get("recoverable") is True,
+            "first dead worker must stay recoverable instead of releasing its lock",
+        )
+        main.JOB_MANAGER.fail_job(dead["job_id"], "test cleanup")
 
         # digest extraction + fallback
         digest = extract_digest("findings:\n- a\n[DIGEST]\nsummary: s\nkey_findings:\n- k\nrisk_level: high\nrecommended_next_action: go\nconfidence: low")

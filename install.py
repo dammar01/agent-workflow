@@ -752,7 +752,6 @@ def main() -> int:
         )
     if args.enable_context_mode:
         _enable_context_mode(plan, apply, backup_root)
-
     agent_path = REPO_ROOT / "main.py"
     if os.environ.get("AGENT_PATH") != str(agent_path):
         plan.add(

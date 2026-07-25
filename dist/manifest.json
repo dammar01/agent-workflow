@@ -4,12 +4,12 @@
     "prompt_bundle": "3.4.0",
     "runtime": "3.4.0"
   },
-  "generated_on": "nt",
+  "generated_on": "posix",
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "d5965ba1200724a0e8a06bceaa344fd3dede844d007f3236a4dcf72be96618d2",
-      "bytes": 19691,
+      "sha256": "528bbd95323399e3ec7989c33fbd20c49e97e7e998c3ec4094f57816ea5b6648",
+      "bytes": 20289,
       "merge": "merge",
       "component": "prompt_bundle"
     },

@@ -551,9 +551,16 @@ Data runtime milik tool sendiri ada di repo ini: `storage/sessions/` (pemetaan s
 
 ## Job asinkron & pemulihan
 
-Command terdelegasi otomatis berjalan lewat worker terpisah. `await` submit lalu memblokir sampai selesai — inilah yang dipakai skrip runner.
+Command terdelegasi otomatis berjalan lewat worker terpisah. Pada Claude Code, runner
+harus diluncurkan sebagai background tool task sehingga tool call foreground segera
+mengembalikan task ID; Claude kemudian mengambil hasil task itu. Runtime tetap
+agent-agnostic—caller lain boleh memakai runner blocking biasa.
 
-Kalau pemanggilan terputus (timeout tool, tak ada JSON), **jangan langsung ulangi**: worker sudah terlepas dan tetap berjalan, tapi job yang sudah selesai tidak terambil sendiri.
+Kalau background task hilang atau pemanggilan terputus, panggil runner lagi dengan
+session, command, dan task yang identik. Runtime akan attach bila worker masih hidup.
+Jika worker sudah mati, job yang sama dipulihkan satu kali melalui OpenCode session lama
+dengan prompt continuation terstruktur. Kematian kedua menghasilkan
+`recovery_exhausted`, melepas lock, dan tidak memicu loop otomatis.
 
 ```powershell
 & ".workflow/inspect.ps1"
@@ -568,6 +575,11 @@ Kalau pemanggilan terputus (timeout tool, tak ada JSON), **jangan langsung ulang
 Exit code `check`: `0` selesai · `1` gagal · `2` masih jalan/antre · `3` tak ditemukan.
 
 Kalau tak ada job yang cocok, hasil terakhir masih ada di `.workflow/sessions/<id>/runtime/response.last.md`.
+
+Recovery bersifat best-effort, bukan process survival: jika session OpenCode lama tidak
+pernah tercatat, runtime gagal sebagai `session_capture_failed` dan clean run diperlukan.
+Request berbeda pada session yang masih terkunci tetap ditolak sebagai
+`job_already_running`.
 
 ### Liveness worker (v3.4.0)
 
