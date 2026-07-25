@@ -204,6 +204,18 @@ def submit(
             "meta": {"pid": job.get("worker_pid"), "reused": True},
         }
 
+    # Global concurrency cap: this fresh job is already counted (status=pending), so a count
+    # ABOVE the ceiling means too many. Fail it (releases the session lock) and tell the
+    # caller to retry — better than spawning an unbounded fan-out of opencode processes.
+    if JOB_MANAGER.active_worker_count() > JOB_MANAGER.max_global_workers:
+        JOB_MANAGER.fail_job(job["job_id"], "global worker capacity reached")
+        return make_error(
+            "worker_capacity",
+            f"global worker limit reached ({JOB_MANAGER.max_global_workers} active)",
+            next_action="Wait for an in-flight delegated job to finish, then retry.",
+            meta={"command": command, "max_global_workers": JOB_MANAGER.max_global_workers},
+        )
+
     worker = _spawn_worker(job["job_id"], work_dir)
     if not worker["ok"]:
         JOB_MANAGER.fail_job(job["job_id"], worker["content"])
@@ -652,6 +664,26 @@ def _slim_result(result: dict) -> dict:
     return {**result, "meta": slim_meta}
 
 
+def _verify_exit_code(command: str, result: dict) -> int:
+    """Nonzero exit when a verify command did NOT cleanly pass.
+
+    So a shell / CI / the run script can trust `$?` instead of parsing JSON for the
+    verdict. Scoped to `verify`: every other command keeps exit 0 on a successful call
+    (`ok` means "executed", not "passed"). The JSON is still printed before we exit, so
+    no information is lost — the code is an ADDITIONAL honest signal, not a replacement.
+
+    verdict `pass`/`skipped` (nothing to verify) and an absent verdict (delegated verify,
+    which carries no meta.verdict) -> 0, so this never breaks the delegated relay. A hard
+    call failure (`ok` false) on verify -> nonzero.
+    """
+    if command != "verify":
+        return 0
+    if not isinstance(result, dict) or not result.get("ok"):
+        return 2
+    verdict = (result.get("meta") or {}).get("verdict")
+    return 0 if verdict in ("pass", "skipped", None) else 2
+
+
 if __name__ == "__main__":
     import argparse
     import json
@@ -777,3 +809,4 @@ if __name__ == "__main__":
         result = run(args.command, prompt, effective_session, work_dir, args.model)
     result = _slim_result(result)
     print(json.dumps(result, indent=2) if args.pretty else json.dumps(result))
+    raise SystemExit(_verify_exit_code(args.command, result))

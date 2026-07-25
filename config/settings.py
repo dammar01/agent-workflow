@@ -10,7 +10,10 @@ CACHE_FILE = BASE_DIR / "storage" / "cache.json"
 JOB_DIR = BASE_DIR / "storage" / "jobs"
 OPENCODE_CONFIG_FILE = BASE_DIR / "config" / "opencode.json"
 
-TOOL_VERSION = "3.4.1"
+# Held at 3.4.0 deliberately: this line is UNRELEASED (never shipped to the team), so all
+# stabilization + feature work lands under 3.4.0 as the first team baseline rather than
+# minting a phantom 3.4.1 nobody ever installed.
+TOOL_VERSION = "3.4.0"
 MAIN_PY = BASE_DIR / "main.py"
 CHECK_PY = BASE_DIR / "check.py"
 
@@ -21,8 +24,8 @@ CHECK_PY = BASE_DIR / "check.py"
 #   runtime       : machine wiring in .workflow (run/inspect/check scripts, config schema,
 #                   opencode adapter) + shipped hooks/settings
 COMPONENT_VERSIONS = {
-    "prompt_bundle": TOOL_VERSION,  # 3.4.1: CLAUDE.md NB reflects the now-shipped PreToolUse gate
-    "runtime": TOOL_VERSION,  # 3.4.1: Pre-flight enforcement hooks + marker-clear in run scripts
+    "prompt_bundle": TOOL_VERSION,
+    "runtime": TOOL_VERSION,
 }
 
 # Overall delegated-call timeout; 0 disables it.
@@ -62,6 +65,11 @@ DEFAULT_MAX_TASK_CHARS = int(os.getenv("AI_PROXY_MAX_TASK_CHARS", "3000"))
 OPENCODE_COMMAND = os.getenv("OPENCODE_COMMAND", "opencode")
 DEFAULT_JOB_POLL_INTERVAL_SECONDS = float(os.getenv("AI_PROXY_JOB_POLL_INTERVAL_SECONDS", "2"))
 DEFAULT_JOB_POLL_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_JOB_POLL_TIMEOUT_SECONDS", "0"))
+# Global ceiling on concurrent in-flight delegated workers across ALL sessions. Per-session
+# concurrency is already 1 (session lock); this bounds the machine-wide fan-out so a burst of
+# parallel main-agents cannot spawn unbounded opencode processes. Soft cap (checked before
+# spawn; a rare race may exceed by one) — a resource bound, not a correctness invariant.
+DEFAULT_MAX_GLOBAL_WORKERS = int(os.getenv("AI_PROXY_MAX_GLOBAL_WORKERS", "6"))
 
 
 def default_opencode_config() -> dict:

@@ -235,3 +235,60 @@ def _win_process_alive(pid: int) -> bool:
         return exit_code.value == STILL_ACTIVE
     finally:
         kernel32.CloseHandle(handle)
+
+
+def pid_create_time(pid: int | None) -> int | None:
+    """Process creation time as an opaque comparable integer, or None if unknowable.
+
+    Windows: the 64-bit creation FILETIME (100ns ticks) via GetProcessTimes — unique per
+    (pid, launch) so it survives PID recycling. Non-Windows or any failure: None. This is
+    NOT a wall-clock value; its only use is proving a PID still hosts the process we
+    recorded before we kill it.
+    """
+    if not pid or pid <= 0 or not IS_WINDOWS:
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return None
+    try:
+        creation = wintypes.FILETIME()
+        exit_t = wintypes.FILETIME()
+        kernel_t = wintypes.FILETIME()
+        user_t = wintypes.FILETIME()
+        ok = kernel32.GetProcessTimes(
+            handle,
+            ctypes.byref(creation),
+            ctypes.byref(exit_t),
+            ctypes.byref(kernel_t),
+            ctypes.byref(user_t),
+        )
+        if not ok:
+            return None
+        return (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+    except Exception:
+        return None
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def pid_reused(pid: int | None, expected_create_time: int | None) -> bool:
+    """True ONLY when we can PROVE the PID now hosts a different process than recorded.
+
+    Guards a kill against PID recycling: a reaped worker's PID may have been handed to an
+    unrelated process, and taskkill /F would take out the innocent bystander. Fail-open by
+    design — if we recorded no create-time (POSIX / legacy job) or cannot read the current
+    one, we return False so the kill proceeds exactly as before. We only ever BLOCK a kill
+    on positive proof of mismatch, never on uncertainty: a missed reuse costs a stray
+    worker (recoverable); a wrongful kill costs someone else's process (not).
+    """
+    if expected_create_time is None:
+        return False
+    current = pid_create_time(pid)
+    if current is None:
+        return False
+    return current != expected_create_time

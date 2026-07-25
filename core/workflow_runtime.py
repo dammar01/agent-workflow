@@ -1124,7 +1124,19 @@ def acquire_runtime_lock(lock_path: Path, command: str, session_id: str) -> dict
     return {"ok": True, "stale": bool(stale_payload), "payload": stale_payload}
 
 
-def release_runtime_lock(lock_path: Path) -> None:
+def release_runtime_lock(lock_path: Path, session_id: str | None = None) -> None:
+    """Release the runtime lock. When `session_id` is given, only the OWNER may release:
+    a lock held by a different session is left in place rather than yanked out from under
+    its owner. Single-writer-per-session makes a cross-owner release rare, but the guard is
+    cheap and turns a silent foot-gun into a no-op. A legacy lock with no session_id, an
+    unreadable/absent lock, or a matching owner all release as before."""
+    if session_id is not None:
+        try:
+            payload = read_json_file(lock_path)
+        except (ValueError, FileNotFoundError, OSError):
+            payload = None
+        if isinstance(payload, dict) and payload.get("session_id") not in (None, session_id):
+            return  # not our lock — leave it for its owner / the TTL stealer
     try:
         lock_path.unlink()
     except FileNotFoundError:

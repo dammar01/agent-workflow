@@ -19,6 +19,11 @@ from utils.parser import (
     first_non_empty,
 )
 
+# Upper bound on captured stdout/stderr per stream (~4MB of text). A well-behaved evidence
+# run is a few hundred KB; this only clamps a runaway/pathological process so it cannot
+# grow the in-memory buffer without limit. The tail is kept (evidence blocks live at the end).
+MAX_CAPTURE_CHARS = 4_000_000
+
 # Substrings that signal opencode refused a path rather than a real crash.
 _PERMISSION_SIGNS = (
     "permission denied",
@@ -155,13 +160,24 @@ class OpenCodeAdapter:
         )
 
         chunks: dict[str, list[str]] = {"stdout": [], "stderr": []}
+        sizes: dict[str, int] = {"stdout": 0, "stderr": 0}
+        truncated: dict[str, bool] = {"stdout": False, "stderr": False}
         last_output = {"at": started}
 
         def _drain(stream, key: str) -> None:
+            # Bounded capture: a runaway or pathological opencode run must not grow the
+            # buffer without limit and exhaust RAM. The evidence contract ([EVIDENCE] /
+            # [DIGEST]) is emitted at the END, so when we exceed the cap we drop from the
+            # FRONT and keep the tail — the part the main_agent actually consumes.
+            buf = chunks[key]
             try:
                 for line in iter(stream.readline, ""):
-                    chunks[key].append(line)
+                    buf.append(line)
+                    sizes[key] += len(line)
                     last_output["at"] = time.monotonic()
+                    while sizes[key] > MAX_CAPTURE_CHARS and len(buf) > 1:
+                        sizes[key] -= len(buf.pop(0))
+                        truncated[key] = True
             except Exception:
                 pass
             finally:
@@ -169,6 +185,15 @@ class OpenCodeAdapter:
                     stream.close()
                 except Exception:
                     pass
+
+        def _joined(key: str) -> str:
+            text = "".join(chunks[key])
+            if truncated[key]:
+                return (
+                    f"[...TRUNCATED: earlier {key} dropped, kept last "
+                    f"~{MAX_CAPTURE_CHARS // 1000}KB...]\n" + text
+                )
+            return text
 
         readers = [
             threading.Thread(target=_drain, args=(proc.stdout, "stdout"), daemon=True),
@@ -204,8 +229,8 @@ class OpenCodeAdapter:
         meta = {
             "output_complete": drained,
             "returncode": proc.returncode,
-            "stdout": "".join(chunks["stdout"]),
-            "stderr": "".join(chunks["stderr"]),
+            "stdout": _joined("stdout"),
+            "stderr": _joined("stderr"),
             "timed_out": timed_out,
             "duration_seconds": round(time.monotonic() - started, 3),
             "idle_seconds": round(time.monotonic() - last_output["at"], 1),

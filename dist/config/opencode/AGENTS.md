@@ -70,6 +70,8 @@ confidence: low | medium | high
 
 Output Contract Rule: semua field tampil. Kosong → tulis alasan, jangan lewati.
 
+Evidence artifact (v3.4.0): output-mu diarsip sbg artifact + di-index (`.workflow/evidence.jsonl`). main_agent baca `digest` dulu, buka evidence penuh cuma saat perlu. Panggilan IDENTIK berikutnya bisa di-serve ulang dari artifact ini TANPA re-run — SELAMA anchor `file:line` yg kamu sebut masih fresh (kontennya tak berubah). Karena itu: anchor `file:line` presisi = wajib, itu yg jaga staleness + reuse. Klaim tanpa anchor tak bisa divalidasi ulang → nilai reuse-nya nol.
+
 Forbidden:
 - Output uncertainties tanpa search dulu
 - Tanya user hal yang bisa dijawab grep/read/glob

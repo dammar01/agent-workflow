@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from adapters.opencode_adapter import OpenCodeAdapter
 from core.contract import (
     contract_warnings,
@@ -7,6 +9,7 @@ from core.contract import (
     reported_no_spawn_tool,
 )
 from core import fact_store
+from core import evidence_store
 from core import graph_index
 from core.prompt_builder import build_prompt
 from core.router import Router
@@ -26,6 +29,7 @@ from core.workflow_runtime import (
     update_plan_scope,
     update_state_from_agent_output,
     verify_mode,
+    workflow_paths,
     write_call_meta,
     write_prompt_handoff,
     write_response_snapshot,
@@ -51,6 +55,51 @@ class Executor:
         from config.settings import load_opencode_config_for
 
         return Router(load_opencode_config_for(project_root))
+
+    def _maybe_reuse(
+        self, project_root: Path, command: str, task: str, session_id: str
+    ) -> dict | None:
+        """Serve a fresh, identical prior evidence artifact instead of re-delegating.
+
+        Returns a complete result dict on a hit, or None to fall through to delegation.
+        Fail-open: the reuse path must never be why a call breaks — on ANY error we return
+        None and normal delegation proceeds. The freshness guarantee lives in
+        evidence_store.find_fresh (exact query + all anchors unchanged).
+        """
+        try:
+            hit = evidence_store.find_fresh(project_root, command, task)
+            if not hit:
+                return None
+            ap = hit.get("artifact_path")
+            if not ap or not Path(ap).is_file():
+                return None  # artifact file gone -> re-delegate rather than serve nothing
+            content = Path(ap).read_text(encoding="utf-8", errors="replace")
+            if not content.strip():
+                return None
+            result = {
+                "ok": True,
+                "content": content,
+                "evidence_ref": {
+                    "artifact_path": ap,
+                    "anchors": len(hit.get("anchors") or []),
+                    "reused": True,
+                },
+                "meta": {
+                    "reused_evidence": True,
+                    "reused_from_session": hit.get("session"),
+                    "captured_at": hit.get("captured_at"),
+                    "command": command,
+                },
+            }
+            if hit.get("digest") is not None:
+                result["digest"] = hit["digest"]
+            if command == "explore":
+                update_command_cache(
+                    project_root, "last_explore_result", content, session_id
+                )
+            return result
+        except Exception:
+            return None
 
     def execute(
         self,
@@ -93,6 +142,14 @@ class Executor:
                 next_action="Use a supported command (explore/plan/analyze/verify/sweep).",
                 meta={"command": normalized_command},
             )
+
+        # Cross-session reuse: an identical prior call whose cited code is unchanged can be
+        # served from the evidence artifact instead of re-delegating (saves time + quota).
+        # Fail-open — any hiccup here falls straight through to a normal delegation.
+        if route["role"] in ("exploration", "reasoning"):
+            reused = self._maybe_reuse(project_root, normalized_command, task, session_id)
+            if reused is not None:
+                return reused
 
         known_facts = None
         graph_leads = None
@@ -152,7 +209,7 @@ class Executor:
                 work_dir,
             )
         finally:
-            release_runtime_lock(handoff["paths"]["lock"])
+            release_runtime_lock(handoff["paths"]["lock"], session_id)
             self.opencode.on_progress = None
             # Archive exit, duration, kill, and stderr metadata for failure diagnosis.
             write_call_meta(
@@ -260,6 +317,30 @@ class Executor:
                     "error": f"{type(exc).__name__}: {exc}",
                     "next_action": "Report this: the fact store rejected the run's output; facts are not being learned.",
                 }
+
+            # Index the evidence artifact for cross-session reuse + attach a digest-first ref
+            # so the main_agent can open the full evidence on demand instead of eating it now.
+            # Best-effort: a store failure never fails the delegated call.
+            try:
+                artifact_path = workflow_paths(project_root, session_id)["response_last"]
+                entry = evidence_store.record(
+                    project_root,
+                    normalized_command,
+                    task,
+                    session_id,
+                    result.get("digest"),
+                    artifact_path,
+                    result.get("content") or "",
+                )
+                result["evidence_ref"] = {
+                    "artifact_path": str(artifact_path),
+                    "anchors": len(entry.get("anchors") or []),
+                    "reused": False,
+                }
+            except Exception as exc:
+                result.setdefault("meta", {})["evidence_store_error"] = (
+                    f"{type(exc).__name__}: {exc}"
+                )
 
         if normalized_command == "explore":
             update_command_cache(

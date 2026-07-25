@@ -50,6 +50,10 @@ MIN_WORDS_FOR_SIMILARITY = 6
 # (which merely trims what gets injected). A collapse that deletes a stored record
 # always demands an identical anchor_hash — losing a real fact is unrecoverable.
 LINE_PROXIMITY = 3
+# A fact with ZERO task-word overlap is noise: injecting it wastes prompt budget and can
+# mislead the second agent with unrelated context. Read-time retrieval requires at least
+# this much overlap — below it the fact is dropped, never served as "relevant".
+MIN_RELEVANCE_OVERLAP = 1
 
 _FILELINE = re.compile(r"([A-Za-z0-9_./\\-]+\.[A-Za-z0-9_]+):(\d+)")
 _CATEGORY = re.compile(r"^\[(config|pattern|invariant)\]", re.IGNORECASE)
@@ -485,6 +489,8 @@ def load_relevant(
             continue  # stale/invalid → drop, do not inject
         blob = f"{f.get('claim', '')} {f.get('file') or ''}".lower()
         overlap = len(task_words & set(re.findall(r"[a-z0-9_]{3,}", blob)))
+        if overlap < MIN_RELEVANCE_OVERLAP:
+            continue  # zero-overlap == irrelevant; do not pad the top-N with noise
         scored.append((overlap, f))
     scored.sort(key=lambda x: -x[0])
     return [f for _, f in scored[:limit]]

@@ -198,7 +198,15 @@ def run(project_root: Path, session_id: str | None = None) -> dict:
         }
 
     report = verify_files(project_root, files)
-    verdict = "fail" if report["failed"] else "pass"
+    if report["failed"]:
+        verdict = "fail"
+    elif report["not_checked"]:
+        # Changed files we could not check (unsupported type, vanished, unreadable) are a
+        # verification GAP, not a clean bill of health. Calling them "pass" would be a false
+        # all-clear — the whole point of honest verify is that a gap is not a pass.
+        verdict = "incomplete"
+    else:
+        verdict = "pass"
 
     lines = [
         "[QUICK VERIFY]",

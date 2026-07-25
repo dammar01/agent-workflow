@@ -1,15 +1,15 @@
 {
-  "version": "3.4.1",
+  "version": "3.4.0",
   "versions": {
-    "prompt_bundle": "3.4.1",
-    "runtime": "3.4.1"
+    "prompt_bundle": "3.4.0",
+    "runtime": "3.4.0"
   },
   "generated_on": "nt",
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "4475cdce581e446dfcee6181e0257c22728a645da3d3b7264b5e78c6fbd609c2",
-      "bytes": 18147,
+      "sha256": "390f6199a9b3163c6c8c8891d5d8b30e7e67169ef6af87e8c269a322befc4449",
+      "bytes": 18821,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -155,8 +155,8 @@
     },
     {
       "path": "opencode/AGENTS.md",
-      "sha256": "a854aa342639bb0fc31a91b4f422ce8583ee1671f020a07e3638099f725cc018",
-      "bytes": 11239,
+      "sha256": "dae136acad1148805d0aec6c5b63f9c24eb4134d77d5ef723ba480fafec54bc5",
+      "bytes": 11718,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -169,8 +169,8 @@
     },
     {
       "path": "opencode/opencode.template.json",
-      "sha256": "47f3deb17e60449e1cf1bd46eab81d9bfb09127b132d56a2532505873b87bbde",
-      "bytes": 338,
+      "sha256": "4b634427e14232145630593903d88e62dbabaa0e81a795ad7c46fa74e78aa933",
+      "bytes": 1890,
       "merge": "merge",
       "component": "runtime"
     }

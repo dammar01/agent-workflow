@@ -9,6 +9,7 @@ from pathlib import Path
 from config.settings import (
     DEFAULT_IDLE_STALL_SECONDS,
     DEFAULT_JOB_MAX_RUNTIME_SECONDS,
+    DEFAULT_MAX_GLOBAL_WORKERS,
     DEFAULT_STALL_THRESHOLD_SECONDS,
     JOB_DIR,
 )
@@ -26,6 +27,7 @@ class JobManager:
         stall_threshold_seconds: int = DEFAULT_STALL_THRESHOLD_SECONDS,
         max_runtime_seconds: int = DEFAULT_JOB_MAX_RUNTIME_SECONDS,
         idle_stall_seconds: int = DEFAULT_IDLE_STALL_SECONDS,
+        max_global_workers: int = DEFAULT_MAX_GLOBAL_WORKERS,
     ) -> None:
         self.job_dir = Path(job_dir)
         self.lock_dir = self.job_dir / "locks"
@@ -36,6 +38,7 @@ class JobManager:
         self.stall_threshold_seconds = stall_threshold_seconds
         self.max_runtime_seconds = max_runtime_seconds
         self.idle_stall_seconds = idle_stall_seconds
+        self.max_global_workers = max_global_workers
 
     def create_job(
         self,
@@ -80,7 +83,23 @@ class JobManager:
     def set_worker_pid(self, job_id: str, pid: int | None) -> None:
         job = self._load(job_id)
         job["worker_pid"] = pid
+        # Snapshot the creation time NOW, while the PID provably belongs to the worker we
+        # just spawned. A later reap compares against this to tell a live worker from a
+        # recycled PID (Windows). None on POSIX / when unreadable — the reuse guard then
+        # degrades to the prior always-kill behaviour, which is safe.
+        job["worker_create_time"] = osutil.pid_create_time(pid)
         self._save(job)
+
+    def _kill_worker(self, job: dict) -> dict:
+        """Terminate a worker by PID — unless the PID was recycled to a different process.
+
+        Centralises the reuse guard so every by-PID kill path is protected. A proven
+        mismatch is reported as a skipped kill rather than taking out an innocent process.
+        """
+        pid = job.get("worker_pid")
+        if pid and osutil.pid_reused(pid, job.get("worker_create_time")):
+            return {"method": "skipped", "ok": False, "reason": "pid_reuse_detected", "pid": pid}
+        return osutil.terminate_tree(None, pid=pid)
 
     def touch_heartbeat(self, job_id: str, progress: dict | None = None) -> None:
         """Record one beat from the worker's poll loop.
@@ -184,7 +203,7 @@ class JobManager:
                     f"job exceeded max runtime {self.max_runtime_seconds}s (reaped)",
                     reaped=True,
                 )
-                osutil.terminate_tree(None, pid=job.get("worker_pid"))
+                self._kill_worker(job)
             elif state == ALIVE_STALLED:
                 # Alive but silent. Report it — never reap on suspicion alone.
                 beat = self.read_heartbeat(job_id) or {}
@@ -426,7 +445,7 @@ class JobManager:
             # left running burns quota against a job nobody is waiting for.
             pass
 
-        kill = osutil.terminate_tree(None, pid=job.get("worker_pid"))
+        kill = self._kill_worker(job)
         meta = {
             "worker_pid": job.get("worker_pid"),
             "kill": kill,
@@ -445,6 +464,28 @@ class JobManager:
         # from resurrecting the job.
         failed = self.fail_job(job_id, message, output=output, reaped=True)
         return {**output, "job_id": job_id, "status": failed.get("status", "failed")}
+
+    def active_worker_count(self) -> int:
+        """Workers in flight across ALL sessions (global concurrency).
+
+        Counts pending jobs (a slot claimed, worker about to spawn) plus running jobs whose
+        PID is still alive. A running-but-dead record (crashed, not yet reaped) does NOT
+        count — it holds no worker. Cheap: a handful of small top-level JSON files.
+        """
+        n = 0
+        for path in self.job_dir.glob("*.json"):
+            try:
+                rec = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(rec, dict) or rec.get("reaped"):
+                continue
+            status = rec.get("status")
+            if status == "pending":
+                n += 1
+            elif status == "running" and osutil.process_alive(rec.get("worker_pid")):
+                n += 1
+        return n
 
     def active_job_for_session(self, session_id: str) -> dict | None:
         lock_path = self._lock_path(session_id)
@@ -531,7 +572,7 @@ class JobManager:
                         f"job exceeded max runtime {self.max_runtime_seconds}s (reaped)",
                         reaped=True,
                     )
-                    osutil.terminate_tree(None, pid=existing_job.get("worker_pid"))
+                    self._kill_worker(existing_job)
                 else:
                     raise ValueError(
                         f"session {session_id} already has active job {existing_job['job_id']}"

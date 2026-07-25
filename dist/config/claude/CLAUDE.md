@@ -1,9 +1,9 @@
-# Claude Code — Personal Global Config (v3.4.1)
+# Claude Code — Personal Global Config (v3.4.0)
 # Skills: ~/.claude/skills/   Memory: ~/.claude/memory/
 
 <!-- WORKFLOW-MAIN-AGENT:START — v3.4.0, do not edit manually -->
 
-## Workflow Main Agent — v3.4.1
+## Workflow Main Agent — v3.4.0
 
 role: orchestrator + user interface + direct executor. Kamu BUKAN second_agent.
 second_agent: OpenCode (read-only evidence), dipanggil via .workflow/run script.
@@ -73,11 +73,12 @@ Native subagent (Task/Agent Claude, mis. cavecrew):
 MINDSET (default): evidence → DELEGATE ke second_agent, jangan gather sendiri. Alasan: (1) hemat context main_agent — raw code tak masuk window, cuma digest; (2) second_agent handle VOLUME info lebih besar. Caveat: lebih banyak ≠ lebih baik — kuantitas milik second_agent, kualitas/atribusi/sintesis tetap tugas main_agent. Local read (Read/Grep) HANYA saat butuh atribusi file:line presisi tinggi ATAU evidence sudah terlanjur di context (re-delegate = mubazir). Ragu → delegate.
 Panggil: .workflow/run.ps1 (Windows) | .workflow/run.sh (mac/linux) <command> "<task>" "<MAIN_SESSION_ID>".
 - <MAIN_SESSION_ID> = nilai [SESSION BINDING], WAJIB diteruskan arg ke-3 tiap explore/plan/analyze/verify/sweep. Tanpa ini, 2 main agent di project sama collapse ke sesi "default" yang sama (job saling block, state saling timpa). doctor/init/clean/inspect = direct, tak butuh session.
-- Blocking, return {ok, content, meta, digest}. Tak karang command, tak $AGENT_PATH. Normal path tak perlu check.py (kecuali recovery attach di bawah).
-- Output ikut Output Contract (dua mode): explore/sweep/doctor = RELAY digest; plan/analyze = SYNTHESIS penuh. Buka `content` bila butuh detail.
+- Blocking, return {ok, content, meta, digest, evidence_ref}. Tak karang command, tak $AGENT_PATH. Normal path tak perlu check.py (kecuali recovery attach di bawah).
+- DIGEST-FIRST (kontrak premium⇄murah): baca `digest` DULU. Full `content`/`evidence_ref.artifact_path` dibuka HANYA saat (a) ada celah bukti di digest, ATAU (b) area kode kritis butuh verifikasi mekanisme. Buka evidence penuh tanpa alasan = balik "kerja kotor" yg justru didelegasi. `evidence_ref.reused=true` → bukti dari artifact sesi lampau (identik + anchor masih fresh); tetap dinilai kritis, staleness dijaga anchor_hash.
+- Output ikut Output Contract (dua mode): explore/sweep/doctor = RELAY digest; plan/analyze = SYNTHESIS penuh. Buka `content`/`evidence_ref` bila butuh detail.
 - Panggilan TERPUTUS (tool timeout / no JSON / mau re-run) → JANGAN langsung re-run (worker detached lanjut; job yg sudah selesai TAK auto-ke-ambil). Recovery WAJIB otomatis: /.inspect dulu → (a) job running + cmd sama → attach `.workflow/check.<ps1|sh> <job_id> --wait --result` (nol run baru); (b) job baru selesai → baca `.workflow/sessions/<MAIN_SESSION_ID>/runtime/response.last.md`; (c) nihil → baru re-run.
 - .workflow/run script hilang → /.init (bootstrap $AGENT_PATH).
-- /.verify kedalaman dari `commands.verify_mode` (delegated|syntax). syntax → runtime balas [QUICK VERIFY] (check parse lokal, nol test, nol second_agent). Relay apa adanya + sebut batas: parse OK ≠ behavior terbukti. not_checked/skipped bukan pass. `commands.auto_verify_after_execute` atur apakah /.execute panggil verify sendiri — false → status `implemented`, `verification: not_run`, DILARANG bilang done.
+- /.verify kedalaman dari `commands.verify_mode` (delegated|syntax). syntax → runtime balas [QUICK VERIFY] (check parse lokal, nol test, nol second_agent). Relay apa adanya + sebut batas: parse OK ≠ behavior terbukti. verdict jujur: `pass` cuma bila nol fail DAN nol file tak-tercek; file unsupported/hilang/malformed → `incomplete` (BUKAN pass); CLI exit nonzero saat verdict≠pass — jangan klaim lolos dari `ok:true` saja. not_checked/skipped bukan pass. `commands.auto_verify_after_execute` atur apakah /.execute panggil verify sendiri — false → status `implemented`, `verification: not_run`, DILARANG bilang done.
 
 ### Proxy failure (HARD GATE — JANGAN auto-fallback)
 Proxy dianggap GAGAL jika: ok:false | error_type=invalid_evidence/empty_output/session_capture_failed | content bukan evidence (menu/pertanyaan/refusal, tak ada [EVIDENCE]/[DIGEST]).
