@@ -211,12 +211,16 @@ def _read_text_lenient(path: Path) -> str:
     emit, then fall back to latin-1, which maps every byte and never raises.
     """
     data = path.read_bytes()
+    text: str | None = None
     for enc in ("utf-8-sig", "utf-8", "cp1252"):
         try:
-            return data.decode(enc)
+            text = data.decode(enc)
+            break
         except UnicodeDecodeError:
             continue
-    return data.decode("latin-1")
+    if text is None:
+        text = data.decode("latin-1")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _install_text(
@@ -306,7 +310,9 @@ def _merge_hook_entries(cur_entries: list, tmpl_entries: list) -> tuple[list, in
             continue
         first = matches[0]
         already_current = len(matches) == 1 and result[first] == tmpl_entry
-        for i in reversed(matches):  # reverse so earlier indices stay valid while deleting
+        for i in reversed(
+            matches
+        ):  # reverse so earlier indices stay valid while deleting
             del result[i]
         result.insert(first, tmpl_entry)
         if not already_current:
@@ -378,15 +384,21 @@ def _install_settings(
     merged_hooks: dict | None = None
     if "hooks" in differing:
         differing.remove("hooks")
-        tmpl_hooks = template.get("hooks") if isinstance(template.get("hooks"), dict) else {}
-        cur_hooks = current.get("hooks") if isinstance(current.get("hooks"), dict) else {}
+        tmpl_hooks = (
+            template.get("hooks") if isinstance(template.get("hooks"), dict) else {}
+        )
+        cur_hooks = (
+            current.get("hooks") if isinstance(current.get("hooks"), dict) else {}
+        )
         merged_hooks = dict(cur_hooks or {})
         for event, tmpl_entries in (tmpl_hooks or {}).items():
             if event not in (cur_hooks or {}):
                 merged_hooks[event] = tmpl_entries
                 hook_changes.append(f"hooks.{event} (added)")
                 continue
-            if not isinstance(tmpl_entries, list) or not isinstance(cur_hooks[event], list):
+            if not isinstance(tmpl_entries, list) or not isinstance(
+                cur_hooks[event], list
+            ):
                 # Non-list shape we do not understand: keep the user's, report it.
                 if cur_hooks[event] != tmpl_entries:
                     plan.warn(
@@ -473,7 +485,8 @@ def _enable_context_mode(plan: Plan, apply: bool, backup_root: Path) -> None:
 
 def _strip_jsonc(text: str) -> str:
     """Remove // and /* */ comments from JSONC, string-aware so a `//` inside a URL
-    (e.g. "https://...") or a `/*` inside a value is preserved. Trailing commas dropped."""
+    (e.g. "https://...") or a `/*` inside a value is preserved. Trailing commas dropped.
+    """
     out: list[str] = []
     i, n = 0, len(text)
     in_str = esc = False
@@ -565,13 +578,17 @@ def _install_opencode(
     """Merge the workflow's opencode.json fragment (read-only second_agent permission)
     into the user's native config additively — MCP servers, providers, and other agents
     are preserved. Env placeholders are resolved (preflight guarantees they exist)."""
-    incoming = json.loads(_resolve_placeholders(src.read_text(encoding="utf-8"), project_root))
+    incoming = json.loads(
+        _resolve_placeholders(src.read_text(encoding="utf-8"), project_root)
+    )
     current: dict = {}
     if dest.exists():
         try:
             current = _load_json_or_jsonc(dest)
         except json.JSONDecodeError:
-            plan.warn(f"{dest} is not valid JSON/JSONC — skipped (fix or remove it, then rerun)")
+            plan.warn(
+                f"{dest} is not valid JSON/JSONC — skipped (fix or remove it, then rerun)"
+            )
             return
     merged = json.loads(json.dumps(current))  # deep copy
     merged, added = _deep_merge_additive(merged, incoming, "opencode", plan)
@@ -733,7 +750,9 @@ def _run_check(manifest: dict) -> int:
         status = "READY"
     print(f"  status: {status}")
     if status != "READY":
-        print("  fix: python tools/gen_manifest.py (bundle) | python install.py --apply (installed)")
+        print(
+            "  fix: python tools/gen_manifest.py (bundle) | python install.py --apply (installed)"
+        )
     return 0 if status == "READY" else 1
 
 
@@ -761,9 +780,7 @@ def main() -> int:
     apply = args.apply
 
     if not MANIFEST.exists():
-        print(
-            "[INSTALL] dist/manifest.json missing — run tools/gen_manifest.py first"
-        )
+        print("[INSTALL] dist/manifest.json missing — run tools/gen_manifest.py first")
         return 1
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
 

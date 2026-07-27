@@ -4,7 +4,6 @@
     "prompt_bundle": "3.4.0",
     "runtime": "3.4.0"
   },
-  "generated_on": "nt",
   "files": [
     {
       "path": "claude/CLAUDE.md",

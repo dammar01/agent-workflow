@@ -26,6 +26,7 @@ Usage:
     python tools/extract_config.py                 # extract into dist/
     python tools/extract_config.py --dry-run       # report only, write nothing
 """
+
 import argparse
 import hashlib
 import json
@@ -71,9 +72,24 @@ DENY_NAMES = {
     ".last-update-result.json",
 }
 DENY_DIR_PARTS = {
-    "projects", "sessions", "session-env", "shell-snapshots", "debug",
-    "cache", "tmp", "paste-cache", "file-history", "backups", "downloads",
-    "jobs", "daemon", "gateway", "ide", "plugins", "node_modules", "__pycache__",
+    "projects",
+    "sessions",
+    "session-env",
+    "shell-snapshots",
+    "debug",
+    "cache",
+    "tmp",
+    "paste-cache",
+    "file-history",
+    "backups",
+    "downloads",
+    "jobs",
+    "daemon",
+    "gateway",
+    "ide",
+    "plugins",
+    "node_modules",
+    "__pycache__",
 }
 
 # Credential-shaped content. Deliberately broad: a false positive costs one manual
@@ -87,7 +103,9 @@ SECRET_PATTERNS = [
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), "private key"),
     (re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-]{20,}"), "bearer token"),
     (
-        re.compile(r"(?i)\"?(api[_-]?key|secret|password|access[_-]?token)\"?\s*[:=]\s*\"[^\"]{12,}\""),
+        re.compile(
+            r"(?i)\"?(api[_-]?key|secret|password|access[_-]?token)\"?\s*[:=]\s*\"[^\"]{12,}\""
+        ),
         "inline credential",
     ),
 ]
@@ -113,9 +131,7 @@ def _redact(text: str) -> str:
 
 def _scan_secrets(text: str, label: str) -> list[str]:
     return [
-        f"{label}: {why}"
-        for pattern, why in SECRET_PATTERNS
-        if pattern.search(text)
+        f"{label}: {why}" for pattern, why in SECRET_PATTERNS if pattern.search(text)
     ]
 
 
@@ -212,7 +228,9 @@ def _clobber_risks(entries: list[dict]) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Extract live agent config into dist/")
-    parser.add_argument("--dry-run", action="store_true", help="report only, write nothing")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="report only, write nothing"
+    )
     parser.add_argument(
         "--force",
         action="store_true",
@@ -235,7 +253,9 @@ def main() -> int:
         print("[EXTRACT] ABORTED — credential-shaped content found:")
         for finding in findings:
             print(f"  !! {finding}")
-        print("Nothing was written. Remove the secret or narrow the allowlist, then rerun.")
+        print(
+            "Nothing was written. Remove the secret or narrow the allowlist, then rerun."
+        )
         return 2
 
     leaked_home = [e["dest"] for e in entries if str(HOME) in e["text"]]
@@ -247,7 +267,9 @@ def main() -> int:
 
     clobber = _clobber_risks(entries)
     if clobber and not args.force:
-        print("[EXTRACT] ABORTED — these dist/ files are NEWER than the ~/.claude files")
+        print(
+            "[EXTRACT] ABORTED — these dist/ files are NEWER than the ~/.claude files"
+        )
         print("          they would be overwritten with, and their content differs:")
         for dest in clobber:
             print(f"  !! {dest}")
@@ -269,14 +291,28 @@ def main() -> int:
                 "path": entry["dest"],
                 "sha256": digest,
                 "bytes": len(entry["text"].encode("utf-8")),
-                "merge": "replace" if "/skills/" in entry["dest"] or entry["dest"].endswith(".ps1") or entry["dest"].endswith(".sh") else "merge",
-                **({"dropped_keys": entry["dropped_keys"]} if "dropped_keys" in entry else {}),
+                "merge": (
+                    "replace"
+                    if "/skills/" in entry["dest"]
+                    or entry["dest"].endswith(".ps1")
+                    or entry["dest"].endswith(".sh")
+                    else "merge"
+                ),
+                **(
+                    {"dropped_keys": entry["dropped_keys"]}
+                    if "dropped_keys" in entry
+                    else {}
+                ),
             }
         )
 
     print(f"[EXTRACT] {'DRY RUN — ' if args.dry_run else ''}{len(entries)} file(s)")
     for meta in files_meta:
-        extra = f" (dropped {len(meta['dropped_keys'])} local key(s))" if meta.get("dropped_keys") else ""
+        extra = (
+            f" (dropped {len(meta['dropped_keys'])} local key(s))"
+            if meta.get("dropped_keys")
+            else ""
+        )
         print(f"  {meta['merge']:8} {meta['path']:44} {meta['bytes']:>7}B{extra}")
     for problem in problems:
         print(f"  - {problem}")
@@ -297,7 +333,6 @@ def main() -> int:
         json.dumps(
             {
                 "version": TOOL_VERSION,
-                "generated_on": os.name,
                 "files": files_meta,
                 "targets": {
                     "claude/CLAUDE.md": "{{HOME}}/.claude/CLAUDE.md",

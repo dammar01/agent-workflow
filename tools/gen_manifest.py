@@ -13,6 +13,7 @@ Usage:
   python tools/gen_manifest.py            # rewrite dist/manifest.json
   python tools/gen_manifest.py --check    # exit 1 if manifest is stale vs dist/
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -43,13 +44,23 @@ def _dist_files() -> list[str]:
     paths: list[str] = ["claude/CLAUDE.md"]
     skills = DIST_CONFIG / "claude" / "skills"
     if skills.is_dir():
-        paths += [f"claude/skills/{p.name}" for p in sorted(skills.glob("*.md")) if p.is_file()]
+        paths += [
+            f"claude/skills/{p.name}"
+            for p in sorted(skills.glob("*.md"))
+            if p.is_file()
+        ]
     commands = DIST_CONFIG / "claude" / "commands"
     if commands.is_dir():
-        paths += [f"claude/commands/{p.name}" for p in sorted(commands.glob("*.md")) if p.is_file()]
+        paths += [
+            f"claude/commands/{p.name}"
+            for p in sorted(commands.glob("*.md"))
+            if p.is_file()
+        ]
     hooks = DIST_CONFIG / "claude" / "hooks"
     if hooks.is_dir():
-        found = sorted(p for p in hooks.iterdir() if p.suffix in {".ps1", ".sh"} and p.is_file())
+        found = sorted(
+            p for p in hooks.iterdir() if p.suffix in {".ps1", ".sh"} and p.is_file()
+        )
         paths += [f"claude/hooks/{p.name}" for p in found]
     if (DIST_CONFIG / "opencode" / "AGENTS.md").is_file():
         paths.append("opencode/AGENTS.md")
@@ -100,12 +111,9 @@ def _build() -> dict:
                 "component": _component(rel),
             }
         )
-    import os
-
     return {
         "version": TOOL_VERSION,
         "versions": dict(COMPONENT_VERSIONS),
-        "generated_on": os.name,
         "files": files_meta,
         "targets": TARGETS,
     }
@@ -120,7 +128,9 @@ def main() -> int:
         if current == built:
             print("[gen_manifest] OK — manifest in sync with dist/")
             return 0
-        print("[gen_manifest] STALE — manifest does not match dist/. Run: python tools/gen_manifest.py")
+        print(
+            "[gen_manifest] STALE — manifest does not match dist/. Run: python tools/gen_manifest.py"
+        )
         return 1
 
     MANIFEST.write_text(built, encoding="utf-8", newline="\n")

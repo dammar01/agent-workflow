@@ -1,0 +1,19 @@
+# The bundle is hash-verified and shipped cross-OS. Normalise every text file to LF in the
+# working tree on ALL platforms so a device's autocrlf setting can never diverge the bytes.
+# CRITICAL: the POSIX hook/runner .sh files break with CRLF on mac/linux ("bad interpreter:
+# bash\r" / "$'\r': command not found"), so they MUST stay LF everywhere.
+* text=auto eol=lf
+
+*.sh    text eol=lf
+*.ps1   text eol=lf
+*.py    text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+
+# Binary assets: never touch line endings.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
