@@ -242,16 +242,21 @@ def _install_text(
 
 
 def _hook_script_ids(entry: dict) -> set[str]:
-    """Filenames of the hook scripts an entry invokes (e.g. intent-gate-check.ps1).
+    """Stems of the hook scripts an entry invokes (e.g. `intent-gate-check`).
 
     These identify an entry as OURS: we ship these scripts, so an entry that runs one is a
     shipped hook we may refresh — not a user's foreign hook to preserve.
+
+    Extension-agnostic ON PURPOSE: `session-bind.ps1` and its `session-bind.sh` sibling must
+    read as the SAME shipped hook. Keying on the full filename made the POSIX rewrite (.ps1 ->
+    .sh) look like a brand-new hook, so the merge appended the bash entry beside the stale
+    powershell one — a double hook, and `powershell: command not found` on mac from the leftover.
     """
     ids: set[str] = set()
     hooks = entry.get("hooks", []) if isinstance(entry, dict) else []
     for h in hooks if isinstance(hooks, list) else []:
         cmd = h.get("command", "") if isinstance(h, dict) else ""
-        ids.update(m.lower() for m in re.findall(r"[\w.-]+\.(?:ps1|sh)", cmd))
+        ids.update(m.lower() for m in re.findall(r"([\w.-]+)\.(?:ps1|sh)", cmd))
     return ids
 
 
@@ -261,8 +266,12 @@ def _merge_hook_entries(cur_entries: list, tmpl_entries: list) -> tuple[list, in
 
     This is what lets a shipped matcher change (e.g. adding Bash to the Pre-flight gate)
     reach an existing install: the old policy kept the whole event whenever it differed,
-    which froze our own hook at its previous matcher. Ownership is by script filename, so a
+    which froze our own hook at its previous matcher. Ownership is by script stem, so a
     hook the user added that runs none of our scripts is never modified.
+
+    A template entry COLLAPSES every current entry sharing one of its stems into a single
+    refreshed entry — so a stale `.ps1` entry AND any duplicate a previous cross-platform
+    merge appended are both replaced, never left side by side.
     """
     result = list(cur_entries)
     updated = 0
@@ -273,14 +282,17 @@ def _merge_hook_entries(cur_entries: list, tmpl_entries: list) -> tuple[list, in
                 result.append(tmpl_entry)
                 updated += 1
             continue
-        idx = next(
-            (i for i, e in enumerate(result) if _hook_script_ids(e) & tids), None
-        )
-        if idx is None:
+        matches = [i for i, e in enumerate(result) if _hook_script_ids(e) & tids]
+        if not matches:
             result.append(tmpl_entry)
             updated += 1
-        elif result[idx] != tmpl_entry:
-            result[idx] = tmpl_entry
+            continue
+        first = matches[0]
+        already_current = len(matches) == 1 and result[first] == tmpl_entry
+        for i in reversed(matches):  # reverse so earlier indices stay valid while deleting
+            del result[i]
+        result.insert(first, tmpl_entry)
+        if not already_current:
             updated += 1
     return result, updated
 
