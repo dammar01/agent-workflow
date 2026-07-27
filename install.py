@@ -202,6 +202,23 @@ def _backup(path: Path, backup_root: Path, plan: Plan, apply: bool) -> None:
         shutil.copy2(path, target)
 
 
+def _read_text_lenient(path: Path) -> str:
+    """Read a possibly non-UTF-8 dest file without crashing.
+
+    An older install — or a PowerShell `Set-Content` in the machine's ANSI codepage — could
+    have written our em-dash-heavy docs as Windows-1252, which strict UTF-8 refuses (byte
+    0x97 is the cp1252 em dash, invalid as a UTF-8 start byte). Try the encodings we actually
+    emit, then fall back to latin-1, which maps every byte and never raises.
+    """
+    data = path.read_bytes()
+    for enc in ("utf-8-sig", "utf-8", "cp1252"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("latin-1")
+
+
 def _install_text(
     src: Path,
     dest: Path,
@@ -215,7 +232,7 @@ def _install_text(
 
     if key in MARKERS and dest.exists():
         start, end = MARKERS[key]
-        existing = dest.read_text(encoding="utf-8")
+        existing = _read_text_lenient(dest)
         merged, how = _merge_managed(existing, incoming, start, end)
         if merged == existing:
             plan.add("unchanged", dest)
@@ -227,7 +244,7 @@ def _install_text(
             dest.write_text(merged, encoding="utf-8")
         return
 
-    if dest.exists() and dest.read_text(encoding="utf-8") == incoming:
+    if dest.exists() and _read_text_lenient(dest) == incoming:
         plan.add("unchanged", dest)
         return
 
@@ -668,7 +685,7 @@ def _run_check(manifest: dict) -> int:
         if not dest.exists():
             installed_missing.append(key)
             continue
-        installed = dest.read_text(encoding="utf-8")
+        installed = _read_text_lenient(dest)
         if key in MARKERS:
             start, end = MARKERS[key]
             want = _managed_block(resolved, start, end)
