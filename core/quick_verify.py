@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 
 from core.workflow_runtime import now_iso
+from utils import osutil
 
 FILE_TIMEOUT_SECONDS = 20
 # Generated bundles and dumps are read whole to be parsed; a multi-GB one would take
@@ -48,6 +49,7 @@ def _run(argv: list[str], project_root: Path) -> tuple[int, str]:
             text=True,
             timeout=FILE_TIMEOUT_SECONDS,
             check=False,
+            **osutil.hidden_run_kwargs(),  # Windows: no console flash per checker/git call
         )
     except subprocess.TimeoutExpired:
         return 124, f"timeout after {FILE_TIMEOUT_SECONDS}s"

@@ -847,6 +847,9 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         f'exec "{sh_py}" "{check_py}" "$@"\n'
     )
 
+    # Generate only the current OS's flavour: Windows gets .ps1, POSIX gets .sh. The other
+    # flavour is dead weight on this machine and only confuses the Bash-allowlist matcher.
+    want_ext = osutil.script_ext()
     for name, content in (
         ("run.ps1", run_ps1),
         ("run.sh", run_sh),
@@ -855,6 +858,8 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         ("check.ps1", check_ps1),
         ("check.sh", check_sh),
     ):
+        if name.rsplit(".", 1)[-1] != want_ext:
+            continue
         path = workflow_dir / name
         if name.endswith(".ps1"):
             # UTF-8 BOM: Windows PowerShell 5.1 reads a no-BOM file as ANSI/Win-1252,
@@ -1325,6 +1330,7 @@ def python_callable() -> tuple[bool, str]:
             capture_output=True,
             text=True,
             check=False,
+            **osutil.hidden_run_kwargs(),  # Windows: no console flash on readiness probe
         )
     except OSError as exc:
         return False, str(exc)
@@ -1942,6 +1948,7 @@ def run_sweep(project_root: Path, session_id: str | None = None) -> dict:
             capture_output=True,
             text=True,
             check=False,
+            **osutil.hidden_run_kwargs(),  # Windows: no console flash
         )
         changed_files = [
             line.strip() for line in names.stdout.splitlines() if line.strip()
@@ -1952,6 +1959,7 @@ def run_sweep(project_root: Path, session_id: str | None = None) -> dict:
             capture_output=True,
             text=True,
             check=False,
+            **osutil.hidden_run_kwargs(),  # Windows: no console flash
         )
         diff_summary = summary.stdout.strip()
     except OSError as exc:

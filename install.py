@@ -285,6 +285,39 @@ def _merge_hook_entries(cur_entries: list, tmpl_entries: list) -> tuple[list, in
     return result, updated
 
 
+def _rewrite_hooks_for_posix(template: dict) -> dict:
+    """On POSIX, point our shipped hook commands at their .sh siblings via bash.
+
+    The template ships Windows-native commands (`powershell ... -File "...ps1"`) — those
+    cannot run on mac/linux. For each entry that calls one of OUR scripts, swap the
+    interpreter to `bash`, the extension to `.sh`, and normalise the backslash path the
+    Windows template embedded. A user's foreign hook (no shipped script) is left untouched.
+    Windows (`os.name == "nt"`) is returned unchanged.
+    """
+    if os.name == "nt":
+        return template
+    hooks = template.get("hooks")
+    if not isinstance(hooks, dict):
+        return template
+    for entries in hooks.values():
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict) or not _hook_script_ids(entry):
+                continue
+            for hook in entry.get("hooks", []):
+                if not isinstance(hook, dict):
+                    continue
+                cmd = hook.get("command", "")
+                cmd = cmd.replace(
+                    'powershell -NoProfile -ExecutionPolicy Bypass -File "', 'bash "'
+                )
+                cmd = cmd.replace('.ps1"', '.sh"')
+                cmd = cmd.replace("\\", "/")
+                hook["command"] = cmd
+    return template
+
+
 def _install_settings(
     src: Path, dest: Path, plan: Plan, apply: bool, backup_root: Path
 ) -> None:
@@ -292,6 +325,7 @@ def _install_settings(
     for this script to resolve — except `hooks`, without which the workflow cannot bind
     a session at all, and which is therefore reported loudly when it differs."""
     template = _resolve_in_json(json.loads(src.read_text(encoding="utf-8")), None)
+    template = _rewrite_hooks_for_posix(template)
     if not dest.exists():
         plan.add("create", dest, f"{len(template)} key(s)")
         if apply:
@@ -562,6 +596,9 @@ def _targets() -> list[tuple[Path, Path, str]]:
             "opencode/AGENTS.md",
         ),
     ]
+    # Ship only the current OS's script flavour: Windows gets .ps1, POSIX gets .sh. Non-script
+    # files (e.g. intent-map.json) carry no ext filter and install on both.
+    want_ext = "ps1" if os.name == "nt" else "sh"
     for sub, dest_dir in (
         ("skills", HOME / ".claude" / "skills"),
         ("commands", HOME / ".claude" / "commands"),
@@ -571,6 +608,9 @@ def _targets() -> list[tuple[Path, Path, str]]:
         if source_dir.is_dir():
             for path in sorted(source_dir.iterdir()):
                 if path.is_file():
+                    ext = path.suffix.lstrip(".").lower()
+                    if ext in ("ps1", "sh") and ext != want_ext:
+                        continue
                     mapping.append(
                         (path, dest_dir / path.name, f"claude/{sub}/{path.name}")
                     )
