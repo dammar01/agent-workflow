@@ -1,12 +1,22 @@
 from pathlib import Path
 
 from adapters.opencode_adapter import OpenCodeAdapter
+from config.settings import (
+    DEFAULT_MAX_TASK_CHARS,
+    DEFAULT_TASK_TRUNCATION_HARD_RATIO,
+)
 from core.contract import (
+    FANOUT_DECLINED,
+    FANOUT_DENIED,
+    FANOUT_INCAPABLE,
+    FANOUT_MISMATCH,
+    FANOUT_UNREPORTED,
+    cap_confidence,
     contract_warnings,
     detect_subagent_usage,
     extract_digest,
     make_error,
-    reported_no_spawn_tool,
+    readable_claims,
 )
 from core import fact_store
 from core import evidence_store
@@ -21,6 +31,7 @@ from core.workflow_runtime import (
     detect_project_root,
     fanout_capability,
     graph_leads_enabled,
+    parse_questions,
     release_runtime_lock,
     set_fanout_capability,
     subagent_fanout_enabled,
@@ -33,8 +44,60 @@ from core.workflow_runtime import (
     write_call_meta,
     write_evidence_sidecars,
     write_prompt_handoff,
+    write_redaction_audit,
     write_response_snapshot,
 )
+
+
+def _scope_incomplete(content: str) -> bool:
+    """True when the run itself reported ground it did not cover.
+
+    Read off the agent's own `scope_not_covered` section: it is the one admission of
+    incompleteness that arrives without lowering the confidence line beside it.
+    """
+    lines = (content or "").splitlines()
+    collecting = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.lower().startswith("scope_not_covered"):
+            collecting = True
+            continue
+        if collecting:
+            if not stripped:
+                continue
+            if not stripped.startswith("-"):
+                break
+            body = stripped.lstrip("-").strip().lower()
+            if body and body not in {"none", "(none)", "n/a"}:
+                return True
+    return False
+
+
+# One line per way fan-out can fail to happen. Each says what to DO about it, because
+# "no fan-out" alone left the reader unable to tell a repairable config wall from a
+# permanent limitation.
+_FANOUT_WARNINGS = {
+    FANOUT_MISMATCH: (
+        "second_agent declared sub-agents but tagged no claims with [cN]; "
+        "treat the fan-out as unconfirmed"
+    ),
+    FANOUT_DENIED: (
+        "sub-agent spawn was refused by a permission rule, not missing. Check the "
+        "opencode agent's `permission.task` — the runtime calls `--agent plan`, which "
+        "may not spawn write-capable subagents like `general`; `explore` is allowed"
+    ),
+    FANOUT_INCAPABLE: (
+        "second_agent reports no spawn tool; fan-out disabled for this project until "
+        "the capability is re-probed"
+    ),
+    FANOUT_DECLINED: (
+        "second_agent chose not to fan out; the answer is a sequential read"
+    ),
+    FANOUT_UNREPORTED: (
+        "second_agent omitted the required `subagents:` line, so whether it fanned out "
+        "is unknown; treat the result as a sequential read"
+    ),
+}
 
 
 class Executor:
@@ -192,6 +255,25 @@ class Executor:
             meta_sink=prompt_meta,
         )
 
+        # A cut instruction is answered in full confidence, so the only place it can be
+        # caught is before the call. Past the hard ratio the second agent would be
+        # answering a materially different question — cheaper to refuse than to deliver
+        # a confident answer to it.
+        if prompt_meta.get("task_truncated"):
+            lost = prompt_meta["task_original_chars"] - prompt_meta["task_kept_chars"]
+            if lost / prompt_meta["task_original_chars"] > DEFAULT_TASK_TRUNCATION_HARD_RATIO:
+                return make_error(
+                    "task_truncated",
+                    f"task lost {lost} of {prompt_meta['task_original_chars']} chars "
+                    f"(cap {DEFAULT_MAX_TASK_CHARS}); too much of the instruction is gone "
+                    "to trust an answer to it",
+                    next_action=(
+                        "Shorten the task to instructions only — move evidence, dumps, and "
+                        "file contents out of it; the second agent gathers those itself."
+                    ),
+                    meta=dict(prompt_meta),
+                )
+
         bound = bind_session(project_root, session_id)
         handoff = write_prompt_handoff(
             project_root, normalized_command, session_id, prompt
@@ -201,6 +283,9 @@ class Executor:
 
         self.opencode.command = route.get(
             "opencode_command", getattr(self.opencode, "command", "opencode")
+        )
+        self.opencode.agent = route.get(
+            "opencode_agent", getattr(self.opencode, "agent", None)
         )
         self.opencode.timeout_seconds = route.get(
             "timeout_seconds", getattr(self.opencode, "timeout_seconds", 0)
@@ -277,6 +362,18 @@ class Executor:
         if not result.get("ok"):
             return result
 
+        # Second layer: a defence that leaves no trace cannot be audited, and one that
+        # logs the value is not a defence. Count and kind only — enough to notice a run
+        # that touched credentials, useless to anyone reading the log for them.
+        redactions = (result.get("meta") or {}).get("redactions")
+        if redactions:
+            try:
+                write_redaction_audit(
+                    project_root, session_id, normalized_command, redactions
+                )
+            except Exception:
+                pass
+
         if route["role"] in ("exploration", "reasoning"):
             body = (result.get("content") or "").lower()
             markers = (
@@ -305,8 +402,49 @@ class Executor:
             # Reported, never enforced: a contract miss is worth surfacing, but it says
             # nothing about whether the evidence underneath is correct.
             issues = contract_warnings(normalized_command, result.get("content") or "")
+            if prompt_meta.get("task_truncated"):
+                issues.append(
+                    {
+                        "kind": "task_truncated",
+                        "detail": (
+                            f"{prompt_meta['task_original_chars'] - prompt_meta['task_kept_chars']}"
+                            f" chars cut from the instruction (cap {DEFAULT_MAX_TASK_CHARS})"
+                        ),
+                    }
+                )
             if issues:
                 result.setdefault("meta", {})["contract_warnings"] = issues
+                result["meta"].update(
+                    {k: v for k, v in prompt_meta.items() if k.startswith("task_")}
+                )
+
+            # Conditions the second agent cannot grade itself, applied to the number
+            # main_agent reads. Each signal is already computed above; this is the wiring.
+            caps: list[tuple[str, str]] = []
+            if prompt_meta.get("task_truncated"):
+                caps.append(("medium", "task was truncated before the call"))
+            if (graph_leads or {}).get("stale"):
+                caps.append(("medium", "dependency graph is stale"))
+            for issue in issues:
+                if issue["kind"] == "grounded_without_evidence":
+                    caps.append(("low", "grounded claims carry no file:line"))
+                elif issue["kind"] == "missing_fields":
+                    caps.append(("medium", f"contract: {issue['detail']}"))
+            if _scope_incomplete(result.get("content") or ""):
+                caps.append(("medium", "scope_not_covered is non-empty"))
+            if caps and digest is not None:
+                result["digest"] = cap_confidence(digest, caps)
+
+            # Readability split (P1.3): prose and anchors handed over separately so the
+            # relay does not have to choose between a readable summary and an auditable
+            # one. Both come from the same claims — this is presentation, not a second
+            # source of truth.
+            claims = readable_claims(result.get("content") or "")
+            if claims:
+                result.setdefault("meta", {})["claims"] = claims
+            questions = parse_questions(result.get("content") or "")
+            if questions["open_questions"] or questions["resolvable_uncertainties"]:
+                result.setdefault("meta", {})["questions"] = questions
 
         if fanout:
             # Report what actually happened, not what was asked for. A run that was told
@@ -316,18 +454,21 @@ class Executor:
             usage = detect_subagent_usage(content)
             meta = result.setdefault("meta", {})
             meta["subagent_used"] = usage["used"]
+            meta["fanout_mode"] = usage["mode"]
             meta["subagent_fanout_clusters"] = usage["fanout_clusters"]
             meta["covered_clusters"] = usage["covered_clusters"]
-            if usage["mismatch"]:
-                meta["subagent_warning"] = (
-                    "second_agent declared sub-agents but tagged no claims with [cN]; "
-                    "treat the fan-out as unconfirmed"
-                )
+            warning = _FANOUT_WARNINGS.get(usage["mode"])
+            if warning:
+                meta["subagent_warning"] = warning
             # Learn opencode's fan-out capability from what it just reported (P1.6): a
             # "no spawn tool" fallback flips it OFF for next time; a real fan-out confirms
             # ON (in case a prior probe was wrong). Best-effort — never fail the run on it.
+            #
+            # Only a genuine absence latches OFF. A permission refusal must not: it is a
+            # config problem with a config fix, and latching on it would retire fan-out
+            # permanently for the one cause that is actually repairable.
             try:
-                if reported_no_spawn_tool(content):
+                if usage["mode"] == FANOUT_INCAPABLE:
                     set_fanout_capability(project_root, False)
                 elif usage["used"]:
                     set_fanout_capability(project_root, True)

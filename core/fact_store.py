@@ -370,11 +370,18 @@ def _recurrence_counts(
     `grounded` blocks is an echo, not independent support. Such claims are skipped in all
     sessions, not just the current one.
     """
-    sessions = workflow_paths(project_root)["workflow_dir"] / "sessions"
+    workflow_dir = workflow_paths(project_root)["workflow_dir"]
+    sessions = workflow_dir / "sessions"
     if not sessions.exists():
         return {}
     excluded = _safe_component(exclude_session_id) if exclude_session_id else None
     injected_norms = injected or set()
+    # A session's past runs never change: their output.raw.md files are written once and
+    # then only added to. Re-reading every file of every session on every ingest made this
+    # cost grow with the project's whole history, for an answer that only moves when a NEW
+    # run lands. Cache each session's claim set, keyed by what would invalidate it.
+    cache = _load_claim_cache(workflow_dir)
+    dirty = False
     per_claim: dict[str, set[str]] = {}
     for sdir in sessions.iterdir():
         logs = sdir / "logs"
@@ -382,22 +389,65 @@ def _recurrence_counts(
             continue
         if excluded and sdir.name == excluded:
             continue
-        seen: set[str] = set()
-        for run in logs.iterdir():
-            out = run / "output.raw.md"
-            if not out.exists():
-                continue
-            try:
-                content = out.read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
-            for claim in _parse_block(content, "grounded"):
-                norm = _normalize(claim)
-                if norm and norm not in injected_norms:
-                    seen.add(norm)
-        for norm in seen:
+        runs = sorted(p.name for p in logs.iterdir() if p.is_dir())
+        fingerprint = f"{len(runs)}:{runs[-1] if runs else ''}"
+        entry = cache.get(sdir.name)
+        if entry and entry.get("fingerprint") == fingerprint:
+            seen = set(entry.get("claims") or [])
+        else:
+            seen = set()
+            for run in logs.iterdir():
+                out = run / "output.raw.md"
+                if not out.exists():
+                    continue
+                try:
+                    content = out.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                for claim in _parse_block(content, "grounded"):
+                    norm = _normalize(claim)
+                    if norm:
+                        seen.add(norm)
+            cache[sdir.name] = {"fingerprint": fingerprint, "claims": sorted(seen)}
+            dirty = True
+        # The injected filter is applied AFTER the cache, never baked into it: it varies
+        # per call, and a cache that folded it in would answer the wrong question later.
+        for norm in seen - injected_norms:
             per_claim.setdefault(norm, set()).add(sdir.name)
+
+    if dirty:
+        _save_claim_cache(workflow_dir, cache, {p.name for p in sessions.iterdir()})
     return {claim: len(dirs) for claim, dirs in per_claim.items()}
+
+
+_CLAIM_CACHE_FILE = "recurrence-cache.json"
+
+
+def _load_claim_cache(workflow_dir: Path) -> dict:
+    try:
+        data = json.loads(
+            (workflow_dir / _CLAIM_CACHE_FILE).read_text(encoding="utf-8")
+        )
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_claim_cache(workflow_dir: Path, cache: dict, live: set[str]) -> None:
+    """Best-effort write, dropping sessions that no longer exist.
+
+    Pruning here rather than never: `prune_jobs` deletes old session dirs, and a cache
+    that only grew would outlive the data it describes.
+    """
+    try:
+        pruned = {k: v for k, v in cache.items() if k in live}
+        path = workflow_dir / _CLAIM_CACHE_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(pruned), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        pass
 
 
 def ingest(project_root: Path, content: str, session_id: str) -> int:

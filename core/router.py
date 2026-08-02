@@ -2,6 +2,7 @@ from config.roles import VALID_ROLES
 from config.routing import COMMAND_ROUTES
 from config.settings import (
     DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,
+    DEFAULT_OPENCODE_AGENT,
     DEFAULT_POLL_INTERVAL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
     load_opencode_config,
@@ -38,6 +39,9 @@ class Router:
             "role": role,
             "model": model,
             "opencode_command": self.config.get("opencode_command", "opencode"),
+            "opencode_agent": cfg_route.get("agent")
+            or self.config.get("opencode_agent")
+            or DEFAULT_OPENCODE_AGENT,
             "timeout_seconds": timeout,
             "bootstrap_timeout_seconds": self.config.get(
                 "bootstrap_timeout_seconds", DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS

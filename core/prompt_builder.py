@@ -40,7 +40,12 @@ def _cap_task(task: str) -> tuple[str, dict | None]:
 # Shared by both fan-out shapes. Kept in one place so the graph and no-graph plans
 # cannot drift into giving the second agent two different sets of rules.
 _SUBAGENT_RULES = [
-    "- FIRST check your own tool list for a sub-agent/task/dispatch tool. If one exists, using it is MANDATORY — reading the slices yourself instead is a failed instruction, not a shortcut",
+    "- use your `task` tool with the `explore` subagent — read-only, and the one this"
+    " runtime is permitted to spawn. Using it is MANDATORY when the tool is present;"
+    " reading the slices yourself instead is a failed instruction, not a shortcut",
+    "- do NOT target the `general` subagent: it can write, so a read-only primary agent"
+    " is denied from spawning it and the call fails. `scout` is allowed too, but only for"
+    " external dependency/doc lookups — never for slices of this repo",
     "- spawn ONE sub-agent per slice below, all at once, not one after another",
     "- each sub-agent is scope-bounded to ITS OWN slice; it must not read outside it",
     "- keep each sub-agent's report SHORT: max 5 grounded claims, each one line with file:line",
@@ -48,7 +53,14 @@ _SUBAGENT_RULES = [
     "- tag every merged claim with its origin slice as a leading [cN] (e.g. `[c3] Router routes by command string [core/router.py:16]`)",
     "- a slice that yields nothing relevant: say so under that slice, do not pad it",
     "- list the slices you actually dispatched on the `subagents:` line",
-    "- ONLY if your tool list genuinely has no such tool: write `subagents: none (no spawn tool; tools: <name, name, ...>)` naming EVERY tool you do have, then read the slices yourself in order. Claiming 'no spawn tool' without that list is not an acceptable answer",
+    "- if you do not fan out, say which of these three it was, then read the slices"
+    " yourself in order:",
+    "  · no tool at all → `subagents: none (no spawn tool; tools: <name, name, ...>)`"
+    " naming EVERY tool you do have. Claiming 'no spawn tool' while a `task` tool is in"
+    " your list is a false report",
+    "  · the tool exists but the call was refused → `subagents: none (denied: <the exact"
+    " error/rule text>)`. Do not silently downgrade a refusal into a preference",
+    "  · you chose not to → `subagents: none (declined: <reason>)`",
     "- never report fan-out you did not perform; an honest sequential read is a valid result, a false claim is not",
 ]
 
@@ -310,7 +322,9 @@ def build_prompt(
                 *(
                     [
                         "",
-                        "subagents: c<N>, c<N> (clusters you actually dispatched) | none (<reason>)",
+                        "subagents: c<N>, c<N> (clusters you actually dispatched)"
+                        " | none (no spawn tool; tools: ...) | none (denied: <rule/error>)"
+                        " | none (declined: <reason>)   [REQUIRED — never omit this line]",
                     ]
                     if (subagent_fanout and role in _EVIDENCE_ROLES)
                     else []

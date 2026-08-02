@@ -7,22 +7,38 @@ structured reason instead of a silent opencode permission error.
 import re
 from pathlib import Path
 
-# Filename / substring patterns that should never be touched.
+# Filename patterns specific enough to flag wherever they appear as a token.
 SENSITIVE_PATTERNS = (
     r"\.env(\.|$|\b)",
     r"id_rsa",
     r"\.ssh\b",
     r"\.pem\b",
     r"\.key\b",
-    r"secret",
-    r"credential",
     r"\.aws\b",
     r"\.npmrc\b",
     r"passwd\b",
 )
 
+# Words that also occur in ordinary prose ("analyze the secret manager module",
+# "add credential redaction"). Only meaningful inside a path-shaped token, so
+# they are checked against those alone — matching them against free text blocks
+# legitimate tasks that merely talk about credential handling.
+SENSITIVE_NAME_PATTERNS = (
+    r"secret",
+    r"credential",
+)
+
 # Token that looks like a filesystem path (absolute win/posix or with a separator).
 _PATH_TOKEN = re.compile(r"(?:[A-Za-z]:[\\/]|~|/)[^\s\"']*|[^\s\"']+[\\/][^\s\"']+")
+
+# Whitespace-delimited word, and the shape that makes one look like a path.
+_WORD = re.compile(r"[^\s\"'`]+")
+_PATH_SHAPE = re.compile(r"[\\/]|^[A-Za-z]:|^~")
+
+
+def _clean_token(token: str) -> str:
+    """Trim surrounding punctuation without eating a leading dot (".env")."""
+    return token.strip("\"'`,;:()[]{}<>").rstrip(".")
 
 
 def validate_scope(task: str, project_root: str | Path) -> tuple[bool, list[str]]:
@@ -32,9 +48,19 @@ def validate_scope(task: str, project_root: str | Path) -> tuple[bool, list[str]
     text = task or ""
     root = Path(project_root).resolve()
 
-    for pattern in SENSITIVE_PATTERNS:
-        for match in re.finditer(pattern, text, re.IGNORECASE):
-            blocked.append(text[max(0, match.start() - 12): match.end() + 4].strip())
+    # Match patterns against tokens, never against free text: the blocked entry
+    # must be the thing that looked like a file, not a window of prose around it.
+    for raw in _WORD.findall(text):
+        token = _clean_token(raw)
+        if not token:
+            continue
+        patterns = SENSITIVE_PATTERNS
+        if _PATH_SHAPE.search(token):
+            patterns = SENSITIVE_PATTERNS + SENSITIVE_NAME_PATTERNS
+        for pattern in patterns:
+            if re.search(pattern, token, re.IGNORECASE):
+                blocked.append(token)
+                break
 
     for token in _PATH_TOKEN.findall(text):
         candidate = token.strip("\"'.,);")

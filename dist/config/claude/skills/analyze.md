@@ -21,6 +21,8 @@ confidence: { problem_understanding, root_cause, solution_path } — masing low|
 findings: <dari content, atribusi grounded/assumption> | (kosong: alasan)
 implications: <dampak> | (kosong: alasan)
 impacted_features: <fitur/modul lain terdampak — dari dependents/reverse-dep> [file:line] | (tidak ada: alasan)
-uncertainties: <tak terkonfirmasi> | (tidak ada)
+uncertainties: - uncertainty: <N>. <tak terkonfirmasi> → cara tutup: <apa> | (tidak ada)
+               NON-blocking: nyatakan asumsi, lanjut. Butuh keputusan user → naikkan jadi
+               `question: <N>. <pertanyaan> | <opsi A> | <opsi B>` dan sajikan interaktif.
 
 ## Rules: zero code changes, zero file mods.

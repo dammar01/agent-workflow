@@ -25,8 +25,11 @@ DILARANG sajikan tebakan (angka, dependency, regresi) sebagai fakta tak berlabel
 task:            <restatement>
 evidence_source: second_agent (1-call) | graphify+claude (local) | none
 assumptions:     - <statement + atribusi> | (tidak ada: alasan)
-open_questions:  - <keputusan arch/impl yg HANYA user bisa putus; BLOCKING> | (tidak ada: alasan)
-resolvable_uncertainties: - <bisa ditutup> → cara: <read/grep/explore apa> | (tidak ada)
+open_questions:  - question: <N>. <keputusan arch/impl yg HANYA user bisa putus; BLOCKING> | <opsi A> | <opsi B>   | (tidak ada: alasan)
+                 Bernomor, opsi dipisah " | ". Jawabannya memang pilihan → opsi WAJIB.
+                 Sajikan lewat pertanyaan interaktif, satu per pertanyaan — jangan paksa user membaca struktur mentah.
+resolvable_uncertainties: - uncertainty: <N>. <bisa ditutup> → cara: <read/grep/explore apa> | (tidak ada)
+                 NON-blocking. JANGAN tanyakan ke user — nyatakan asumsi, lanjut.
 steps:           1. <concrete + atribusi> 2. ...
 dependencies:    - A→B [bukti:file:line] | A→B [ASUMSI-belum-verified] | (tidak ada)
 files_affected:  <list>

@@ -35,6 +35,10 @@ TARGETS = {
     "claude/hooks": "{{HOME}}/.claude/hooks",
     "claude/settings.template.json": "{{HOME}}/.claude/settings.json",
     "opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",
+    # Subagents install per-project by default: opencode reads .opencode/agents/ in the
+    # worktree, so shipping them there leaves the user's own ~/.config/opencode untouched.
+    # Falls back to the global dir when no project root is known (plain global install).
+    "opencode/agents": "{{PROJECT_ROOT}}/.opencode/agents",
     "opencode/opencode.template.json": "{{HOME}}/.config/opencode/opencode.json",
 }
 
@@ -64,6 +68,13 @@ def _dist_files() -> list[str]:
         paths += [f"claude/hooks/{p.name}" for p in found]
     if (DIST_CONFIG / "opencode" / "AGENTS.md").is_file():
         paths.append("opencode/AGENTS.md")
+    agents = DIST_CONFIG / "opencode" / "agents"
+    if agents.is_dir():
+        paths += [
+            f"opencode/agents/{p.name}"
+            for p in sorted(agents.glob("*.md"))
+            if p.is_file()
+        ]
     if (DIST_CONFIG / "claude" / "settings.template.json").is_file():
         paths.append("claude/settings.template.json")
     if (DIST_CONFIG / "opencode" / "opencode.template.json").is_file():
@@ -74,7 +85,10 @@ def _dist_files() -> list[str]:
 def _merge_kind(rel: str) -> str:
     return (
         "replace"
-        if "/skills/" in rel or "/commands/" in rel or rel.endswith((".ps1", ".sh"))
+        if "/skills/" in rel
+        or "/commands/" in rel
+        or "/agents/" in rel
+        or rel.endswith((".ps1", ".sh"))
         else "merge"
     )
 
@@ -88,6 +102,7 @@ def _component(rel: str) -> str:
     if (
         "/skills/" in rel
         or "/commands/" in rel
+        or "/agents/" in rel
         or rel in ("claude/CLAUDE.md", "opencode/AGENTS.md")
     ):
         return "prompt_bundle"

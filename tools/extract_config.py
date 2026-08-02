@@ -36,6 +36,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 DIST_DIR = REPO_ROOT / "dist" / "config"
 MANIFEST = REPO_ROOT / "dist" / "manifest.json"
 
@@ -92,23 +93,10 @@ DENY_DIR_PARTS = {
     "__pycache__",
 }
 
-# Credential-shaped content. Deliberately broad: a false positive costs one manual
-# look, a false negative costs a permanent leak.
-SECRET_PATTERNS = [
-    (re.compile(r"sk-[A-Za-z0-9_\-]{16,}"), "openai-style key"),
-    (re.compile(r"\bghp_[A-Za-z0-9]{20,}"), "github token"),
-    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "github token"),
-    (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"), "slack token"),
-    (re.compile(r"AKIA[0-9A-Z]{16}"), "aws access key"),
-    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), "private key"),
-    (re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-]{20,}"), "bearer token"),
-    (
-        re.compile(
-            r"(?i)\"?(api[_-]?key|secret|password|access[_-]?token)\"?\s*[:=]\s*\"[^\"]{12,}\""
-        ),
-        "inline credential",
-    ),
-]
+# Credential-shaped content. Lives in utils/redact.py so the runtime evidence path uses
+# the SAME table — a second copy here would drift, and the copy that fell behind would be
+# the one guarding live agent output.
+from utils.redact import SECRET_PATTERNS  # noqa: E402
 
 HOME = Path.home()
 

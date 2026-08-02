@@ -1021,6 +1021,55 @@ def extract_lines_by_prefix(text: str, prefixes: tuple[str, ...]) -> list[str]:
     return [item for item in results if item]
 
 
+_QUESTION_NUM = re.compile(r"^(\d+)\s*[.)]\s*(.+)$", re.DOTALL)
+# ` | A) ... | B) ...` — enumerated answers on the same line as the question.
+_QUESTION_OPT = re.compile(r"\s\|\s")
+
+
+def parse_questions(text: str) -> dict:
+    """Split the agent's questions into the two kinds that need different handling.
+
+    `question:` blocks — the answer changes what gets built, so the user must see it.
+    `uncertainty:` does not — it is closed by stating an assumption and carrying on.
+    Both used to land in one `open_questions` list, which made every uncertainty look
+    like it needed a decision and buried the ones that actually did.
+
+    Numbering and ` | ` options are parsed out when present so a caller can render a real
+    choice instead of a paragraph. Unnumbered lines still parse — older state files and
+    any agent that ignores the format keep working, they just get positional ids.
+
+    Returns {'open_questions': [...], 'resolvable_uncertainties': [...]} where each entry
+    is {'id', 'text', 'options'}.
+    """
+
+    def _collect(prefixes: tuple[str, ...]) -> list[dict]:
+        out: list[dict] = []
+        for raw in extract_lines_by_prefix(text, prefixes):
+            body = raw
+            number = None
+            match = _QUESTION_NUM.match(body)
+            if match:
+                number = int(match.group(1))
+                body = match.group(2).strip()
+            parts = [p.strip() for p in _QUESTION_OPT.split(body) if p.strip()]
+            question, options = (parts[0], parts[1:]) if parts else (body, [])
+            if not question:
+                continue
+            out.append(
+                {
+                    "id": number if number is not None else len(out) + 1,
+                    "text": question,
+                    "options": options,
+                }
+            )
+        return out
+
+    return {
+        "open_questions": _collect(("question:",)),
+        "resolvable_uncertainties": _collect(("uncertainty:",)),
+    }
+
+
 def maybe_extract_plan_readiness(text: str) -> str:
     lowered = text.lower()
     if "ready" in lowered and "not ready" not in lowered:
@@ -1052,9 +1101,9 @@ def update_state_from_agent_output(
     )
     state["context"]["assumptions"] = extract_lines_by_prefix(content, ("assumption:",))
     state["context"]["risks"] = extract_lines_by_prefix(content, ("risk:",))
-    state["context"]["open_questions"] = extract_lines_by_prefix(
-        content, ("question:", "uncertainty:")
-    )
+    questions = parse_questions(content)
+    state["context"]["open_questions"] = questions["open_questions"]
+    state["context"]["resolvable_uncertainties"] = questions["resolvable_uncertainties"]
     state["guards"]["state_version"] = int(state["guards"].get("state_version", 0)) + 1
     atomic_write_json(loaded["paths"]["state"], state)
     return state
@@ -1260,16 +1309,39 @@ def write_evidence_sidecars(
     TRANSPORT moves: the second agent reads leads.json/facts.json itself, keeping the
     prompt focused on the task.
 
-    Overwrites unconditionally every call — a stale file from a prior task must never
-    be read as this task's leads. Returns the two paths that were written.
+    Rewritten whenever the CONTENT differs — a stale file from a prior task must never be
+    read as this task's leads. An identical rewrite is skipped: it produced the same bytes
+    at the cost of two temp-file-and-rename cycles on every delegated call, and back-to-back
+    calls on an unchanged repo produce identical leads by design.
+
+    Returns the two paths, each with whether it was rewritten.
     """
     paths = workflow_paths(project_root, session_id)
     paths["runtime_dir"].mkdir(parents=True, exist_ok=True)
-    # `null`/`[]` are meaningful: they say "computed, nothing relevant", which the
-    # second agent must be able to tell apart from a leftover file.
-    atomic_write_json(paths["leads"], graph_leads)
-    atomic_write_json(paths["facts"], known_facts or [])
-    return {"leads": str(paths["leads"]), "facts": str(paths["facts"])}
+
+    def _write_if_changed(path: Path, payload) -> bool:
+        # `null`/`[]` are meaningful: they say "computed, nothing relevant", which the
+        # second agent must be able to tell apart from a leftover file. So compare against
+        # the serialised form, never against emptiness.
+        # Must match atomic_write_json byte for byte, or the comparison never matches and
+        # the skip silently never fires.
+        want = json.dumps(payload, indent=JSON_INDENT)
+        try:
+            if path.read_text(encoding="utf-8") == want:
+                return False
+        except (OSError, ValueError):
+            pass
+        atomic_write_json(path, payload)
+        return True
+
+    leads_written = _write_if_changed(paths["leads"], graph_leads)
+    facts_written = _write_if_changed(paths["facts"], known_facts or [])
+    return {
+        "leads": str(paths["leads"]),
+        "facts": str(paths["facts"]),
+        "leads_written": leads_written,
+        "facts_written": facts_written,
+    }
 
 
 def write_response_snapshot(
@@ -1284,6 +1356,39 @@ def write_response_snapshot(
         run_dir = paths["logs_dir"] / prompt_id
         run_dir.mkdir(parents=True, exist_ok=True)
         atomic_write_text(run_dir / "output.raw.md", content)
+
+
+def write_redaction_audit(
+    project_root: Path,
+    session_id: str | None,
+    command: str,
+    redactions: list[dict],
+) -> None:
+    """Append-only note that a run produced credential-shaped output.
+
+    Kind and count only — never the matched text. The value was scrubbed at the adapter
+    boundary precisely so it would exist nowhere on disk; writing it into the audit trail
+    would relocate the leak into the file people grep when investigating one.
+    """
+    if not redactions:
+        return
+    paths = workflow_paths(project_root, session_id)
+    line = json.dumps(
+        {
+            "at": now_iso(),
+            "session_id": session_id,
+            "command": command,
+            "redactions": [
+                {"kind": item.get("kind"), "count": item.get("count")}
+                for item in redactions
+            ],
+        },
+        ensure_ascii=False,
+    )
+    path = Path(paths["workflow_dir"]) / "redactions.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(line + "\n")
 
 
 def write_call_meta(
@@ -1510,11 +1615,29 @@ def _scan_mcp(project_root: Path) -> dict:
     return {"sources": sources, "servers": servers, "verdict": verdict}
 
 
-def _expand_home(template: str) -> str:
-    return str(template).replace("{{HOME}}", os.path.expanduser("~"))
+def _expand_home(template: str, project_root: Path | str | None = None) -> str:
+    """Resolve manifest target placeholders.
+
+    `{{PROJECT_ROOT}}` marks a target that installs into the worktree rather than the
+    user's home — the default for opencode subagents. With no project root known, it
+    degrades to the global opencode config dir so a plain global install still resolves
+    to a real path instead of a literal `{{PROJECT_ROOT}}` directory.
+    """
+    text = str(template).replace("{{HOME}}", os.path.expanduser("~"))
+    if "{{PROJECT_ROOT}}" in text:
+        if project_root:
+            text = text.replace("{{PROJECT_ROOT}}", str(project_root))
+        else:
+            text = text.replace(
+                "{{PROJECT_ROOT}}/.opencode",
+                str(Path(os.path.expanduser("~")) / ".config" / "opencode"),
+            ).replace("{{PROJECT_ROOT}}", os.path.expanduser("~"))
+    return text
 
 
-def _installed_path_for(rel: str, targets: dict) -> Path | None:
+def _installed_path_for(
+    rel: str, targets: dict, project_root: Path | str | None = None
+) -> Path | None:
     """Map a manifest dist-relative path to its installed location via the targets map.
 
     A targets key is either an exact file (claude/CLAUDE.md) or a directory (claude/skills).
@@ -1522,7 +1645,7 @@ def _installed_path_for(rel: str, targets: dict) -> Path | None:
     <target_dir>/<remainder>.
     """
     if rel in targets:
-        return Path(_expand_home(str(targets[rel])))
+        return Path(_expand_home(str(targets[rel]), project_root))
     best_key = None
     for key in targets:
         if rel == key or rel.startswith(key + "/"):
@@ -1531,10 +1654,75 @@ def _installed_path_for(rel: str, targets: dict) -> Path | None:
     if best_key is None:
         return None
     remainder = rel[len(best_key) :].lstrip("/")
-    return Path(_expand_home(str(targets[best_key]))) / remainder
+    return Path(_expand_home(str(targets[best_key]), project_root)) / remainder
 
 
-def _bundle_integrity(dist_config_dir: Path, manifest_path: Path) -> dict:
+# Files installed as a marker-delimited block inside a file the user also owns. Their
+# bytes legitimately differ from dist: content outside the markers is the user's, and
+# {{HOME}}/{{PROJECT_ROOT}} inside the block are resolved at install time. Comparing whole
+# files here reported drift on every single run, which trained the reader to ignore it.
+_MANAGED_MARKERS = {
+    "claude/CLAUDE.md": ("WORKFLOW-MAIN-AGENT:START", "WORKFLOW-MAIN-AGENT:END"),
+    "opencode/AGENTS.md": ("WORKFLOW-SECOND-AGENT:START", "WORKFLOW-SECOND-AGENT:END"),
+}
+
+
+def _installed_intent_mode() -> bool:
+    """True when the last install chose command-only (auto-intent stanza stripped)."""
+    try:
+        path = Path(os.path.expanduser("~")) / ".claude" / ".workflow-install-mode.json"
+        return bool(read_json_file(path).get("only_command"))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def _select_intent_section(text: str, only_command: bool) -> str:
+    """Drop whichever of the two intent stanzas the installer would have dropped.
+
+    Without this the dist copy carries both and the installed copy carries one, so the
+    managed-block comparison reports a local edit on every command-only install — the
+    exact false alarm this comparison was rewritten to remove.
+    """
+    drop = "AUTO-INTENT" if only_command else "COMMAND-ONLY"
+    text = re.sub(
+        rf"<!--\s*{drop}:START\s*-->.*?<!--\s*{drop}:END\s*-->\s*",
+        "",
+        text,
+        flags=re.DOTALL,
+    )
+    # Mirror install._apply_intent_mode: the kept stanza's markers are stripped there too,
+    # so comparing against a copy that still had them would report a phantom edit.
+    return re.sub(
+        r"[ \t]*<!--\s*(?:AUTO-INTENT|COMMAND-ONLY):(?:START|END)\s*-->\n?", "", text
+    )
+
+
+def _marker_block(text: str, start: str, end: str) -> str | None:
+    """The marker-delimited region, markers included. None when absent."""
+    match = re.search(
+        rf"<!--\s*{re.escape(start)}.*?-->.*?<!--\s*{re.escape(end)}\s*-->",
+        text or "",
+        re.DOTALL,
+    )
+    return match.group(0) if match else None
+
+
+def _os_variant_skip(rel: str) -> bool:
+    """True for a shipped script written for the other OS.
+
+    The installer ships one flavour per platform (.ps1 on Windows, .sh elsewhere) while
+    the manifest lists both, so the absent flavour is expected — not missing. Mirrors the
+    filter in install._targets(); keep the two in step.
+    """
+    suffix = Path(rel).suffix.lstrip(".").lower()
+    if suffix not in {"ps1", "sh"}:
+        return False
+    return suffix != ("ps1" if os.name == "nt" else "sh")
+
+
+def _bundle_integrity(
+    dist_config_dir: Path, manifest_path: Path, project_root: Path | str | None = None
+) -> dict:
     """Verify the installed bundle matches dist/manifest.json (release-integrity).
 
     For each file the manifest records, hash the INSTALLED copy the same way gen_manifest
@@ -1546,6 +1734,11 @@ def _bundle_integrity(dist_config_dir: Path, manifest_path: Path) -> dict:
         "checked": 0,
         "mismatched": [],
         "missing": [],
+        # Every entry that is neither clean nor silently ignored, with WHY. A bare list of
+        # paths says a file differs but not whether that is a real problem, and the two
+        # need opposite responses: reinstall, or leave it alone.
+        "drift": [],
+        "skipped": [],
         "manifest_fresh": None,
         "hooks_installed": None,
     }
@@ -1560,15 +1753,22 @@ def _bundle_integrity(dist_config_dir: Path, manifest_path: Path) -> dict:
         result["error"] = "manifest has no files/targets"
         return result
 
+    home = os.path.expanduser("~")
+    only_command = _installed_intent_mode()
+    result["intent_mode"] = "command_only" if only_command else "auto_intent"
     for entry in files:
         rel = entry.get("path")
-        installed = _installed_path_for(rel, targets)
+        if _os_variant_skip(rel):
+            result["skipped"].append({"path": rel, "reason": "os_variant"})
+            continue
+        installed = _installed_path_for(rel, targets, project_root)
         if installed is not None and installed.name == "opencode.json":
             jsonc = installed.with_name("opencode.jsonc")
             if jsonc.is_file():
                 installed = jsonc
         if installed is None or not installed.is_file():
             result["missing"].append(rel)
+            result["drift"].append({"path": rel, "reason": "not_installed"})
             continue
         # *.template.json is installed via {{HOME}} placeholder substitution + key-merge
         # into the user's settings.json/opencode.json, so its bytes legitimately diverge
@@ -1577,13 +1777,42 @@ def _bundle_integrity(dist_config_dir: Path, manifest_path: Path) -> dict:
             result["checked"] += 1
             continue
         try:
-            blob = installed.read_text(encoding="utf-8").encode("utf-8")
+            text = installed.read_text(encoding="utf-8")
         except OSError:
             result["missing"].append(rel)
+            result["drift"].append({"path": rel, "reason": "unreadable"})
             continue
         result["checked"] += 1
-        if hashlib.sha256(blob).hexdigest() != entry.get("sha256"):
+
+        if rel in _MANAGED_MARKERS:
+            # Compare the managed block alone, against a dist copy put through the same
+            # placeholder substitution the installer applies. What is left after that is
+            # a genuine local edit.
+            start, end = _MANAGED_MARKERS[rel]
+            source = dist_config_dir / rel
+            try:
+                expected = source.read_text(encoding="utf-8")
+            except OSError:
+                result["drift"].append({"path": rel, "reason": "dist_source_unreadable"})
+                continue
+            expected = expected.replace("{{HOME}}", home)
+            if project_root:
+                expected = expected.replace("{{PROJECT_ROOT}}", str(project_root))
+            if rel == "claude/CLAUDE.md":
+                expected = _select_intent_section(expected, only_command)
+            want = _marker_block(expected, start, end)
+            got = _marker_block(text, start, end)
+            if got is None:
+                result["mismatched"].append(rel)
+                result["drift"].append({"path": rel, "reason": "managed_block_absent"})
+            elif want is not None and got.strip() != want.strip():
+                result["mismatched"].append(rel)
+                result["drift"].append({"path": rel, "reason": "locally_edited"})
+            continue
+
+        if hashlib.sha256(text.encode("utf-8")).hexdigest() != entry.get("sha256"):
             result["mismatched"].append(rel)
+            result["drift"].append({"path": rel, "reason": "content_differs"})
 
     try:
         newest_src = max(
@@ -1594,12 +1823,14 @@ def _bundle_integrity(dist_config_dir: Path, manifest_path: Path) -> dict:
     except OSError:
         result["manifest_fresh"] = None
 
+    # Same OS split as the installer: checking for .ps1 on Linux would fail every time.
+    ext = "ps1" if os.name == "nt" else "sh"
     required_hooks = [
-        "session-bind.ps1",
-        "intent-gate-set.ps1",
-        "intent-gate-check.ps1",
+        f"session-bind.{ext}",
+        f"intent-gate-set.{ext}",
+        f"intent-gate-check.{ext}",
     ]
-    hook_target = _installed_path_for("claude/hooks", targets)
+    hook_target = _installed_path_for("claude/hooks", targets, project_root)
     if hook_target is not None:
         result["hooks_installed"] = all(
             (hook_target / h).is_file() for h in required_hooks
@@ -1871,7 +2102,9 @@ def run_doctor(
     if resolver.get("ok") and resolver.get("path"):
         repo_root = Path(resolver["path"]).parent
         integrity = _bundle_integrity(
-            repo_root / "dist" / "config", repo_root / "dist" / "manifest.json"
+            repo_root / "dist" / "config",
+            repo_root / "dist" / "manifest.json",
+            project_root,
         )
     checks["bundle_integrity"] = integrity
     if isinstance(integrity, dict):
@@ -1880,20 +2113,22 @@ def run_doctor(
             recommended_fixes.append(
                 "Regenerate the manifest: python tools/gen_manifest.py"
             )
-        if integrity.get("mismatched"):
+        # Name the file AND why it drifted. "2 files differ" is the same sentence whether
+        # the user edited a block on purpose or an install never ran, and those need
+        # opposite responses.
+        drift_by_reason: dict[str, list[str]] = {}
+        for item in integrity.get("drift") or []:
+            drift_by_reason.setdefault(item["reason"], []).append(item["path"])
+        for reason, paths_ in sorted(drift_by_reason.items()):
             issues.append(
-                f"bundle drift: {len(integrity['mismatched'])} installed file(s) differ from manifest "
-                f"({', '.join(integrity['mismatched'][:5])})"
+                f"bundle {reason}: {len(paths_)} file(s) — {', '.join(paths_[:5])}"
             )
+        if "locally_edited" in drift_by_reason or "content_differs" in drift_by_reason:
             recommended_fixes.append(
                 "Re-run install/upgrade to reinstall the shipped bundle; if dist/ changed on "
                 "purpose, regenerate the manifest (python tools/gen_manifest.py)"
             )
-        if integrity.get("missing"):
-            issues.append(
-                f"bundle incomplete: {len(integrity['missing'])} manifest file(s) not installed "
-                f"({', '.join(integrity['missing'][:5])})"
-            )
+        if "not_installed" in drift_by_reason:
             recommended_fixes.append("Re-run install to place the missing bundle files")
         if integrity.get("manifest_fresh") is False:
             issues.append(
@@ -1913,7 +2148,19 @@ def run_doctor(
         status = "NEEDS_UPGRADE"
     else:
         status = "READY"
+    # `checked_at` is the only field that changes between two runs over identical state.
+    # Kept out of `result` so `doctor` twice can be diffed directly — with it inline, every
+    # comparison showed a difference and proved nothing.
     payload = {
+        "meta": {"checked_at": now_iso()},
+        "result": {
+            "status": status,
+            "project_root": str(project_root),
+            "issues": issues,
+            "recommended_fixes": recommended_fixes,
+            "checks": checks,
+        },
+        # Flat copies kept so existing readers of doctor.json keep working.
         "status": status,
         "checked_at": now_iso(),
         "project_root": str(project_root),

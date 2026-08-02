@@ -26,6 +26,7 @@ ERROR_TYPES = {
     "streaming_failed",
     "second_agent_unavailable",  # probe in a FRESH session could not get an answer either
     "job_expired",  # ran past the hard runtime ceiling (OOM backstop)
+    "task_truncated",  # the instruction lost too much to trust the answer to it
     "fact_ingest_failed",
     "workflow_init_error",
     "job_submit_error",
@@ -67,6 +68,25 @@ _CLUSTER_TAG = re.compile(r"\[c(\d+)\]")
 _NO_SPAWN_RE = re.compile(
     r"^\s*subagents\s*:\s*none\b.*no\s+spawn\s+tool", re.IGNORECASE | re.MULTILINE
 )
+# A refusal is not an absence. `task` can be present and still be denied — opencode
+# blocks a read-only primary agent from spawning a write-capable subagent. Left
+# undistinguished, that permission wall reads as "opencode cannot fan out" and latches
+# the capability off forever, so the one fix that would work is never attempted.
+_DENIED_RE = re.compile(
+    r"^\s*subagents\s*:\s*none\b.*\b(denied|refus|not\s+permitted|permission)",
+    re.IGNORECASE | re.MULTILINE,
+)
+_DECLINED_RE = re.compile(
+    r"^\s*subagents\s*:\s*none\b", re.IGNORECASE | re.MULTILINE
+)
+
+# What actually happened to the fan-out instruction, for meta.fanout_mode.
+FANOUT_PARALLEL = "parallel"
+FANOUT_DENIED = "denied_by_permission"
+FANOUT_INCAPABLE = "incapable"
+FANOUT_DECLINED = "declined"
+FANOUT_UNREPORTED = "unreported"
+FANOUT_MISMATCH = "claimed_unconfirmed"
 
 
 def reported_no_spawn_tool(content: str) -> bool:
@@ -100,8 +120,27 @@ def detect_subagent_usage(content: str) -> dict:
 
     tagged = sorted({f"c{n}" for n in _CLUSTER_TAG.findall(content or "")})
     used = bool(declared) and bool(tagged)
+
+    # Why fan-out did not happen decides what to do about it, and the three reasons need
+    # opposite responses: a permission wall is fixable config, no tool is permanent, a
+    # decline is the agent's judgement call. Collapsing them into "not used" threw that
+    # away — and an omitted line was indistinguishable from a decline.
+    if used:
+        mode = FANOUT_PARALLEL
+    elif declared:
+        mode = FANOUT_MISMATCH
+    elif _NO_SPAWN_RE.search(content or ""):
+        mode = FANOUT_INCAPABLE
+    elif _DENIED_RE.search(content or ""):
+        mode = FANOUT_DENIED
+    elif _DECLINED_RE.search(content or ""):
+        mode = FANOUT_DECLINED
+    else:
+        mode = FANOUT_UNREPORTED
+
     return {
         "used": used,
+        "mode": mode,
         # Clusters a sub-agent was actually dispatched to — empty unless BOTH signals agree.
         "fanout_clusters": declared if used else [],
         # Clusters the answer draws on, fan-out or not.
@@ -143,6 +182,35 @@ def _section(content: str, name: str) -> list[str]:
         if collecting and line.strip().startswith("-"):
             out.append(line.strip().lstrip("-").strip())
     return out
+
+
+_BRACKET_REF = re.compile(r"\[([^\[\]]+)\]")
+
+
+def split_claim(claim: str) -> dict:
+    """Separate what a claim SAYS from the identifiers that back it.
+
+    The two are written on one line because that is how the agent must emit them — an
+    anchor detached from its claim cannot be checked. But a reader drowning in
+    `[core/router.py:16]` mid-sentence is reading machine bookkeeping, so hand callers a
+    prose `text` and a separate `refs` list rather than making each of them re-derive it.
+
+    Returns {'text', 'refs'}. A claim with no brackets comes back unchanged with refs=[].
+    """
+    body = claim or ""
+    refs = [r.strip() for r in _BRACKET_REF.findall(body) if r.strip()]
+    text = _BRACKET_REF.sub("", body)
+    # Collapse the whitespace and dangling punctuation the removal leaves behind.
+    text = re.sub(r"\s{2,}", " ", text).strip().rstrip(" ,;")
+    return {"text": text, "refs": refs}
+
+
+def readable_claims(content: str, section: str = "grounded") -> list[dict]:
+    """Every claim in `section` as {'text', 'refs'} — prose first, anchors beside it.
+
+    Detail stays available for audit; it just stops being the thing the eye lands on.
+    """
+    return [split_claim(claim) for claim in _section(content, section)]
 
 
 def contract_warnings(command: str, content: str) -> list[dict]:
@@ -188,6 +256,39 @@ def contract_warnings(command: str, content: str) -> list[dict]:
         )
 
     return warnings
+
+
+_CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
+_RANK_CONFIDENCE = {0: "low", 1: "medium", 2: "high"}
+
+
+def cap_confidence(digest: dict | None, reasons: list[tuple[str, str]]) -> dict | None:
+    """Lower a reported confidence to what the run's own conditions support.
+
+    The second agent grades its own confidence, and it grades on the analysis it did —
+    not on whether the inputs to that analysis were sound. A stale dependency graph, a
+    truncated instruction, or a `grounded` section with no file:line all leave the prose
+    just as assured as a clean run. Every one of those signals is already computed
+    elsewhere in this pipeline; the only missing step was letting them reach the number
+    main_agent actually reads.
+
+    `reasons` is a list of (cap_level, why). The lowest cap wins. The original value is
+    kept as `confidence_reported` so the downgrade is auditable, never silent.
+    """
+    if not digest:
+        return digest
+    reported = (digest.get("confidence") or "unknown").lower()
+    if reported not in _CONFIDENCE_RANK or not reasons:
+        return digest
+
+    ceiling = min(_CONFIDENCE_RANK[level] for level, _ in reasons if level in _CONFIDENCE_RANK)
+    if _CONFIDENCE_RANK[reported] <= ceiling:
+        return digest
+
+    digest["confidence_reported"] = reported
+    digest["confidence"] = _RANK_CONFIDENCE[ceiling]
+    digest["confidence_capped_by"] = [why for _, why in reasons]
+    return digest
 
 
 def extract_digest(content: str) -> dict | None:

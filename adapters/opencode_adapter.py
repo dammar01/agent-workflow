@@ -6,12 +6,14 @@ import subprocess
 
 from config.settings import (
     DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,
+    DEFAULT_OPENCODE_AGENT,
     DEFAULT_POLL_INTERVAL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
     OPENCODE_COMMAND,
 )
 from core.contract import make_error, make_ok
 from utils import osutil
+from utils.redact import redact
 from utils.parser import (
     clean_opencode_output,
     ensure_text,
@@ -128,7 +130,15 @@ class OpenCodeAdapter:
         self.on_progress = on_progress
         self.poll_interval = DEFAULT_POLL_INTERVAL_SECONDS
         self.bootstrap_timeout_seconds = DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS
+        # Which opencode agent runs the delegated call. `plan` is opencode's own
+        # read-only primary and stays the default, so a config predating `wf-second`
+        # keeps working — an upgrade that silently pointed at a missing agent would
+        # break every delegated call at once.
+        self.agent = DEFAULT_OPENCODE_AGENT
         self.last_call_meta: dict = {}
+
+    def _agent_args(self) -> list[str]:
+        return ["--agent", self.agent or DEFAULT_OPENCODE_AGENT]
 
     def _popen_capture(
         self,
@@ -283,7 +293,7 @@ class OpenCodeAdapter:
         """Capture a new OpenCode session id by running bootstrap and waiting for completion."""
         command = self._resolve_command()
         args = [command, "run", "Initialize session. Reply READY."]
-        args.extend(["--agent", "plan"])
+        args.extend(self._agent_args())
         if model:
             args.extend(["-m", model])
         args.extend(["--print-logs", "--log-level", "INFO"])
@@ -348,7 +358,7 @@ class OpenCodeAdapter:
         command = self._resolve_command()
         safe_prompt = prompt.replace("\n", " \\n ")
         args = [command, "run", safe_prompt]
-        args.extend(["--agent", "plan"])
+        args.extend(self._agent_args())
         if model:
             args.extend(["-m", model])
         args.extend(["-s", session_id])
@@ -359,7 +369,7 @@ class OpenCodeAdapter:
         check here measures the real command line — not the pre-expansion prompt."""
         command = self._resolve_command()
         safe_prompt = prompt.replace("\n", " \\n ")
-        args = [command, "run", safe_prompt, "--agent", "plan"]
+        args = [command, "run", safe_prompt, *self._agent_args()]
         if model:
             args.extend(["-m", model])
         # `-s <ses_id>` is appended once the session exists; a real id is ~30 chars.
@@ -443,7 +453,7 @@ class OpenCodeAdapter:
         Its own short timeout matters: without it the watchdog hangs like its patient.
         """
         command = self._resolve_command()
-        args = [command, "run", "PING. Reply PONG.", "--agent", "plan"]
+        args = [command, "run", "PING. Reply PONG.", *self._agent_args()]
         if model:
             args.extend(["-m", model])
 
@@ -637,6 +647,15 @@ class OpenCodeAdapter:
                 raw_tail=raw[:500],
             )
 
+        # Redaction boundary. Everything downstream — the transcript main_agent reads, the
+        # response snapshot, the fact store, the cross-session evidence index — is fed from
+        # this one return, so a credential scrubbed here cannot reach any of them. Scrubbing
+        # at the storage layer instead would be too late: the value would already have been
+        # relayed once.
+        cleaned, redactions = redact(cleaned)
+        if redactions:
+            meta["redactions"] = redactions
+            meta["redaction_count"] = sum(item["count"] for item in redactions)
         return make_ok(cleaned, meta)
 
     @staticmethod

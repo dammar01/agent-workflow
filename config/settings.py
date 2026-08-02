@@ -62,7 +62,19 @@ DEFAULT_JOB_MAX_RUNTIME_SECONDS = int(
 # task string is the only variable-size part worth capping here — cap it before assembly
 # so a long task degrades to a visible truncation instead of a deterministic call failure.
 DEFAULT_MAX_TASK_CHARS = int(os.getenv("AI_PROXY_MAX_TASK_CHARS", "3000"))
+# Fraction of the task that may be cut before the call is refused instead of degraded.
+# A tail trimmed off a long instruction usually costs nothing; losing a third of it means
+# the second agent answered a different question than the one asked — and it answers with
+# full confidence either way, which is the part that misleads.
+DEFAULT_TASK_TRUNCATION_HARD_RATIO = float(
+    os.getenv("AI_PROXY_TASK_TRUNCATION_HARD_RATIO", "0.2")
+)
 OPENCODE_COMMAND = os.getenv("OPENCODE_COMMAND", "opencode")
+# The opencode agent that runs delegated calls. `plan` is opencode's own read-only
+# primary; `wf-second` is the workflow's own, which additionally allowlists the
+# `permission.task` entries fan-out needs. Default stays `plan` so a config written
+# before `wf-second` existed keeps working instead of pointing at a missing agent.
+DEFAULT_OPENCODE_AGENT = os.getenv("AI_PROXY_OPENCODE_AGENT", "plan")
 DEFAULT_JOB_POLL_INTERVAL_SECONDS = float(os.getenv("AI_PROXY_JOB_POLL_INTERVAL_SECONDS", "2"))
 DEFAULT_JOB_POLL_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_JOB_POLL_TIMEOUT_SECONDS", "0"))
 # Global ceiling on concurrent in-flight delegated workers across ALL sessions. Per-session
@@ -75,6 +87,7 @@ DEFAULT_MAX_GLOBAL_WORKERS = int(os.getenv("AI_PROXY_MAX_GLOBAL_WORKERS", "6"))
 def default_opencode_config() -> dict:
     return {
         "opencode_command": OPENCODE_COMMAND,
+        "opencode_agent": DEFAULT_OPENCODE_AGENT,
         "default_model": None,
         "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
         "bootstrap_timeout_seconds": DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,

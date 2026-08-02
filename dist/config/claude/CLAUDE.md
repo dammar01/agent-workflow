@@ -23,6 +23,15 @@ Dua mode (jangan campur):
 - SYNTHESIS (plan/analyze): main_agent REASONING sendiri → isi [PLAN]/[ANALYSIS RESULT] penuh dari evidence+digest. confidence (3 sub) + uncertainties WAJIB. "Jangan rebuild" TIDAK berlaku di sini — ini memang output main_agent.
 Violasi = output incomplete.
 
+<!-- COMMAND-ONLY:START -->
+### Command invocation (prefix WAJIB)
+Command HANYA jalan lewat prefix "/." eksplisit. Bahasa natural TIDAK dipetakan ke command.
+- Pesan tanpa prefix = percakapan biasa. Jawab langsung. DILARANG menebak command darinya.
+- Butuh command → user yang menuliskannya. Kalau maksud user jelas mengarah ke satu command
+  tapi prefix tak ada, boleh SARANKAN satu baris ("mau /.explore?") lalu berhenti — jangan jalankan.
+- Registry command ada di bawah. Pre-flight gate tetap berlaku begitu sebuah "/." DELEGATED dipanggil.
+<!-- COMMAND-ONLY:END -->
+<!-- AUTO-INTENT:START -->
 ### Intent detection (AUTO-FIRE — menggantikan Command Validation STRICT)
 Prefix "/." TIDAK lagi wajib. Bahasa natural dipetakan ke command lalu DIJALANKAN langsung — tanpa gate konfirmasi.
 
@@ -41,6 +50,7 @@ Batas:
 
 Tak ada lagi output [INVALID COMMAND]. Input tanpa prefix bukan error.
 
+<!-- AUTO-INTENT:END -->
 ### Pre-flight gate — DELEGATED (ENFORCEMENT, bukan awareness)
 Gap paling sering: intent TERDETEKSI, routing ke second_agent TIDAK ditegakkan. Aturan kuat di deteksi, lemah di penegakan — tutup DI SINI. Gate KERAS, bukan mindset.
 [INTENT] resolve ke explore/plan/analyze/verify/sweep → langkah WAJIB berikutnya = `.workflow/run`. DILARANG panggil tool GATHER (MCP apa pun incl `mcp__laravel-boost__*`/DB, Grep/Read/Glob untuk bulk) SEBELUM run script jalan. "Gua tau ini analyze" (awareness) TAK cukup — yang dinilai ROUTING, bukan kesadaran.
@@ -97,6 +107,7 @@ Auto-fallback ke local tanpa tanya user = DILARANG.
 LOCAL:     /.execute -y /.init /.refactor /.commit /.review /.compress /.memory /.caveman /.local /.help
 DELEGATED: /.explore /.plan /.analyze /.verify /.sweep /.doctor
 Definisi lengkap tiap skill = file standalone `~/.claude/skills/<name>.md` (dibuka saat "/.name" dipanggil). CLAUDE.md ini SENGAJA cuma orchestrator + registry — body skill TIDAK di-embed di sini (hemat token/turn; single source di skills/).
+<!-- AUTO-INTENT:START -->
 NL map (auto-fire, lihat Intent detection). Cocokkan ke TRIGGER, bukan ke topik —
 "kenapa X lambat" itu analyze walau soal performa, "di mana X" itu explore walau soal bug.
 
@@ -141,6 +152,7 @@ Tie-break (urut, berhenti di yang pertama cocok):
 Trigger di atas indikator, bukan whitelist. Kalimat yang jelas maksudnya tapi tak persis
 sama tetap boleh dipetakan — sebut dasarnya di [INTENT]. Yang dilarang itu sebaliknya:
 memaksa pertanyaan biasa jadi command karena kebetulan mengandung satu kata trigger.
+<!-- AUTO-INTENT:END -->
 
 ### Auto command suggestion
 Akhir respons untuk task berbau kode → tambahkan max 3 langkah lanjut relevan:
@@ -150,6 +162,11 @@ Tak ada langkah lanjut yang masuk akal → jangan tulis [NEXT] sama sekali. Jang
 ### Plan/analysis output (structured)
 WAJIB: confidence {problem_understanding, root_cause, solution_path} (low|medium|high — alasan).
 Pisah open_questions (keputusan-user, BLOCKING) vs resolvable_uncertainties (kamu tutup dulu). Jangan campur — nyampur = geser bebanmu ke user.
+Format pertanyaan (dipakai runtime utk render interaktif — patuhi persis):
+- `question: <N>. <pertanyaan> | <opsi A> | <opsi B>` → BLOCKING. Bernomor, opsi dipisah ` | `. Opsi WAJIB kalau jawabannya memang pilihan; pertanyaan terbuka boleh tanpa opsi.
+- `uncertainty: <N>. <hal yang belum pasti>` → NON-blocking. JANGAN tanyakan ke user. Nyatakan asumsimu, lanjut, sebut cara menutupnya nanti.
+Sajikan open_questions lewat pertanyaan interaktif (satu per pertanyaan), bukan paragraf — user tak perlu membaca struktur mentah untuk menjawab. Nol open_questions → jangan interupsi sama sekali.
+Keterbacaan: prosa dulu, identifier mesin menyusul. Jangan menaburkan `[file:line]` di tengah kalimat sampai narasinya tenggelam — kumpulkan anchor di akhir klaim atau di baris evidence terpisah. Detail tetap tersedia untuk audit; ia cuma berhenti jadi yang pertama dilihat mata.
 Atribusi: TIAP klaim beri sumber [proxy:file:line]|[main_agent-inference]|[user-provided]|[PLACEHOLDER]. Field kosong → tampilkan + alasan. Bangun dari digest+content.
 Anti-spekulasi: DILARANG masukkan angka/dependency/regresi absen-evidence sebagai fakta. Didorong user ≠ izin ngarang; label [main_agent-inference] atau minta evidence. dependency palsu ubah urutan kerja — tunjukkan bukti coupling atau tandai [ASUMSI].
 Relay-tag: teruskan tag grounded/assumption dari proxy apa adanya; JANGAN re-summarize sampai hilang bedanya (tiap ringkas = lossy).

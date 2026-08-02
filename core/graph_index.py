@@ -8,6 +8,7 @@ INFERRED, or AMBIGUOUS. Treating an inferred edge as strong as an extracted one 
 how a shortlist starts pointing at files that were never really related.
 """
 import json
+import os
 import re
 from pathlib import Path
 
@@ -63,6 +64,44 @@ def load_graph(project_root) -> dict | None:
 # always re-evaluated. Process-local and tiny — a worker handles one call and exits.
 _STALE_CACHE: dict[tuple[str, float], bool | None] = {}
 
+# ...which is exactly why the in-process cache never helped: every delegated call is a
+# FRESH worker process, so the memo was always empty and the full-tree walk ran every
+# single time. The verdict is a pure function of the graph mtime, so it survives on disk.
+_STALE_CACHE_FILE = "graph-stale.json"
+
+
+def _stale_cache_path(project_root) -> Path:
+    return Path(project_root) / ".workflow" / _STALE_CACHE_FILE
+
+
+def _read_stale_cache(project_root, graph_mtime: float) -> bool | None:
+    """Cached verdict for this exact graph mtime, or None to recompute. Never raises."""
+    try:
+        data = json.loads(
+            _stale_cache_path(project_root).read_text(encoding="utf-8")
+        )
+        if float(data.get("graph_mtime", -1)) == graph_mtime:
+            verdict = data.get("verdict")
+            return verdict if isinstance(verdict, bool) else None
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return None
+
+
+def _write_stale_cache(project_root, graph_mtime: float, verdict: bool) -> None:
+    """Best-effort: a cache that cannot be written must not fail the call."""
+    try:
+        path = _stale_cache_path(project_root)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps({"graph_mtime": graph_mtime, "verdict": verdict}),
+            encoding="utf-8",
+        )
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
 
 def is_stale(project_root) -> bool | None:
     """True when the graph is older than the newest tracked source file.
@@ -81,6 +120,10 @@ def is_stale(project_root) -> bool | None:
     cache_key = (str(project_root), graph_mtime)
     if cache_key in _STALE_CACHE:
         return _STALE_CACHE[cache_key]
+    cached = _read_stale_cache(project_root, graph_mtime)
+    if cached is not None:
+        _STALE_CACHE[cache_key] = cached
+        return cached
 
     newest = 0.0
     root = Path(project_root)
@@ -100,6 +143,7 @@ def is_stale(project_root) -> bool | None:
         return None
     verdict = newest > graph_mtime
     _STALE_CACHE[cache_key] = verdict
+    _write_stale_cache(project_root, graph_mtime, verdict)
     return verdict
 
 

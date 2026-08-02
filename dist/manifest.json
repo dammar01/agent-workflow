@@ -7,15 +7,15 @@
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "967e02fda8b62df9a46d96880e16b815c502a6fcfc5bfe8b0aa562f42623a117",
-      "bytes": 20549,
+      "sha256": "96edfcd5274a00dede74405286fab512d94325969062450a472f655bcdb4f57e",
+      "bytes": 22111,
       "merge": "merge",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/skills/analyze.md",
-      "sha256": "9ac91d4581f98c4b62084a46483420fb4cfe513be2cf7cbe4c5265635a24bbcd",
-      "bytes": 1526,
+      "sha256": "2d1c194f3657b5ae5114bc9ec097f07c0bb613951ef2de405a1ef4881670911f",
+      "bytes": 1751,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -91,8 +91,8 @@
     },
     {
       "path": "claude/skills/plan.md",
-      "sha256": "86fee4b42191281f755a25c74089083d310a7341a5079f7dc5d56b6f6c70c4a9",
-      "bytes": 4998,
+      "sha256": "e4ed770d17c98e22fee42ddd6208c76d0949f85226edc81b1d5f19fbf88827b1",
+      "bytes": 5349,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -294,9 +294,44 @@
     },
     {
       "path": "opencode/AGENTS.md",
-      "sha256": "46aa819e0a676c177abda07c92eb5c2695a14a48e6600011775b6bce6c9bdc1b",
-      "bytes": 13871,
+      "sha256": "d66d8e30d6ebea94df9386862819158cb16b18c4656317c322989267e9437107",
+      "bytes": 15515,
       "merge": "merge",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "opencode/agents/wf-db.md",
+      "sha256": "6678f293a869211081b7b7a24a939e5e4cdc3d6c25423e0bcd1e2f18f9653f04",
+      "bytes": 1249,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "opencode/agents/wf-docs.md",
+      "sha256": "b0c572f4e211a2d236ef7c10c6e2c9941b72bca2c4b71b31f1ca2e4a889de280",
+      "bytes": 967,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "opencode/agents/wf-map.md",
+      "sha256": "d9df00851904aa250a72af413e43bc981b543b9d84b139a6022ba667b37541b1",
+      "bytes": 1083,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "opencode/agents/wf-slice.md",
+      "sha256": "147c98d866201d0aebaebf5986a8115400563c4fe8fe1470075a84edbf8696bd",
+      "bytes": 961,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "opencode/agents/wf-trace.md",
+      "sha256": "cf3276e40a43217fda6a42afcc89f19a85b033ef1f87359d5c2bb8089e0a1011",
+      "bytes": 1135,
+      "merge": "replace",
       "component": "prompt_bundle"
     },
     {
@@ -321,6 +356,7 @@
     "claude/hooks": "{{HOME}}/.claude/hooks",
     "claude/settings.template.json": "{{HOME}}/.claude/settings.json",
     "opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",
+    "opencode/agents": "{{PROJECT_ROOT}}/.opencode/agents",
     "opencode/opencode.template.json": "{{HOME}}/.config/opencode/opencode.json"
   }
 }

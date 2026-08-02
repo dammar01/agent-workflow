@@ -100,14 +100,34 @@ Leads & facts TIDAK lagi ikut di prompt (argv Windows capped 8191). Ditulis ke f
 - `runtime_dir/facts.json` → list string `"<claim> [file:line]"` cached dari run lampau. Treat sbg LEADS to verify, BUKAN ground truth. `[]` → tak ada cached facts.
 - Kedua file WAJIB kamu baca (Read) SEBELUM jawab bila blok `[EVIDENCE_SIDECARS]` ada. Skip = instruksi gagal, bukan shortcut. File hilang/kosong → lanjut direct traversal, JANGAN gagal.
 
+## Subagent Roster (satu primary, sisanya subagent)
+Kamu SATU-SATUNYA primary. Semua spesialisasi di bawah ini subagent, dipanggil lewat tool `task`.
+
+| Subagent | Untuk | Menghasilkan |
+|---|---|---|
+| `wf-slice` | satu slice/community dalam fan-out | max 5 grounded claim + file:line |
+| `wf-map` | struktur area: di mana mulai, alur, modul terlibat | `entry_points`, `flow`, `related_modules` |
+| `wf-trace` | siapa memakai simbol X, apa rusak kalau berubah | `dependents`, `blast_radius` |
+| `wf-docs` | API/versi library eksternal via context7 | `external` `[EXTERNAL:context7 …]` |
+| `wf-db` | isi database nyata (skema, kolom, sampel baris) | `external` `[EXTERNAL:db …]` |
+
+- Subagent tak ada di daftar tool-mu → pakai `explore` (read-only bawaan) sbg pengganti umum.
+- DILARANG target `general`: dia bisa nulis, jadi primary read-only ditolak spawn dia (`{"permission":"task","pattern":"general","action":"deny"}`) dan call gagal.
+- Pakai TOOL `task`, bukan menulis `@nama` di teks. Di `opencode run` non-interaktif `@nama` cuma teks biasa: nol spawn, nol child session, dan primary diam-diam mengerjakannya sendiri.
+- Subagent tak bisa spawn subagent (`task: deny` di tiap file agent). Jangan susun rantai.
+
 ## Fan-out Protocol (blok [EVIDENCE_SIDECARS] menandai "FAN-OUT call")
 Prompt bilang FAN-OUT → clusters ada di `leads.json` `communities[]`. Satu sub-agent per community.
-- Cek tool list-mu dulu utk sub-agent/task/dispatch tool. Ada → WAJIB pakai; baca slice sendiri = instruksi gagal.
+- Pakai tool `task` dgn subagent **`wf-slice`**. Ada tool → WAJIB pakai; baca slice sendiri = instruksi gagal.
 - Spawn SEMUA sekaligus, tiap sub-agent scope-bounded ke community-nya (file di `communities[].files`), dilarang baca luar slice-nya.
 - Laporan tiap sub-agent PENDEK: max 5 grounded claim, tiap baris file:line. Kamu merge; teks sub-agent = bahan mentah, bukan jawaban.
 - Tag tiap merged claim origin community sbg leading `[cN]` (mis. `[c3] Router routes by command [core/router.py:16]`).
 - Community yang nihil → sebut kosong, jangan pad. Isi baris `subagents:` dgn community yang benar-benar di-dispatch.
-- Tak ada spawn tool → tulis `subagents: none (no spawn tool; tools: <daftar SEMUA tool-mu>)` lalu baca slice sendiri berurutan. Klaim "no spawn tool" tanpa daftar tool = tak diterima.
+- Baris `subagents:` WAJIB ada tiap FAN-OUT call. Menghilangkannya = runtime tak bisa bedakan kamu fan-out atau tidak, dan hasilnya dihitung sbg sequential read.
+- Tak fan-out → sebut MANA dari tiga ini, lalu baca slice sendiri berurutan:
+  - tool `task` memang tak ada → `subagents: none (no spawn tool; tools: <daftar SEMUA tool-mu>)`. Klaim "no spawn tool" padahal `task` ada di list = laporan palsu.
+  - tool ada tapi call ditolak → `subagents: none (denied: <teks error/rule persis>)`. Penolakan JANGAN diturunkan jadi "preferensi".
+  - kamu memilih tidak → `subagents: none (declined: <alasan>)`.
 - Jangan lapor fan-out yang tak kamu lakukan; sequential read jujur itu valid, klaim palsu tidak.
 
 ## Docs Protocol — context7 (plan/analyze)
