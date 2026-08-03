@@ -23,7 +23,6 @@ from core import evidence_store
 from core import graph_index
 from core.prompt_builder import build_prompt
 from core.router import Router
-from utils.path_guard import validate_scope
 from utils.redact import redact_value
 from core import quick_verify
 from core.workflow_runtime import (
@@ -152,8 +151,9 @@ _FANOUT_WARNINGS = {
         "may not spawn write-capable subagents like `general`; `explore` is allowed"
     ),
     FANOUT_INCAPABLE: (
-        "second_agent reports no spawn tool; fan-out disabled for this project until "
-        "the capability is re-probed"
+        "second_agent reports no spawn tool; fan-out is off for this project and will be "
+        "retried automatically after AI_PROXY_FANOUT_RECHECK_HOURS (default 24h). To "
+        "retry now, delete .workflow/capabilities.json"
     ),
     FANOUT_DECLINED: (
         "second_agent chose not to fan out; the answer is a sequential read"
@@ -316,16 +316,12 @@ class Executor:
         )
         project_root = detect_project_root(work_dir)
 
-        scope_ok, blocked = validate_scope(task, project_root)
-        if not scope_ok:
-            return make_error(
-                "path_out_of_scope",
-                "task references sensitive files or paths outside the project",
-                next_action="Remove the flagged paths or ask the user for explicit access, then retry.",
-                meta={"command": normalized_command},
-                blocked_paths=blocked,
-            )
-
+        # No secret-path preflight here any more. It scanned the TASK TEXT, so it blocked
+        # talking about a file rather than reading one — an audit that named `.env` in its
+        # instructions was rejected while nothing stopped a run that never mentioned it.
+        # The boundary now sits where it can be enforced: opencode `permission.read`/`grep`
+        # deny rules, shipped in the project's opencode.json, which act on the actual tool
+        # call. See dist/config/opencode/opencode.project.json.
         mode = verify_mode(project_root) if normalized_command == "verify" else None
         if mode == "syntax":
             result = quick_verify.run(project_root, session_id)
@@ -699,6 +695,16 @@ class Executor:
             meta["subagent_fanout_clusters"] = usage["fanout_clusters"]
             meta["covered_clusters"] = usage["covered_clusters"]
             warning = _FANOUT_WARNINGS.get(usage["mode"])
+            if usage.get("false_incapable_report"):
+                # Say it plainly. The agent broke a rule its own prompt states, and the
+                # reader needs to know the "declined" below is a downgrade, not a report.
+                meta["false_incapable_report"] = True
+                warning = (
+                    "second_agent claimed it has no spawn tool while listing one in its "
+                    "own tool inventory; counted as a decline, and fan-out was NOT "
+                    "disabled. Spawning a read-only subagent writes nothing — being in a "
+                    "read-only agent is not a reason to refuse `task`"
+                )
             if warning:
                 meta["subagent_warning"] = warning
             # Only a genuine tool absence latches capability off. A permission refusal is

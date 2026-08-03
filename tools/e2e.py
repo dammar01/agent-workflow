@@ -165,9 +165,11 @@ def local_checks(report: Report) -> None:
     manifest = json.loads((REPO_ROOT / "dist" / "manifest.json").read_text(encoding="utf-8"))
     report.check(
         "release versions are synchronized",
-        TOOL_VERSION == CONFIG_VERSION == manifest.get("version") == "3.4.1"
-        and set(COMPONENT_VERSIONS.values()) == {"3.4.1"}
-        and set((manifest.get("versions") or {}).values()) == {"3.4.1"},
+        # Compared against TOOL_VERSION, not a literal: a hardcoded number turns every
+        # release bump into a test edit, and the check is about the four staying in sync.
+        TOOL_VERSION == CONFIG_VERSION == manifest.get("version")
+        and set(COMPONENT_VERSIONS.values()) == {TOOL_VERSION}
+        and set((manifest.get("versions") or {}).values()) == {TOOL_VERSION},
         f"tool={TOOL_VERSION}, config={CONFIG_VERSION}, manifest={manifest.get('version')}",
     )
 
@@ -607,12 +609,15 @@ def installer_checks(report: Report) -> None:
         project = Path(tempfile.mkdtemp(prefix="e2e-install-project-"))
         try:
             (project / ".git").mkdir()
-            project_install = subprocess.run(
+            # init owns scaffolding now; the installer finds the workspace by cwd instead
+            # of taking a --init-project flag.
+            project_init = subprocess.run(
                 [
                     sys.executable,
-                    str(REPO_ROOT / "install.py"),
-                    "--apply",
-                    "--init-project",
+                    str(REPO_ROOT / "main.py"),
+                    "--command",
+                    "init",
+                    "--work-dir",
                     str(project),
                 ],
                 capture_output=True,
@@ -622,24 +627,34 @@ def installer_checks(report: Report) -> None:
                 env=env,
             )
             report.check(
-                "project install places custom agents in project scope",
-                project_install.returncode == 0
-                and len(list((project / ".opencode" / "agents").glob("wf-*.md"))) >= 5,
-                f"rc={project_install.returncode}",
+                "init installs the project opencode boundary",
+                project_init.returncode == 0 and (project / "opencode.json").exists(),
+                f"rc={project_init.returncode}",
             )
-            project_check = subprocess.run(
-                [
-                    sys.executable,
-                    str(REPO_ROOT / "install.py"),
-                    "--check",
-                    "--init-project",
-                    str(project),
-                ],
+            project_install = subprocess.run(
+                [sys.executable, str(REPO_ROOT / "install.py"), "--apply"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
                 env=env,
+                cwd=str(project),
+            )
+            report.check(
+                "install inside a project keeps custom agents global",
+                project_install.returncode == 0
+                and len(list(global_agents.glob("wf-*.md"))) >= 5
+                and not (project / ".opencode" / "agents").exists(),
+                f"rc={project_install.returncode}",
+            )
+            project_check = subprocess.run(
+                [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+                cwd=str(project),
             )
             report.check(
                 "project-scoped install passes check",

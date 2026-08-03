@@ -1,8 +1,8 @@
 {
-  "version": "3.4.1",
+  "version": "3.4.2",
   "versions": {
-    "prompt_bundle": "3.4.1",
-    "runtime": "3.4.1"
+    "prompt_bundle": "3.4.2",
+    "runtime": "3.4.2"
   },
   "files": [
     {
@@ -315,8 +315,8 @@
     },
     {
       "path": "opencode/AGENTS.md",
-      "sha256": "3afe6b6b15845c43df15d9767fc87e0b4fac67c3be80211ed3f281187b11e698",
-      "bytes": 15749,
+      "sha256": "f491a41a07848350911648230532c923a176fa377f90dbaddc6c815ec014d879",
+      "bytes": 16113,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -368,6 +368,13 @@
       "bytes": 1885,
       "merge": "merge",
       "component": "runtime"
+    },
+    {
+      "path": "opencode/opencode.project.json",
+      "sha256": "a9289058900f9de5a800d48d7a97cf09c32be38ff3cd7fb29cfdbf5f1f5803e8",
+      "bytes": 1353,
+      "merge": "merge",
+      "component": "runtime"
     }
   ],
   "targets": {
@@ -377,7 +384,8 @@
     "claude/hooks": "{{HOME}}/.claude/hooks",
     "claude/settings.template.json": "{{HOME}}/.claude/settings.json",
     "opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",
-    "opencode/agents": "{{PROJECT_ROOT}}/.opencode/agents",
-    "opencode/opencode.template.json": "{{HOME}}/.config/opencode/opencode.json"
+    "opencode/agents": "{{HOME}}/.config/opencode/agents",
+    "opencode/opencode.template.json": "{{HOME}}/.config/opencode/opencode.json",
+    "opencode/opencode.project.json": "{{PROJECT_ROOT}}/opencode.json"
   }
 }

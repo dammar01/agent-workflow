@@ -8,7 +8,6 @@ import re
 
 ERROR_TYPES = {
     "permission_denied",
-    "path_out_of_scope",
     "empty_output",
     "job_already_running",
     "session_capture_failed",
@@ -91,6 +90,32 @@ _DENIED_RE = re.compile(
 _DECLINED_RE = re.compile(
     r"^\s*subagents\s*:\s*none\b", re.IGNORECASE | re.MULTILINE
 )
+# The no-spawn fallback must list the agent's own tools, which makes the claim checkable
+# against itself. Observed live: `subagents: none (no spawn tool available; tools: read,
+# grep, glob, task, ...)` — `task` named in the same breath as its absence. The agent had
+# decided read-only mode forbade spawning and dressed a choice up as a limitation. Taken
+# at face value that sentence permanently disables fan-out, so it is checked, not trusted.
+_TOOLS_INVENTORY_RE = re.compile(r"tools?\s*:\s*(.+)$", re.IGNORECASE)
+_SPAWN_TOOL_NAMES = ("task", "spawn", "subagent", "dispatch_agent")
+
+
+def _no_spawn_report_is_false(content: str) -> bool:
+    """True when a 'no spawn tool' claim lists a spawn tool in its own inventory.
+
+    Reads the WHOLE `subagents:` line, not the no-spawn match: that match ends at the
+    words "no spawn tool", and the inventory that contradicts it comes after.
+    """
+    line = _SUBAGENT_LINE.search(content or "")
+    if not line:
+        return False
+    inventory = _TOOLS_INVENTORY_RE.search(line.group(0))
+    if not inventory:
+        return False
+    names = {
+        token.strip().strip("`'\"*").lower()
+        for token in re.split(r"[,;/]| and ", inventory.group(1))
+    }
+    return any(name in names for name in _SPAWN_TOOL_NAMES)
 
 # What actually happened to the fan-out instruction, for meta.fanout_mode.
 FANOUT_PARALLEL = "parallel"
@@ -104,10 +129,11 @@ FANOUT_MISMATCH = "claimed_unconfirmed"
 def reported_no_spawn_tool(content: str) -> bool:
     """True when the second agent explicitly reported it has no sub-agent/spawn tool.
 
-    A capability signal, not a contract miss: observed once, it means opencode here cannot
-    fan out, so the runtime can stop paying prompt space for a plan it will never run.
+    A capability signal, not a contract miss: it means opencode here cannot fan out, so the
+    runtime can stop paying prompt space for a plan it will never run. A report that names
+    a spawn tool while denying one does not count — that is a decision, not a limitation.
     """
-    return bool(_NO_SPAWN_RE.search(content or ""))
+    return bool(_NO_SPAWN_RE.search(content or "")) and not _no_spawn_report_is_false(content)
 
 
 def detect_subagent_usage(content: str) -> dict:
@@ -140,12 +166,18 @@ def detect_subagent_usage(content: str) -> dict:
     # opposite responses: a permission wall is fixable config, no tool is permanent, a
     # decline is the agent's judgement call. Collapsing them into "not used" threw that
     # away — and an omitted line was indistinguishable from a decline.
+    no_spawn = _NO_SPAWN_RE.search(content or "")
+    false_report = bool(no_spawn) and _no_spawn_report_is_false(content)
     if used:
         mode = FANOUT_PARALLEL
     elif declared:
         mode = FANOUT_MISMATCH
-    elif _NO_SPAWN_RE.search(content or ""):
+    elif no_spawn and not false_report:
         mode = FANOUT_INCAPABLE
+    elif false_report:
+        # It has the tool and did not use it. That is a decline, and it must stay one:
+        # only a real absence may switch fan-out off for the whole project.
+        mode = FANOUT_DECLINED
     elif _DENIED_RE.search(content or ""):
         mode = FANOUT_DENIED
     elif _DECLINED_RE.search(content or ""):
@@ -161,6 +193,10 @@ def detect_subagent_usage(content: str) -> dict:
         # Clusters the answer draws on, fan-out or not.
         "covered_clusters": tagged,
         "mismatch": bool(declared) and not signals_match,
+        # The agent contradicted itself about having a spawn tool. Surfaced rather than
+        # silently downgraded: the prompt contract forbids this line, and a run that
+        # produced it is worth seeing.
+        "false_incapable_report": false_report,
     }
 
 
@@ -199,6 +235,45 @@ def _section(content: str, name: str) -> list[str]:
 
 _BRACKET_REF = re.compile(r"\[([^\[\]]+)\]")
 
+# Not every bracket is an anchor. Treating them all as one deleted the marker out of
+# "replaces the value with [REDACTED:api key]", leaving a sentence that says the opposite
+# of what was written and a `refs` list holding the word "REDACTED:api key". A bracket is
+# bookkeeping only when its contents READ like a reference.
+_REF_SOURCE = r"(?:proof|proxy|ref|source|src|evidence|external)"
+_REF_ATOM = re.compile(
+    rf"""^(?:{_REF_SOURCE}\s*:\s*)?              # optional source prefix
+        [^\s\[\]<>:]+(?:[\\/][^\s\[\]<>:]+)*     # path segments
+        \.[A-Za-z0-9_]{{1,12}}                   # extension — a bare word is not a path
+        (?:[:#]L?\d+(?:[-:]L?\d+)?)?             # optional :line, :start-end, #Lnn
+        $""",
+    re.VERBOSE | re.IGNORECASE,
+)
+# Attribution labels the plan/analysis contract requires. They carry no path but are
+# bookkeeping all the same, so they belong beside the claim rather than inside it.
+_ATTRIBUTION_REFS = {
+    "main_agent-inference",
+    "main-agent-inference",
+    "user-provided",
+    "placeholder",
+    "asumsi",
+    "assumption",
+}
+
+
+def _is_anchor(inner: str) -> bool:
+    """True when bracketed text is bookkeeping, not part of the sentence."""
+    body = (inner or "").strip()
+    if not body:
+        return False
+    # A redaction marker is content: it is what the reader is meant to see in place of
+    # the secret. Pulling it out of the prose destroys the only trace the value existed.
+    if body.upper().startswith("REDACTED"):
+        return False
+    parts = [part.strip() for part in body.split(",") if part.strip()]
+    return bool(parts) and all(
+        part.lower() in _ATTRIBUTION_REFS or _REF_ATOM.match(part) for part in parts
+    )
+
 
 def split_claim(claim: str) -> dict:
     """Separate what a claim SAYS from the identifiers that back it.
@@ -208,11 +283,25 @@ def split_claim(claim: str) -> dict:
     `[core/router.py:16]` mid-sentence is reading machine bookkeeping, so hand callers a
     prose `text` and a separate `refs` list rather than making each of them re-derive it.
 
-    Returns {'text', 'refs'}. A claim with no brackets comes back unchanged with refs=[].
+    Only reference-shaped brackets move. Anything else — a redaction marker, a status
+    tag, a markdown link label — stays in `text`, because removing it changes what the
+    sentence means.
+
+    Returns {'text', 'refs'}. A claim with no anchors comes back unchanged with refs=[].
     """
     body = claim or ""
-    refs = [r.strip() for r in _BRACKET_REF.findall(body) if r.strip()]
-    text = _BRACKET_REF.sub("", body)
+    refs: list[str] = []
+
+    def take(match: "re.Match") -> str:
+        # `[label](url)` is a markdown link, not an anchor, however path-like the label.
+        if body[match.end():match.end() + 1] == "(":
+            return match.group(0)
+        if not _is_anchor(match.group(1)):
+            return match.group(0)
+        refs.append(match.group(1).strip())
+        return ""
+
+    text = _BRACKET_REF.sub(take, body)
     # Collapse the whitespace and dangling punctuation the removal leaves behind.
     text = re.sub(r"\s{2,}", " ", text).strip().rstrip(" ,;")
     return {"text": text, "refs": refs}

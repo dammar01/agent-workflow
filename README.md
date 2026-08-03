@@ -78,9 +78,8 @@ Clone → jalankan satu script → terkonfigurasi.
 git clone <repo> && cd agent-workflow
 python install.py            # DRY RUN — tampilkan semua perubahan, tulis nol
 python install.py --apply    # baru menulis
-python install.py --apply --init-project .   # sekalian scaffold .workflow/ di sini
 python install.py --apply --only-command      # matikan auto-intent
-python install.py --check --init-project .    # cek bundle + instalasi project
+python install.py --check                     # cek bundle + instalasi (termasuk project bila cwd punya .workflow/)
 python install.py --rollback                  # dry-run rollback terakhir
 python install.py --rollback --apply          # rollback setelah preflight hash
 ```
@@ -97,7 +96,8 @@ Yang dilakukan `--apply`:
 | `~/.claude/settings.json` | tambah key dan refresh hook milik workflow; hook user dipertahankan |
 | `~/.config/opencode/AGENTS.md` | ganti isi di antara marker `WORKFLOW-SECOND-AGENT` |
 | `~/.config/opencode/opencode.{json,jsonc}` | merge additive untuk config umum; permission `agent.plan` milik workflow ditegakkan, key user lain dipertahankan |
-| `.opencode/agents/*.md` | project-local saat memakai `--init-project`; global bila project tidak diberikan |
+| `~/.config/opencode/agents/*.md` | replace — satu roster subagent global, dipakai semua project yang dikelola workflow |
+| `<project_root>/opencode.json` | **bukan** tugas installer — dipasang dan di-refresh oleh `init`/`upgrade` (deny-rule file rahasia ditegakkan tiap kali) |
 
 Semua yang akan tertimpa di-backup dulu ke `~/.claude/backups/install_<timestamp>/`.
 Receipt schema v2 mencatat hash sebelum dan sesudah untuk setiap file yang dibuat atau
@@ -108,7 +108,7 @@ Receipt mencakup target instalasi global dan bundle. Init/upgrade stateful pada 
 serta penambahan `.workflow/` ke `.gitignore` tidak masuk rollback installer karena dapat
 memuat session dan state project yang tidak aman dihapus otomatis.
 
-Jika `--init-project` menunjuk project yang sudah memiliki `.workflow/`, installer menjalankan **upgrade in-place**: scripts diregenerasi, key config baru di-backfill secara additive, dan `sessions/` dipertahankan. Upgrade workspace ditolak bila masih ada job aktif; install global tetap selesai dan warning harus diperiksa.
+Bila installer dijalankan dari dalam project yang sudah memiliki `.workflow/`, ia menjalankan **upgrade in-place**: scripts diregenerasi, key config baru di-backfill secara additive, `<project_root>/opencode.json` di-refresh, dan `sessions/` dipertahankan. Workspace baru tidak di-scaffold oleh installer — pakai `python main.py --command init --work-dir DIR` (skill `/.init`). Upgrade workspace ditolak bila masih ada job aktif; install global tetap selesai dan warning harus diperiksa.
 
 ### Mode intent
 
@@ -118,8 +118,9 @@ kontrak prefix `/.` dan menghapus hook `intent-gate-set` milik workflow yang sud
 terpasang; hook lain milik user tidak dihapus. Jalankan `--auto-intent` untuk memulihkannya.
 Tanpa kedua flag, upgrade mempertahankan mode instalasi sebelumnya.
 
-`--check` tanpa `--init-project` memeriksa custom OpenCode agents global. Gabungkan dengan
-`--init-project DIR` untuk memeriksa agents project-local pada directory tersebut.
+`--check` menentukan scope dari cwd: dijalankan di dalam project yang punya `.workflow/`, ia
+ikut memeriksa boundary project (`<project_root>/opencode.json`). Di luar workspace, scope
+itu dilaporkan `SKIPPED` — bukan didiamkan lalu dilaporkan READY.
 
 ### Extractor (sisi maintainer)
 
@@ -231,10 +232,11 @@ Konsekuensinya: `run.sh` yang dihasilkan di Windows berisi path bergaya `C:\...`
 Jalur yang direkomendasikan setelah menarik versi agent-workflow baru:
 
 ```bash
-python install.py --apply --init-project /path/to/target-app
+cd /path/to/target-app && python /path/to/agent-workflow/install.py --apply
 ```
 
-Command itu memperbarui config global dan otomatis memilih `init` atau `upgrade` untuk project target. Untuk workspace saja:
+Command itu memperbarui config global dan meng-upgrade workspace di cwd. Project yang belum
+punya `.workflow/` di-scaffold lewat `init`, bukan installer. Untuk workspace saja:
 
 ```bash
 python3 "$AGENT_PATH" --command upgrade --work-dir /path/to/target-app --pretty

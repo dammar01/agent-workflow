@@ -1501,30 +1501,45 @@ confidence: high — all requested checks ran
             "result must derive verify exit status from the stored output",
         )
 
-        # preflight path guard
-        guard_ok, blocked = path_guard.validate_scope("read the .env and secret files", temp_root)
-        assert_true(not guard_ok and blocked, "path guard must block sensitive references")
-        traversal_ok, blocked = path_guard.validate_scope("read ../outside/file.py", temp_root)
+        # Secret access is denied on the TOOL CALL, not by scanning the task text. The
+        # text scan blocked an audit for naming the files it audited while leaving the
+        # files themselves reachable, so the rules now ship as opencode permissions.
         assert_true(
-            not traversal_ok and "../outside/file.py" in blocked,
-            f"relative traversal must be resolved against project root: {blocked}",
+            not hasattr(path_guard, "validate_scope"),
+            "the task-text scope guard must stay removed; enforcement is opencode's",
         )
-        bare_secret_ok, blocked = path_guard.validate_scope("inspect credentials.json", temp_root)
+        project_policy = json.loads(
+            (
+                Path(__file__).resolve().parent
+                / "dist"
+                / "config"
+                / "opencode"
+                / "opencode.project.json"
+            ).read_text(encoding="utf-8")
+        )
+        policy_read = project_policy["permission"]["read"]
+        policy_grep = project_policy["permission"]["grep"]
+        for pattern in ("*.env", "*.env.*", "*id_rsa*", "*.pem", "*.key", "*.ssh/*"):
+            assert_true(
+                policy_read.get(pattern) == "deny",
+                f"project policy must deny reading {pattern}",
+            )
         assert_true(
-            not bare_secret_ok and "credentials.json" in blocked,
-            f"bare credential filenames must be blocked: {blocked}",
-        )
-        ranged_secret_ok, blocked = path_guard.validate_scope(
-            "inspect credentials.json:12-14 and secrets.yaml#L12", temp_root
+            policy_grep.get("*.env") == "deny",
+            "grep must be denied too: it returns file CONTENTS, so read-only denial alone leaks",
         )
         assert_true(
-            not ranged_secret_ok
-            and "credentials.json:12-14" in blocked
-            and "secrets.yaml#L12" in blocked,
-            f"sensitive bare file ranges must be blocked: {blocked}",
+            policy_read.get("*.env.example") == "allow",
+            "example env files carry no secret and must stay readable",
         )
-        clean_ok, _ = path_guard.validate_scope("find the auth entry point", temp_root)
-        assert_true(clean_ok, "clean task must pass the guard")
+        assert_true(
+            list(policy_read).index("*.env") < list(policy_read).index("*.env.example"),
+            "the allow exception must come after the deny it narrows; order decides the winner",
+        )
+        assert_true(
+            not any(p in policy_read for p in ("*secret*", "*credential*")),
+            "word-shaped patterns are what made the old guard block ordinary source files",
+        )
 
         # cross-OS primitive
         assert_true(osutil.process_alive(999999999) is False, "process_alive must report dead pid")

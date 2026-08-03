@@ -21,7 +21,7 @@ WORKFLOW_DIRNAME = ".workflow"
 LOCK_TTL_SECONDS = 300
 JSON_INDENT = 2
 ARCHIVE_KEEP = 20
-CONFIG_VERSION = "3.4.1"
+CONFIG_VERSION = "3.4.2"
 
 
 def now_iso() -> str:
@@ -368,12 +368,9 @@ def upgrade_workflow_workspace(
     tool = _tool_paths(agent_workflow_path)
 
     config_changed = False
-    fresh_config = False
-    main_py_changed = False
     if not paths["config"].exists():
         config = default_config(project_root, agent_workflow_path)
         config_changed = True
-        fresh_config = True
     else:
         try:
             config = read_json_file(paths["config"])
@@ -391,9 +388,6 @@ def upgrade_workflow_workspace(
             )
         config, config_changed = merge_config_defaults(config)
         runtime = config.setdefault("runtime", {})
-        # Scripts embed main_py_path; a repo move must regenerate them even when the
-        # runtime component version did not bump.
-        main_py_changed = runtime.get("main_py_path") != tool["main_py_path"]
         # Tool paths are absolute and machine-specific: an upgrade after the repo moved
         # must repoint them, or the regenerated scripts call a main.py that is gone.
         for key in (
@@ -416,16 +410,16 @@ def upgrade_workflow_workspace(
         atomic_write_json(paths["config"], config)
 
     opencode_added = _merge_opencode_config(project_root, tool["tool_dir"])
+    # Refresh the project boundary too. Skipping it here would mean a deny-rule added in a
+    # newer build never reaches a workspace that was scaffolded on an older one.
+    project_opencode = _install_project_opencode(project_root, tool["tool_dir"])
 
-    # The run/inspect/check scripts are a pure function of
-    # main_py_path + platform + the generator's version. Regenerate only when one of those
-    # could have moved — the runtime component bumped, the repo relocated, or the config was
-    # created fresh — instead of rewriting identical files on every upgrade.
-    runtime_bumped = before.get("installed_runtime_version") != tool["runtime_version"]
-    if fresh_config or main_py_changed or runtime_bumped:
-        scripts = _generate_run_scripts(project_root, tool["main_py_path"])
-    else:
-        scripts = []
+    # Always render; the generator writes only what actually differs. The old gate keyed on
+    # the runtime version bumping, which meant a generator change shipped without a version
+    # bump never reached an existing workspace — the script on disk stayed wrong until
+    # someone re-ran init. Content is the honest signal; the version number was a proxy for
+    # it that could silently disagree.
+    scripts = _generate_run_scripts(project_root, tool["main_py_path"])
     gitignore_updated = ensure_root_gitignore_entry(project_root)
 
     return {
@@ -434,6 +428,7 @@ def upgrade_workflow_workspace(
         "to": workspace_versions(project_root),
         "config_updated": config_changed,
         "opencode_keys_added": opencode_added,
+        "project_opencode": project_opencode,
         "diverged_from_defaults": diverged_defaults(config),
         "regenerated_scripts": scripts,
         "gitignore_updated": gitignore_updated,
@@ -518,17 +513,47 @@ def fanout_capability(project_root: Path) -> bool | None:
     True/False once a delegated run has revealed it; None while unprobed. Default fan-out
     stays ON — this only flips it OFF after opencode itself reports no spawn tool, so the
     prompt stops carrying a fan-out plan opencode cannot execute.
+
+    A False verdict EXPIRES. It rests on one sentence the second agent wrote about itself,
+    and that sentence is not always true. Worse, it is self-sealing: with fan-out off the
+    prompt no longer asks for fan-out, so no later run can produce the evidence that would
+    turn it back on. Ageing it out means a wrong verdict costs one stale window, not the
+    life of the project. True never expires — a capability that was demonstrated once does
+    not need re-proving.
     """
+    from config.settings import DEFAULT_FANOUT_RECHECK_HOURS
+
     try:
         data = read_json_file(_capabilities_path(project_root))
     except (OSError, ValueError):
         return None
     value = data.get("subagent_fanout_capable") if isinstance(data, dict) else None
-    return value if isinstance(value, bool) else None
+    if not isinstance(value, bool):
+        return None
+    if value or DEFAULT_FANOUT_RECHECK_HOURS <= 0:
+        return value
+    stamped = data.get("subagent_fanout_capable_at")
+    if not isinstance(stamped, str):
+        # No timestamp means it was written by an older build. Retry rather than honour a
+        # verdict whose age cannot be established.
+        return None
+    try:
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(stamped)
+    except (TypeError, ValueError):
+        return None
+    if age.total_seconds() >= DEFAULT_FANOUT_RECHECK_HOURS * 3600:
+        return None
+    return value
 
 
 def set_fanout_capability(project_root: Path, capable: bool) -> None:
-    """Persist the observed fan-out capability. No-op when unchanged (avoids churn)."""
+    """Persist the observed fan-out capability, refreshing when it is merely reconfirmed.
+
+    An unchanged verdict used to be a no-op. Once False verdicts expire, that silently
+    broke them: a run that observed the same limitation again left the old timestamp in
+    place, so the verdict aged out despite being confirmed every single time. The stamp
+    records when the evidence was last SEEN, not when the answer last changed.
+    """
     path = _capabilities_path(project_root)
     try:
         data = read_json_file(path)
@@ -536,8 +561,6 @@ def set_fanout_capability(project_root: Path, capable: bool) -> None:
             data = {}
     except (OSError, ValueError):
         data = {}
-    if data.get("subagent_fanout_capable") == capable:
-        return
     data["subagent_fanout_capable"] = capable
     data["subagent_fanout_capable_at"] = now_iso()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -805,6 +828,63 @@ def _copy_opencode_config(project_root: Path, tool_dir: str) -> str | None:
     return None
 
 
+def _install_project_opencode(project_root: Path, tool_dir: str) -> dict:
+    """Install/refresh <project_root>/opencode.json — the secret-file boundary the
+    second_agent runs under.
+
+    Init owns this rather than install.py: the boundary belongs to a workspace, and a
+    project scaffolded without it is exactly the gap doctor reports. Permissions are
+    ENFORCED on every call (init and upgrade alike), so a boundary someone edited loose is
+    repaired; every other key in the file stays the user's.
+    """
+    from core.opencode_policy import load_json_or_jsonc, merge_opencode_policy
+
+    src = Path(tool_dir) / "dist" / "config" / "opencode" / "opencode.project.json"
+    dest = project_root / "opencode.json"
+    result: dict = {
+        "path": str(dest),
+        "status": "source_missing",
+        "keys_added": 0,
+        "permissions_enforced": 0,
+        "warnings": [],
+    }
+    if not src.exists():
+        result["path"] = None
+        return result
+
+    warnings: list[str] = result["warnings"]
+    incoming = json.loads(src.read_text(encoding="utf-8"))
+    current: dict = {}
+    if dest.exists():
+        try:
+            current = load_json_or_jsonc(dest)
+        except json.JSONDecodeError:
+            warnings.append(
+                f"{dest} is not valid JSON/JSONC — left untouched (fix or remove it, then rerun)"
+            )
+            result["status"] = "invalid_json"
+            return result
+        if not isinstance(current, dict):
+            warnings.append(
+                f"{dest} root is not a JSON object — left untouched (replace it with an object, then rerun)"
+            )
+            result["status"] = "invalid_root"
+            return result
+
+    merged, added, enforced = merge_opencode_policy(current, incoming, warnings.append)
+    result["keys_added"] = added
+    result["permissions_enforced"] = enforced
+    if merged == current and enforced == 0:
+        result["status"] = "unchanged"
+        return result
+    # Trailing newline to match what install.py writes for the global config: the two
+    # produce the same bytes for the same content, so moving this writer does not show up
+    # as drift.
+    atomic_write_text(dest, json.dumps(merged, indent=JSON_INDENT) + "\n")
+    result["status"] = "created" if not current else "merged"
+    return result
+
+
 def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
     """Emit run.ps1 + run.sh + inspect.ps1 + inspect.sh so main_agent calls one script.
 
@@ -900,6 +980,14 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         if name.rsplit(".", 1)[-1] != want_ext:
             continue
         path = workflow_dir / name
+        # utf-8-sig on read strips a BOM if present and is harmless when absent, so the
+        # comparison is about content, never about how the previous writer encoded it.
+        if path.exists():
+            try:
+                if path.read_text(encoding="utf-8-sig") == content:
+                    continue
+            except OSError:
+                pass  # unreadable -> rewrite it
         if name.endswith(".ps1"):
             # UTF-8 BOM: Windows PowerShell 5.1 reads a no-BOM file as ANSI/Win-1252,
             # which corrupts any non-ASCII byte (em-dash, accented path) -> parse error.
@@ -945,6 +1033,7 @@ def ensure_workflow_workspace(
 
     tool = _tool_paths(agent_workflow_path)
     opencode_copied = _copy_opencode_config(project_root, tool["tool_dir"])
+    project_opencode = _install_project_opencode(project_root, tool["tool_dir"])
     generated_scripts = _generate_run_scripts(project_root, tool["main_py_path"])
 
     gitignore_updated = ensure_root_gitignore_entry(project_root)
@@ -955,6 +1044,7 @@ def ensure_workflow_workspace(
         "existing_files": existing_files,
         "gitignore_updated": gitignore_updated,
         "opencode_config": opencode_copied,
+        "project_opencode": project_opencode,
         "generated_scripts": generated_scripts,
         "tool": tool,
     }
@@ -1864,19 +1954,16 @@ def _expand_home(template: str, project_root: Path | str | None = None) -> str:
     """Resolve manifest target placeholders.
 
     `{{PROJECT_ROOT}}` marks a target that installs into the worktree rather than the
-    user's home — the default for opencode subagents. With no project root known, it
-    degrades to the global opencode config dir so a plain global install still resolves
-    to a real path instead of a literal `{{PROJECT_ROOT}}` directory.
+    user's home — now only the opencode.json boundary. With no project root known it
+    degrades to home, so a caller without a workspace still resolves to a real path
+    instead of a literal `{{PROJECT_ROOT}}` directory.
     """
     text = str(template).replace("{{HOME}}", os.path.expanduser("~"))
     if "{{PROJECT_ROOT}}" in text:
-        if project_root:
-            text = text.replace("{{PROJECT_ROOT}}", str(project_root))
-        else:
-            text = text.replace(
-                "{{PROJECT_ROOT}}/.opencode",
-                str(Path(os.path.expanduser("~")) / ".config" / "opencode"),
-            ).replace("{{PROJECT_ROOT}}", os.path.expanduser("~"))
+        text = text.replace(
+            "{{PROJECT_ROOT}}",
+            str(project_root) if project_root else os.path.expanduser("~"),
+        )
     return text
 
 
@@ -2027,6 +2114,12 @@ def _bundle_integrity(
         # into the user's settings.json/opencode.json, so its bytes legitimately diverge
         # from the shipped template. Verify presence only — an exact hash would false-alarm.
         if str(rel).endswith(".template.json"):
+            result["checked"] += 1
+            continue
+        # Same reasoning for anything the manifest marks as merged rather than copied: the
+        # installed file is dist merged INTO the user's, so it matches the shipped bytes only
+        # while the user has added nothing. Hashing it reports drift for using the file.
+        if entry.get("merge") == "merge":
             result["checked"] += 1
             continue
         try:

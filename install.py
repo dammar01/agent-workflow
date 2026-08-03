@@ -5,11 +5,12 @@ agent directories.
 
     python install.py              # DRY RUN — show every change, write nothing
     python install.py --apply      # actually write
-    python install.py --apply --init-project .   # ...and scaffold/upgrade .workflow/ here
 
-Upgrading is the same command: point --init-project at a directory that already has a
-.workflow/ and it is refreshed in place (scripts regenerated, new config keys backfilled,
-sessions/ untouched) instead of being left on the build that first created it.
+Project scope is detected, not passed: run it from anywhere inside a directory that has a
+.workflow/ and that workspace is refreshed in place too (scripts regenerated, new config
+keys backfilled, opencode.json boundary re-enforced, sessions/ untouched). Scaffolding a
+NEW workspace belongs to init — `python main.py --command init --work-dir DIR` — so there
+is one bootstrap path rather than a flag that half-duplicates it.
 
 Dry run is the default on purpose. This writes into the user's global agent config,
 which every project on the machine reads; a mistake here is not contained to one repo.
@@ -43,6 +44,18 @@ HOME = (
     Path(os.environ["AGENT_HOME"]).expanduser()
     if os.environ.get("AGENT_HOME")
     else Path.home()
+)
+
+# The merge policy is shared with core.workflow_runtime (which installs the project-scoped
+# boundary). Importing it keeps one definition of the deny-rule enforcement instead of two
+# copies that drift apart. REPO_ROOT is already sys.path[0] under `python install.py`; the
+# insert covers being imported from elsewhere (tools/e2e.py).
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from core.opencode_policy import (  # noqa: E402
+    load_json_or_jsonc,
+    merge_opencode_policy,
 )
 
 MARKERS = {
@@ -593,54 +606,6 @@ def _install_settings(
         _record("merge", dest, "claude/settings.json", saved, pre_sha256)
 
 
-def _strip_jsonc(text: str) -> str:
-    """Remove // and /* */ comments from JSONC, string-aware so a `//` inside a URL
-    (e.g. "https://...") or a `/*` inside a value is preserved. Trailing commas dropped.
-    """
-    out: list[str] = []
-    i, n = 0, len(text)
-    in_str = esc = False
-    while i < n:
-        char = text[i]
-        if in_str:
-            out.append(char)
-            if esc:
-                esc = False
-            elif char == "\\":
-                esc = True
-            elif char == '"':
-                in_str = False
-            i += 1
-            continue
-        if char == '"':
-            in_str = True
-            out.append(char)
-            i += 1
-            continue
-        if char == "/" and i + 1 < n and text[i + 1] == "/":
-            while i < n and text[i] != "\n":
-                i += 1
-            continue
-        if char == "/" and i + 1 < n and text[i + 1] == "*":
-            i += 2
-            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
-                i += 1
-            i += 2
-            continue
-        out.append(char)
-        i += 1
-    return re.sub(r",(\s*[}\]])", r"\1", "".join(out))
-
-
-def _load_json_or_jsonc(path: Path) -> dict:
-    """Parse a config that may carry comments (opencode.jsonc) or be plain JSON."""
-    text = path.read_text(encoding="utf-8")
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return json.loads(_strip_jsonc(text))
-
-
 def _opencode_config_path() -> Path:
     """The native opencode config file to merge into. Prefer an existing .jsonc (the
     common opencode default), else .json. opencode reads either from this directory."""
@@ -651,77 +616,6 @@ def _opencode_config_path() -> Path:
     return directory / "opencode.json"
 
 
-def _deep_merge_additive(
-    base: dict, incoming: dict, path: str, plan: Plan
-) -> tuple[dict, int]:
-    """Recursively add keys from `incoming` absent in `base`; report scalar conflicts.
-
-    Same posture as _install_settings: a value the user already set is their decision,
-    never silently overwritten — reported instead. Nested dicts recurse so unrelated
-    sibling keys (the user's MCP servers, providers) are preserved untouched.
-    """
-    added = 0
-    for key, value in incoming.items():
-        sub_path = f"{path}.{key}"
-        if key not in base:
-            base[key] = value
-            added += 1
-        elif isinstance(base[key], dict) and isinstance(value, dict):
-            base[key], sub = _deep_merge_additive(base[key], value, sub_path, plan)
-            added += sub
-        elif base[key] != value:
-            plan.warn(
-                f"opencode.json[{sub_path}] differs from the workflow default — kept "
-                f"yours ({base[key]!r}); workflow wants {value!r} (read-only enforcement)"
-            )
-    return base, added
-
-
-def _merge_opencode_policy(
-    current: dict, incoming: dict, plan: Plan
-) -> tuple[dict, int, int]:
-    """Merge general config additively, but enforce workflow-owned plan permissions."""
-    incoming_copy = json.loads(json.dumps(incoming))
-    incoming_plan = (incoming_copy.get("agent") or {}).get("plan")
-    shipped_permissions = None
-    if isinstance(incoming_plan, dict):
-        shipped_permissions = incoming_plan.pop("permission", None)
-
-    merged = json.loads(json.dumps(current))
-    merged, added = _deep_merge_additive(merged, incoming_copy, "opencode", plan)
-    enforced = 0
-    if isinstance(shipped_permissions, dict):
-        agent = merged.get("agent")
-        if not isinstance(agent, dict):
-            plan.warn("opencode agent config was not an object; replaced for workflow policy")
-            agent = {}
-            merged["agent"] = agent
-        plan_agent = agent.get("plan")
-        if not isinstance(plan_agent, dict):
-            plan.warn("opencode plan agent config was not an object; replaced")
-            plan_agent = {}
-            agent["plan"] = plan_agent
-        permissions = plan_agent.get("permission")
-        if not isinstance(permissions, dict):
-            permissions = {}
-            plan_agent["permission"] = permissions
-        for key, value in shipped_permissions.items():
-            current_value = permissions.get(key)
-            same_value = current_value == value
-            if key == "bash" and isinstance(current_value, dict) and isinstance(value, dict):
-                same_value = list(current_value.items()) == list(value.items())
-            if same_value:
-                continue
-            if key in permissions:
-                plan.warn(
-                    f"opencode plan permission {key!r} replaced by the workflow's "
-                    "read-only policy"
-                )
-            permissions[key] = json.loads(json.dumps(value))
-            enforced += 1
-    return merged, added, enforced
-
-
 def _install_opencode(
     src: Path,
     dest: Path,
@@ -729,11 +623,16 @@ def _install_opencode(
     apply: bool,
     backup_root: Path,
     project_root: Path | None,
+    key: str = "opencode/opencode.json",
 ) -> None:
-    """Preserve unrelated OpenCode config while enforcing plan-agent permissions.
+    """Preserve unrelated OpenCode config while enforcing workflow permissions.
 
     MCP servers, providers, and other agents remain additive. Environment placeholders
     are resolved after preflight proves the required values exist.
+
+    `key` names the receipt/backup slot. The global and the project config both come
+    through here, and a shared key would have them overwrite each other's backup — the
+    second install would then be unrollbackable.
     """
     incoming = json.loads(
         _resolve_placeholders(src.read_text(encoding="utf-8"), project_root)
@@ -741,7 +640,7 @@ def _install_opencode(
     current: dict = {}
     if dest.exists():
         try:
-            current = _load_json_or_jsonc(dest)
+            current = load_json_or_jsonc(dest)
         except json.JSONDecodeError:
             plan.warn(
                 f"{dest} is not valid JSON/JSONC — skipped (fix or remove it, then rerun)"
@@ -752,13 +651,13 @@ def _install_opencode(
                 f"{dest} root is not a JSON object; skipped (replace it with an object, then rerun)"
             )
             return
-    merged, added, enforced = _merge_opencode_policy(current, incoming, plan)
+    merged, added, enforced = merge_opencode_policy(current, incoming, plan.warn)
     if merged == current and enforced == 0:
         plan.add("unchanged", dest)
         return
     if dest.exists():
         pre_sha256 = _file_sha256(dest)
-        saved = _backup(dest, backup_root, plan, apply, "opencode/opencode.json")
+        saved = _backup(dest, backup_root, plan, apply, key)
         plan.add(
             "merge",
             dest,
@@ -771,13 +670,7 @@ def _install_opencode(
     if apply:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
-        _record(
-            "merge" if saved else "create",
-            dest,
-            "opencode/opencode.json",
-            saved,
-            pre_sha256,
-        )
+        _record("merge" if saved else "create", dest, key, saved, pre_sha256)
 
 
 def _install_deps(plan: Plan, apply: bool) -> None:
@@ -930,34 +823,79 @@ def _run_rollback(which: str | None, apply: bool) -> int:
             print(f"  !! {conflict}")
         return 2
 
-    restored = deleted = 0
-    for item in entries:
-        dest = Path(item["dest"])
-        backup = Path(item["backup"]) if item.get("backup") else None
-        if backup is not None:
-            print(f"  restore  {dest}")
-            restored += 1
-            if apply:
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(backup, dest)
-        else:
-            print(f"  delete   {dest} — created by that install")
-            deleted += 1
-            if apply:
-                dest.unlink()
-    print(f"\n  restore {restored}, delete {deleted}")
+    restores = [i for i in entries if i.get("backup")]
+    deletes = [i for i in entries if not i.get("backup")]
+    for item in restores:
+        print(f"  restore  {item['dest']}")
+    for item in deletes:
+        print(f"  delete   {item['dest']} — created by that install")
+
     if not apply:
+        print(f"\n  restore {len(restores)}, delete {len(deletes)}")
         print("  dry run — rerun with --apply to write")
+        return 0
+
+    # The preflight above is all-or-nothing, but the writes were not: a copy that failed
+    # halfway left some files restored and some not, with nothing recording where it
+    # stopped — and a second attempt then aborted, because the files already restored no
+    # longer matched their post-install hash. So copy everything to a sibling temp FIRST.
+    # A staging failure changes nothing; only same-directory renames run after that, which
+    # is the cheapest step that can fail.
+    staged: list[tuple[Path, Path]] = []
+    try:
+        for item in restores:
+            dest = Path(item["dest"])
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            tmp = dest.with_name(f"{dest.name}.{os.getpid()}.rollback")
+            shutil.copy2(Path(item["backup"]), tmp)
+            staged.append((tmp, dest))
+    except OSError as exc:
+        for tmp, _ in staged:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        print(f"  ABORTED while staging: {exc}")
+        print("  nothing was changed.")
+        return 2
+
+    restored = deleted = 0
+    failures: list[str] = []
+    for tmp, dest in staged:
+        try:
+            os.replace(tmp, dest)
+            restored += 1
+        except OSError as exc:
+            failures.append(f"{dest}: {exc}")
+            try:
+                tmp.unlink()  # the staged copy is litter once its rename failed
+            except OSError:
+                pass
+    for item in deletes:
+        dest = Path(item["dest"])
+        try:
+            dest.unlink(missing_ok=True)
+            deleted += 1
+        except OSError as exc:
+            failures.append(f"{dest}: {exc}")
+
+    print(f"\n  restore {restored}/{len(staged)}, delete {deleted}/{len(deletes)}")
+    if failures:
+        # Say exactly what is still in place. A partial rollback that reports success is
+        # worse than one that fails loudly: the next install builds on an unknown state.
+        print("  PARTIAL — these were not rolled back:")
+        for failure in failures:
+            print(f"  !! {failure}")
+        print(f"  backups remain at {chosen}")
+        return 2
     return 0
 
 
-def _targets(project_root: Path | None = None) -> list[tuple[Path, Path, str]]:
+def _targets() -> list[tuple[Path, Path, str]]:
     """(source, destination, manifest-key) for everything in dist/config.
 
-    `project_root` only affects the opencode subagents: they install into the worktree's
-    .opencode/agents/ so a project gets them without the installer writing into the user's
-    ~/.config/opencode at all. Without a project root there is nowhere else to put them,
-    so they fall back to the global dir.
+    Every entry here is global. The only project-scoped file the workflow ships is
+    <project_root>/opencode.json, and that one is installed by init/upgrade, not here.
     """
     mapping = [
         (
@@ -978,17 +916,10 @@ def _targets(project_root: Path | None = None) -> list[tuple[Path, Path, str]]:
         ("claude", "skills", HOME / ".claude" / "skills"),
         ("claude", "commands", HOME / ".claude" / "commands"),
         ("claude", "hooks", HOME / ".claude" / "hooks"),
-        # The file stem becomes the custom OpenCode agent name. Project scope is the
-        # default: opencode reads
-        # <worktree>/.opencode/agents/, so the roster ships without the installer touching
-        # the user's global opencode config.
-        (
-            "opencode",
-            "agents",
-            (project_root / ".opencode" / "agents")
-            if project_root
-            else HOME / ".config" / "opencode" / "agents",
-        ),
+        # The file stem becomes the custom OpenCode agent name. One global roster: the
+        # subagents belong to the workflow, so every project it manages reads the same set
+        # instead of each worktree carrying its own copy to keep in sync.
+        ("opencode", "agents", HOME / ".config" / "opencode" / "agents"),
     ):
         source_dir = DIST_CONFIG / family / sub
         if source_dir.is_dir():
@@ -1029,6 +960,21 @@ def _opencode_would_change(
     )
 
 
+def _detect_project_root() -> Path | None:
+    """The workspace this install run is standing in, or None.
+
+    Derived from an existing `.workflow/config.json` walking up from the cwd, never from a
+    flag. A flag let `--check` run with a narrower scope than doctor uses and report READY
+    while the project-scoped boundary was missing — the exact state a check exists to catch.
+    Requiring the marker also means running the installer from an unrelated directory never
+    writes project files into it.
+    """
+    for candidate in [Path.cwd().resolve(), *Path.cwd().resolve().parents]:
+        if (candidate / ".workflow" / "config.json").exists():
+            return candidate
+    return None
+
+
 def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     """Report drift without writing anything.
 
@@ -1043,7 +989,7 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     installed_drift: list[str] = []
     installed_missing: list[str] = []
 
-    checks = list(_targets(project_root))
+    checks = list(_targets())
     settings_src = DIST_CONFIG / "claude" / "settings.template.json"
     if settings_src.exists():
         # settings.json is a key-wise JSON merge, not a copy — bundle-check only.
@@ -1052,6 +998,9 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     if opencode_src.exists():
         # opencode.json is merged, not copied, so its installed state is checked below.
         checks.append((opencode_src, None, "opencode/opencode.template.json"))
+    project_src = DIST_CONFIG / "opencode" / "opencode.project.json"
+    if project_src.exists():
+        checks.append((project_src, None, "opencode/opencode.project.json"))
 
     for source, dest, key in checks:
         dist_text = source.read_text(encoding="utf-8")
@@ -1091,6 +1040,24 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
         elif _opencode_would_change(opencode_src, opencode_dest, project_root):
             installed_drift.append("opencode/opencode.json")
 
+    # The project config carries the secret-file denial. Checking only the global one let
+    # --check report OK while the boundary was missing or had been edited away — the exact
+    # state a check exists to catch.
+    project_scope_note = None
+    if project_src.exists():
+        if project_root:
+            project_dest = project_root / "opencode.json"
+            if not project_dest.exists():
+                installed_missing.append("opencode/opencode.project.json")
+            elif _opencode_would_change(project_src, project_dest, project_root):
+                installed_drift.append("opencode/opencode.project.json")
+        else:
+            # Say so rather than pass quietly: an unchecked boundary is not a clean one.
+            project_scope_note = (
+                "no .workflow/ found from this directory — the project boundary "
+                "(<project_root>/opencode.json) was NOT checked. Run init there first."
+            )
+
     print("[INSTALL CHECK]")
     print(
         f"  bundle (dist vs manifest): {'OK' if not bundle_stale else f'STALE ({len(bundle_stale)})'}"
@@ -1109,6 +1076,8 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
             print(f"    - DRIFTED {key}")
         for key in installed_missing:
             print(f"    - MISSING {key}")
+    if project_scope_note:
+        print(f"  project scope: SKIPPED — {project_scope_note}")
 
     # Report component ownership so the required version bump is explicit.
     versions = manifest.get("versions") or {}
@@ -1145,11 +1114,6 @@ def main() -> int:
         "--apply", action="store_true", help="write changes (default: dry run)"
     )
     parser.add_argument(
-        "--init-project",
-        metavar="DIR",
-        help="also scaffold .workflow/ in DIR (upgrades it in place when it already exists)",
-    )
-    parser.add_argument(
         "--only-command",
         action="store_true",
         help="install the main-agent block WITHOUT natural-language auto-intent: commands "
@@ -1172,8 +1136,8 @@ def main() -> int:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="report drift (installed config vs bundle, dist vs manifest); combine with "
-        "--init-project DIR to check project-scoped OpenCode agents",
+        help="report drift (installed config vs bundle, dist vs manifest, and the "
+        "project-scoped files when run from a directory that has a .workflow/)",
     )
     args = parser.parse_args()
     apply = args.apply
@@ -1195,7 +1159,7 @@ def main() -> int:
         return 1
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
 
-    project_root = Path(args.init_project).resolve() if args.init_project else None
+    project_root = _detect_project_root()
     if args.check:
         return _run_check(manifest, project_root)
 
@@ -1229,7 +1193,7 @@ def main() -> int:
 
     _install_deps(plan, apply)
 
-    for source, dest, key in _targets(project_root):
+    for source, dest, key in _targets():
         _install_text(
             source, dest, key, plan, apply, backup_root, project_root, args.only_command
         )
@@ -1254,6 +1218,9 @@ def main() -> int:
             backup_root,
             project_root,
         )
+    # <project_root>/opencode.json (the secret-file boundary) is NOT installed here. It
+    # belongs to a workspace, so init/upgrade owns it — see
+    # core.workflow_runtime._install_project_opencode. The upgrade call below reaches it.
     agent_path = REPO_ROOT / "main.py"
     if os.environ.get("AGENT_PATH") != str(agent_path):
         plan.add(
@@ -1261,35 +1228,29 @@ def main() -> int:
         )
 
     if project_root:
-        # Upgrade an existing workspace; scaffold only when .workflow/ is absent.
-        existing = (project_root / ".workflow").exists()
-        sys.path.insert(0, str(REPO_ROOT))
+        # project_root is only set when a .workflow/ already exists here, so this is always
+        # an in-place upgrade. Scaffolding a NEW workspace is `init`'s job (main.py
+        # --command init --work-dir DIR) — one bootstrap path instead of two.
         from core.workflow_runtime import (
-            ensure_workflow_workspace,
             upgrade_workflow_workspace,
             workspace_versions,
         )
 
-        if existing:
-            versions = workspace_versions(project_root)
-            plan.add(
-                "upgrade",
-                project_root / ".workflow",
-                f"tool {versions['installed_tool_version']} -> {versions['current_tool_version']}"
-                " (regenerate scripts, backfill config keys, keep sessions/)",
-            )
-            if apply:
-                try:
-                    upgrade_workflow_workspace(project_root, str(agent_path))
-                except ValueError as exc:
-                    # Refuses while a delegated job is live. Reported, not raised: the
-                    # global config install above already succeeded, and aborting here
-                    # would leave the user unsure which half of the run took effect.
-                    plan.warn(f"workspace not upgraded: {exc}")
-        else:
-            plan.add("init", project_root / ".workflow", "scaffold workspace")
-            if apply:
-                ensure_workflow_workspace(project_root, str(agent_path))
+        versions = workspace_versions(project_root)
+        plan.add(
+            "upgrade",
+            project_root / ".workflow",
+            f"tool {versions['installed_tool_version']} -> {versions['current_tool_version']}"
+            " (regenerate scripts, backfill config keys, refresh opencode.json, keep sessions/)",
+        )
+        if apply:
+            try:
+                upgrade_workflow_workspace(project_root, str(agent_path))
+            except ValueError as exc:
+                # Refuses while a delegated job is live. Reported, not raised: the
+                # global config install above already succeeded, and aborting here
+                # would leave the user unsure which half of the run took effect.
+                plan.warn(f"workspace not upgraded: {exc}")
 
     _store_only_command(args.only_command, plan, apply, backup_root)
 

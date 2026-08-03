@@ -35,11 +35,15 @@ TARGETS = {
     "claude/hooks": "{{HOME}}/.claude/hooks",
     "claude/settings.template.json": "{{HOME}}/.claude/settings.json",
     "opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",
-    # Subagents install per-project by default: opencode reads .opencode/agents/ in the
-    # worktree, so shipping them there leaves the user's own ~/.config/opencode untouched.
-    # Falls back to the global dir when no project root is known (plain global install).
-    "opencode/agents": "{{PROJECT_ROOT}}/.opencode/agents",
+    # Subagents are part of the workflow's own toolchain, not a per-project artifact: they
+    # install globally so every project the workflow manages gets the same roster without a
+    # copy landing in each worktree.
+    "opencode/agents": "{{HOME}}/.config/opencode/agents",
     "opencode/opencode.template.json": "{{HOME}}/.config/opencode/opencode.json",
+    # Secret-file denial lives in the PROJECT config, not the user's global one. opencode
+    # merges project over global, so the boundary follows the projects this workflow
+    # manages instead of quietly rewriting how the user's other work behaves.
+    "opencode/opencode.project.json": "{{PROJECT_ROOT}}/opencode.json",
 }
 
 
@@ -77,6 +81,8 @@ def _dist_files() -> list[str]:
         paths.append("claude/settings.template.json")
     if (DIST_CONFIG / "opencode" / "opencode.template.json").is_file():
         paths.append("opencode/opencode.template.json")
+    if (DIST_CONFIG / "opencode" / "opencode.project.json").is_file():
+        paths.append("opencode/opencode.project.json")
     return paths
 
 

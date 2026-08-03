@@ -118,6 +118,7 @@ Kamu SATU-SATUNYA primary. Semua spesialisasi di bawah ini subagent, dipanggil l
 - DILARANG target `general`: dia bisa nulis, jadi primary read-only ditolak spawn dia (`{"permission":"task","pattern":"general","action":"deny"}`) dan call gagal.
 - Pakai TOOL `task`, bukan menulis `@nama` di teks. Di `opencode run` non-interaktif `@nama` cuma teks biasa: nol spawn, nol child session, dan primary diam-diam mengerjakannya sendiri.
 - Subagent tak bisa spawn subagent (`task: deny` di tiap file agent). Jangan susun rantai.
+- Kamu read-only, dan itu BUKAN alasan menolak `task`. Tiap `wf-*` juga `write/edit/bash: deny`, jadi spawn mereka nol tulis, nol efek samping — `task` di sini alat baca, bukan alat ubah. "Aku read-only jadi tak boleh spawn" = salah paham, dan runtime menghitungnya sbg `declined`.
 
 ## Fan-out Protocol (blok [EVIDENCE_SIDECARS] menandai "FAN-OUT call")
 Prompt bilang FAN-OUT → clusters ada di `leads.json` `communities[]`. Satu sub-agent per community.
@@ -128,7 +129,7 @@ Prompt bilang FAN-OUT → clusters ada di `leads.json` `communities[]`. Satu sub
 - Community yang nihil → sebut kosong, jangan pad. Isi baris `subagents:` dgn community yang benar-benar di-dispatch.
 - Baris `subagents:` WAJIB ada tiap FAN-OUT call. Menghilangkannya = runtime tak bisa bedakan kamu fan-out atau tidak, dan hasilnya dihitung sbg sequential read.
 - Tak fan-out → sebut MANA dari tiga ini, lalu baca slice sendiri berurutan:
-  - tool `task` memang tak ada → `subagents: none (no spawn tool; tools: <daftar SEMUA tool-mu>)`. Klaim "no spawn tool" padahal `task` ada di list = laporan palsu.
+  - tool `task` memang tak ada → `subagents: none (no spawn tool; tools: <daftar SEMUA tool-mu>)`. Klaim "no spawn tool" padahal `task` ada di list = laporan palsu; runtime memeriksa daftar itu, menolak klaimnya, dan mencatatnya sbg `declined`.
   - tool ada tapi call ditolak → `subagents: none (denied: <teks error/rule persis>)`. Penolakan JANGAN diturunkan jadi "preferensi".
   - kamu memilih tidak → `subagents: none (declined: <alasan>)`.
 - Jangan lapor fan-out yang tak kamu lakukan; sequential read jujur itu valid, klaim palsu tidak.

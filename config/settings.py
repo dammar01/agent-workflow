@@ -12,12 +12,14 @@ CACHE_FILE = BASE_DIR / "storage" / "cache.json"
 JOB_DIR = BASE_DIR / "storage" / "jobs"
 OPENCODE_CONFIG_FILE = BASE_DIR / "config" / "opencode.json"
 
-TOOL_VERSION = "3.4.1"
+TOOL_VERSION = "3.4.2"
 MAIN_PY = BASE_DIR / "main.py"
 CHECK_PY = BASE_DIR / "check.py"
 
 # Component stamps allow lazy upgrades and may diverge when only one surface changes.
-# Both surfaces changed in v3.4.1, so both currently match TOOL_VERSION.
+# Both surfaces changed in v3.4.2, so both currently match TOOL_VERSION.
+# The stamps no longer gate script regeneration — upgrade compares generated content
+# directly, so a generator change reaches existing workspaces whether or not this bumps.
 #   prompt_bundle : LLM-facing contract shipped to ~/.claude (CLAUDE.md, skills, AGENTS.md)
 #   runtime       : machine wiring in .workflow (run/inspect/check scripts, config schema,
 #                   opencode adapter) + shipped hooks/settings
@@ -69,10 +71,15 @@ DEFAULT_TASK_TRUNCATION_HARD_RATIO = float(
 )
 OPENCODE_COMMAND = os.getenv("OPENCODE_COMMAND", "opencode")
 # The opencode agent that runs delegated calls. `plan` is opencode's own read-only
-# primary; `wf-second` is the workflow's own, which additionally allowlists the
-# `permission.task` entries fan-out needs. Default stays `plan` so a config written
-# before `wf-second` existed keeps working instead of pointing at a missing agent.
+# primary, and the workflow deliberately adds no second primary: every wf-* agent ships
+# as a subagent that `plan` spawns through the `task` tool.
 DEFAULT_OPENCODE_AGENT = os.getenv("AI_PROXY_OPENCODE_AGENT", "plan")
+# How long a learned "this project cannot fan out" verdict stands before it is retried.
+# It is inferred from one sentence the second agent wrote about itself, and that sentence
+# has been wrong: an agent listed `task` among its tools and still called itself incapable.
+# Without an expiry the wrong verdict is permanent, because a project with fan-out off
+# stops sending the fan-out plan and can never produce the evidence that would undo it.
+DEFAULT_FANOUT_RECHECK_HOURS = float(os.getenv("AI_PROXY_FANOUT_RECHECK_HOURS", "24"))
 DEFAULT_JOB_POLL_INTERVAL_SECONDS = float(os.getenv("AI_PROXY_JOB_POLL_INTERVAL_SECONDS", "2"))
 DEFAULT_JOB_POLL_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_JOB_POLL_TIMEOUT_SECONDS", "0"))
 # Global ceiling on concurrent in-flight delegated workers across ALL sessions. Per-session

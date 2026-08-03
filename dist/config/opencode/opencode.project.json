@@ -1,0 +1,53 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permission": {
+    "read": {
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*id_rsa*": "deny",
+      "*id_ed25519*": "deny",
+      "*id_ecdsa*": "deny",
+      "*.pem": "deny",
+      "*.key": "deny",
+      "*.p12": "deny",
+      "*.pfx": "deny",
+      "*.jks": "deny",
+      "*.keystore": "deny",
+      "*.ssh/*": "deny",
+      "*.aws/*": "deny",
+      "*.gnupg/*": "deny",
+      "*.npmrc": "deny",
+      "*.netrc": "deny",
+      "*.pgpass": "deny",
+      "*.git-credentials": "deny",
+      "*credentials.json": "deny",
+      "*credentials.yml": "deny",
+      "*credentials.yaml": "deny",
+      "*service-account*.json": "deny",
+      "*.env.example": "allow",
+      "*.env.sample": "allow",
+      "*.env.template": "allow"
+    },
+    "grep": {
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*id_rsa*": "deny",
+      "*id_ed25519*": "deny",
+      "*id_ecdsa*": "deny",
+      "*.pem": "deny",
+      "*.key": "deny",
+      "*.ssh/*": "deny",
+      "*.aws/*": "deny",
+      "*.gnupg/*": "deny",
+      "*.npmrc": "deny",
+      "*.netrc": "deny",
+      "*.pgpass": "deny",
+      "*.git-credentials": "deny",
+      "*credentials.json": "deny",
+      "*service-account*.json": "deny",
+      "*.env.example": "allow",
+      "*.env.sample": "allow",
+      "*.env.template": "allow"
+    }
+  }
+}
