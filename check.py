@@ -12,7 +12,6 @@ from config.settings import (
 from core.contract import validate_verification_contract
 from core.job_manager import JobManager
 
-
 JOB_MANAGER = JobManager()
 # Attach-path cadence for the stall checks. Fixed rather than per-project: check.py is
 # handed a job id and nothing else, so there is no config to read before the first poll.
@@ -37,6 +36,11 @@ def _status_payload(job_id: str) -> dict:
     error_type = (result.get("meta") or {}).get("error_type")
     if error_type:
         payload["error_type"] = error_type
+    if error_type == "worker_died":
+        payload["done"] = True
+        next_action = (result.get("meta") or {}).get("next_action")
+        if next_action:
+            payload["next_action"] = next_action
     if result.get("content") and status != "completed":
         payload["content"] = result["content"]
     return payload
@@ -198,17 +202,23 @@ def _exit_code_for_result(job_id: str) -> int:
         return 2
     verdict = (output.get("meta") or {}).get("verdict")
     if verdict is None:
-        verdict = validate_verification_contract(output.get("content") or "")[
-            "verdict"
-        ]
+        verdict = validate_verification_contract(output.get("content") or "")["verdict"]
     return 0 if verdict == "pass" else 2
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check workflow job status or result")
     parser.add_argument("job_id")
-    parser.add_argument("--result", action="store_true", help="return final cleaned output only when completed")
-    parser.add_argument("--wait", action="store_true", help="poll internally until completion or timeout")
+    parser.add_argument(
+        "--result",
+        action="store_true",
+        help="return final cleaned output only when completed",
+    )
+    parser.add_argument(
+        "--wait",
+        action="store_true",
+        help="poll internally until completion or timeout",
+    )
     parser.add_argument(
         "--poll-interval",
         type=float,

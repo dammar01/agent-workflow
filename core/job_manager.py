@@ -39,9 +39,11 @@ def _process_identity(pid: int | None) -> str | None:
         stat_text = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
         start_ticks = stat_text.rsplit(")", 1)[1].split()[19]
         try:
-            boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(
-                encoding="ascii"
-            ).strip()
+            boot_id = (
+                Path("/proc/sys/kernel/random/boot_id")
+                .read_text(encoding="ascii")
+                .strip()
+            )
         except OSError:
             boot_id = "unknown-boot"
         return f"proc:{boot_id}:{start_ticks}"
@@ -247,9 +249,7 @@ class JobManager:
             if counts_as_restart and attempt >= max_attempts:
                 job["status"] = "failed"
                 job["completed_at"] = self._now()
-                job["error"] = (
-                    f"worker died again after {attempt} recovery attempt(s)"
-                )
+                job["error"] = f"worker died again after {attempt} recovery attempt(s)"
                 job["reaped"] = True
                 job.pop("recovery_in_progress", None)
                 self._save(job)
@@ -441,9 +441,7 @@ class JobManager:
                 if attempt >= 1:
                     from core.contract import make_error
 
-                    message = (
-                        f"worker died again after {attempt} recovery attempt(s)"
-                    )
+                    message = f"worker died again after {attempt} recovery attempt(s)"
                     output = make_error(
                         "worker_died",
                         message,
@@ -547,6 +545,62 @@ class JobManager:
             "content": f"job {job_id} not completed yet",
             "meta": {},
         }
+
+    def release_stale_session_locks(self) -> dict:
+        """Release session locks whose owning job can never finish.
+
+        The lock is deliberately released by job state, not by a timer — a long delegated
+        call must not have its lock stolen while it works. The gap that leaves: a worker
+        that DIES holds the lock forever, because get_result reports `worker_died` as
+        recoverable and never fails the record. Recovery needs the caller to resubmit the
+        identical request, and a caller who has moved on never will. Locks then accumulate
+        across sessions and every later delegated call on that session is refused.
+
+        Only provably-finished owners are cleared: a missing record, a terminal status, or
+        a worker PID that is gone. A live or merely silent worker is left alone — that is
+        the case the lock exists for.
+        """
+        released: list[dict] = []
+        kept = 0
+        for path in sorted(self.lock_dir.glob("*.lock")):
+            data = self._read_lock(path) or {}
+            job_id = data.get("job_id") or ""
+            job = self.get_job(job_id) if job_id else None
+            if job is None:
+                reason = "no_job_record"
+            elif job.get("status") not in {"pending", "running", "recovering"}:
+                reason = f"job_{job.get('status')}"
+            elif self.liveness(job) == DEAD:
+                reason = "worker_died"
+            else:
+                kept += 1
+                continue
+            if reason == "worker_died":
+                try:
+                    self.fail_job(
+                        job_id,
+                        "worker died and the session lock was released by clean",
+                        reaped=True,
+                    )
+                except Exception:
+                    pass
+            if not path.exists():
+                released.append(
+                    {"session_id": path.stem, "job_id": job_id, "reason": reason}
+                )
+                continue
+            if self._release_lock_path(
+                path,
+                expected_job_id=data.get("job_id"),
+                expected_token=data.get("token"),
+                force=job is None,
+            ):
+                released.append(
+                    {"session_id": path.stem, "job_id": job_id, "reason": reason}
+                )
+            else:
+                kept += 1
+        return {"released": released, "kept": kept}
 
     def prune_jobs(self, ttl_days: int = 7, keep_last: int = 50) -> dict:
         """Delete terminal jobs older than ttl_days, always keeping the newest keep_last."""
@@ -1039,9 +1093,7 @@ class JobManager:
             except FileExistsError:
                 existing = self._read_lock(lock_path)
                 if not existing:
-                    if not self._claim_is_stale(
-                        lock_path, _CLAIM_STALE_SECONDS, None
-                    ):
+                    if not self._claim_is_stale(lock_path, _CLAIM_STALE_SECONDS, None):
                         raise ValueError(
                             f"session {session_id} lock is being initialized"
                         )

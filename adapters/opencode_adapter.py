@@ -547,14 +547,16 @@ class OpenCodeAdapter:
                 args, env, cwd, max(5, int(timeout_seconds)), "probe"
             )
         except (OSError, FileNotFoundError) as exc:
-            return _sanitize_meta({
-                "alive": False,
-                "reason": "command_not_found",
-                "error": str(exc),
-                "returncode": None,
-                "duration_seconds": None,
-                "timed_out": False,
-            })
+            return _sanitize_meta(
+                {
+                    "alive": False,
+                    "reason": "command_not_found",
+                    "error": str(exc),
+                    "returncode": None,
+                    "duration_seconds": None,
+                    "timed_out": False,
+                }
+            )
 
         probe_tail = _error_tail(outcome["stderr"], outcome["stdout"])
         rate_limited = _is_rate_limited(probe_tail)
@@ -570,16 +572,22 @@ class OpenCodeAdapter:
         else:
             reason = "probe_ok"
 
-        return _sanitize_meta({
-            "alive": reason == "probe_ok",
-            "reason": reason,
-            "rate_limited": rate_limited,
-            "stream_failed": stream_failed,
-            "returncode": outcome["returncode"],
-            "duration_seconds": outcome["duration_seconds"],
-            "timed_out": outcome["timed_out"],
-            "stderr_tail": outcome["stderr"].strip()[-500:],
-        })
+        if not probe_tail and outcome["timed_out"]:
+            rate_limited = None
+
+        return _sanitize_meta(
+            {
+                "alive": reason == "probe_ok",
+                "reason": reason,
+                "rate_limited": rate_limited,
+                "no_probe_output": not probe_tail,
+                "stream_failed": stream_failed,
+                "returncode": outcome["returncode"],
+                "duration_seconds": outcome["duration_seconds"],
+                "timed_out": outcome["timed_out"],
+                "stderr_tail": outcome["stderr"].strip()[-500:],
+            }
+        )
 
     def _run_args(self, args: list[str], work_dir: str | None = None) -> dict:
         oversize = _too_long_for_cmd(args)

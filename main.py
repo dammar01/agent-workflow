@@ -74,7 +74,9 @@ def _session_storage_id(session_id: str) -> str:
 def _session_manager_for(project_root: Path) -> SessionManager:
     if SESSION_MANAGER is not _DEFAULT_SESSION_MANAGER:
         return SESSION_MANAGER
-    return SessionManager(workflow_paths(project_root)["workflow_dir"] / "provider-sessions")
+    return SessionManager(
+        workflow_paths(project_root)["workflow_dir"] / "provider-sessions"
+    )
 
 
 def resolve_session_id(
@@ -151,18 +153,21 @@ def run(
     if normalized_command == "clean":
         from core import fact_store
 
+        locks = JOB_MANAGER.release_stale_session_locks()
         summary = JOB_MANAGER.prune_jobs()
         facts = fact_store.prune(project_root)
         sessions = prune_sessions(project_root)
         return {
             "ok": True,
             "content": (
+                f"released {len(locks['released'])} stale session lock(s), "
+                f"kept {locks['kept']}; "
                 f"pruned {summary['removed']} job(s), kept {summary['kept']}; "
                 f"logs removed {summary['logs_removed']}; "
                 f"facts kept {facts['kept']}, dropped {facts['removed']} stale; "
                 f"sessions removed {sessions['removed']}, kept {sessions['kept']}"
             ),
-            "meta": {**summary, "facts": facts, "sessions": sessions},
+            "meta": {**summary, "locks": locks, "facts": facts, "sessions": sessions},
         }
 
     if normalized_command == "inspect":
@@ -186,9 +191,7 @@ def run(
     try:
         provider_sessions = _session_manager_for(project_root)
         try:
-            session = provider_sessions.load_or_create(
-                _session_storage_id(session_id)
-            )
+            session = provider_sessions.load_or_create(_session_storage_id(session_id))
         except (OSError, ValueError) as exc:
             return make_error(
                 "session_state_error",
@@ -221,9 +224,9 @@ def run(
         try:
             provider_sessions.record_run(session, command)
         except (OSError, ValueError) as exc:
-            output.setdefault("meta", {})["session_history_error"] = (
-                f"{type(exc).__name__}: {exc}"
-            )
+            output.setdefault("meta", {})[
+                "session_history_error"
+            ] = f"{type(exc).__name__}: {exc}"
         output["session_id"] = session_id
         return output
     finally:
@@ -345,10 +348,7 @@ def submit(
                     )
                 recovering = True
             else:
-                if (
-                    JOB_MANAGER.active_worker_count()
-                    >= JOB_MANAGER.max_global_workers
-                ):
+                if JOB_MANAGER.active_worker_count() >= JOB_MANAGER.max_global_workers:
                     return capacity_error()
                 try:
                     job = JOB_MANAGER.create_job(
@@ -620,10 +620,9 @@ def await_job(
 
     while True:
         result = get_result(job_id)
-        if (
-            (result.get("meta") or {}).get("error_type") == "worker_died"
-            and (result.get("meta") or {}).get("recoverable")
-        ):
+        if (result.get("meta") or {}).get("error_type") == "worker_died" and (
+            result.get("meta") or {}
+        ).get("recoverable"):
             return {
                 "ok": False,
                 "content": result.get("content"),
@@ -732,9 +731,7 @@ def _inspect(project_root, session_id: str | None = None) -> dict:
         try:
             job = _json.loads(path.read_text(encoding="utf-8"))
             display_status = (
-                "recovering"
-                if job.get("recovery_in_progress")
-                else job["status"]
+                "recovering" if job.get("recovery_in_progress") else job["status"]
             )
             lines.append(
                 f"  - {job['job_id']} [{display_status}] {job['command']} "
@@ -1021,8 +1018,7 @@ if __name__ == "__main__":
         except OSError as exc:
             raise SystemExit(f"cannot read prompt file: {exc}")
     if (
-        args.command
-        in {"explore", "plan", "analyze", "verify", "submit", "await"}
+        args.command in {"explore", "plan", "analyze", "verify", "submit", "await"}
         and not prompt
     ):
         raise SystemExit("--prompt or --prompt-file is required for this command")

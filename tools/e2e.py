@@ -12,6 +12,7 @@ Checks assert the CONTRACT, not prose: `ok`, the evidence markers, and the field
 `core/contract.py` declares required. A check that could not run is reported as SKIPPED
 and never counted as a pass.
 """
+
 import argparse
 import json
 import os
@@ -77,7 +78,9 @@ def local_checks(report: Report) -> None:
     project = Path(tempfile.mkdtemp(prefix="e2e-project-"))
     subprocess.run(["git", "init", "-q", str(project)], check=True)
     try:
-        code, out = _run_cli("--command", "init", "--work-dir", str(project), "--pretty")
+        code, out = _run_cli(
+            "--command", "init", "--work-dir", str(project), "--pretty"
+        )
         payload = _json_from(out) or {}
         report.check("init returns ok", payload.get("ok") is True, f"rc={code}")
         report.check("init creates .workflow", (project / ".workflow").is_dir())
@@ -89,8 +92,7 @@ def local_checks(report: Report) -> None:
         runner_text = runner.read_text(encoding="utf-8-sig") if runner else ""
         report.check(
             "runner keeps sweep on the local command path",
-            "verify','sweep" not in runner_text
-            and "verify sweep " not in runner_text,
+            "verify','sweep" not in runner_text and "verify sweep " not in runner_text,
         )
         config_path = project / ".workflow" / "config.json"
         if config_path.exists():
@@ -105,7 +107,9 @@ def local_checks(report: Report) -> None:
         else:
             report.record("config carries current version", SKIP, "config.json absent")
 
-        code, out = _run_cli("--command", "doctor", "--work-dir", str(project), "--pretty")
+        code, out = _run_cli(
+            "--command", "doctor", "--work-dir", str(project), "--pretty"
+        )
         payload = _json_from(out) or {}
         # A well-formed run emits one of the three real statuses. Which one depends on the
         # install/bundle state of the HOME this runs against (release-integrity can make it
@@ -113,32 +117,46 @@ def local_checks(report: Report) -> None:
         # produces a VALID status, not a specifically green one.
         report.check(
             "doctor reports a status",
-            payload.get("meta", {}).get("status") in {"READY", "NEEDS_UPGRADE", "NOT_READY"},
+            payload.get("meta", {}).get("status")
+            in {"READY", "NEEDS_UPGRADE", "NOT_READY"},
             payload.get("meta", {}).get("status", "?"),
         )
 
-        code, out = _run_cli("--command", "inspect", "--work-dir", str(project), "--pretty")
+        code, out = _run_cli(
+            "--command", "inspect", "--work-dir", str(project), "--pretty"
+        )
         report.check("inspect returns ok", (_json_from(out) or {}).get("ok") is True)
 
         code, out = _run_cli(
-            "--command", "sweep", "--session", "e2e-local", "--work-dir", str(project), "--pretty"
+            "--command",
+            "sweep",
+            "--session",
+            "e2e-local",
+            "--work-dir",
+            str(project),
+            "--pretty",
         )
         sweep = _json_from(out) or {}
         report.check(
             "sweep runs locally and writes a report",
-            code == 0 and sweep.get("ok") is True
+            code == 0
+            and sweep.get("ok") is True
             and bool(sweep.get("meta", {}).get("report")),
             f"rc={code}",
         )
 
-        code, out = _run_cli("--command", "upgrade", "--work-dir", str(project), "--pretty")
+        code, out = _run_cli(
+            "--command", "upgrade", "--work-dir", str(project), "--pretty"
+        )
         report.check(
             "upgrade is exposed by the CLI",
             code == 0 and (_json_from(out) or {}).get("ok") is True,
             f"rc={code}",
         )
 
-        code, out = _run_cli("--command", "clean", "--work-dir", str(project), "--pretty")
+        code, out = _run_cli(
+            "--command", "clean", "--work-dir", str(project), "--pretty"
+        )
         report.check("clean returns ok", (_json_from(out) or {}).get("ok") is True)
     finally:
         shutil.rmtree(project, ignore_errors=True)
@@ -157,12 +175,16 @@ def local_checks(report: Report) -> None:
             str(models),
         )
     else:
-        report.record("shipped example has no placeholder models", SKIP, "example missing")
+        report.record(
+            "shipped example has no placeholder models", SKIP, "example missing"
+        )
 
     from config.settings import COMPONENT_VERSIONS, TOOL_VERSION
     from core.workflow_runtime import CONFIG_VERSION
 
-    manifest = json.loads((REPO_ROOT / "dist" / "manifest.json").read_text(encoding="utf-8"))
+    manifest = json.loads(
+        (REPO_ROOT / "dist" / "manifest.json").read_text(encoding="utf-8")
+    )
     report.check(
         "release versions are synchronized",
         # Compared against TOOL_VERSION, not a literal: a hardcoded number turns every
@@ -192,8 +214,11 @@ def integrity_checks(report: Report) -> None:
     from core.workflow_runtime import default_commands, default_policies
 
     clean = {"commands": default_commands(), "policies": default_policies()}
-    report.check("validate_config: clean config has no warnings",
-                 validate_config(clean) == [], str(validate_config(clean)[:2]))
+    report.check(
+        "validate_config: clean config has no warnings",
+        validate_config(clean) == [],
+        str(validate_config(clean)[:2]),
+    )
     dirty = {
         "commands": {"verify_mode": 123, "typo_key": True},
         "policies": {"fact_relevant_limit": "3"},
@@ -214,20 +239,31 @@ def integrity_checks(report: Report) -> None:
 
         # --- fact-store provenance + lock plumbing ---
         (project / "sample.py").write_text("anchor_line = 1\n", encoding="utf-8")
-        content = "durable_facts:\n- [config] sample defines anchor_line [sample.py:1]\n"
+        content = (
+            "durable_facts:\n- [config] sample defines anchor_line [sample.py:1]\n"
+        )
         added = fact_store.ingest(project, content, "e2e-integrity")
-        report.check("fact_store: ingest promotes a durable fact", added == 1, f"added={added}")
+        report.check(
+            "fact_store: ingest promotes a durable fact", added == 1, f"added={added}"
+        )
         facts_path = workflow_paths(project)["workflow_dir"] / "facts.jsonl"
         stored = []
         if facts_path.exists():
-            stored = [json.loads(l) for l in facts_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+            stored = [
+                json.loads(l)
+                for l in facts_path.read_text(encoding="utf-8").splitlines()
+                if l.strip()
+            ]
         report.check(
             "fact_store: stored fact carries provenance origin",
             bool(stored) and stored[0].get("origin") == "discovered",
             str(stored[0].get("origin") if stored else "no fact"),
         )
-        report.check("fact_store: recurrence threshold lowered to 3",
-                     fact_store.RECURRENCE_THRESHOLD == 3, str(fact_store.RECURRENCE_THRESHOLD))
+        report.check(
+            "fact_store: recurrence threshold lowered to 3",
+            fact_store.RECURRENCE_THRESHOLD == 3,
+            str(fact_store.RECURRENCE_THRESHOLD),
+        )
         # lock is re-entrant per call and releases cleanly
         with fact_store._FactLock(project):
             lock_held = (facts_path.with_name("facts.jsonl.lock")).exists()
@@ -239,19 +275,46 @@ def integrity_checks(report: Report) -> None:
         config = json.loads(cfg_path.read_text(encoding="utf-8"))
         report.check(
             "config: runtime_version stamped",
-            config.get("runtime", {}).get("runtime_version") == COMPONENT_VERSIONS["runtime"],
+            config.get("runtime", {}).get("runtime_version")
+            == COMPONENT_VERSIONS["runtime"],
             str(config.get("runtime", {}).get("runtime_version")),
         )
         # nothing changed since init -> scripts must NOT be rewritten (lazy skip)
         r1 = upgrade_workflow_workspace(project, str(REPO_ROOT / "main.py"))
-        report.check("upgrade: skips script regen when runtime unchanged",
-                     r1["regenerated_scripts"] == [], f"{len(r1['regenerated_scripts'])} script(s)")
-        # simulate an older build -> gate must regen and restamp
+        report.check(
+            "upgrade: skips script regen when runtime unchanged",
+            r1["regenerated_scripts"] == [],
+            f"{len(r1['regenerated_scripts'])} script(s)",
+        )
+        # simulate an older build -> version alone must NOT trigger a rewrite any more
         config["runtime"]["runtime_version"] = "0.0.0"
         cfg_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
         r2 = upgrade_workflow_workspace(project, str(REPO_ROOT / "main.py"))
-        report.check("upgrade: regenerates scripts when runtime bumped",
-                     len(r2["regenerated_scripts"]) > 0, f"{len(r2['regenerated_scripts'])} script(s)")
+        report.check(
+            "upgrade: a version bump alone rewrites nothing",
+            r2["regenerated_scripts"] == [],
+            f"{len(r2['regenerated_scripts'])} script(s)",
+        )
+        script = next(
+            (
+                p
+                for p in (project / ".workflow").glob("run.*")
+                if p.suffix in {".ps1", ".sh"}
+            ),
+            None,
+        )
+        if script is None:
+            report.record(
+                "upgrade: rewrites a drifted script", SKIP, "no run script generated"
+            )
+        else:
+            script.write_text("# drifted\n", encoding="utf-8")
+            r3 = upgrade_workflow_workspace(project, str(REPO_ROOT / "main.py"))
+            report.check(
+                "upgrade: rewrites a drifted script",
+                len(r3["regenerated_scripts"]) > 0,
+                f"{len(r3['regenerated_scripts'])} script(s)",
+            )
 
         # --- fan-out capability probe ---
         from core.contract import reported_no_spawn_tool
@@ -262,10 +325,14 @@ def integrity_checks(report: Report) -> None:
             reported_no_spawn_tool("subagents: none (no spawn tool; tools: read, grep)")
             and not reported_no_spawn_tool("subagents: c1, c2"),
         )
-        report.check("fan-out: capability unprobed is None", fanout_capability(project) is None)
+        report.check(
+            "fan-out: capability unprobed is None", fanout_capability(project) is None
+        )
         set_fanout_capability(project, False)
-        report.check("fan-out: capability persists OFF once learned",
-                     fanout_capability(project) is False)
+        report.check(
+            "fan-out: capability persists OFF once learned",
+            fanout_capability(project) is False,
+        )
     finally:
         shutil.rmtree(project, ignore_errors=True)
 
@@ -290,9 +357,9 @@ def integrity_checks(report: Report) -> None:
         command="verify",
         project_root=str(REPO_ROOT),
     )
-    agents_contract = (REPO_ROOT / "dist" / "config" / "opencode" / "AGENTS.md").read_text(
-        encoding="utf-8"
-    )
+    agents_contract = (
+        REPO_ROOT / "dist" / "config" / "opencode" / "AGENTS.md"
+    ).read_text(encoding="utf-8")
     report.check(
         "verify prompt keeps the compact AGENTS.md contract",
         "introduced/regression + in_scope" not in verify_prompt
@@ -307,7 +374,8 @@ def integrity_checks(report: Report) -> None:
     )
     report.check(
         "OUTPUT_FORMAT skeleton remains enforceable",
-        "[EVIDENCE]" in explore_prompt and "[DIGEST]" in explore_prompt
+        "[EVIDENCE]" in explore_prompt
+        and "[DIGEST]" in explore_prompt
         and "[VERIFICATION]" in verify_prompt,
     )
     report.check(
@@ -339,7 +407,8 @@ def integrity_checks(report: Report) -> None:
     )
     report.check(
         "slim: success keeps content, digest, and actionable meta (policy/session_reset)",
-        slim["content"] == "evidence" and "digest" in slim
+        slim["content"] == "evidence"
+        and "digest" in slim
         and slim["meta"]["policy"]["verify_mode"] == "delegated"
         and slim["meta"]["job_id"] == "job_1",
     )
@@ -361,7 +430,8 @@ def integrity_checks(report: Report) -> None:
 
 def installer_checks(report: Report) -> None:
     """Install into a throwaway HOME. Installing onto the machine that produced dist/
-    only ever proves idempotency — it never exercises the create path a new user hits."""
+    only ever proves idempotency — it never exercises the create path a new user hits.
+    """
     print("\n[INSTALLER] against a throwaway HOME")
 
     if not (REPO_ROOT / "dist" / "manifest.json").exists():
@@ -369,13 +439,22 @@ def installer_checks(report: Report) -> None:
         return
 
     fake_home = Path(tempfile.mkdtemp(prefix="e2e-home-"))
-    env = {**os.environ, "PYTHONPATH": str(REPO_ROOT), "PYTHONUTF8": "1",
-           "USERPROFILE": str(fake_home), "HOME": str(fake_home),
-           "AGENT_HOME": str(fake_home)}
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(REPO_ROOT),
+        "PYTHONUTF8": "1",
+        "USERPROFILE": str(fake_home),
+        "HOME": str(fake_home),
+        "AGENT_HOME": str(fake_home),
+    }
     try:
         dry = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py")],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
         report.check("dry run exits clean", dry.returncode == 0, f"rc={dry.returncode}")
         report.check("dry run writes nothing", not (fake_home / ".claude").exists())
@@ -383,9 +462,15 @@ def installer_checks(report: Report) -> None:
 
         applied = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--apply"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
-        report.check("apply exits clean", applied.returncode == 0, f"rc={applied.returncode}")
+        report.check(
+            "apply exits clean", applied.returncode == 0, f"rc={applied.returncode}"
+        )
 
         claude_md = fake_home / ".claude" / "CLAUDE.md"
         report.check("CLAUDE.md installed", claude_md.exists())
@@ -395,7 +480,9 @@ def installer_checks(report: Report) -> None:
         report.check("settings.json installed", settings.exists())
         intent_map = fake_home / ".claude" / "hooks" / "intent-map.json"
         report.check("intent-map.json installed", intent_map.exists())
-        manifest = json.loads((REPO_ROOT / "dist" / "manifest.json").read_text(encoding="utf-8"))
+        manifest = json.loads(
+            (REPO_ROOT / "dist" / "manifest.json").read_text(encoding="utf-8")
+        )
         report.check(
             "manifest tracks intent-map.json",
             any(
@@ -407,7 +494,9 @@ def installer_checks(report: Report) -> None:
         if settings.exists():
             try:
                 loaded = json.loads(settings.read_text(encoding="utf-8"))
-                report.check("settings.json is valid JSON", True, f"{len(loaded)} key(s)")
+                report.check(
+                    "settings.json is valid JSON", True, f"{len(loaded)} key(s)"
+                )
                 hook_text = json.dumps(loaded.get("hooks", {}))
                 report.check(
                     "hook path resolved to this HOME",
@@ -420,13 +509,18 @@ def installer_checks(report: Report) -> None:
         leftover = [
             str(p.relative_to(fake_home))
             for p in fake_home.rglob("*")
-            if p.is_file() and "{{HOME}}" in p.read_text(encoding="utf-8", errors="ignore")
+            if p.is_file()
+            and "{{HOME}}" in p.read_text(encoding="utf-8", errors="ignore")
         ]
         report.check("no unresolved placeholders", not leftover, str(leftover[:3]))
 
         second = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--apply"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
         report.check(
             "re-install is idempotent",
@@ -436,7 +530,11 @@ def installer_checks(report: Report) -> None:
 
         checked = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
         report.check(
             "apply followed by check is clean",
@@ -445,14 +543,25 @@ def installer_checks(report: Report) -> None:
         )
 
         loaded = json.loads(settings.read_text(encoding="utf-8"))
-        prompt_entries = loaded.setdefault("hooks", {}).setdefault("UserPromptSubmit", [])
+        prompt_entries = loaded.setdefault("hooks", {}).setdefault(
+            "UserPromptSubmit", []
+        )
         prompt_entries[0].setdefault("hooks", []).append(
             {"type": "command", "command": "user-hook --keep"}
         )
         settings.write_text(json.dumps(loaded, indent=2) + "\n", encoding="utf-8")
         command_only = subprocess.run(
-            [sys.executable, str(REPO_ROOT / "install.py"), "--apply", "--only-command"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+            [
+                sys.executable,
+                str(REPO_ROOT / "install.py"),
+                "--apply",
+                "--only-command",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
         loaded = json.loads(settings.read_text(encoding="utf-8"))
         hook_text = json.dumps(loaded.get("hooks", {}))
@@ -467,7 +576,11 @@ def installer_checks(report: Report) -> None:
         )
         checked = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
         report.check(
             "command-only install passes check",
@@ -477,7 +590,11 @@ def installer_checks(report: Report) -> None:
 
         auto_intent = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--apply", "--auto-intent"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
         loaded = json.loads(settings.read_text(encoding="utf-8"))
         hook_text = json.dumps(loaded.get("hooks", {}))
@@ -495,37 +612,59 @@ def installer_checks(report: Report) -> None:
         settings.write_text(json.dumps(loaded, indent=2) + "\n", encoding="utf-8")
         settings_drift = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
         report.check(
             "check detects installed settings drift",
-            settings_drift.returncode == 1 and "claude/settings.json" in settings_drift.stdout,
+            settings_drift.returncode == 1
+            and "claude/settings.json" in settings_drift.stdout,
             f"rc={settings_drift.returncode}",
         )
         settings_repair = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--apply", "--auto-intent"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
-        report.check("apply repairs installed settings drift", settings_repair.returncode == 0)
+        report.check(
+            "apply repairs installed settings drift", settings_repair.returncode == 0
+        )
 
         opencode_config = fake_home / ".config" / "opencode" / "opencode.json"
         opencode = json.loads(opencode_config.read_text(encoding="utf-8"))
         permission = opencode["agent"]["plan"]["permission"]
         permission["external_directory"] = "allow"
         permission["bash"]["cat *"] = "allow"
-        opencode_config.write_text(json.dumps(opencode, indent=2) + "\n", encoding="utf-8")
+        opencode_config.write_text(
+            json.dumps(opencode, indent=2) + "\n", encoding="utf-8"
+        )
         opencode_drift = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
         report.check(
             "check detects installed OpenCode policy drift",
-            opencode_drift.returncode == 1 and "opencode/opencode.json" in opencode_drift.stdout,
+            opencode_drift.returncode == 1
+            and "opencode/opencode.json" in opencode_drift.stdout,
             f"rc={opencode_drift.returncode}",
         )
         opencode_repair = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--apply", "--auto-intent"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
         repaired_opencode = json.loads(opencode_config.read_text(encoding="utf-8"))
         repaired_permission = repaired_opencode["agent"]["plan"]["permission"]
@@ -540,7 +679,11 @@ def installer_checks(report: Report) -> None:
         )
         repaired_check = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
         report.check("repaired install passes check", repaired_check.returncode == 0)
 
@@ -548,19 +691,30 @@ def installer_checks(report: Report) -> None:
         reordered_bash = reordered["agent"]["plan"]["permission"]["bash"]
         catch_all = reordered_bash.pop("*")
         reordered_bash["*"] = catch_all
-        opencode_config.write_text(json.dumps(reordered, indent=2) + "\n", encoding="utf-8")
+        opencode_config.write_text(
+            json.dumps(reordered, indent=2) + "\n", encoding="utf-8"
+        )
         order_drift = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
         report.check(
             "check detects semantic OpenCode rule-order drift",
-            order_drift.returncode == 1 and "opencode/opencode.json" in order_drift.stdout,
+            order_drift.returncode == 1
+            and "opencode/opencode.json" in order_drift.stdout,
             f"rc={order_drift.returncode}",
         )
         order_repair = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--apply", "--auto-intent"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
         canonical = json.loads(opencode_config.read_text(encoding="utf-8"))
         canonical_bash = canonical["agent"]["plan"]["permission"]["bash"]
@@ -575,7 +729,11 @@ def installer_checks(report: Report) -> None:
         settings.write_text("[]\n", encoding="utf-8")
         non_object_settings = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
         report.check(
             "check rejects non-object settings JSON without traceback",
@@ -590,7 +748,11 @@ def installer_checks(report: Report) -> None:
         opencode_config.write_text("[]\n", encoding="utf-8")
         non_object_opencode = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
         )
         report.check(
             "check rejects non-object OpenCode JSON without traceback",
@@ -685,15 +847,20 @@ def installer_checks(report: Report) -> None:
             env=rollback_env,
         )
         receipts = sorted(
-            (rollback_home / ".claude" / "backups").glob("install_*/install_receipt.json")
+            (rollback_home / ".claude" / "backups").glob(
+                "install_*/install_receipt.json"
+            )
         )
-        receipt = json.loads(receipts[-1].read_text(encoding="utf-8")) if receipts else {}
+        receipt = (
+            json.loads(receipts[-1].read_text(encoding="utf-8")) if receipts else {}
+        )
         receipt_keys = {entry.get("key") for entry in receipt.get("entries", [])}
         report.check(
             "receipt v2 covers settings and install mode with post hashes",
             installed.returncode == 0
             and receipt.get("schema_version") == 2
-            and {"claude/settings.json", "claude/workflow-install-mode.json"} <= receipt_keys
+            and {"claude/settings.json", "claude/workflow-install-mode.json"}
+            <= receipt_keys
             and all(entry.get("post_sha256") for entry in receipt.get("entries", [])),
             f"rc={installed.returncode}, entries={len(receipt.get('entries', []))}",
         )
@@ -711,7 +878,9 @@ def installer_checks(report: Report) -> None:
             rolled_back.returncode == 0
             and not (rollback_home / ".claude" / "CLAUDE.md").exists()
             and not (rollback_home / ".claude" / "settings.json").exists()
-            and not (rollback_home / ".claude" / ".workflow-install-mode.json").exists(),
+            and not (
+                rollback_home / ".claude" / ".workflow-install-mode.json"
+            ).exists(),
             f"rc={rolled_back.returncode}",
         )
 
@@ -725,7 +894,9 @@ def installer_checks(report: Report) -> None:
             check=True,
         )
         edited = rollback_home / ".claude" / "CLAUDE.md"
-        edited.write_text(edited.read_text(encoding="utf-8") + "\nuser edit\n", encoding="utf-8")
+        edited.write_text(
+            edited.read_text(encoding="utf-8") + "\nuser edit\n", encoding="utf-8"
+        )
         untouched_peer = rollback_home / ".claude" / "settings.json"
         refused = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--rollback", "--apply"],
@@ -759,10 +930,14 @@ def delegated_checks(report: Report, session_id: str) -> None:
             "def main():\n    return 'ready'\n",
             encoding="utf-8",
         )
-        code, output = _run_cli("--command", "init", "--work-dir", str(project), "--pretty")
+        code, output = _run_cli(
+            "--command", "init", "--work-dir", str(project), "--pretty"
+        )
         script = project / ".workflow" / ("run.ps1" if os.name == "nt" else "run.sh")
         if code != 0 or not script.exists():
-            report.record("delegated commands", SKIP, "fresh workflow runner was not generated")
+            report.record(
+                "delegated commands", SKIP, "fresh workflow runner was not generated"
+            )
             return
 
         # sweep is local and returns a git-diff report, not delegated evidence.
@@ -772,12 +947,23 @@ def delegated_checks(report: Report, session_id: str) -> None:
         ]
         for command, task, contract in cases:
             runner = (
-                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)]
-                if os.name == "nt" else [str(script)]
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(script),
+                ]
+                if os.name == "nt"
+                else [str(script)]
             )
             result = subprocess.run(
                 [*runner, command, task, session_id],
-                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
                 cwd=str(project),
             )
             payload = _json_from(result.stdout or "")
@@ -798,11 +984,16 @@ def delegated_checks(report: Report, session_id: str) -> None:
                     any(m in content for m in ("[evidence]", "[digest]", "grounded:")),
                 )
                 for field in REQUIRED_FIELDS.get(command, ()):
-                    report.check(f"{command} has required field '{field}'", field in content)
+                    report.check(
+                        f"{command} has required field '{field}'", field in content
+                    )
             else:
                 report.check(
                     f"{command} reports changed files",
-                    any(k in content for k in ("changed", "diff", "modified", "no changes")),
+                    any(
+                        k in content
+                        for k in ("changed", "diff", "modified", "no changes")
+                    ),
                     "local git report, not an evidence block",
                 )
     finally:
@@ -811,9 +1002,14 @@ def delegated_checks(report: Report, session_id: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="agent-workflow end-to-end checks")
-    parser.add_argument("--full", action="store_true",
-                        help="also run delegated commands (minutes + real quota)")
-    parser.add_argument("--session", default="e2e-session", help="session id for delegated runs")
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="also run delegated commands (minutes + real quota)",
+    )
+    parser.add_argument(
+        "--session", default="e2e-session", help="session id for delegated runs"
+    )
     args = parser.parse_args()
 
     report = Report()
@@ -828,8 +1024,10 @@ def main() -> int:
     total = len(report.rows)
     passed = total - report.failed - report.skipped
     print("\n[E2E REPORT]")
-    print(f"  {passed} passed | {report.failed} failed | {report.skipped} skipped "
-          f"({total} checks)")
+    print(
+        f"  {passed} passed | {report.failed} failed | {report.skipped} skipped "
+        f"({total} checks)"
+    )
     if report.skipped:
         print("  skipped checks are NOT passes — see the reasons above")
     return 1 if report.failed else 0
