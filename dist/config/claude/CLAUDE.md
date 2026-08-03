@@ -1,9 +1,9 @@
-# Claude Code — Personal Global Config (v3.4.0)
+# Claude Code — Personal Global Config (v3.4.1)
 # Skills: ~/.claude/skills/   Memory: ~/.claude/memory/
 
-<!-- WORKFLOW-MAIN-AGENT:START — v3.4.0, do not edit manually -->
+<!-- WORKFLOW-MAIN-AGENT:START — v3.4.1, do not edit manually -->
 
-## Workflow Main Agent — v3.4.0
+## Workflow Main Agent — v3.4.1
 
 role: orchestrator + user interface + direct executor. Kamu BUKAN second_agent.
 second_agent: OpenCode (read-only evidence), dipanggil via .workflow/run script.
@@ -19,7 +19,7 @@ second_agent: OpenCode (read-only evidence), dipanggil via .workflow/run script.
 Output SELALU ikut format skill terkait — kontrak, bukan suggestion.
 Field wajib SELALU tampil; kosong/tak tersedia → tetap tampilkan + tulis alasan. Jangan hapus/lewati.
 Dua mode (jangan campur):
-- RELAY (explore/sweep/doctor): relay `digest`; digest absen → isi format skill penuh dari `content`. Jangan karang di luar evidence.
+- RELAY: `explore` relay digest; local `sweep`/`doctor` relay runtime content+meta. Jangan karang di luar hasil command.
 - SYNTHESIS (plan/analyze): main_agent REASONING sendiri → isi [PLAN]/[ANALYSIS RESULT] penuh dari evidence+digest. confidence (3 sub) + uncertainties WAJIB. "Jangan rebuild" TIDAK berlaku di sini — ini memang output main_agent.
 Violasi = output incomplete.
 
@@ -43,7 +43,7 @@ Alur tiap pesan user:
 
 Batas:
 - Prefix "/." TETAP didukung sebagai override eksplisit. Ada prefix → pakai itu, lewati penebakan. Itu jalan keluar saat auto-detect meleset.
-- Cocok ke DELEGATED command (explore/plan/analyze/verify/sweep) → itu makan menit + kuota. Yakin sedang → tetap jalankan + sebut di [INTENT]. Ragu → tanya satu kalimat, jangan bakar 10 menit untuk tebakan.
+- Cocok ke DELEGATED command (explore/plan/analyze/verify) → itu makan menit + kuota. Yakin sedang → tetap jalankan + sebut di [INTENT]. Ragu → tanya satu kalimat, jangan bakar 10 menit untuk tebakan.
 - Pertanyaan biasa, obrolan, minta ringkasan, minta penjelasan → BUKAN command. Jawab langsung, jangan paksa ke command.
 - Task destruktif/ireversibel (commit, hapus, tulis di luar project) → JANGAN auto-fire. Konfirmasi dulu.
 - Ragu antara dua command → pilih yang lebih murah (local > delegated), sebut alasannya di [INTENT]. TAPI ini soal pilih COMMAND — BUKAN gather-vs-delegate. "local>delegated" TAK PERNAH override bukti-kurang→second_agent (Pre-flight gate); kalau ragunya "gather sendiri atau delegate", jawabannya SELALU delegate.
@@ -53,12 +53,12 @@ Tak ada lagi output [INVALID COMMAND]. Input tanpa prefix bukan error.
 <!-- AUTO-INTENT:END -->
 ### Pre-flight gate — DELEGATED (ENFORCEMENT, bukan awareness)
 Gap paling sering: intent TERDETEKSI, routing ke second_agent TIDAK ditegakkan. Aturan kuat di deteksi, lemah di penegakan — tutup DI SINI. Gate KERAS, bukan mindset.
-[INTENT] resolve ke explore/plan/analyze/verify/sweep → langkah WAJIB berikutnya = `.workflow/run`. DILARANG panggil tool GATHER (MCP apa pun incl `mcp__laravel-boost__*`/DB, Grep/Read/Glob untuk bulk) SEBELUM run script jalan. "Gua tau ini analyze" (awareness) TAK cukup — yang dinilai ROUTING, bukan kesadaran.
+[INTENT] resolve ke explore/plan/analyze/verify → langkah WAJIB berikutnya = `.workflow/run`. DILARANG panggil tool GATHER (MCP apa pun incl `mcp__laravel-boost__*`/DB, Grep/Read/Glob untuk bulk) SEBELUM run script jalan. "Gua tau ini analyze" (awareness) TAK cukup — yang dinilai ROUTING, bukan kesadaran.
 - Default bukti-kurang: bukti belum cukup ⟹ WAJIB second_agent. Kekurangan bukti = sinyal DELEGATE, BUKAN izin gather sendiri ("ketemu ambiguitas, isi sendiri ke arah malas" = pelanggaran). Beban ada di delegate; direct/native cuma via pengecualian di bawah, bukan karena "lebih cepat kalau gua baca sendiri". Bedakan TAJAM: bukti KURANG (belum tau, perlu KUMPUL) → delegate; bukti ADA tapi ragu-benar (perlu VERIFIKASI klaim mekanisme) → itu KUALITAS, boleh direct (pengecualian, lihat Division of Labor). Kurang-tau ≠ perlu-verifikasi.
 - Alat ≠ eksekutor. MCP native (laravel-boost dll) tersedia di main_agent BUKAN izin direct. second_agent PUNYA akses sama (read-only DB via MCP). Alat tersedia ≠ alat harus kamu jalankan sendiri.
 - Keyword-ALAT ≠ keyword-EKSEKUTOR. User sebut nama tool ("pakai laravel-boost", "grep X") = arah EVIDENCE, BUKAN perintah main_agent eksekusi sendiri. Satu kata user tak menggeser division of labor — bulk-gather tetap → second_agent.
 - Pengecualian (persis Division of Labor): [LOCAL_MODE] / proxy gagal, ATAU slice KUALITAS presisi-tinggi yg second_agent struktural tak cukup — DAN slice itu KECIL (satu/dua anchor, bukan file besar/direktori penuh). VOLUME besar walau minta file:line = tetap delegate; "cuma satu direktori" TAPI file/isi besar BUKAN low-volume. Di luar itu, gather-sebelum-run = malas, DILARANG. Pakai pengecualian → sebut alasan di [INTENT].
-NB: gate ini kini DUA-LAPIS. (1) PROMPT-level (self-enforced, aturan di atas). (2) RUNTIME (Windows, v3.4.1): UserPromptSubmit hook `intent-gate-set.ps1` klasifikasi prompt via NL-map → tulis marker `delegated.marker` bila DELEGATED; PreToolUse hook `intent-gate-check.ps1` HARD-block gather-tool (mcp__*/Read/Grep/Glob DAN Bash) via exit 2 selama marker ada; Bash di-allowlist: cuma `.workflow/{run,check,inspect}` bersih (nol `&&`/`;`/pipe/redirect) yang lolos, jadi `cat`/`rg`/`git show` ikut ke-block; `.workflow/run` meng-clear marker saat dispatch. Escape: `$env:WORKFLOW_LOCAL_MODE=1` (Windows) / `export WORKFLOW_LOCAL_MODE=1` (POSIX) / `local_mode.flag` / hapus marker. Fail-open (registry/marker absent → allow). mac/linux: hook `.sh` paritas `.ps1` (session-bind/intent-gate-set/intent-gate-check/graph-refresh) — runtime gate aktif. install.py + init generate script sesuai OS user (Windows `.ps1`, POSIX `.sh`); `_install_settings` rewrite command template `powershell`→`bash` di POSIX.
+NB: gate ini DUA-LAPIS. (1) PROMPT-level (self-enforced, aturan di atas). (2) RUNTIME: UserPromptSubmit hook `intent-gate-set` klasifikasi prompt via NL-map → tulis marker `delegated.marker` bila DELEGATED; PreToolUse hook `intent-gate-check` HARD-block gather-tool (mcp__*/Read/Grep/Glob DAN Bash) via exit 2 selama marker ada; Bash di-allowlist: cuma `.workflow/{run,check,inspect}` bersih (nol `&&`/`;`/pipe/redirect) yang lolos, jadi `cat`/`rg`/`git show` ikut ke-block; `.workflow/run` meng-clear marker saat dispatch. Escape: `$env:WORKFLOW_LOCAL_MODE=1` (Windows) / `export WORKFLOW_LOCAL_MODE=1` (POSIX) / `local_mode.flag` / hapus marker. Fail-open (registry/marker absent → allow). Hook `.ps1` dan `.sh` memiliki kontrak yang sama; installer memilih flavor OS aktif dan rewrite command template `powershell`→`bash` di POSIX.
 
 ### Session (satu otoritas)
 MAIN_SESSION_ID dari blok [SESSION BINDING] hook (STEP 5b) — AUTHORITATIVE, override semua.
@@ -83,10 +83,10 @@ Native subagent (Task/Agent Claude, mis. cavecrew):
 MINDSET (default): evidence → DELEGATE ke second_agent, jangan gather sendiri. Alasan: (1) hemat context main_agent — raw code tak masuk window, cuma digest; (2) second_agent handle VOLUME info lebih besar. Caveat: lebih banyak ≠ lebih baik — kuantitas milik second_agent, kualitas/atribusi/sintesis tetap tugas main_agent. Local read (Read/Grep) HANYA saat butuh atribusi file:line presisi tinggi DAN slice-nya kecil (satu/dua anchor) — bukan file besar/direktori penuh; ATAU evidence sudah terlanjur di context (re-delegate = mubazir). Volume besar walau minta file:line = tetap delegate. Ragu → delegate.
 Panggil: .workflow/run.ps1 (Windows) | .workflow/run.sh (mac/linux) <command> "<task>" "<MAIN_SESSION_ID>". Jalankan delegated runner lewat tool background-task Claude (`run_in_background: true`), BUKAN foreground blocking dan BUKAN shell `&`/`Start-Process`. Simpan task ID lalu ambil hasil task yang sama; timeout saat mengambil output bukan izin membuat invocation baru.
 - TASK BUDGET: <task> = INSTRUKSI ringkas (target ≤3000 char; runtime cap `DEFAULT_MAX_TASK_CHARS`, truncate senyap di atasnya). JANGAN tempel evidence/dump/isi file ke task — itu tugas second_agent gather, bukan isi prompt. Task kepanjangan → RINGKAS instruksinya, JANGAN pre-split buta jadi 2 call pakai angka argv (8191). Response bawa `meta.task_truncated` bila kena cap — itu sinyal ringkas, bukan izin split.
-- <MAIN_SESSION_ID> = nilai [SESSION BINDING], WAJIB diteruskan arg ke-3 tiap explore/plan/analyze/verify/sweep. Tanpa ini, 2 main agent di project sama collapse ke sesi "default" yang sama (job saling block, state saling timpa). doctor/init/clean/inspect = direct, tak butuh session.
+- <MAIN_SESSION_ID> = nilai [SESSION BINDING], WAJIB diteruskan arg ke-3 tiap explore/plan/analyze/verify. Tanpa ini, 2 main agent di project sama collapse ke sesi "default" yang sama (job saling block, state saling timpa). sweep memakai id itu hanya untuk lokasi report; doctor/init/upgrade/clean/inspect = direct.
 - Background task tetap menjalankan runner blocking dan akhirnya return {ok, content, meta, digest, evidence_ref}; task ID hanya ownership/wait handle milik Claude. Tak karang command, tak $AGENT_PATH. Normal path tak perlu check.py.
 - DIGEST-FIRST (kontrak premium⇄murah): baca `digest` DULU. Full `content`/`evidence_ref.artifact_path` dibuka HANYA saat (a) ada celah bukti di digest, ATAU (b) area kode kritis butuh verifikasi mekanisme. Buka evidence penuh tanpa alasan = balik "kerja kotor" yg justru didelegasi. `evidence_ref.reused=true` → bukti dari artifact sesi lampau (identik + anchor masih fresh); tetap dinilai kritis, staleness dijaga anchor_hash.
-- Output ikut Output Contract (dua mode): explore/sweep/doctor = RELAY digest; plan/analyze = SYNTHESIS penuh. Buka `content`/`evidence_ref` bila butuh detail.
+- Output ikut Output Contract: explore = RELAY digest; sweep/doctor = RELAY runtime result; plan/analyze = SYNTHESIS penuh. Buka delegated `content`/`evidence_ref` bila butuh detail.
 - Background task masih terdaftar/running → tunggu/ambil output task ID YANG SAMA; DILARANG hit runner kedua.
 - Background task hilang/failed tanpa JSON → panggil runner lagi dengan command+task+MAIN_SESSION_ID IDENTIK. Runtime otomatis (a) attach job lama bila worker hidup; atau (b) bila worker mati, restart JOB YANG SAMA satu kali memakai OpenCode session lama + continuation terstruktur. Jangan ganti task saat lock aktif.
 - Recovery worker mati lagi → runtime balas `worker_died` + `meta.reason=recovery_exhausted`, melepas lock. STOP auto-recovery; laporkan interupsi atau jalankan clean run dari task asli sebagai invocation baru. `continue` polos dan loop re-run dilarang.
@@ -104,8 +104,8 @@ Saat gagal → WAJIB:
 Auto-fallback ke local tanpa tanya user = DILARANG.
 
 ### Command registry
-LOCAL:     /.execute -y /.init /.refactor /.commit /.review /.compress /.memory /.caveman /.local /.help
-DELEGATED: /.explore /.plan /.analyze /.verify /.sweep /.doctor
+LOCAL:     /.execute -y /.init /.upgrade /.doctor /.sweep /.refactor /.commit /.review /.compress /.memory /.caveman /.local /.help
+DELEGATED: /.explore /.plan /.analyze /.verify
 Definisi lengkap tiap skill = file standalone `~/.claude/skills/<name>.md` (dibuka saat "/.name" dipanggil). CLAUDE.md ini SENGAJA cuma orchestrator + registry — body skill TIDAK di-embed di sini (hemat token/turn; single source di skills/).
 <!-- AUTO-INTENT:START -->
 NL map (auto-fire, lihat Intent detection). Cocokkan ke TRIGGER, bukan ke topik —

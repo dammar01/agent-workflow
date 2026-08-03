@@ -7,6 +7,7 @@ Edge confidence is honored: graphify tags every edge EXTRACTED (read from source
 INFERRED, or AMBIGUOUS. Treating an inferred edge as strong as an extracted one is
 how a shortlist starts pointing at files that were never really related.
 """
+import hashlib
 import json
 import os
 import re
@@ -58,15 +59,7 @@ def load_graph(project_root) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-# (project_root, graph_mtime) -> verdict. The check walks every .py in the repo, and
-# it runs on every delegated call; without this the same full-tree scan is repeated for
-# a graph that has not moved. Keyed on the graph's mtime so a regenerated graph is
-# always re-evaluated. Process-local and tiny — a worker handles one call and exits.
-_STALE_CACHE: dict[tuple[str, float], bool | None] = {}
-
-# ...which is exactly why the in-process cache never helped: every delegated call is a
-# FRESH worker process, so the memo was always empty and the full-tree walk ran every
-# single time. The verdict is a pure function of the graph mtime, so it survives on disk.
+_STALE_CACHE: dict[tuple[str, int, str], bool | None] = {}
 _STALE_CACHE_FILE = "graph-stale.json"
 
 
@@ -74,13 +67,17 @@ def _stale_cache_path(project_root) -> Path:
     return Path(project_root) / ".workflow" / _STALE_CACHE_FILE
 
 
-def _read_stale_cache(project_root, graph_mtime: float) -> bool | None:
-    """Cached verdict for this exact graph mtime, or None to recompute. Never raises."""
+def _read_stale_cache(
+    project_root, graph_mtime_ns: int, source_fingerprint: str
+) -> bool | None:
+    """Cached verdict, or stale when the same graph saw a different source tree."""
     try:
         data = json.loads(
             _stale_cache_path(project_root).read_text(encoding="utf-8")
         )
-        if float(data.get("graph_mtime", -1)) == graph_mtime:
+        if int(data.get("graph_mtime_ns", -1)) == graph_mtime_ns:
+            if data.get("source_fingerprint") != source_fingerprint:
+                return True
             verdict = data.get("verdict")
             return verdict if isinstance(verdict, bool) else None
     except (OSError, ValueError, TypeError, AttributeError):
@@ -88,14 +85,22 @@ def _read_stale_cache(project_root, graph_mtime: float) -> bool | None:
     return None
 
 
-def _write_stale_cache(project_root, graph_mtime: float, verdict: bool) -> None:
+def _write_stale_cache(
+    project_root, graph_mtime_ns: int, source_fingerprint: str, verdict: bool
+) -> None:
     """Best-effort: a cache that cannot be written must not fail the call."""
     try:
         path = _stale_cache_path(project_root)
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
         tmp.write_text(
-            json.dumps({"graph_mtime": graph_mtime, "verdict": verdict}),
+            json.dumps(
+                {
+                    "graph_mtime_ns": graph_mtime_ns,
+                    "source_fingerprint": source_fingerprint,
+                    "verdict": verdict,
+                }
+            ),
             encoding="utf-8",
         )
         os.replace(tmp, path)
@@ -103,8 +108,36 @@ def _write_stale_cache(project_root, graph_mtime: float, verdict: bool) -> None:
         pass
 
 
+def _source_state(project_root) -> tuple[str, int] | None:
+    """Fingerprint Python source stat data and return the newest source mtime."""
+    root = Path(project_root)
+    rows: list[str] = []
+    newest_ns = 0
+    try:
+        for candidate in root.rglob("*.py"):
+            try:
+                relative = candidate.relative_to(root)
+            except ValueError:
+                continue
+            if set(relative.parts) & _SKIP_DIRS:
+                continue
+            try:
+                stat = candidate.stat()
+            except OSError:
+                continue
+            newest_ns = max(newest_ns, stat.st_mtime_ns)
+            rows.append(f"{relative.as_posix()}\0{stat.st_mtime_ns}\0{stat.st_size}")
+    except OSError:
+        return None
+    if not rows:
+        return None
+    rows.sort()
+    fingerprint = hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()[:24]
+    return fingerprint, newest_ns
+
+
 def is_stale(project_root) -> bool | None:
-    """True when the graph is older than the newest tracked source file.
+    """True when the graph is older than the newest project Python source file.
 
     None when it cannot be determined. A stale graph is still useful as leads, but
     the caller must be able to say so rather than presenting it as current.
@@ -113,37 +146,34 @@ def is_stale(project_root) -> bool | None:
     if not path.exists():
         return None
     try:
-        graph_mtime = path.stat().st_mtime
+        graph_mtime_ns = path.stat().st_mtime_ns
     except OSError:
         return None
 
-    cache_key = (str(project_root), graph_mtime)
+    source_state = _source_state(project_root)
+    if source_state is None:
+        return None
+    source_fingerprint, newest_ns = source_state
+    cache_key = (str(Path(project_root).resolve()), graph_mtime_ns, source_fingerprint)
     if cache_key in _STALE_CACHE:
         return _STALE_CACHE[cache_key]
-    cached = _read_stale_cache(project_root, graph_mtime)
+    if any(
+        key[0] == cache_key[0]
+        and key[1] == graph_mtime_ns
+        and key[2] != source_fingerprint
+        for key in _STALE_CACHE
+    ):
+        _STALE_CACHE[cache_key] = True
+        _write_stale_cache(project_root, graph_mtime_ns, source_fingerprint, True)
+        return True
+    cached = _read_stale_cache(project_root, graph_mtime_ns, source_fingerprint)
     if cached is not None:
         _STALE_CACHE[cache_key] = cached
         return cached
 
-    newest = 0.0
-    root = Path(project_root)
-    try:
-        # rglob itself can raise (permission denied on a subtree) — this runs on every
-        # delegated call, so it must degrade to "unknown" rather than break the call.
-        for candidate in root.rglob("*.py"):
-            if set(candidate.parts) & _SKIP_DIRS:
-                continue
-            try:
-                newest = max(newest, candidate.stat().st_mtime)
-            except OSError:
-                continue
-    except OSError:
-        return None
-    if not newest:
-        return None
-    verdict = newest > graph_mtime
+    verdict = newest_ns > graph_mtime_ns
     _STALE_CACHE[cache_key] = verdict
-    _write_stale_cache(project_root, graph_mtime, verdict)
+    _write_stale_cache(project_root, graph_mtime_ns, source_fingerprint, verdict)
     return verdict
 
 

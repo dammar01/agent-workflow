@@ -1,7 +1,7 @@
 # intent-gate-set.ps1 - UserPromptSubmit hook (Pre-flight gate: SET side)
 #
 # Classifies the raw user prompt against the DELEGATED NL-map (intent-map.json).
-# If the prompt resolves to a DELEGATED command (explore/plan/analyze/verify/sweep),
+# If the prompt resolves to a DELEGATED command (explore/plan/analyze/verify),
 # it writes a marker:  .workflow/sessions/<MAIN_SESSION_ID>/runtime/delegated.marker
 # The PreToolUse hook (intent-gate-check.ps1) reads that marker to HARD-block gather
 # tools until .workflow/run has executed (which clears the marker).

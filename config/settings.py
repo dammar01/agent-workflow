@@ -1,5 +1,7 @@
+import hashlib
 import os
 import json
+import secrets
 from pathlib import Path
 
 from config.routing import COMMAND_ROUTES
@@ -10,16 +12,12 @@ CACHE_FILE = BASE_DIR / "storage" / "cache.json"
 JOB_DIR = BASE_DIR / "storage" / "jobs"
 OPENCODE_CONFIG_FILE = BASE_DIR / "config" / "opencode.json"
 
-# Held at 3.4.0 deliberately: this line is UNRELEASED (never shipped to the team), so all
-# stabilization + feature work lands under 3.4.0 as the first team baseline rather than
-# minting a phantom 3.4.1 nobody ever installed.
-TOOL_VERSION = "3.4.0"
+TOOL_VERSION = "3.4.1"
 MAIN_PY = BASE_DIR / "main.py"
 CHECK_PY = BASE_DIR / "check.py"
 
-# Per-component versions for lazy upgrades (P0.7). Both derive from TOOL_VERSION; a
-# maintainer bumps ONE entry when only that component changed, so an upgrade re-applies
-# just that part instead of rewriting the whole workspace / install.
+# Component stamps allow lazy upgrades and may diverge when only one surface changes.
+# Both surfaces changed in v3.4.1, so both currently match TOOL_VERSION.
 #   prompt_bundle : LLM-facing contract shipped to ~/.claude (CLAUDE.md, skills, AGENTS.md)
 #   runtime       : machine wiring in .workflow (run/inspect/check scripts, config schema,
 #                   opencode adapter) + shipped hooks/settings
@@ -79,8 +77,8 @@ DEFAULT_JOB_POLL_INTERVAL_SECONDS = float(os.getenv("AI_PROXY_JOB_POLL_INTERVAL_
 DEFAULT_JOB_POLL_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_JOB_POLL_TIMEOUT_SECONDS", "0"))
 # Global ceiling on concurrent in-flight delegated workers across ALL sessions. Per-session
 # concurrency is already 1 (session lock); this bounds the machine-wide fan-out so a burst of
-# parallel main-agents cannot spawn unbounded opencode processes. Soft cap (checked before
-# spawn; a rare race may exceed by one) — a resource bound, not a correctness invariant.
+# parallel main-agents cannot spawn unbounded opencode processes. Admission is serialized
+# across processes so the configured ceiling is a hard bound for this runtime version.
 DEFAULT_MAX_GLOBAL_WORKERS = int(os.getenv("AI_PROXY_MAX_GLOBAL_WORKERS", "6"))
 
 
@@ -104,10 +102,19 @@ def default_opencode_config() -> dict:
     }
 
 
-def get_cached_main_session_id() -> str | None:
+def _main_session_cache_path(project_root=None) -> Path:
+    if project_root is None:
+        return Path(CACHE_FILE)
+    normalized = os.path.normcase(str(Path(project_root).resolve()))
+    digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:24]
+    return Path(CACHE_FILE).parent / "main-sessions" / f"{digest}.json"
+
+
+def get_cached_main_session_id(project_root=None) -> str | None:
     """Read the cached main agent session ID from cache file."""
+    cache_path = _main_session_cache_path(project_root)
     try:
-        with Path(CACHE_FILE).open("r", encoding="utf-8") as file:
+        with cache_path.open("r", encoding="utf-8") as file:
             cache = json.load(file)
         if isinstance(cache, dict):
             return cache.get("main_session_id")
@@ -116,11 +123,12 @@ def get_cached_main_session_id() -> str | None:
     return None
 
 
-def set_cached_main_session_id(session_id: str) -> None:
+def set_cached_main_session_id(session_id: str, project_root=None) -> None:
     """Write the main agent session ID to cache file."""
+    cache_path = _main_session_cache_path(project_root)
     cache: dict = {}
     try:
-        with Path(CACHE_FILE).open("r", encoding="utf-8") as file:
+        with cache_path.open("r", encoding="utf-8") as file:
             cache = json.load(file)
         if not isinstance(cache, dict):
             cache = {}
@@ -128,9 +136,15 @@ def set_cached_main_session_id(session_id: str) -> None:
         cache = {}
 
     cache["main_session_id"] = session_id
-    CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with Path(CACHE_FILE).open("w", encoding="utf-8") as file:
+    if project_root is not None:
+        cache["project_root"] = str(Path(project_root).resolve())
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    temp = cache_path.with_suffix(cache_path.suffix + f".{secrets.token_hex(6)}.tmp")
+    with temp.open("w", encoding="utf-8") as file:
         json.dump(cache, file, indent=2)
+        file.flush()
+        os.fsync(file.fileno())
+    temp.replace(cache_path)
 
 
 def load_opencode_config(path: Path = OPENCODE_CONFIG_FILE) -> dict:

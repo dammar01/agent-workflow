@@ -2,8 +2,9 @@
 
 BOOTSTRAP-ONLY. dist/ is the canonical, Git-reviewed bundle; this tool only *seeds* it
 from a maintainer's live ~/.claude the first time (or when deliberately re-importing home
-edits). Routine changes are made in dist/ directly. Skill bodies live ONLY in
-`dist/config/claude/skills/*.md` (CLAUDE.md no longer embeds them — see P1.5);
+edits). Routine changes are made in dist/ directly. Skill bodies live only in
+`dist/config/claude/skills/*.md`; CLAUDE.md contains the command registry and
+orchestrator contract.
 `tools/sync_skills.py --check` verifies those files still match CLAUDE.md's command
 registry, and `tools/gen_manifest.py` rebuilds the manifest from dist/. Do NOT run this to
 refresh the manifest after editing dist/ — it would overwrite dist/ with home-dir content
@@ -47,7 +48,7 @@ ALLOWLIST = [
     (".claude/CLAUDE.md", "claude/CLAUDE.md", "file"),
     (".claude/skills", "claude/skills", "dir:*.md"),
     (".claude/commands", "claude/commands", "dir:*.md"),
-    (".claude/hooks", "claude/hooks", "dir:*.ps1,*.sh"),
+    (".claude/hooks", "claude/hooks", "dir:*.ps1,*.sh,intent-map.json"),
     (".config/opencode/AGENTS.md", "opencode/AGENTS.md", "file"),
 ]
 
@@ -282,8 +283,8 @@ def main() -> int:
                 "merge": (
                     "replace"
                     if "/skills/" in entry["dest"]
-                    or entry["dest"].endswith(".ps1")
-                    or entry["dest"].endswith(".sh")
+                    or "/commands/" in entry["dest"]
+                    or "/hooks/" in entry["dest"]
                     else "merge"
                 ),
                 **(
@@ -314,23 +315,12 @@ def main() -> int:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(entry["text"], encoding="utf-8")
 
-    from config.settings import TOOL_VERSION
+    from tools.gen_manifest import _build
 
     MANIFEST.parent.mkdir(parents=True, exist_ok=True)
     MANIFEST.write_text(
         json.dumps(
-            {
-                "version": TOOL_VERSION,
-                "files": files_meta,
-                "targets": {
-                    "claude/CLAUDE.md": "{{HOME}}/.claude/CLAUDE.md",
-                    "claude/skills": "{{HOME}}/.claude/skills",
-                    "claude/commands": "{{HOME}}/.claude/commands",
-                    "claude/hooks": "{{HOME}}/.claude/hooks",
-                    "claude/settings.template.json": "{{HOME}}/.claude/settings.json",
-                    "opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",
-                },
-            },
+            _build(),
             indent=2,
         )
         + "\n",

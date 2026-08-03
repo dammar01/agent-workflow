@@ -14,8 +14,8 @@
 #   - env  WORKFLOW_LOCAL_MODE=1
 #   - file .workflow/sessions/<MAIN_SESSION_ID>/runtime/local_mode.flag exists
 # Marker absent, or session unresolved -> allow (fail-open). Always resolves via the
-# registry written by session-bind.ps1. Bash is NOT matched, so .workflow/run can run
-# to clear the marker even while the gate is active.
+# registry written by session-bind.ps1. A clean .workflow/run call remains allowlisted so
+# it can clear the marker while the gate is active.
 
 $ErrorActionPreference = 'Stop'
 

@@ -1,4 +1,4 @@
-# agent-workflow v3.4.0
+# agent-workflow v3.4.1
 
 Runtime orkestrasi mandiri untuk alur kerja dua-agent. Tanpa dependency pihak ketiga.
 
@@ -52,7 +52,7 @@ Diagram ini menggambarkan jalur delegated penuh. `sweep` dipotong lebih awal ole
 | `opencode` di `PATH` | hanya untuk command terdelegasi |
 | `git` di `PATH` | opsional; dipakai `sweep` dan mode verify `syntax` |
 | Dependency runtime | **nol**; seluruh runtime memakai standard library |
-| Graphify / context-mode | opsional |
+| Graphify | opsional |
 
 Cek cepat:
 
@@ -70,7 +70,7 @@ git --version
 
 ---
 
-## Install (v3.4.0)
+## Install (v3.4.1)
 
 Clone → jalankan satu script → terkonfigurasi.
 
@@ -79,7 +79,10 @@ git clone <repo> && cd agent-workflow
 python install.py            # DRY RUN — tampilkan semua perubahan, tulis nol
 python install.py --apply    # baru menulis
 python install.py --apply --init-project .   # sekalian scaffold .workflow/ di sini
-python install.py --apply --enable-context-mode   # opt-in plugin OpenCode global
+python install.py --apply --only-command      # matikan auto-intent
+python install.py --check --init-project .    # cek bundle + instalasi project
+python install.py --rollback                  # dry-run rollback terakhir
+python install.py --rollback --apply          # rollback setelah preflight hash
 ```
 
 **Dry run adalah default, disengaja.** Script ini menulis ke config agent global — dibaca setiap project di mesin itu. Kesalahan di sini tidak terkurung dalam satu repo.
@@ -91,22 +94,32 @@ Yang dilakukan `--apply`:
 | `~/.claude/CLAUDE.md` | ganti isi **di antara marker** `WORKFLOW-MAIN-AGENT` — tulisan tangan di luar marker selamat |
 | `~/.claude/skills/*.md` | replace (template) |
 | `~/.claude/hooks/*` | replace |
-| `~/.claude/settings.json` | **hanya menambah key yang belum ada**; nilai yang sudah kamu set tak pernah ditimpa diam-diam, hanya dilaporkan |
+| `~/.claude/settings.json` | tambah key dan refresh hook milik workflow; hook user dipertahankan |
 | `~/.config/opencode/AGENTS.md` | ganti isi di antara marker `WORKFLOW-SECOND-AGENT` |
+| `~/.config/opencode/opencode.{json,jsonc}` | merge additive untuk config umum; permission `agent.plan` milik workflow ditegakkan, key user lain dipertahankan |
+| `.opencode/agents/*.md` | project-local saat memakai `--init-project`; global bila project tidak diberikan |
 
 Semua yang akan tertimpa di-backup dulu ke `~/.claude/backups/install_<timestamp>/`.
+Receipt schema v2 mencatat hash sebelum dan sesudah untuk setiap file yang dibuat atau
+diubah, termasuk `settings.json` dan file mode intent. Rollback memvalidasi seluruh
+destination dan backup sebelum menulis apa pun; satu perubahan setelah instalasi membuat
+rollback berhenti dengan konflik, bukan menimpa edit user atau melakukan rollback parsial.
+Receipt mencakup target instalasi global dan bundle. Init/upgrade stateful pada `.workflow/`
+serta penambahan `.workflow/` ke `.gitignore` tidak masuk rollback installer karena dapat
+memuat session dan state project yang tidak aman dihapus otomatis.
 
 Jika `--init-project` menunjuk project yang sudah memiliki `.workflow/`, installer menjalankan **upgrade in-place**: scripts diregenerasi, key config baru di-backfill secara additive, dan `sessions/` dipertahankan. Upgrade workspace ditolak bila masih ada job aktif; install global tetap selesai dan warning harus diperiksa.
 
-### context-mode (opsional)
+### Mode intent
 
-`--enable-context-mode` menambahkan `"context-mode"` ke `plugin[]` di config OpenCode global:
+Default installer adalah **auto-intent**: bahasa natural dapat dipetakan ke command dan
+hook `UserPromptSubmit` mengaktifkan pre-flight gate. `--only-command` mempertahankan hanya
+kontrak prefix `/.` dan menghapus hook `intent-gate-set` milik workflow yang sudah
+terpasang; hook lain milik user tidak dihapus. Jalankan `--auto-intent` untuk memulihkannya.
+Tanpa kedua flag, upgrade mempertahankan mode instalasi sebelumnya.
 
-```text
-~/.config/opencode/opencode.json
-```
-
-Perubahan ini additive dan di-backup lebih dulu. Plain install tidak mengaktifkannya. Ini bukan key `.workflow/opencode.json`; key lama seperti `commands.context_compression` juga tidak mengaktifkan plugin dan tidak dibaca runtime.
+`--check` tanpa `--init-project` memeriksa custom OpenCode agents global. Gabungkan dengan
+`--init-project DIR` untuk memeriksa agents project-local pada directory tersebut.
 
 ### Extractor (sisi maintainer)
 
@@ -299,7 +312,7 @@ Second_agent hanya memasok evidence dan reasoning. Runtime tidak membuat atau me
 | `plan` | terdelegasi | ya | evidence + jejak dependency terbalik |
 | `analyze` | terdelegasi | ya | analisis mendalam, nol perubahan kode |
 | `verify` | terdelegasi¹ | ya | verifikasi; kedalaman diatur `verify_mode` |
-| `sweep` | lokal via worker | ya² | pindai `git diff` tanpa OpenCode |
+| `sweep` | lokal | — | pindai staged, unstaged, dan untracked diff tanpa OpenCode |
 | `submit` | job | ya | jalankan asinkron, kembalikan `job_id` |
 | `await` | job | ya | submit lalu tunggu selesai |
 | `status` | job | — | butuh `--job-id` |
@@ -307,8 +320,6 @@ Second_agent hanya memasok evidence dan reasoning. Runtime tidak membuat atau me
 | `worker` | internal | — | dipakai proses worker, jangan dipanggil manual |
 
 ¹ `verify` melewati OpenCode sepenuhnya ketika `verify_mode` bernilai `syntax`.
-
-² Implementasi `sweep` tidak memakai isi task, tetapi jalur blocking runner melewati `await` yang saat ini tetap mewajibkan prompt non-kosong.
 
 Tidak ada command Python `execute`. `/.execute -y` tetap tersedia sebagai command user-facing di main_agent; menulis kode sengaja tidak didelegasikan ke runtime atau second_agent.
 
@@ -326,7 +337,9 @@ python3 main.py -c await --job-command explore -p "cari entry point auth" -s "ma
 python main.py -c await --job-command explore -p "cari entry point auth" -s "main_app_20260723_090000" -w "C:/path/to/target-app" --pretty
 ```
 
-Memanggil `-c explore`, `plan`, `analyze`, `verify`, atau `sweep` secara langsung hanya melakukan `submit` dan segera mengembalikan payload job. Ambil hasilnya lewat `result`/`check`, atau gunakan `await` seperti contoh di atas.
+Memanggil `-c explore`, `plan`, `analyze`, atau `verify` secara langsung hanya melakukan
+`submit` dan segera mengembalikan payload job. Ambil hasilnya lewat `result`/`check`, atau
+gunakan `await` seperti contoh di atas. `sweep` dan command lokal lain selesai langsung.
 
 | Argumen | Alias | Arti |
 |---|---|---|
@@ -334,7 +347,7 @@ Memanggil `-c explore`, `plan`, `analyze`, `verify`, atau `sweep` secara langsun
 | `--prompt` | `-p` | task |
 | `--prompt-file` | | baca task dari file (alternatif `--prompt`) |
 | `--session` | `-s` | id sesi main_agent |
-| `--fresh-session` | | paksa sesi baru, abaikan cache |
+| `--fresh-session` | | paksa sesi baru, abaikan cache ID sesi dan evidence reuse |
 | `--work-dir` | `-w` | root project target (default: cwd) |
 | `--model` | `-m` | override model, format `provider/model_key` |
 | `--job-id` | | untuk `status`/`result`/`worker` |
@@ -396,15 +409,14 @@ File adapter project-local ini boleh diubah per project. Saat `init`, source-nya
     "explore": { "model": null },
     "plan":    { "model": null },
     "analyze": { "model": null },
-    "verify":  { "model": null },
-    "sweep":   { "model": null }
+    "verify":  { "model": null }
   }
 }
 ```
 
 `model: null` berarti pakai model default OpenCode.
 
-Kunci reliability (v3.4.0):
+Kunci reliability (v3.4.1):
 
 | Kunci | Default | Arti |
 | --- | --- | --- |
@@ -430,12 +442,16 @@ Per-route juga bisa: `"plan": { "model": "...", "timeout_seconds": 3600 }`.
 
 Upgrade mempertahankan nilai existing. Workspace lama yang sudah menyimpan `false` tetap nonaktif sampai kamu mengubahnya sendiri.
 
-Ketika aktif, prompt membawa `[SUBAGENT_PLAN]`:
+Ketika aktif, prompt membawa anchor `[EVIDENCE_SIDECARS]`; cluster fan-out berada di
+`.workflow/sessions/<id>/runtime/leads.json` agar tidak menghabiskan batas argv Windows:
 
 - graph memiliki ≥2 community → satu slice per community;
 - graph tidak ada atau hanya menghasilkan 0–1 community → tetap fan-out ke empat sudut investigasi: entry point, core flow, reverse dependencies, serta config/tests.
 
-Second_agent wajib memakai tool spawn bila tersedia, menjalankan slice secara paralel, lalu menggabungkan klaim dengan tag `[cN]`. Jika tidak memiliki tool spawn, ia harus menyebutkan daftar tool yang benar-benar tersedia sebelum membaca slice secara berurutan.
+Second_agent wajib memakai custom agent `wf-slice` melalui tool `task` bila tersedia,
+menjalankan slice secara paralel, lalu menggabungkan klaim dengan tag `[cN]`. Jika tool
+spawn tidak tersedia, ia harus menyebutkan daftar tool yang benar-benar tersedia sebelum
+membaca slice secara berurutan.
 
 **Pemakaian dilaporkan apa adanya.** Runtime mengecek dua sinyal yang harus sepakat: baris `subagents:` yang dideklarasikan, dan tag `[cN]` pada klaim hasil merge.
 
@@ -460,6 +476,10 @@ Dengan `policies.graph_leads_enabled: true`, runtime membaca `graphify-out/graph
 
 Runtime Python tidak pernah menjalankan `graphify init`, `build`, `watch`, atau `update`. Bundle Claude/PowerShell saat ini juga menyediakan Stop hook terpisah yang dapat menjalankan `graphify update` setelah `[EXECUTION RESULT]` atau `[REFACTOR RESULT]`, hanya bila graph sudah ada, stale, dan binary tersedia. Hook bersifat fail-open dan tidak menolak response bila gagal, tetapi berjalan sinkron sehingga dapat menambah latency sampai 45 detik (outer timeout 60 detik). Hook tidak pernah membuat graph baru atau menjalankan `init`/`build`/`watch`.
 
+Cache verdict graph memakai fingerprint path, mtime nanosecond, dan ukuran seluruh source
+`.py`. Perubahan isi, penambahan, atau penghapusan source menginvalidasi cache walaupun
+`graph.json` tidak berubah.
+
 ---
 
 ## Mode verify
@@ -471,12 +491,10 @@ Kontrak konfigurasi yang dimaksud memisahkan dua pengaturan:
 
 Jadi `auto_verify_after_execute: false` tidak mematikan `/.verify`; ia hanya mencegah pemanggilan otomatis.
 
-Namun bundle prompt saat ini belum konsisten penuh: skill `execute` mengikuti setting tersebut, sedangkan ringkasan prompt utama masih menyebut auto `/.verify` tanpa kondisi. Lihat batasan yang diketahui.
-
 `verify_mode` mengatur **sedalam apa** `/.verify` bekerja:
 
 - **`delegated`** (default) — second_agent memverifikasi dan mengembalikan kontrak berlabel. Tiap temuan wajib membawa tiga tag: `severity` (critical/high/medium/low), `origin` (introduced/regression/pre_existing/unknown), `scope_relation` (in_scope/out_of_scope). Blocking ditentukan kombinasi ketiganya, bukan severity saja — cacat pre-existing tidak menyandera verdict perubahan berjalan, dan `origin: unknown` gagal-tertutup.
-- **`syntax`** — dijawab lokal, tanpa memanggil OpenCode sama sekali. Memeriksa parse file yang berubah (`git diff --name-only HEAD` + untracked): `.py` via `compile()` in-process, `.json` via `json.loads`, `.js`/`.mjs`/`.cjs` via `node --check`, `.php` via `php -l`. Name check opsional lewat `pyflakes` bila terpasang.
+- **`syntax`** — dijawab lokal, tanpa memanggil OpenCode sama sekali. Memeriksa staged, unstaged, dan untracked files, termasuk repository tanpa commit: `.py` via `compile()` in-process, `.json` via `json.loads`, `.js`/`.mjs`/`.cjs` via `node --check`, `.php` via `php -l`. File Python juga memerlukan name check `pyflakes`; bila tool tidak tersedia, hasilnya `incomplete`. Kegagalan discovery Git juga menghasilkan `incomplete`, bukan `skipped`.
 
 Semua yang tak bisa diperiksa dilaporkan apa adanya, tidak pernah dihitung lulus:
 
@@ -484,11 +502,12 @@ Semua yang tak bisa diperiksa dilaporkan apa adanya, tidak pernah dihitung lulus
 |---|---|
 | `not_checked` | tak ada checker untuk ekstensi itu, atau file > 2 MB |
 | `skipped` | toolchain bahasa tak ada di `PATH` |
-| `name_check: unavailable` | `pyflakes` tak terpasang — hanya syntax yang diperiksa |
+| `name_check: unavailable` | `pyflakes` tak terpasang; file Python masuk `skipped` dan verdict `incomplete` |
 
 Python diperiksa in-process, bukan lewat `py_compile`, supaya tak ada `.pyc` yang tertinggal di pohon kerjamu. Direktori `__pycache__`, `node_modules`, `.git`, `vendor`, `.venv`, `venv` dilewati.
 
-`verdict: pass` berarti berkas ter-parse. **Bukan** berarti fiturnya bekerja.
+`verdict: pass` berarti semua checker yang berlaku selesai tanpa finding dan tidak ada gap.
+**Bukan** berarti fiturnya bekerja atau test perilaku telah dijalankan.
 
 ---
 
@@ -505,6 +524,26 @@ Tiap fakta ditambatkan ke hash isi baris `file:line`. Ketika baris itu berubah, 
 
 Dua klaim dilebur hanya bila **semua** pagar setuju: `file` sama, `category` sama, `anchor_hash` identik, polaritas negasi sama, kemiripan Jaccard ≥ 0.5, dan kedua klaim ≥ 6 kata. Satu pagar menolak → dua-duanya disimpan. Duplikat itu murah; fakta yang hilang tak bisa dikembalikan.
 
+## Evidence reuse dan boundary
+
+Evidence lintas sesi diindeks di `.workflow/evidence.jsonl` dengan lock lintas proses dan
+atomic rewrite. Entry hanya boleh menunjuk artifact immutable
+`sessions/<id>/logs/<prompt_id>/output.raw.md`; hash artifact dan seluruh anchor `file:line`
+harus tetap cocok. Anchor yang tidak resolve atau melebihi batas membuat evidence tidak
+eligible untuk reuse. Entry lama yang menunjuk `response.last.md` dibuang.
+Query cache bersifat case-sensitive dan juga mengikat effective route/model, versi config,
+mode fan-out, graph leads, serta facts yang dipakai. `--fresh-session` menonaktifkan lookup
+reuse untuk invocation tersebut.
+
+Sebelum delegasi, path relatif di-resolve terhadap project root; traversal, path absolut
+di luar root, home-relative path, dan bare sensitive file seperti `credentials.json`
+ditolak. Primary OpenCode juga memakai `external_directory: deny`; file discovery harus
+melalui Read/Grep/Glob built-in. Bash hanya mengizinkan command Git read-only yang terdaftar.
+
+Semua content dan metadata adapter, termasuk error, timeout, bootstrap, probe, dan
+`call.meta.json`, melewati redaksi recursive. Argumen proses mentah tidak disimpan;
+telemetry hanya membawa jumlah, panjang, dan hash argv.
+
 Bersihkan yang usang dan duplikat:
 
 ```bash
@@ -520,6 +559,8 @@ python3 main.py --command clean --work-dir /path/to/target-app --pretty
 ├─ config.json              # statis, dibuat saat init
 ├─ opencode.json            # salinan project-local
 ├─ facts.jsonl              # fact store lintas sesi
+├─ evidence.jsonl           # index artifact immutable lintas sesi
+├─ provider-sessions/       # ID sesi OpenCode, terisolasi per project
 ├─ .gitignore
 ├─ run.ps1  run.sh          # entry point 1-panggilan
 ├─ inspect.ps1  inspect.sh  # daftar job
@@ -545,7 +586,10 @@ python3 main.py --command clean --work-dir /path/to/target-app --pretty
 
 State yang berubah-ubah (`state`/`scope`/`cache`/`runtime`/`logs`) hidup di bawah `sessions/<id>/`, sehingga dua main_agent pada project yang sama tak pernah saling menimpa. Config dan reports tetap bersama di root `.workflow/`.
 
-Data runtime milik tool sendiri ada di repo ini: `storage/sessions/` (pemetaan sesi → sesi OpenCode), `storage/jobs/` (job asinkron), `storage/cache.json`.
+Job asinkron tetap disimpan di repo tool pada `storage/jobs/`. Cache ID sesi default berada
+di `storage/main-sessions/` dan dipisah dengan hash project root; pemetaan ke ID sesi
+OpenCode berada project-local di `.workflow/provider-sessions/` sehingga ID yang sama pada
+dua project tidak dapat me-resume provider session satu sama lain.
 
 ---
 
@@ -572,7 +616,9 @@ dengan prompt continuation terstruktur. Kematian kedua menghasilkan
 .workflow/check.sh <job_id> --wait --result
 ```
 
-Exit code `check`: `0` selesai · `1` gagal · `2` masih jalan/antre · `3` tak ditemukan.
+Exit code status `check`: `0` selesai · `1` gagal · `2` masih jalan/antre · `3` tak
+ditemukan. Dengan `--result` untuk job verify, `0` hanya berarti verdict `pass`; verdict
+`fail` atau `incomplete` mengembalikan `2`.
 
 Kalau tak ada job yang cocok, hasil terakhir masih ada di `.workflow/sessions/<id>/runtime/response.last.md`.
 
@@ -581,7 +627,7 @@ pernah tercatat, runtime gagal sebagai `session_capture_failed` dan clean run di
 Request berbeda pada session yang masih terkunci tetap ditolak sebagai
 `job_already_running`.
 
-### Liveness worker (v3.4.0)
+### Liveness worker (v3.4.1)
 
 PID yang hidup **tidak** berarti sedang bekerja. Worker karena itu melaporkan heartbeat sekaligus usia output stream, lalu job diklasifikasi tiga keadaan:
 
@@ -603,7 +649,9 @@ Jalur normal `await` membaca `stall_threshold_seconds`, `idle_stall_seconds`, da
 
 Plafon keras JobManager tetap ada sebagai jaring pengaman: default 5400 detik dan dapat diubah lewat env `AI_PROXY_JOB_MAX_RUNTIME_SECONDS`. Job yang melewatinya gagal sebagai `job_expired` meski PID tampak hidup. Key project-local bernama sama belum mengubah nilai ini.
 
-Setiap panggilan yang mencapai `OpenCodeAdapter` menuliskan `call.meta.json` (exit code, durasi, timeout, cara kill, ekor stderr) ke `.workflow/sessions/<id>/logs/<prompt_id>/`. Early failure dan `verify_mode: syntax` tidak membuat file ini.
+Setiap panggilan yang mencapai `OpenCodeAdapter` menuliskan `call.meta.json` yang sudah
+diredaksi (exit code, durasi, timeout, cara kill, ekor stderr aman, dan agregat argv) ke
+`.workflow/sessions/<id>/logs/<prompt_id>/`. `verify_mode: syntax` tidak membuat file ini.
 
 ---
 
@@ -635,13 +683,11 @@ python3 test_scenario.py
 python test_scenario.py
 ```
 
-13 kelompok test. Suite tidak memanggil OpenCode sungguhan; alur agent memakai adapter palsu, sedangkan jalur subprocess, heartbeat, timeout, dan kill-tree diuji dengan proses Python lokal.
-
-Kelompok 12 menutup jalur reliability: tri-state liveness, heartbeat, plafon runtime, verdict probe, parser fact toleran, dan degradasi graph leads. Kelompok 13 mengunci instruksi fan-out serta deteksi pemakaian sub-agent yang jujur.
+Suite default tidak memanggil OpenCode sungguhan; alur agent memakai adapter palsu,
+sedangkan jalur subprocess, heartbeat, timeout, kill-tree, installer, rollback, dan
+kontrak persistence diuji secara lokal.
 
 Gunakan `python tools/e2e.py --full` bila ingin menambahkan smoke test OpenCode nyata; mode itu opt-in karena memakai quota.
-
-Saat ini default E2E masih memiliki assertion status doctor lama: ia menerima `READY`/`NEEDS SETUP`, sedangkan runtime sekarang dapat mengembalikan `NOT_READY`. Di mesin tanpa prasyarat lengkap, check itu dapat menjadi satu failure walau check local/installer lain lulus. Snapshot graph Windows yang dibaca dari WSL/POSIX juga dapat menggagalkan assertion path di `test_scenario.py`.
 
 Pemeriksaan tambahan:
 
@@ -657,18 +703,14 @@ python3 main.py --command doctor --work-dir . --pretty
 Disebut terbuka karena diam soal ini akan membuat runtime terlihat lebih menjamin daripada kenyataannya:
 
 - **Mutasi main_agent tak terlihat oleh runtime ini.** `/.execute` tak punya jalur Python sama sekali. Audit scope, penjaga operasi destruktif, dan atribusi perubahan file karena itu belum ada — perlu lapisan hook di sisi main_agent.
-- **Kontrak masih sebagian berbasis prompt.** Validasi bukti berupa pencocokan penanda; nilai `confidence` belum divalidasi runtime.
-- **`facts.jsonl` dibaca-ubah-tulis tanpa lock.** Dua sesi yang ingest bersamaan bisa saling menimpa.
-- **`config.json` yang hilang atau rusak** membuat command terdelegasi gagal dengan exception mentah, bukan error terstruktur.
-- **Telemetry masih parsial.** Sejak v3.4.0 durasi, exit code, dan hasil kill dicatat per panggilan di `call.meta.json`; token dan jumlah pemanggilan tool masih belum, jadi klaim efisiensi belum bisa diukur.
-- **Test sebagian besar palsu.** Adapter opencode nyata masih disimulasikan; yang kini ditest sungguhan adalah jalur `Popen` (capture, heartbeat tick, timeout, kill-tree lintas-OS). Lihat bagian Test.
+- **Kontrak masih sebagian berbasis prompt.** Runtime memvalidasi struktur dan routing finding verify, tetapi kebenaran semantik klaim serta output kontrak milik main_agent tetap tidak dapat dibuktikan hanya dari penanda.
+- **Telemetry masih parsial.** Durasi, exit code, hasil kill, ukuran prompt/output, dan estimasi token dicatat per panggilan di `call.meta.json`; jumlah pemanggilan tool dan token provider aktual belum selalu tersedia.
+- **OpenCode nyata hanya diuji opt-in.** Suite default mensimulasikan provider; jalur `Popen`, persistence, installer, dan process lifecycle tetap dijalankan lokal. Gunakan `tools/e2e.py --full` untuk smoke test berkuota.
 - **Probe PING memakai kuota.** Job yang terus stalled dapat diprobe berulang sesuai cadence; default `await` adalah 120 detik.
 - **Tuning liveness belum seragam di jalur attach.** `check.py --wait` memakai default tool untuk ambang stalled dan probe ulang, bukan nilai project-local.
 - **`job_max_runtime_seconds` project-local belum aktif.** Hard ceiling masih berasal dari default source atau env `AI_PROXY_JOB_MAX_RUNTIME_SECONDS`.
-- **Hard runtime ceiling tidak membunuh process tree.** Job ditandai failed/reaped dan late output tidak boleh membangkitkannya, tetapi worker yang masih hidup hanya benar-benar diterminasi melalui jalur stalled reaper.
 - **Deteksi upgrade dapat tertutupi backfill parsial.** Delegated load memperbarui marker versi `config.json` tanpa meregenerasi scripts atau `opencode.json`, sehingga warning berikutnya dan `doctor` dapat menganggap workspace current.
-- **Instruksi auto-verify di bundle belum sepenuhnya konsisten.** Skill `execute` menghormati `auto_verify_after_execute: false`, tetapi ringkasan prompt utama masih memerintahkan auto `/.verify`; perilaku akhirnya tetap bergantung pada main_agent sampai prompt itu diselaraskan.
-- **Graph leads bisa basi.** Runtime hanya mendeteksi staleness terhadap source `.py`; Stop hook Graphify merupakan layer Claude/PowerShell terpisah dan tidak tersedia di semua main agent/platform.
+- **Deteksi staleness graph hanya mengikuti source `.py`.** Perubahan bahasa lain tidak masuk fingerprint runtime; Stop hook Graphify merupakan layer Claude terpisah dan tidak tersedia di semua main agent.
 - **Path graph lintas-OS belum dinormalisasi penuh.** Snapshot yang dibuat di Windows lalu dibaca dari POSIX/WSL dapat tetap menghasilkan candidate path ber-backslash; refresh graph secara manual dari environment aktif bila ini terjadi.
 - **Skrip runner tidak portabel lintas-OS.** Path absolut dipanggang saat init/upgrade; pindah repo, path, atau OS berarti jalankan upgrade dari environment baru.
 
@@ -676,7 +718,7 @@ Disebut terbuka karena diam soal ini akan membuat runtime terlihat lebih menjami
 
 ## Referensi
 
-- Catatan rilis: `prompt/v3.4.0/changelog.md`
-- Prompt setup main_agent: `prompt/v3.4.0/main_agent.md`
-- Prompt setup second_agent: `prompt/v3.4.0/second_agent.md`
-- Runtime entry point: `main.py`
+- Catatan rilis: [`prompt/v3.4.1/changelog.md`](prompt/v3.4.1/changelog.md)
+- Kontrak canonical main_agent: [`dist/config/claude/CLAUDE.md`](dist/config/claude/CLAUDE.md)
+- Kontrak canonical second_agent: [`dist/config/opencode/AGENTS.md`](dist/config/opencode/AGENTS.md)
+- Runtime entry point: [`main.py`](main.py)

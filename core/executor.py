@@ -24,8 +24,11 @@ from core import graph_index
 from core.prompt_builder import build_prompt
 from core.router import Router
 from utils.path_guard import validate_scope
+from utils.redact import redact_value
 from core import quick_verify
 from core.workflow_runtime import (
+    CONFIG_VERSION,
+    acquire_runtime_lock,
     auto_verify_after_execute,
     bind_session,
     detect_project_root,
@@ -33,6 +36,7 @@ from core.workflow_runtime import (
     graph_leads_enabled,
     parse_questions,
     release_runtime_lock,
+    runtime_lock_owned,
     set_fanout_capability,
     subagent_fanout_enabled,
     run_sweep,
@@ -71,6 +75,67 @@ def _scope_incomplete(content: str) -> bool:
             if body and body not in {"none", "(none)", "n/a"}:
                 return True
     return False
+
+
+def _attach_redactions(meta: dict, hits: list[dict]) -> None:
+    if not hits:
+        return
+    counts: dict[str, int] = {}
+    for hit in [*(meta.get("redactions") or []), *hits]:
+        if not isinstance(hit, dict) or not hit.get("kind"):
+            continue
+        kind = str(hit["kind"])
+        counts[kind] = counts.get(kind, 0) + int(hit.get("count") or 0)
+    meta["redactions"] = [
+        {"kind": kind, "count": count} for kind, count in counts.items()
+    ]
+    meta["redaction_count"] = sum(counts.values())
+
+
+def _without_raw_args(value):
+    """Remove argv payloads from injected/legacy adapter data."""
+    if isinstance(value, dict):
+        raw_args = value.get("args")
+        clean = {
+            key: _without_raw_args(child)
+            for key, child in value.items()
+            if key != "args"
+        }
+        if isinstance(raw_args, (list, tuple)):
+            clean.setdefault("argv_count", len(raw_args))
+            clean.setdefault("argv_chars", sum(len(str(arg)) for arg in raw_args))
+        return clean
+    if isinstance(value, list):
+        return [_without_raw_args(child) for child in value]
+    if isinstance(value, tuple):
+        return tuple(_without_raw_args(child) for child in value)
+    return value
+
+
+def _sanitize_result(result):
+    clean, hits = redact_value(_without_raw_args(result))
+    if isinstance(clean, dict):
+        meta = clean.setdefault("meta", {})
+        if isinstance(meta, dict):
+            _attach_redactions(meta, hits)
+    return clean, hits
+
+
+def _evidence_context(
+    route: dict,
+    fanout: bool,
+    graph_leads: dict | None,
+    known_facts: list[str] | None,
+) -> dict:
+    """Inputs that can materially change an otherwise identical delegated answer."""
+    return {
+        "schema": 2,
+        "runtime_config_version": CONFIG_VERSION,
+        "route": dict(route),
+        "fanout": bool(fanout),
+        "graph_leads": graph_leads,
+        "known_facts": known_facts or [],
+    }
 
 
 # One line per way fan-out can fail to happen. Each says what to DO about it, because
@@ -120,8 +185,74 @@ class Executor:
 
         return Router(load_opencode_config_for(project_root))
 
+    @staticmethod
+    def _audit_redactions(
+        project_root: Path, session_id: str, command: str, redactions: list[dict]
+    ) -> None:
+        if not redactions:
+            return
+        try:
+            write_redaction_audit(project_root, session_id, command, redactions)
+        except Exception:
+            pass
+
+    def _finalize_runtime_result(
+        self,
+        result: dict,
+        project_root: Path,
+        command: str,
+        task: str,
+        session_id: str,
+        bound: dict,
+        fanout: bool,
+        *,
+        audit_existing_redactions: bool = False,
+    ) -> dict:
+        result, new_redactions = _sanitize_result(result)
+        existing_redactions = (result.get("meta") or {}).get("redactions") or []
+        self._audit_redactions(
+            project_root,
+            session_id,
+            command,
+            existing_redactions if audit_existing_redactions else new_redactions,
+        )
+
+        content = result.get("content") or ""
+        cache_names = {
+            "explore": "last_explore_result",
+            "analyze": "last_analyze_result",
+            "plan": "last_plan_result",
+        }
+        cache_name = cache_names.get(command)
+        if cache_name:
+            update_command_cache(project_root, cache_name, content, session_id)
+            update_state_from_agent_output(
+                project_root, command, task, content, session_id
+            )
+        if command == "plan":
+            update_plan_scope(project_root, content, session_id)
+
+        meta = result.setdefault("meta", {})
+        meta["project_root"] = str(project_root)
+        meta["session_reset"] = bool(bound.get("session_reset"))
+        meta["policy"] = {
+            "auto_verify_after_execute": auto_verify_after_execute(project_root),
+            "verify_mode": verify_mode(project_root),
+            "subagent_fanout_enabled": fanout,
+        }
+        result, metadata_redactions = _sanitize_result(result)
+        self._audit_redactions(
+            project_root, session_id, command, metadata_redactions
+        )
+        return result
+
     def _maybe_reuse(
-        self, project_root: Path, command: str, task: str, session_id: str
+        self,
+        project_root: Path,
+        command: str,
+        task: str,
+        session_id: str,
+        context: dict,
     ) -> dict | None:
         """Serve a fresh, identical prior evidence artifact instead of re-delegating.
 
@@ -131,14 +262,14 @@ class Executor:
         evidence_store.find_fresh (exact query + all anchors unchanged).
         """
         try:
-            hit = evidence_store.find_fresh(project_root, command, task)
+            hit = evidence_store.find_fresh(project_root, command, task, context)
             if not hit:
                 return None
             ap = hit.get("artifact_path")
-            if not ap or not Path(ap).is_file():
-                return None  # artifact file gone -> re-delegate rather than serve nothing
-            content = Path(ap).read_text(encoding="utf-8", errors="replace")
-            if not content.strip():
+            content, reuse_redactions = evidence_store.read_artifact_with_redactions(
+                project_root, hit
+            )
+            if not content or not content.strip():
                 return None
             result = {
                 "ok": True,
@@ -155,12 +286,9 @@ class Executor:
                     "command": command,
                 },
             }
+            _attach_redactions(result["meta"], reuse_redactions)
             if hit.get("digest") is not None:
                 result["digest"] = hit["digest"]
-            if command == "explore":
-                update_command_cache(
-                    project_root, "last_explore_result", content, session_id
-                )
             return result
         except Exception:
             return None
@@ -173,9 +301,19 @@ class Executor:
         work_dir: str | None = None,
         model: str | None = None,
         on_progress=None,
+        allow_reuse: bool = True,
+        session_manager=None,
+        workflow_session_id: str | None = None,
+        *,
+        _runtime_lock: dict | None = None,
+        _resolved_route: dict | None = None,
     ) -> dict:
         normalized_command = command.strip().lower()
-        session_id = session["session_id"]
+        provider_session_id = session["session_id"]
+        session_id = str(workflow_session_id or provider_session_id)
+        effective_session_manager = (
+            session_manager if session_manager is not None else self.session_manager
+        )
         project_root = detect_project_root(work_dir)
 
         scope_ok, blocked = validate_scope(task, project_root)
@@ -193,27 +331,71 @@ class Executor:
             result = quick_verify.run(project_root, session_id)
             result["meta"]["verify_mode"] = mode
             result["meta"]["command"] = normalized_command
-            return result
+            return _sanitize_result(result)[0]
 
-        try:
-            route = self._router_for(project_root).route(
-                normalized_command, model_override=model
-            )
-        except ValueError as exc:
-            return make_error(
-                "routing_error",
-                str(exc),
-                next_action="Use a supported command (explore/plan/analyze/verify/sweep).",
-                meta={"command": normalized_command},
-            )
+        if _resolved_route is None:
+            try:
+                route = self._router_for(project_root).route(
+                    normalized_command, model_override=model
+                )
+            except ValueError as exc:
+                return make_error(
+                    "routing_error",
+                    str(exc),
+                    next_action="Use a supported command (explore/plan/analyze/verify/sweep).",
+                    meta={"command": normalized_command},
+                )
+        else:
+            route = dict(_resolved_route)
 
-        # Cross-session reuse: an identical prior call whose cited code is unchanged can be
-        # served from the evidence artifact instead of re-delegating (saves time + quota).
-        # Fail-open — any hiccup here falls straight through to a normal delegation.
-        if route["role"] in ("exploration", "reasoning"):
-            reused = self._maybe_reuse(project_root, normalized_command, task, session_id)
-            if reused is not None:
-                return reused
+        lock_path = workflow_paths(project_root, session_id)["lock"]
+        if _runtime_lock is None:
+            lock_claim = acquire_runtime_lock(
+                lock_path, normalized_command, session_id
+            )
+            if not lock_claim.get("ok"):
+                payload = lock_claim.get("payload") or {}
+                holder = payload.get("session_id") or "unknown"
+                result = make_error(
+                    "runtime_lock",
+                    f"runtime lock active for session {holder}",
+                    next_action=(
+                        "Wait for the in-flight delegated call on this session to finish, "
+                        "then retry; if its owner is gone, inspect the runtime lock."
+                    ),
+                    meta={"lock": payload, "lock_path": str(lock_path)},
+                )
+                return _sanitize_result(result)[0]
+            try:
+                return self.execute(
+                    command,
+                    task,
+                    session,
+                    work_dir,
+                    model,
+                    on_progress,
+                    allow_reuse,
+                    effective_session_manager,
+                    session_id,
+                    _runtime_lock=lock_claim,
+                    _resolved_route=route,
+                )
+            finally:
+                release_runtime_lock(
+                    lock_path, session_id, lock_claim.get("token")
+                )
+
+        lock_token = str(_runtime_lock.get("token") or "")
+        if not lock_token or not runtime_lock_owned(
+            lock_path, session_id, lock_token
+        ):
+            result = make_error(
+                "runtime_lock",
+                "runtime lock ownership was lost before delegation",
+                next_action="Retry the command after the current session owner finishes.",
+                meta={"lock_path": str(lock_path)},
+            )
+            return _sanitize_result(result)[0]
 
         known_facts = None
         graph_leads = None
@@ -231,21 +413,22 @@ class Executor:
                 subagent_fanout_enabled(project_root)
                 and fanout_capability(project_root) is not False
             )
-
-        # Transport split: the ranked leads/facts go to runtime files the second agent
-        # reads for itself; only the task (plus an anchor telling it where the files are)
-        # rides in the 8191-capped command-line prompt. build_prompt gets the runtime dir
-        # and booleans, not the payloads it used to inline.
-        write_evidence_sidecars(
-            project_root, session["session_id"], graph_leads, known_facts
+        evidence_context = _evidence_context(
+            route, fanout, graph_leads, known_facts
         )
-        runtime_dir = str(workflow_paths(project_root, session["session_id"])["runtime_dir"])
+
+        # Sidecars keep dynamic evidence off the Windows-limited command line; the
+        # command prompt carries only the task and paths needed to read them.
+        write_evidence_sidecars(
+            project_root, session_id, graph_leads, known_facts
+        )
+        runtime_dir = str(workflow_paths(project_root, session_id)["runtime_dir"])
 
         prompt_meta: dict = {}
         prompt = build_prompt(
             role=route["role"],
             task=task,
-            session_id=session["session_id"],
+            session_id=session_id,
             command=normalized_command,
             project_root=str(project_root),
             runtime_dir=runtime_dir,
@@ -275,8 +458,32 @@ class Executor:
                 )
 
         bound = bind_session(project_root, session_id)
+        if allow_reuse and route["role"] in ("exploration", "reasoning"):
+            reused = self._maybe_reuse(
+                project_root,
+                normalized_command,
+                task,
+                session_id,
+                evidence_context,
+            )
+            if reused is not None:
+                return self._finalize_runtime_result(
+                    reused,
+                    project_root,
+                    normalized_command,
+                    task,
+                    session_id,
+                    bound,
+                    fanout,
+                    audit_existing_redactions=True,
+                )
+
         handoff = write_prompt_handoff(
-            project_root, normalized_command, session_id, prompt
+            project_root,
+            normalized_command,
+            session_id,
+            prompt,
+            lock_claim=_runtime_lock,
         )
         if not handoff.get("ok"):
             return handoff
@@ -299,16 +506,44 @@ class Executor:
             self.opencode.poll_interval = route["poll_interval_seconds"]
         # Only the adapter's poll loop can emit liveness while opencode blocks.
         self.opencode.on_progress = on_progress
+
+        adapter_session = dict(session)
+        adapter_session["session_id"] = session_id
+
+        def persist_new_session(opencode_session_id: str) -> None:
+            adapter_session["opencode_session_id"] = opencode_session_id
+            session["opencode_session_id"] = opencode_session_id
+            if effective_session_manager is not None:
+                effective_session_manager.update_opencode_session_id(
+                    session, opencode_session_id
+                )
+
+        session_callback_bound = False
+        try:
+            if hasattr(self.opencode, "on_session_created"):
+                session_callback_bound = True
+                self.opencode.on_session_created = persist_new_session
+        except Exception:
+            session_callback_bound = False
+        try:
+            self.opencode.last_call_meta = {}
+        except Exception:
+            pass
         try:
             result = self.opencode.run(
                 prompt,
-                session,
+                adapter_session,
                 route.get("model"),
                 work_dir,
             )
+            result, _ = _sanitize_result(result)
         finally:
-            release_runtime_lock(handoff["paths"]["lock"], session_id)
             self.opencode.on_progress = None
+            if session_callback_bound:
+                try:
+                    self.opencode.on_session_created = None
+                except Exception:
+                    pass
             # Archive exit, duration, kill, and stderr metadata for failure diagnosis,
             # plus minimal cost telemetry. Char counts are exact; token counts are
             # rough len/4 estimates and are labelled token_source=estimated so they are
@@ -318,25 +553,37 @@ class Executor:
             _content = _result.get("content") if isinstance(_result, dict) else None
             _prompt_chars = len(prompt)
             _resp_chars = len(_content) if isinstance(_content, str) else None
+            adapter_meta, meta_redactions = redact_value(
+                _without_raw_args(
+                    getattr(self.opencode, "last_call_meta", None) or {}
+                )
+            )
+            if not isinstance(adapter_meta, dict):
+                adapter_meta = {}
+            call_meta = {
+                "command": normalized_command,
+                "role": route.get("role"),
+                "model": route.get("model"),
+                "timeout_seconds": self.opencode.timeout_seconds,
+                "prompt_chars": _prompt_chars,
+                "response_chars": _resp_chars,
+                "estimated_input_tokens": _prompt_chars // 4,
+                "estimated_output_tokens": (
+                    _resp_chars // 4 if _resp_chars is not None else None
+                ),
+                "token_source": "estimated",
+                **prompt_meta,
+                **adapter_meta,
+            }
+            call_meta, persisted_meta_redactions = redact_value(call_meta)
+            _attach_redactions(
+                call_meta, [*meta_redactions, *persisted_meta_redactions]
+            )
             write_call_meta(
                 project_root,
                 handoff.get("meta", {}).get("prompt_id"),
                 session_id,
-                {
-                    "command": normalized_command,
-                    "role": route.get("role"),
-                    "model": route.get("model"),
-                    "timeout_seconds": self.opencode.timeout_seconds,
-                    "prompt_chars": _prompt_chars,
-                    "response_chars": _resp_chars,
-                    "estimated_input_tokens": _prompt_chars // 4,
-                    "estimated_output_tokens": (
-                        _resp_chars // 4 if _resp_chars is not None else None
-                    ),
-                    "token_source": "estimated",
-                    **prompt_meta,
-                    **(getattr(self.opencode, "last_call_meta", None) or {}),
-                },
+                call_meta,
             )
 
         write_response_snapshot(
@@ -348,31 +595,27 @@ class Executor:
 
         opencode_session_id = result.get("meta", {}).get(
             "opencode_session_id"
-        ) or session.get("opencode_session_id")
+        ) or adapter_session.get("opencode_session_id") or session.get(
+            "opencode_session_id"
+        )
         if (
             result.get("ok")
             and opencode_session_id
             and not session.get("opencode_session_id")
-            and self.session_manager
         ):
-            self.session_manager.update_opencode_session_id(
-                session, opencode_session_id
-            )
+            session["opencode_session_id"] = opencode_session_id
+            if effective_session_manager is not None:
+                effective_session_manager.update_opencode_session_id(
+                    session, opencode_session_id
+                )
+
+        redactions = (result.get("meta") or {}).get("redactions")
+        self._audit_redactions(
+            project_root, session_id, normalized_command, redactions or []
+        )
 
         if not result.get("ok"):
             return result
-
-        # Second layer: a defence that leaves no trace cannot be audited, and one that
-        # logs the value is not a defence. Count and kind only — enough to notice a run
-        # that touched credentials, useless to anyone reading the log for them.
-        redactions = (result.get("meta") or {}).get("redactions")
-        if redactions:
-            try:
-                write_redaction_audit(
-                    project_root, session_id, normalized_command, redactions
-                )
-            except Exception:
-                pass
 
         if route["role"] in ("exploration", "reasoning"):
             body = (result.get("content") or "").lower()
@@ -435,10 +678,8 @@ class Executor:
             if caps and digest is not None:
                 result["digest"] = cap_confidence(digest, caps)
 
-            # Readability split (P1.3): prose and anchors handed over separately so the
-            # relay does not have to choose between a readable summary and an auditable
-            # one. Both come from the same claims — this is presentation, not a second
-            # source of truth.
+            # Keep prose and anchors derived from the same claims so presentation cannot
+            # become a second source of truth.
             claims = readable_claims(result.get("content") or "")
             if claims:
                 result.setdefault("meta", {})["claims"] = claims
@@ -460,13 +701,8 @@ class Executor:
             warning = _FANOUT_WARNINGS.get(usage["mode"])
             if warning:
                 meta["subagent_warning"] = warning
-            # Learn opencode's fan-out capability from what it just reported (P1.6): a
-            # "no spawn tool" fallback flips it OFF for next time; a real fan-out confirms
-            # ON (in case a prior probe was wrong). Best-effort — never fail the run on it.
-            #
-            # Only a genuine absence latches OFF. A permission refusal must not: it is a
-            # config problem with a config fix, and latching on it would retire fan-out
-            # permanently for the one cause that is actually repairable.
+            # Only a genuine tool absence latches capability off. A permission refusal is
+            # repairable configuration and must not disable fan-out permanently.
             try:
                 if usage["mode"] == FANOUT_INCAPABLE:
                     set_fanout_capability(project_root, False)
@@ -489,11 +725,17 @@ class Executor:
                     "next_action": "Report this: the fact store rejected the run's output; facts are not being learned.",
                 }
 
-            # Index the evidence artifact for cross-session reuse + attach a digest-first ref
-            # so the main_agent can open the full evidence on demand instead of eating it now.
-            # Best-effort: a store failure never fails the delegated call.
+            # Index the immutable per-run copy; response.last.md is mutable and cannot
+            # identify which delegated response an evidence row certifies.
             try:
-                artifact_path = workflow_paths(project_root, session_id)["response_last"]
+                prompt_id = handoff.get("meta", {}).get("prompt_id")
+                if not prompt_id:
+                    raise ValueError("prompt_id missing; immutable artifact unavailable")
+                artifact_path = (
+                    workflow_paths(project_root, session_id)["logs_dir"]
+                    / str(prompt_id)
+                    / "output.raw.md"
+                )
                 entry = evidence_store.record(
                     project_root,
                     normalized_command,
@@ -502,6 +744,7 @@ class Executor:
                     result.get("digest"),
                     artifact_path,
                     result.get("content") or "",
+                    evidence_context,
                 )
                 result["evidence_ref"] = {
                     "artifact_path": str(artifact_path),
@@ -513,50 +756,12 @@ class Executor:
                     f"{type(exc).__name__}: {exc}"
                 )
 
-        if normalized_command == "explore":
-            update_command_cache(
-                project_root, "last_explore_result", result.get("content"), session_id
-            )
-            update_state_from_agent_output(
-                project_root,
-                normalized_command,
-                task,
-                result.get("content") or "",
-                session_id,
-            )
-        elif normalized_command == "analyze":
-            update_command_cache(
-                project_root, "last_analyze_result", result.get("content"), session_id
-            )
-            update_state_from_agent_output(
-                project_root,
-                normalized_command,
-                task,
-                result.get("content") or "",
-                session_id,
-            )
-        elif normalized_command == "plan":
-            update_command_cache(
-                project_root, "last_plan_result", result.get("content"), session_id
-            )
-            update_state_from_agent_output(
-                project_root,
-                normalized_command,
-                task,
-                result.get("content") or "",
-                session_id,
-            )
-            update_plan_scope(project_root, result.get("content") or "", session_id)
-
-        result.setdefault("meta", {})["project_root"] = str(project_root)
-        result["meta"]["session_reset"] = bool(bound.get("session_reset"))
-        # The two settings main_agent has to obey after a delegated call, carried on the
-        # result itself. Neither can be enforced from here (/.execute has no Python
-        # path), but shipping the values removes the other half of the problem: acting
-        # on a remembered config instead of the one this project actually has.
-        result["meta"]["policy"] = {
-            "auto_verify_after_execute": auto_verify_after_execute(project_root),
-            "verify_mode": verify_mode(project_root),
-            "subagent_fanout_enabled": fanout,
-        }
-        return result
+        return self._finalize_runtime_result(
+            result,
+            project_root,
+            normalized_command,
+            task,
+            session_id,
+            bound,
+            fanout,
+        )

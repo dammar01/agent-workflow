@@ -30,7 +30,6 @@ CLAUDE_MD = REPO_ROOT / "dist" / "config" / "claude" / "CLAUDE.md"
 INTENT_MAP = REPO_ROOT / "dist" / "config" / "claude" / "hooks" / "intent-map.json"
 
 _COMMAND_RE = re.compile(r"/\.([a-z][a-z0-9_-]*)")
-_DELEGATED_SET = {"explore", "plan", "analyze", "verify", "sweep"}
 _WORD_RE = re.compile(r"[a-z]{4,}")
 
 
@@ -68,14 +67,10 @@ def main() -> int:
 
     problems: list[str] = []
 
-    # Every gate-enforced command MUST be registered in the prompt. The registry MAY carry
-    # extra delegated commands the runtime gate does not enforce (e.g. doctor), so this is a
-    # subset check, not equality — a JSON command absent from the registry is the real bug.
-    unregistered = json_delegated - registry
-    if unregistered:
+    if json_delegated != registry:
         problems.append(
-            f"intent-map delegated commands missing from CLAUDE.md DELEGATED registry: "
-            f"{sorted(unregistered)}"
+            f"intent-map delegated commands {sorted(json_delegated)} != "
+            f"CLAUDE.md DELEGATED registry {sorted(registry)}"
         )
     if json_delegated != prefix_cmds:
         problems.append(

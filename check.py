@@ -9,6 +9,7 @@ from config.settings import (
     DEFAULT_MAX_PROBES,
     DEFAULT_PROBE_RECHECK_SECONDS,
 )
+from core.contract import validate_verification_contract
 from core.job_manager import JobManager
 
 
@@ -60,6 +61,29 @@ def _reap_if_stalled(job_id: str, payload: dict) -> dict | None:
     return _status_payload(job_id)
 
 
+def _resume_pending_reservation(job_id: str, payload: dict) -> dict:
+    """Let attach polling reclaim a submit that died before spawning its worker."""
+    if payload.get("status") != "pending":
+        return payload
+    job = JOB_MANAGER.get_job(job_id) or {}
+    if job.get("worker_pid") is not None:
+        return payload
+    try:
+        from main import submit
+
+        submit(
+            str(job.get("command") or ""),
+            str(job.get("task") or ""),
+            str(job.get("session_id") or ""),
+            job.get("work_dir"),
+            job.get("model"),
+            bool(job.get("allow_reuse", True)),
+        )
+    except Exception:
+        return payload
+    return _status_payload(job_id)
+
+
 def _result_payload(job_id: str):
     result = JOB_MANAGER.get_result(job_id)
     if result.get("status") == "completed":
@@ -84,6 +108,7 @@ def _wait_for_status(job_id: str, poll_interval: float, poll_timeout: int) -> di
 
     while True:
         payload = _status_payload(job_id)
+        payload = _resume_pending_reservation(job_id, payload)
         if payload["status"] not in {"pending", "running"}:
             return payload
 
@@ -119,6 +144,10 @@ def _wait_for_result(job_id: str, poll_interval: float, poll_timeout: int):
 
     while True:
         ok, payload = _result_payload(job_id)
+        if not ok and payload.get("status") == "pending":
+            status = _resume_pending_reservation(job_id, _status_payload(job_id))
+            if status.get("status") != "pending":
+                ok, payload = _result_payload(job_id)
         if ok:
             return True, payload
         if payload["status"] not in {"pending", "running"}:
@@ -160,6 +189,21 @@ def _exit_code_for_status(status: str) -> int:
     return 1
 
 
+def _exit_code_for_result(job_id: str) -> int:
+    job = JOB_MANAGER.get_job(job_id) or {}
+    if str(job.get("command") or "").strip().lower() != "verify":
+        return 0
+    output = job.get("output")
+    if not isinstance(output, dict) or not output.get("ok"):
+        return 2
+    verdict = (output.get("meta") or {}).get("verdict")
+    if verdict is None:
+        verdict = validate_verification_contract(output.get("content") or "")[
+            "verdict"
+        ]
+    return 0 if verdict == "pass" else 2
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check workflow job status or result")
     parser.add_argument("job_id")
@@ -187,7 +231,7 @@ def main() -> int:
         )
         if ok:
             _write_text(payload)
-            return 0
+            return _exit_code_for_result(args.job_id)
         print(json.dumps(payload))
         return _exit_code_for_status(payload.get("status"))
 

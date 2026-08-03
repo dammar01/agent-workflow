@@ -1,7 +1,7 @@
 {
   "_comment": "NL-map for the Pre-flight enforcement gate. KEEP IN SYNC with the Command registry NL-map in ~/.claude/CLAUDE.md. Only DELEGATED commands are listed — those are the ones the gate enforces. Patterns are case-insensitive regex fragments matched against the raw user prompt.",
-  "delegated": ["explore", "plan", "analyze", "verify", "sweep"],
-  "prefix_regex": "^\\s*/\\.(explore|plan|analyze|verify|sweep)\\b",
+  "delegated": ["explore", "plan", "analyze", "verify"],
+  "prefix_regex": "^\\s*/\\.(explore|plan|analyze|verify)\\b",
   "patterns": {
     "explore": [
       "eksplorasi", "cari tau", "cari di ?mana", "kode mana", "di ?mana letak",
@@ -20,10 +20,6 @@
     "verify": [
       "cek hasil", "bener gak", "test dong", "sudah jalan belum", "udah bener",
       "pastikan", "validasi", "cek lagi"
-    ],
-    "sweep": [
-      "\\bdampak\\b", "\\bimpact\\b", "apa yg kena", "\\bdiff\\b", "apa aja yang berubah",
-      "blast radius"
     ]
   }
 }

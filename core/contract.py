@@ -29,7 +29,10 @@ ERROR_TYPES = {
     "task_truncated",  # the instruction lost too much to trust the answer to it
     "fact_ingest_failed",
     "workflow_init_error",
+    "workflow_upgrade_error",
     "job_submit_error",
+    "worker_capacity",
+    "sweep_git_error",
     "runtime_lock",
     "unknown",
 }
@@ -39,6 +42,15 @@ REQUIRED_FIELDS = {
     "explore": ("entry_points", "uncertainties"),
     "analyze": ("grounded", "uncertainties"),
     "plan": ("grounded", "uncertainties"),
+    "verify": (
+        "verdict",
+        "blocking_findings",
+        "escalations",
+        "notes",
+        "checks_run",
+        "not_verified",
+        "confidence",
+    ),
 }
 
 
@@ -119,7 +131,10 @@ def detect_subagent_usage(content: str) -> dict:
         declared = sorted({f"c{n}" for n in re.findall(r"c(\d+)", raw)})
 
     tagged = sorted({f"c{n}" for n in _CLUSTER_TAG.findall(content or "")})
-    used = bool(declared) and bool(tagged)
+    # A dispatched slice may legitimately return no claim, so declarations may be a
+    # strict superset. Every observed claim tag must still belong to a declared slice.
+    signals_match = bool(declared) and bool(tagged) and set(tagged) <= set(declared)
+    used = signals_match
 
     # Why fan-out did not happen decides what to do about it, and the three reasons need
     # opposite responses: a permission wall is fixable config, no tool is permanent, a
@@ -145,9 +160,7 @@ def detect_subagent_usage(content: str) -> dict:
         "fanout_clusters": declared if used else [],
         # Clusters the answer draws on, fan-out or not.
         "covered_clusters": tagged,
-        # Declared fan-out with nothing tagged: report it rather than counting it as
-        # success. Silent acceptance is how an unperformed step starts looking done.
-        "mismatch": bool(declared) and not tagged,
+        "mismatch": bool(declared) and not signals_match,
     }
 
 
@@ -256,6 +269,224 @@ def contract_warnings(command: str, content: str) -> list[dict]:
         )
 
     return warnings
+
+
+_VERIFY_VERDICT = re.compile(
+    r"^\s*verdict\s*:\s*(DONE|NEEDS\s+FIX)\b", re.IGNORECASE | re.MULTILINE
+)
+_VERIFY_SECTION_NAMES = (
+    "blocking_findings",
+    "escalations",
+    "notes",
+    "checks_run",
+    "not_verified",
+)
+_NONE_ITEM = re.compile(
+    r"^(?:none|\(none\)|n/?a|not applicable)(?:\s*\([^\r\n]*\))?$",
+    re.IGNORECASE,
+)
+_VERIFY_TAG_VALUES = {
+    "severity": {"critical", "high", "medium", "low"},
+    "origin": {"introduced", "regression", "pre_existing", "unknown"},
+    "scope_relation": {"in_scope", "out_of_scope"},
+}
+
+
+def _section_items(content: str, name: str) -> list[str]:
+    pattern = re.compile(
+        rf"^\s*{re.escape(name)}\s*:\s*(.*)$", re.IGNORECASE | re.MULTILINE
+    )
+    match = pattern.search(content or "")
+    if not match:
+        return []
+
+    items: list[str] = []
+    inline = match.group(1).strip()
+    if inline and not inline.startswith("#"):
+        items.append(inline.lstrip("-").strip())
+    section_heads = {*_VERIFY_SECTION_NAMES, "confidence", "verdict"}
+    for line in (content or "")[match.end() :].splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        heading = re.match(r"^([a-z_]+)\s*:", stripped, re.IGNORECASE)
+        if heading and heading.group(1).lower() in section_heads:
+            break
+        if stripped.startswith("[") and stripped.endswith("]"):
+            break
+        if stripped.startswith("-"):
+            items.append(stripped.lstrip("-").strip())
+    return items
+
+
+def _meaningful_items(items: list[str]) -> list[str]:
+    return [item for item in items if item and not _NONE_ITEM.fullmatch(item.strip())]
+
+
+def _verification_tags(finding: str) -> tuple[dict[str, str], list[str]]:
+    tags: dict[str, str] = {}
+    invalid: list[str] = []
+    lowered = finding.lower()
+    for tag, allowed in _VERIFY_TAG_VALUES.items():
+        match = re.search(rf"\b{tag}\s*:\s*([a-z_]+)", lowered)
+        if not match:
+            invalid.append(f"{tag} missing")
+            continue
+        value = match.group(1)
+        tags[tag] = value
+        if value not in allowed:
+            invalid.append(f"{tag}={value}")
+    return tags, invalid
+
+
+def _expected_verification_section(tags: dict[str, str]) -> str:
+    severity = tags.get("severity")
+    origin = tags.get("origin")
+    scope = tags.get("scope_relation")
+    severe = severity in {"critical", "high"}
+    if severe and origin in {"introduced", "regression", "unknown"}:
+        return "blocking_findings"
+    if (severe and origin == "pre_existing") or (
+        not severe and origin in {"introduced", "regression"} and scope == "out_of_scope"
+    ):
+        return "escalations"
+    return "notes"
+
+
+def validate_verification_contract(content: str) -> dict:
+    """Derive a fail-closed verdict from delegated verification output."""
+    body = content or ""
+    verification_body = body
+    if "[VERIFICATION]" in body:
+        verification_body = body.split("[VERIFICATION]", 1)[1]
+    if "[DIGEST]" in verification_body:
+        verification_body = verification_body.split("[DIGEST]", 1)[0]
+    warnings: list[dict] = []
+    missing = validate_fields("verify", verification_body)
+    if "[VERIFICATION]" not in body:
+        missing.insert(0, "[VERIFICATION]")
+    for name in _VERIFY_SECTION_NAMES:
+        if not re.search(
+            rf"^\s*{name}\s*:", verification_body, re.IGNORECASE | re.MULTILINE
+        ):
+            missing.append(name)
+    if missing:
+        warnings.append(
+            {
+                "kind": "missing_fields",
+                "detail": (
+                    "required verification field(s) absent: "
+                    + ", ".join(dict.fromkeys(missing))
+                ),
+            }
+        )
+
+    declared_match = _VERIFY_VERDICT.search(verification_body)
+    declared = (
+        re.sub(r"\s+", " ", declared_match.group(1).upper())
+        if declared_match
+        else None
+    )
+    sections = {
+        name: _section_items(verification_body, name)
+        for name in _VERIFY_SECTION_NAMES
+    }
+    blocking = _meaningful_items(sections["blocking_findings"])
+    checks = _meaningful_items(sections["checks_run"])
+    gaps = _meaningful_items(sections["not_verified"])
+
+    for section_name, items in sections.items():
+        if section_name != "checks_run" and not items:
+            warnings.append(
+                {
+                    "kind": "empty_section",
+                    "detail": f"{section_name} must contain findings or an explicit none",
+                }
+            )
+
+    effective_blocking = list(blocking)
+    for section_name in ("blocking_findings", "escalations", "notes"):
+        for finding in _meaningful_items(sections[section_name]):
+            tags, invalid = _verification_tags(finding)
+            if invalid:
+                warnings.append(
+                    {
+                        "kind": "invalid_finding_tags",
+                        "detail": (
+                            f"{section_name} finding has invalid tag(s): {', '.join(invalid)}"
+                        ),
+                        "sample": finding[:240],
+                    }
+                )
+                continue
+            expected_section = _expected_verification_section(tags)
+            if expected_section != section_name:
+                warnings.append(
+                    {
+                        "kind": "finding_misrouted",
+                        "detail": (
+                            f"{section_name} finding belongs in {expected_section} "
+                            "under the severity/origin/scope routing table"
+                        ),
+                        "sample": finding[:240],
+                    }
+                )
+                if expected_section == "blocking_findings":
+                    effective_blocking.append(finding)
+
+    if not re.search(
+        r"^\s*confidence\s*:\s*(low|medium|high)\b",
+        verification_body,
+        re.IGNORECASE | re.MULTILINE,
+    ):
+        warnings.append(
+            {
+                "kind": "invalid_confidence",
+                "detail": "verification confidence must be low, medium, or high",
+            }
+        )
+
+    if declared == "DONE" and effective_blocking:
+        warnings.append(
+            {
+                "kind": "verdict_mismatch",
+                "detail": "verdict DONE conflicts with non-empty blocking_findings",
+            }
+        )
+    elif declared == "NEEDS FIX" and not effective_blocking:
+        warnings.append(
+            {
+                "kind": "verdict_mismatch",
+                "detail": "verdict NEEDS FIX has no blocking_findings",
+            }
+        )
+    if not checks:
+        warnings.append(
+            {"kind": "checks_missing", "detail": "checks_run contains no executed check"}
+        )
+    if gaps:
+        warnings.append(
+            {
+                "kind": "verification_gap",
+                "detail": f"not_verified contains {len(gaps)} unchecked area(s)",
+            }
+        )
+
+    if effective_blocking or declared == "NEEDS FIX":
+        verdict = "fail"
+    elif declared != "DONE" or warnings:
+        verdict = "incomplete"
+    else:
+        verdict = "pass"
+
+    return {
+        "verdict": verdict,
+        "declared_verdict": declared,
+        "blocking_findings": len(dict.fromkeys(effective_blocking)),
+        "checks_run": len(checks),
+        "not_verified": len(gaps),
+        "warnings": warnings,
+    }
 
 
 _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}

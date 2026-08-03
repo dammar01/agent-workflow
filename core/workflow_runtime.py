@@ -2,35 +2,46 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from utils import osutil
+from utils.path_guard import safe_path_component
 
 
 def _safe_component(value: str) -> str:
-    """Filesystem-safe single path component for a session id."""
-    return re.sub(r"[^A-Za-z0-9_.-]", "_", value)
+    return safe_path_component(value)
 
 
 WORKFLOW_DIRNAME = ".workflow"
 LOCK_TTL_SECONDS = 300
 JSON_INDENT = 2
 ARCHIVE_KEEP = 20
-CONFIG_VERSION = "3.4.0"
+CONFIG_VERSION = "3.4.1"
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def atomic_write_text(path: Path, content: str) -> None:
-    temp = path.with_suffix(path.suffix + ".tmp")
-    temp.parent.mkdir(parents=True, exist_ok=True)
-    temp.write_text(content, encoding="utf-8")
-    temp.replace(path)
+def atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(
+        f"{path.name}.{os.getpid()}.{threading.get_ident()}."
+        f"{secrets.token_hex(8)}.tmp"
+    )
+    try:
+        temp.write_text(content, encoding=encoding)
+        os.replace(temp, path)
+    finally:
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def atomic_write_json(path: Path, payload: dict) -> None:
@@ -216,9 +227,8 @@ def _rewrite_superseded_keys(config: dict) -> bool:
     commands.setdefault("verify_mode", "delegated" if legacy else "syntax")
     policies = config.get("policies")
     if isinstance(policies, dict) and policies.get("fact_recurrence_threshold") == 3:
-        # 3 was that same build's default. A deliberate 3 is indistinguishable from it, so
-        # this does overwrite one — accepted because the window was a single unreleased
-        # build, and the effect is tuning (slower auto-promotion), not correctness.
+        # This compatibility rewrite only affects the short-lived schema that shipped
+        # the old default; current user values are otherwise preserved.
         policies["fact_recurrence_threshold"] = default_policies()[
             "fact_recurrence_threshold"
         ]
@@ -315,7 +325,9 @@ def needs_upgrade(project_root: Path) -> bool:
 
 
 def upgrade_workflow_workspace(
-    project_root: Path, agent_workflow_path: str | None
+    project_root: Path,
+    agent_workflow_path: str | None,
+    _capacity_guarded: bool = False,
 ) -> dict:
     """Bring an existing .workflow/ up to the running build. Manual-run, never automatic.
 
@@ -324,6 +336,14 @@ def upgrade_workflow_workspace(
     sessions/ above all: a job may be running against it right now, and rewriting its
     state mid-flight would lose the very evidence the caller is waiting for.
     """
+    if not _capacity_guarded:
+        from core.job_manager import JobManager
+
+        with JobManager().capacity_guard():
+            return upgrade_workflow_workspace(
+                project_root, agent_workflow_path, _capacity_guarded=True
+            )
+
     paths = workflow_paths(project_root)
     if not paths["workflow_dir"].exists():
         raise ValueError(
@@ -350,13 +370,25 @@ def upgrade_workflow_workspace(
     config_changed = False
     fresh_config = False
     main_py_changed = False
-    try:
-        config = read_json_file(paths["config"])
-    except (OSError, ValueError):
+    if not paths["config"].exists():
         config = default_config(project_root, agent_workflow_path)
         config_changed = True
         fresh_config = True
     else:
+        try:
+            config = read_json_file(paths["config"])
+        except (OSError, ValueError) as exc:
+            raise ValueError(
+                f"refusing to overwrite unreadable workflow config {paths['config']}: {exc}"
+            ) from exc
+        if not isinstance(config, dict):
+            raise ValueError(
+                f"workflow config must be a JSON object: {paths['config']}"
+            )
+        if "runtime" in config and not isinstance(config.get("runtime"), dict):
+            raise ValueError(
+                f"workflow config runtime must be an object: {paths['config']}"
+            )
         config, config_changed = merge_config_defaults(config)
         runtime = config.setdefault("runtime", {})
         # Scripts embed main_py_path; a repo move must regenerate them even when the
@@ -385,7 +417,7 @@ def upgrade_workflow_workspace(
 
     opencode_added = _merge_opencode_config(project_root, tool["tool_dir"])
 
-    # Lazy runtime component (P0.7): the run/inspect/check scripts are a pure function of
+    # The run/inspect/check scripts are a pure function of
     # main_py_path + platform + the generator's version. Regenerate only when one of those
     # could have moved — the runtime component bumped, the repo relocated, or the config was
     # created fresh — instead of rewriting identical files on every upgrade.
@@ -427,11 +459,16 @@ def active_jobs_for_workspace(project_root: Path) -> list[dict]:
                 job = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
-            if job.get("status") not in {"pending", "running"}:
+            if job.get("status") not in {"pending", "running", "recovering"}:
                 continue
             work_dir = job.get("work_dir")
-            if work_dir and str(Path(work_dir).resolve()) != target:
-                continue
+            if work_dir:
+                try:
+                    job_root = str(detect_project_root(work_dir).resolve())
+                except (OSError, ValueError):
+                    job_root = str(Path(work_dir).resolve())
+                if job_root != target:
+                    continue
             # A job whose worker is gone is not "active", it is unreaped. Blocking the
             # upgrade on one would make a crashed worker permanently jam the command.
             if manager.liveness(job) == DEAD:
@@ -476,7 +513,7 @@ def _capabilities_path(project_root: Path) -> Path:
 
 
 def fanout_capability(project_root: Path) -> bool | None:
-    """Learned opencode fan-out capability for this project (P1.6).
+    """Learned opencode fan-out capability for this project.
 
     True/False once a delegated run has revealed it; None while unprobed. Default fan-out
     stays ON — this only flips it OFF after opencode itself reports no spawn tool, so the
@@ -508,7 +545,7 @@ def set_fanout_capability(project_root: Path, capable: bool) -> None:
 
 
 def validate_config(config: dict) -> list[str]:
-    """Structural sanity of config.json's user-tunable sections (P0.10).
+    """Structural sanity of config.json's user-tunable sections.
 
     Two silent failure modes this surfaces: an UNKNOWN key (a misspelled knob does nothing,
     yet reads as "configured"), and a TYPE mismatch (a bool knob set to a string is ignored
@@ -795,7 +832,7 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         # DEFAULT_MAX_TASK_CHARS, silently. Surface it BEFORE dispatch so main_agent shortens
         # the instruction instead of blindly pre-splitting into two calls.
         f'if ($Task.Length -gt {DEFAULT_MAX_TASK_CHARS}) {{ [Console]::Error.WriteLine("[workflow] WARN: task is $($Task.Length) chars > {DEFAULT_MAX_TASK_CHARS}-char cap; it WILL be truncated. Shorten the instruction (do not paste evidence into the task) rather than pre-splitting into multiple calls.") }}\n'
-        "$bg = @('explore','plan','analyze','verify','sweep')\n"
+        "$bg = @('explore','plan','analyze','verify')\n"
         "if ($bg -contains $Command) {\n"
         # Pre-flight gate: dispatching a delegated run satisfies the gate -> clear the marker
         # so the PreToolUse hook stops blocking gather tools for the rest of this turn.
@@ -804,7 +841,8 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         f'  & "{ps_py}" "{main_py}" --command await --job-command $Command '
         f'--prompt $Task --session $Session --work-dir "{root}" --pretty\n'
         "} else {\n"
-        f'  & "{ps_py}" "{main_py}" --command $Command --work-dir "{root}" --pretty\n'
+        f'  & "{ps_py}" "{main_py}" --command $Command --prompt $Task '
+        f'--session $Session --work-dir "{root}" --pretty\n'
         "}\n"
     )
     run_sh = (
@@ -815,7 +853,7 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         'SESSION="${3:-${MAIN_SESSION_ID:-default}}"\n'
         '[ "$SESSION" = "default" ] && echo "[workflow] WARN: session=default - pass MAIN_SESSION_ID for concurrent-safe isolation" >&2\n'
         f'[ "${{#TASK}}" -gt {DEFAULT_MAX_TASK_CHARS} ] && echo "[workflow] WARN: task is ${{#TASK}} chars > {DEFAULT_MAX_TASK_CHARS}-char cap; it WILL be truncated. Shorten the instruction rather than pre-splitting." >&2\n'
-        'case " explore plan analyze verify sweep " in\n'
+        'case " explore plan analyze verify " in\n'
         '  *" $COMMAND "*)\n'
         # Pre-flight gate: clear the marker before dispatching (delegation satisfies the gate).
         f'    MK="{root}/.workflow/sessions/$SESSION/runtime/delegated.marker"\n'
@@ -823,7 +861,8 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         f'    exec "{sh_py}" "{main_py}" --command await --job-command "$COMMAND" '
         f'--prompt "$TASK" --session "$SESSION" --work-dir "{root}" --pretty ;;\n'
         "  *)\n"
-        f'    exec "{sh_py}" "{main_py}" --command "$COMMAND" --work-dir "{root}" --pretty ;;\n'
+        f'    exec "{sh_py}" "{main_py}" --command "$COMMAND" --prompt "$TASK" '
+        f'--session "$SESSION" --work-dir "{root}" --pretty ;;\n'
         "esac\n"
     )
     inspect_ps1 = (
@@ -864,9 +903,7 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         if name.endswith(".ps1"):
             # UTF-8 BOM: Windows PowerShell 5.1 reads a no-BOM file as ANSI/Win-1252,
             # which corrupts any non-ASCII byte (em-dash, accented path) -> parse error.
-            tmp = path.with_suffix(path.suffix + ".tmp")
-            tmp.write_text(content, encoding="utf-8-sig")
-            tmp.replace(path)
+            atomic_write_text(path, content, encoding="utf-8-sig")
         else:
             atomic_write_text(
                 path, content
@@ -1173,55 +1210,240 @@ def resolve_agent_workflow_path(project_root: Path) -> dict:
     return {"ok": False, "path": None, "source": None, "candidates": candidates}
 
 
-def acquire_runtime_lock(lock_path: Path, command: str, session_id: str) -> dict:
-    if lock_path.exists():
-        try:
-            payload = read_json_file(lock_path)
-        except ValueError:
-            payload = None
-        if payload:
-            created_at = payload.get("created_at")
-            try:
-                created = datetime.fromisoformat(created_at)
-            except (TypeError, ValueError):
-                created = None
-            if created and datetime.now(timezone.utc) - created <= timedelta(
-                seconds=LOCK_TTL_SECONDS
-            ):
-                return {"ok": False, "stale": False, "payload": payload}
-    stale_payload = None
-    if lock_path.exists():
-        try:
-            stale_payload = read_json_file(lock_path)
-        except ValueError:
-            stale_payload = {"invalid": True}
-    atomic_write_json(
-        lock_path,
-        {"command": command, "session_id": session_id, "created_at": now_iso()},
-    )
-    return {"ok": True, "stale": bool(stale_payload), "payload": stale_payload}
+_RUNTIME_TRANSITION_THREAD_LOCK = threading.Lock()
 
 
-def release_runtime_lock(lock_path: Path, session_id: str | None = None) -> None:
-    """Release the runtime lock. When `session_id` is given, only the OWNER may release:
-    a lock held by a different session is left in place rather than yanked out from under
-    its owner. Single-writer-per-session makes a cross-owner release rare, but the guard is
-    cheap and turns a silent foot-gun into a no-op. A legacy lock with no session_id, an
-    unreadable/absent lock, or a matching owner all release as before."""
-    if session_id is not None:
+class _RuntimeTransitionGuard:
+    """Serialize runtime-lock creation and removal across threads and processes."""
+
+    def __init__(self, lock_path: Path):
+        self.path = lock_path.with_name(f"{lock_path.name}.guard")
+        self.handle = None
+
+    def __enter__(self):
+        _RUNTIME_TRANSITION_THREAD_LOCK.acquire()
         try:
-            payload = read_json_file(lock_path)
-        except (ValueError, FileNotFoundError, OSError):
-            payload = None
-        if isinstance(payload, dict) and payload.get("session_id") not in (
-            None,
-            session_id,
-        ):
-            return  # not our lock — leave it for its owner / the TTL stealer
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.handle = self.path.open("a+b")
+            if osutil.IS_WINDOWS:
+                import msvcrt
+
+                self.handle.seek(0, os.SEEK_END)
+                if self.handle.tell() == 0:
+                    self.handle.write(b"\0")
+                    self.handle.flush()
+                self.handle.seek(0)
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX)
+            return self
+        except Exception:
+            if self.handle is not None:
+                self.handle.close()
+                self.handle = None
+            _RUNTIME_TRANSITION_THREAD_LOCK.release()
+            raise
+
+    def __exit__(self, *exc) -> None:
+        try:
+            if self.handle is not None:
+                if osutil.IS_WINDOWS:
+                    import msvcrt
+
+                    self.handle.seek(0)
+                    msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            if self.handle is not None:
+                self.handle.close()
+                self.handle = None
+            _RUNTIME_TRANSITION_THREAD_LOCK.release()
+
+
+def _runtime_lock_payload(lock_path: Path) -> dict | None:
     try:
-        lock_path.unlink()
-    except FileNotFoundError:
+        payload = read_json_file(lock_path)
+    except (ValueError, FileNotFoundError, OSError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _runtime_lock_age_seconds(lock_path: Path, payload: dict | None) -> float | None:
+    created = None
+    if payload:
+        try:
+            created = datetime.fromisoformat(str(payload.get("created_at") or ""))
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+        except (TypeError, ValueError):
+            created = None
+    if created is not None:
+        return max(0.0, (datetime.now(timezone.utc) - created).total_seconds())
+    try:
+        modified = datetime.fromtimestamp(lock_path.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        return None
+    return max(0.0, (datetime.now(timezone.utc) - modified).total_seconds())
+
+
+def _process_identity(pid: int) -> str | None:
+    """Best-effort process start identity, stable across PID reuse."""
+    if pid <= 0:
+        return None
+    native = osutil.pid_create_time(pid)
+    if native is not None:
+        return f"native:{native!r}"
+    if os.name == "nt":
+        return None
+    proc_stat = Path(f"/proc/{pid}/stat")
+    try:
+        stat_text = proc_stat.read_text(encoding="ascii")
+        fields_after_comm = stat_text.rsplit(")", 1)[1].split()
+        start_ticks = fields_after_comm[19]
+        try:
+            boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(
+                encoding="ascii"
+            ).strip()
+        except OSError:
+            boot_id = "unknown-boot"
+        return f"proc:{boot_id}:{start_ticks}"
+    except (OSError, IndexError):
         pass
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+            **osutil.hidden_run_kwargs(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    started = (result.stdout or "").strip()
+    return f"ps:{started}" if result.returncode == 0 and started else None
+
+
+def _runtime_lock_is_active(lock_path: Path, payload: dict | None) -> bool:
+    if payload:
+        try:
+            pid = int(payload.get("pid") or 0)
+        except (TypeError, ValueError):
+            pid = 0
+        if pid > 0:
+            if not osutil.process_alive(pid):
+                return False
+            expected_identity = payload.get("process_identity")
+            if expected_identity:
+                return _process_identity(pid) == expected_identity
+            expected_create_time = payload.get("pid_create_time")
+            if expected_create_time is not None:
+                return not osutil.pid_reused(pid, expected_create_time)
+            age = _runtime_lock_age_seconds(lock_path, payload)
+            return age is None or age <= LOCK_TTL_SECONDS
+    age = _runtime_lock_age_seconds(lock_path, payload)
+    return age is None or age <= LOCK_TTL_SECONDS
+
+
+def runtime_lock_owned(lock_path: Path, session_id: str, lock_token: str) -> bool:
+    """True only while the exact runtime-lock generation is still installed."""
+    with _RuntimeTransitionGuard(lock_path):
+        payload = _runtime_lock_payload(lock_path)
+        return bool(
+            payload
+            and payload.get("session_id") == session_id
+            and payload.get("token") == lock_token
+        )
+
+
+def acquire_runtime_lock(lock_path: Path, command: str, session_id: str) -> dict:
+    stale_payload = None
+    stale_replaced = False
+    with _RuntimeTransitionGuard(lock_path):
+        if lock_path.exists():
+            payload = _runtime_lock_payload(lock_path)
+            if _runtime_lock_is_active(lock_path, payload):
+                return {
+                    "ok": False,
+                    "stale": False,
+                    "payload": payload or {"invalid": True},
+                }
+            stale_payload = payload or {"invalid": True}
+            try:
+                lock_path.unlink()
+                stale_replaced = True
+            except FileNotFoundError:
+                pass
+
+        token = secrets.token_hex(16)
+        payload = {
+            "command": command,
+            "session_id": session_id,
+            "token": token,
+            "pid": os.getpid(),
+            "pid_create_time": osutil.pid_create_time(os.getpid()),
+            "process_identity": _process_identity(os.getpid()),
+            "created_at": now_iso(),
+        }
+        encoded = json.dumps(payload, indent=JSON_INDENT).encode("utf-8")
+        fd = None
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "wb") as handle:
+                fd = None
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except FileExistsError:
+            current = _runtime_lock_payload(lock_path)
+            return {
+                "ok": False,
+                "stale": False,
+                "payload": current or {"invalid": True},
+            }
+        except Exception:
+            if fd is not None:
+                os.close(fd)
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                pass
+            raise
+
+    return {
+        "ok": True,
+        "stale": stale_replaced,
+        "payload": stale_payload,
+        "token": token,
+    }
+
+
+def release_runtime_lock(
+    lock_path: Path,
+    session_id: str | None = None,
+    lock_token: str | None = None,
+) -> None:
+    """Release only the exact runtime-lock generation owned by this call."""
+    with _RuntimeTransitionGuard(lock_path):
+        if not lock_path.exists():
+            return
+        if session_id is not None or lock_token is not None:
+            payload = _runtime_lock_payload(lock_path)
+            if not isinstance(payload, dict):
+                return
+            if session_id is not None and payload.get("session_id") != session_id:
+                return
+            if lock_token is not None and payload.get("token") != lock_token:
+                return
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _prune_archive(logs_dir: Path, keep: int = ARCHIVE_KEEP) -> None:
@@ -1248,26 +1470,52 @@ def _archive_prompt(logs_dir: Path, prompt_id: str, prompt: str) -> None:
 
 
 def write_prompt_handoff(
-    project_root: Path, command: str, session_id: str, prompt: str
+    project_root: Path,
+    command: str,
+    session_id: str,
+    prompt: str,
+    lock_claim: dict | None = None,
 ) -> dict:
     loaded = load_workspace_state(project_root, session_id)
     loaded["paths"]["runtime_dir"].mkdir(parents=True, exist_ok=True)
-    lock_result = acquire_runtime_lock(loaded["paths"]["lock"], command, session_id)
+    if lock_claim is not None:
+        token = str(lock_claim.get("token") or "")
+        owned = bool(token) and runtime_lock_owned(
+            loaded["paths"]["lock"], session_id, token
+        )
+        lock_result = (
+            dict(lock_claim)
+            if owned
+            else {
+                "ok": False,
+                "stale": False,
+                "payload": _runtime_lock_payload(loaded["paths"]["lock"])
+                or {"invalid": True},
+            }
+        )
+    else:
+        lock_result = acquire_runtime_lock(
+            loaded["paths"]["lock"], command, session_id
+        )
     if not lock_result["ok"]:
-        holder = lock_result["payload"].get("session_id")
+        payload = lock_result.get("payload") or {}
+        holder = payload.get("session_id") or "unknown"
         return {
             "ok": False,
             "content": f"runtime lock active for session {holder}",
             "meta": {
                 "error_type": "runtime_lock",
                 "next_action": "Wait for the in-flight delegated call on this session to finish, then retry; if it is stuck, clear .workflow/sessions/<sid>/runtime/lock.",
-                "lock": lock_result["payload"],
+                "lock": payload,
                 "lock_path": str(loaded["paths"]["lock"]),
             },
         }
 
     state = loaded["state"]
-    prompt_id = f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{command}"
+    prompt_id = (
+        f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S_%f')}_"
+        f"{command}_{secrets.token_hex(4)}"
+    )
     meta = {
         "prompt_id": prompt_id,
         "session_id": session_id,
@@ -1277,16 +1525,13 @@ def write_prompt_handoff(
         "scope_version": state.get("guards", {}).get("scope_version", 0),
         "created_at": now_iso(),
         "status": "ready",
+        "lock_token": lock_result["token"],
     }
     if lock_result["stale"]:
         meta["stale_lock_replaced"] = True
 
-    prompt_tmp = loaded["paths"]["prompt"].with_suffix(".tmp")
-    prompt_meta_tmp = loaded["paths"]["prompt_meta"].with_suffix(".tmp")
-    prompt_tmp.write_text(prompt, encoding="utf-8")
-    prompt_meta_tmp.write_text(json.dumps(meta, indent=JSON_INDENT), encoding="utf-8")
-    prompt_tmp.replace(loaded["paths"]["prompt"])
-    prompt_meta_tmp.replace(loaded["paths"]["prompt_meta"])
+    atomic_write_text(loaded["paths"]["prompt"], prompt)
+    atomic_write_json(loaded["paths"]["prompt_meta"], meta)
 
     _archive_prompt(loaded["paths"]["logs_dir"], prompt_id, prompt)
 
@@ -1762,6 +2007,14 @@ def _bundle_integrity(
             result["skipped"].append({"path": rel, "reason": "os_variant"})
             continue
         installed = _installed_path_for(rel, targets, project_root)
+        if (
+            str(rel).startswith("opencode/agents/")
+            and (installed is None or not installed.is_file())
+            and project_root is not None
+        ):
+            global_agent = _installed_path_for(rel, targets, None)
+            if global_agent is not None and global_agent.is_file():
+                installed = global_agent
         if installed is not None and installed.name == "opencode.json":
             jsonc = installed.with_name("opencode.jsonc")
             if jsonc.is_file():
@@ -2188,33 +2441,66 @@ def run_sweep(project_root: Path, session_id: str | None = None) -> dict:
     paths = workflow_paths(project_root, session_id)
     changed_files: list[str] = []
     diff_summary = ""
+
+    def git_error(detail: str, operation: str) -> dict:
+        from core.contract import make_error
+
+        return make_error(
+            "sweep_git_error",
+            detail or f"{operation} failed",
+            next_action=(
+                "Run the reported Git command in the project, fix the repository or "
+                "Git installation, then retry sweep."
+            ),
+            meta={"project_root": str(project_root), "operation": operation},
+        )
+
+    def git_run(argv: list[str]):
+        return subprocess.run(
+            argv,
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=False,
+            **osutil.hidden_run_kwargs(),
+        )
+
     try:
-        names = subprocess.run(
-            ["git", "diff", "--name-only"],
-            cwd=project_root,
-            capture_output=True,
-            text=True,
-            check=False,
-            **osutil.hidden_run_kwargs(),  # Windows: no console flash
-        )
-        changed_files = [
-            line.strip() for line in names.stdout.splitlines() if line.strip()
+        name_results = [
+            ("unstaged diff", git_run(["git", "diff", "--name-only"])),
+            ("staged diff", git_run(["git", "diff", "--cached", "--name-only"])),
+            (
+                "untracked files",
+                git_run(["git", "ls-files", "--others", "--exclude-standard"]),
+            ),
         ]
-        summary = subprocess.run(
-            ["git", "diff", "--stat"],
-            cwd=project_root,
-            capture_output=True,
-            text=True,
-            check=False,
-            **osutil.hidden_run_kwargs(),  # Windows: no console flash
+        for operation, result in name_results:
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()
+                return git_error(detail, operation)
+        changed_files = list(
+            dict.fromkeys(
+                line.strip()
+                for _operation, result in name_results
+                for line in result.stdout.splitlines()
+                if line.strip()
+            )
         )
-        diff_summary = summary.stdout.strip()
+        stat_results = [
+            ("unstaged stat", git_run(["git", "diff", "--stat"])),
+            ("staged stat", git_run(["git", "diff", "--cached", "--stat"])),
+        ]
+        for operation, result in stat_results:
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout or "").strip()
+                return git_error(detail, operation)
+        diff_summary = "\n".join(
+            result.stdout.strip()
+            for _operation, result in stat_results
+            if result.stdout.strip()
+        )
     except OSError as exc:
-        return {
-            "ok": False,
-            "content": str(exc),
-            "meta": {"error_type": type(exc).__name__},
-        }
+        return git_error(str(exc), "launch git")
 
     loaded = load_workspace_state(project_root, session_id)
     scope = loaded["scope"]
@@ -2224,7 +2510,16 @@ def run_sweep(project_root: Path, session_id: str | None = None) -> dict:
         lower = file_path.lower()
         if any(
             token in lower
-            for token in ("config", "auth", "payment", "schema", "migration")
+            for token in (
+                "config",
+                "auth",
+                "payment",
+                "schema",
+                "migration",
+                ".env",
+                "secret",
+                "credential",
+            )
         ):
             risk_hits.append(file_path)
         if impact_radius and any(
@@ -2279,7 +2574,10 @@ def run_sweep(project_root: Path, session_id: str | None = None) -> dict:
     )
     return {
         "ok": True,
-        "content": f"sweep {verdict}: {reason}",
+        "content": (
+            f"sweep {verdict}: {reason}; "
+            f"{len(changed_files)} changed file(s)"
+        ),
         "meta": {
             "verdict": verdict,
             "reason": reason,
@@ -2294,10 +2592,13 @@ def prune_sessions(project_root: Path, ttl_days: int = 7, keep_last: int = 20) -
     """Delete per-session dirs older than ttl_days, always keeping the newest keep_last.
     Recent (active) sessions survive the TTL, so this never reaps a live session."""
     sessions_dir = workflow_paths(project_root)["workflow_dir"] / "sessions"
-    if not sessions_dir.exists():
+    provider_dir = workflow_paths(project_root)["workflow_dir"] / "provider-sessions"
+    if not sessions_dir.exists() and not provider_dir.exists():
         return {"removed": 0, "kept": 0}
     dirs = sorted(
-        (p for p in sessions_dir.iterdir() if p.is_dir()),
+        (p for p in sessions_dir.iterdir() if p.is_dir())
+        if sessions_dir.exists()
+        else (),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
@@ -2313,4 +2614,25 @@ def prune_sessions(project_root: Path, ttl_days: int = 7, keep_last: int = 20) -
                 removed += 1
         except OSError:
             continue
-    return {"removed": removed, "kept": min(len(dirs), keep_last)}
+    provider_files = sorted(
+        (p for p in provider_dir.glob("*.json") if p.is_file())
+        if provider_dir.exists()
+        else (),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    provider_removed = 0
+    for index, path in enumerate(provider_files):
+        if index < keep_last:
+            continue
+        try:
+            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            if mtime < cutoff:
+                path.unlink()
+                provider_removed += 1
+        except OSError:
+            continue
+    return {
+        "removed": removed + provider_removed,
+        "kept": min(len(dirs), keep_last) + min(len(provider_files), keep_last),
+    }

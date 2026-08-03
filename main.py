@@ -1,21 +1,28 @@
 import os
+import secrets
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-from core.contract import make_error
+from core.contract import make_error, validate_verification_contract
 from core.executor import Executor
-from core.job_manager import JobManager
+from core.job_manager import DEAD, JobManager
 from core.session_manager import SessionManager
 from utils import osutil
+from utils.path_guard import safe_path_component
+from utils.redact import redact_value
 from core.workflow_runtime import (
+    acquire_runtime_lock,
     detect_project_root,
     ensure_workflow_workspace,
     needs_upgrade,
     prune_sessions,
+    release_runtime_lock,
     resolve_agent_workflow_path,
     run_doctor,
+    run_sweep,
+    upgrade_workflow_workspace,
     workflow_paths,
     workspace_versions,
 )
@@ -35,21 +42,57 @@ from config.settings import (
 from utils.parser import generate_main_session_id
 
 SESSION_MANAGER = SessionManager()
+_DEFAULT_SESSION_MANAGER = SESSION_MANAGER
 EXECUTOR = Executor(session_manager=SESSION_MANAGER)
 JOB_MANAGER = JobManager()
-BACKGROUND_COMMANDS = {"explore", "plan", "analyze", "verify", "sweep"}
+BACKGROUND_COMMANDS = {"explore", "plan", "analyze", "verify"}
 
 
-def resolve_session_id(session_id: str, fresh: bool = False) -> str:
+def _finalize_verify_result(command: str, result: dict) -> dict:
+    if command.strip().lower() != "verify" or not isinstance(result, dict):
+        return result
+    if not result.get("ok"):
+        return result
+
+    meta = result.setdefault("meta", {})
+    if meta.get("mode") == "quick" or "quick_verify" in meta:
+        return result
+
+    assessment = validate_verification_contract(result.get("content") or "")
+    meta["verdict"] = assessment["verdict"]
+    meta["verify_contract"] = assessment
+    warnings = assessment.get("warnings") or []
+    if warnings:
+        meta.setdefault("contract_warnings", []).extend(warnings)
+    return result
+
+
+def _session_storage_id(session_id: str) -> str:
+    return safe_path_component(session_id)
+
+
+def _session_manager_for(project_root: Path) -> SessionManager:
+    if SESSION_MANAGER is not _DEFAULT_SESSION_MANAGER:
+        return SESSION_MANAGER
+    return SessionManager(workflow_paths(project_root)["workflow_dir"] / "provider-sessions")
+
+
+def resolve_session_id(
+    session_id: str, fresh: bool = False, project_root: str | Path | None = None
+) -> str:
     """Resolve the effective session ID, using cache or generating a new one."""
-    if session_id != "default":
+    cache_root = (
+        detect_project_root(str(project_root)) if project_root is not None else None
+    )
+    if session_id != "default" and not fresh:
         return session_id
     if not fresh:
-        cached = get_cached_main_session_id()
+        cached = get_cached_main_session_id(cache_root)
         if cached:
             return cached
-    new_id = generate_main_session_id()
-    set_cached_main_session_id(new_id)
+    new_id = f"{generate_main_session_id()}_{secrets.token_hex(3)}"
+    if session_id == "default":
+        set_cached_main_session_id(new_id, cache_root)
     return new_id
 
 
@@ -60,6 +103,8 @@ def run(
     work_dir: str | None = None,
     model: str | None = None,
     on_progress=None,
+    allow_reuse: bool = True,
+    require_provider_session: bool = False,
 ) -> dict:
     normalized_command = command.strip().lower()
     project_root = detect_project_root(work_dir)
@@ -69,15 +114,13 @@ def run(
         agent_workflow_path = resolver.get("path")
         try:
             meta = ensure_workflow_workspace(project_root, agent_workflow_path)
-        except ValueError as exc:
-            return {
-                "ok": False,
-                "content": str(exc),
-                "meta": {
-                    "project_root": str(project_root),
-                    "error_type": "workflow_init_error",
-                },
-            }
+        except (OSError, ValueError) as exc:
+            return make_error(
+                "workflow_init_error",
+                str(exc),
+                next_action="Fix the reported workspace path/config issue, then retry init.",
+                meta={"project_root": str(project_root)},
+            )
         return {"ok": True, "content": "workflow workspace initialized", "meta": meta}
 
     if normalized_command == "doctor":
@@ -85,6 +128,25 @@ def run(
         return run_doctor(
             project_root, config.get("opencode_command", "opencode"), session_id
         )
+
+    if normalized_command == "upgrade":
+        resolver = resolve_agent_workflow_path(project_root)
+        try:
+            meta = upgrade_workflow_workspace(project_root, resolver.get("path"))
+        except (OSError, ValueError) as exc:
+            return make_error(
+                "workflow_upgrade_error",
+                str(exc),
+                next_action=(
+                    "Initialize the workspace first or finish active jobs, then retry upgrade."
+                ),
+                meta={"project_root": str(project_root)},
+            )
+        return {
+            "ok": True,
+            "content": "workflow workspace upgraded",
+            "meta": meta,
+        }
 
     if normalized_command == "clean":
         from core import fact_store
@@ -96,6 +158,7 @@ def run(
             "ok": True,
             "content": (
                 f"pruned {summary['removed']} job(s), kept {summary['kept']}; "
+                f"logs removed {summary['logs_removed']}; "
                 f"facts kept {facts['kept']}, dropped {facts['removed']} stale; "
                 f"sessions removed {sessions['removed']}, kept {sessions['kept']}"
             ),
@@ -105,13 +168,66 @@ def run(
     if normalized_command == "inspect":
         return _inspect(project_root, session_id)
 
-    session = SESSION_MANAGER.load_or_create(session_id)
-    output = EXECUTOR.execute(
-        command, task, session, work_dir, model, on_progress=on_progress
-    )
-    SESSION_MANAGER.record_run(session, command)
-    output["session_id"] = session_id
-    return output
+    if normalized_command == "sweep":
+        output = run_sweep(project_root, session_id)
+        output["session_id"] = session_id
+        return output
+
+    lock_path = workflow_paths(project_root, session_id)["lock"]
+    lock_claim = acquire_runtime_lock(lock_path, normalized_command, session_id)
+    if not lock_claim.get("ok"):
+        payload = lock_claim.get("payload") or {}
+        return make_error(
+            "runtime_lock",
+            f"runtime lock active for session {payload.get('session_id') or 'unknown'}",
+            next_action="Wait for the in-flight call on this session to finish, then retry.",
+            meta={"lock": payload, "lock_path": str(lock_path)},
+        )
+    try:
+        provider_sessions = _session_manager_for(project_root)
+        try:
+            session = provider_sessions.load_or_create(
+                _session_storage_id(session_id)
+            )
+        except (OSError, ValueError) as exc:
+            return make_error(
+                "session_state_error",
+                str(exc),
+                next_action="Repair or remove the project-local provider session file, then retry.",
+                meta={"project_root": str(project_root)},
+            )
+        if require_provider_session and not session.get("opencode_session_id"):
+            return make_error(
+                "session_capture_failed",
+                "cannot recover interrupted job because its OpenCode session ID was not captured",
+                next_action=(
+                    "The session lock was released. Run the original task again as a clean invocation."
+                ),
+                meta={"reason": "recovery_session_unavailable"},
+            )
+        output = EXECUTOR.execute(
+            command,
+            task,
+            session,
+            work_dir,
+            model,
+            on_progress=on_progress,
+            allow_reuse=allow_reuse,
+            session_manager=provider_sessions,
+            workflow_session_id=session_id,
+            _runtime_lock=lock_claim,
+        )
+        output = _finalize_verify_result(normalized_command, output)
+        try:
+            provider_sessions.record_run(session, command)
+        except (OSError, ValueError) as exc:
+            output.setdefault("meta", {})["session_history_error"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
+        output["session_id"] = session_id
+        return output
+    finally:
+        release_runtime_lock(lock_path, session_id, lock_claim.get("token"))
 
 
 def submit(
@@ -120,112 +236,151 @@ def submit(
     session_id: str,
     work_dir: str | None = None,
     model: str | None = None,
+    allow_reuse: bool = True,
 ) -> dict:
-    if command in {"submit", "status", "result", "worker"}:
+    normalized_command = command.strip().lower()
+    if normalized_command not in BACKGROUND_COMMANDS:
         return make_error(
             "job_submit_error",
             f"unsupported submit target: {command}",
-            next_action="Use a delegated command (explore/plan/analyze/verify/sweep).",
-            meta={"command": command},
+            next_action="Use a delegated command (explore/plan/analyze/verify).",
+            meta={"command": normalized_command},
         )
 
-    expected_hash = JOB_MANAGER.request_hash(command, task, session_id, work_dir)
-    active = JOB_MANAGER.active_job_for_session(session_id)
+    expected_hash = JOB_MANAGER.request_hash(
+        normalized_command, task, session_id, work_dir, allow_reuse, model
+    )
     recovering = False
 
-    if active:
-        if active.get("request_hash") != expected_hash:
-            active_id = active["job_id"]
-            next_action = (
-                f"Wait for {active_id} or run: "
-                f".workflow/check.{osutil.script_ext()} {active_id} --wait"
-            )
-            return make_error(
-                "job_already_running",
-                f"session {session_id} already has active job {active_id}",
-                next_action=next_action,
-                meta={"command": command},
-                active_job_id=active_id,
-            )
-
-        if osutil.process_alive(active.get("worker_pid")):
-            return {
-                "ok": True,
-                "job_id": active["job_id"],
-                "status": active["status"],
-                "submitted_at": active["created_at"],
-                "meta": {
-                    "pid": active.get("worker_pid"),
-                    "reused": True,
-                    "recovery": False,
-                },
-            }
-
-        recovery = JOB_MANAGER.claim_recovery(active["job_id"])
-        action = recovery.get("action")
-        job = recovery.get("job") or active
-        if action in {"wait", "attach"}:
-            return {
-                "ok": True,
-                "job_id": job["job_id"],
-                "status": job.get("status", "recovering"),
-                "submitted_at": job["created_at"],
-                "meta": {
-                    "pid": job.get("worker_pid"),
-                    "reused": True,
-                    "recovery": action == "wait",
-                    "recovery_pending": action == "wait",
-                },
-            }
-        if action == "exhausted":
-            return make_error(
-                "worker_died",
-                f"job {job['job_id']} exhausted its single recovery attempt",
-                next_action=(
-                    "The session lock was released. Report the interruption or invoke the "
-                    "original task again as a clean run; do not send continue automatically."
-                ),
-                meta={
-                    "reason": "recovery_exhausted",
-                    "job_id": job["job_id"],
-                    "recovery_attempt": job.get("recovery_attempt", 1),
-                },
-            )
-        if action != "recover":
-            return make_error(
-                "job_submit_error",
-                f"cannot recover active job {active['job_id']}",
-                next_action="Inspect the job record, then retry the original task.",
-                meta={"reason": action or "recovery_unknown"},
-            )
-        recovering = True
-    else:
-        try:
-            job = JOB_MANAGER.create_job(command, task, session_id, work_dir, model)
-        except ValueError as exc:
-            active = JOB_MANAGER.active_job_for_session(session_id)
-            active_id = active["job_id"] if active else None
-            next_action = (
-                f"Wait for {active_id} or run: "
-                f".workflow/check.{osutil.script_ext()} {active_id} --wait"
-                if active_id
-                else "Wait for the active job to finish, then retry."
-            )
-            return make_error(
-                "job_already_running",
-                str(exc),
-                next_action=next_action,
-                meta={"command": command},
-                active_job_id=active_id,
-            )
-
-    if not recovering and JOB_MANAGER.active_worker_count() > JOB_MANAGER.max_global_workers:
-        JOB_MANAGER.fail_job(job["job_id"], "global worker capacity reached")
+    def capacity_error() -> dict:
         return make_error(
             "worker_capacity",
             f"global worker limit reached ({JOB_MANAGER.max_global_workers} active)",
             next_action="Wait for an in-flight delegated job to finish, then retry.",
-            meta={"command": command, "max_global_workers": JOB_MANAGER.max_global_workers},
+            meta={
+                "command": normalized_command,
+                "max_global_workers": JOB_MANAGER.max_global_workers,
+            },
+        )
+
+    try:
+        with JOB_MANAGER.capacity_guard():
+            active = JOB_MANAGER.active_job_for_session(session_id)
+            if active:
+                if active.get("request_hash") != expected_hash:
+                    active_id = active["job_id"]
+                    return make_error(
+                        "job_already_running",
+                        f"session {session_id} already has active job {active_id}",
+                        next_action=(
+                            f"Wait for {active_id} or run: "
+                            f".workflow/check.{osutil.script_ext()} {active_id} --wait"
+                        ),
+                        meta={"command": normalized_command},
+                        active_job_id=active_id,
+                    )
+
+                if active.get("worker_pid") and JOB_MANAGER.liveness(active) != DEAD:
+                    return {
+                        "ok": True,
+                        "job_id": active["job_id"],
+                        "status": active["status"],
+                        "submitted_at": active["created_at"],
+                        "meta": {
+                            "pid": active.get("worker_pid"),
+                            "reused": True,
+                            "recovery": False,
+                        },
+                    }
+
+                pending_reservation = (
+                    active.get("status") == "pending"
+                    and active.get("worker_pid") is None
+                )
+                if (
+                    not pending_reservation
+                    and JOB_MANAGER.active_worker_count()
+                    >= JOB_MANAGER.max_global_workers
+                ):
+                    return capacity_error()
+
+                recovery = JOB_MANAGER.claim_recovery(active["job_id"])
+                action = recovery.get("action")
+                job = recovery.get("job") or active
+                if action in {"wait", "attach"}:
+                    waiting_for_recovery = bool(job.get("recovery_in_progress"))
+                    return {
+                        "ok": True,
+                        "job_id": job["job_id"],
+                        "status": job.get("status", "pending"),
+                        "submitted_at": job["created_at"],
+                        "meta": {
+                            "pid": job.get("worker_pid"),
+                            "reused": True,
+                            "recovery": waiting_for_recovery,
+                            "recovery_pending": waiting_for_recovery,
+                        },
+                    }
+                if action == "exhausted":
+                    return make_error(
+                        "worker_died",
+                        f"job {job['job_id']} exhausted its single recovery attempt",
+                        next_action=(
+                            "The session lock was released. Report the interruption or "
+                            "invoke the original task again as a clean run; do not send "
+                            "continue automatically."
+                        ),
+                        meta={
+                            "reason": "recovery_exhausted",
+                            "job_id": job["job_id"],
+                            "recovery_attempt": job.get("recovery_attempt", 1),
+                        },
+                    )
+                if action != "recover":
+                    return make_error(
+                        "job_submit_error",
+                        f"cannot recover active job {active['job_id']}",
+                        next_action="Inspect the job record, then retry the original task.",
+                        meta={"reason": action or "recovery_unknown"},
+                    )
+                recovering = True
+            else:
+                if (
+                    JOB_MANAGER.active_worker_count()
+                    >= JOB_MANAGER.max_global_workers
+                ):
+                    return capacity_error()
+                try:
+                    job = JOB_MANAGER.create_job(
+                        normalized_command,
+                        task,
+                        session_id,
+                        work_dir,
+                        model,
+                        allow_reuse,
+                    )
+                except ValueError as exc:
+                    active = JOB_MANAGER.active_job_for_session(session_id)
+                    active_id = active["job_id"] if active else None
+                    next_action = (
+                        f"Wait for {active_id} or run: "
+                        f".workflow/check.{osutil.script_ext()} {active_id} --wait"
+                        if active_id
+                        else "Wait for the active job to finish, then retry."
+                    )
+                    return make_error(
+                        "job_already_running",
+                        str(exc),
+                        next_action=next_action,
+                        meta={"command": normalized_command},
+                        active_job_id=active_id,
+                    )
+    except OSError as exc:
+        return make_error(
+            "job_submit_error",
+            str(exc),
+            next_action="Check that the job store is writable, then retry.",
+            meta={"command": normalized_command, "error": type(exc).__name__},
         )
 
     try:
@@ -314,14 +469,7 @@ def _max_probes(work_dir: str | None) -> int:
 
 
 def _warn_if_workspace_stale(work_dir: str | None) -> None:
-    """One stderr line when .workflow/ was scaffolded by a different build.
-
-    Warn, never act. Regenerating scripts under a caller that is mid-flow is exactly
-    the kind of surprise the workflow exists to avoid — so upgrading stays a thing the
-    user runs deliberately, via the installer. Emitted from Python rather than from the
-    generated shell scripts so both OSes report it identically, and so a workspace whose
-    scripts are themselves outdated still gets the warning.
-    """
+    """Warn when the workspace version differs; upgrade remains explicit."""
     try:
         project_root = detect_project_root(work_dir)
         if not needs_upgrade(project_root):
@@ -333,7 +481,7 @@ def _warn_if_workspace_stale(work_dir: str | None) -> None:
         f"[workflow] WARN: .workflow was built by tool "
         f"{versions['installed_tool_version']} / config {versions['installed_config_version']}, "
         f"running {versions['current_tool_version']} / {versions['current_config_version']} — "
-        f'upgrade via installer: python install.py --apply --init-project "{project_root}"',
+        f'run: python main.py --command upgrade --work-dir "{project_root}"',
         file=sys.stderr,
     )
 
@@ -450,10 +598,14 @@ def await_job(
     model: str | None = None,
     poll_interval: float = DEFAULT_JOB_POLL_INTERVAL_SECONDS,
     poll_timeout: int = DEFAULT_JOB_POLL_TIMEOUT_SECONDS,
+    allow_reuse: bool = True,
 ) -> dict:
+    if command.strip().lower() == "sweep":
+        return run("sweep", task, session_id, work_dir, model)
+
     _apply_job_thresholds(work_dir)
     _warn_if_workspace_stale(work_dir)
-    submitted = submit(command, task, session_id, work_dir, model)
+    submitted = submit(command, task, session_id, work_dir, model, allow_reuse)
     if not submitted.get("ok"):
         return submitted
 
@@ -490,6 +642,8 @@ def await_job(
                 probe_count += 1
                 reaped = check_stalled_job(job_id, work_dir, model)
                 if reaped is not None:
+                    if reaped.get("status") == "completed":
+                        continue
                     meta = dict(reaped.get("meta") or {})
                     meta.setdefault("job_id", job_id)
                     meta.setdefault("submitted_at", submitted.get("submitted_at"))
@@ -504,6 +658,7 @@ def await_job(
         if result.get("status") == "completed":
             output = result.get("output") or {}
             if isinstance(output, dict):
+                output = _finalize_verify_result(command, output)
                 meta = output.setdefault("meta", {})
                 meta.setdefault("job_id", job_id)
                 meta.setdefault("submitted_at", submitted.get("submitted_at"))
@@ -530,11 +685,10 @@ def await_job(
 
         if result.get("status") == "pending":
             queued = JOB_MANAGER.get_job(job_id) or {}
-            if (
-                queued.get("recovery_in_progress")
-                and queued.get("worker_pid") is None
-            ):
-                resumed = submit(command, task, session_id, work_dir, model)
+            if queued.get("worker_pid") is None:
+                resumed = submit(
+                    command, task, session_id, work_dir, model, allow_reuse
+                )
                 if not resumed.get("ok"):
                     return resumed
                 submitted = resumed
@@ -612,7 +766,14 @@ def run_worker(job_id: str) -> dict:
     # The worker is authoritative for its own PID. Parent-side registration is only a
     # fast-path; this closes the small spawn-to-persist race after caller interruption.
     JOB_MANAGER.set_worker_pid(job_id, os.getpid())
-    JOB_MANAGER.mark_running(job_id)
+    running = JOB_MANAGER.mark_running(job_id)
+    if running.get("status") != "running":
+        return make_error(
+            "worker_died",
+            f"job {job_id} became terminal before its worker started",
+            next_action="Inspect the terminal job result; do not restart this worker.",
+            meta={"job_id": job_id, "status": running.get("status")},
+        )
     JOB_MANAGER.touch_heartbeat(job_id, {"phase": "starting", "elapsed_seconds": 0})
 
     def _beat(progress: dict) -> None:
@@ -620,23 +781,8 @@ def run_worker(job_id: str) -> dict:
 
     try:
         effective_task = job["task"]
-        if int(job.get("recovery_attempt") or 0) > 0:
-            session = SESSION_MANAGER.load_or_create(job["session_id"])
-            if not session.get("opencode_session_id"):
-                message = (
-                    "cannot recover interrupted job because its OpenCode session ID "
-                    "was not captured"
-                )
-                JOB_MANAGER.fail_job(job_id, message)
-                return make_error(
-                    "session_capture_failed",
-                    message,
-                    next_action=(
-                        "The session lock was released. Run the original task again as a "
-                        "clean invocation."
-                    ),
-                    meta={"reason": "recovery_session_unavailable", "job_id": job_id},
-                )
+        require_provider_session = int(job.get("recovery_attempt") or 0) > 0
+        if require_provider_session:
             effective_task = (
                 f"Continue the interrupted task for job {job_id}.\n"
                 f"Original task: {job['task']}\n"
@@ -651,7 +797,10 @@ def run_worker(job_id: str) -> dict:
             job.get("work_dir"),
             job.get("model"),
             on_progress=_beat,
+            allow_reuse=bool(job.get("allow_reuse", True)),
+            require_provider_session=require_provider_session,
         )
+        output.setdefault("meta", {}).setdefault("job_id", job_id)
         if output.get("ok"):
             JOB_MANAGER.complete_job(job_id, output)
         else:
@@ -679,8 +828,7 @@ def _spawn_worker(job_id: str, work_dir: str | None = None) -> dict:
         "--job-id",
         job_id,
     ]
-    # Preserve detached-worker tracebacks, including pre-handler crashes.
-    log_path = JOB_MANAGER.job_dir / "logs" / f"{job_id}.log"
+    log_path = JOB_MANAGER.log_path(job_id)
     log_handle = subprocess.DEVNULL
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -716,50 +864,71 @@ def _spawn_worker(job_id: str, work_dir: str | None = None) -> dict:
     return {"ok": True, "content": "worker started", "meta": meta}
 
 
-# The heavy diagnostic keys: the echoed prompt argv and the full (unbounded) opencode
-# logs. On a successful run these are noise the main_agent never reads — but they are
-# the bulk of the payload (100KB+ on a long verify). The full meta is already archived
-# to .workflow by write_call_meta, so dropping them from stdout loses nothing.
 _HEAVY_META_KEYS = frozenset(
     {"args", "stderr", "stderr_tail", "stdout", "cwd", "raw", "bootstrap"}
 )
 
 
+def _without_raw_args(value):
+    if isinstance(value, dict):
+        raw_args = value.get("args")
+        clean = {
+            key: _without_raw_args(child)
+            for key, child in value.items()
+            if key != "args"
+        }
+        if isinstance(raw_args, (list, tuple)):
+            clean.setdefault("argv_count", len(raw_args))
+            clean.setdefault("argv_chars", sum(len(str(arg)) for arg in raw_args))
+        return clean
+    if isinstance(value, list):
+        return [_without_raw_args(child) for child in value]
+    if isinstance(value, tuple):
+        return tuple(_without_raw_args(child) for child in value)
+    return value
+
+
 def _slim_result(result: dict) -> dict:
-    """Trim the stdout payload to what the main_agent actually consumes.
-
-    Only on success, and only the heavy diagnostic keys inside meta: top-level keys
-    (content, digest, job_id, status, session_id) and the small actionable meta
-    (policy, session_reset, ...) are kept, so submit/status/result payloads stay intact.
-    Failures pass through untouched — their stderr/args/next_action IS the diagnosis.
-    """
-    if not isinstance(result, dict) or not result.get("ok"):
-        return result
-    meta = result.get("meta")
+    """Redact every payload and trim bulky success-only diagnostics."""
+    clean, redactions = redact_value(_without_raw_args(result))
+    if not isinstance(clean, dict):
+        return clean
+    meta = clean.get("meta")
     if not isinstance(meta, dict):
-        return result
+        return clean
+    if redactions:
+        meta["boundary_redactions"] = redactions
+        meta["boundary_redaction_count"] = sum(
+            int(hit.get("count") or 0) for hit in redactions
+        )
+    if not clean.get("ok"):
+        return clean
     slim_meta = {k: v for k, v in meta.items() if k not in _HEAVY_META_KEYS}
-    return {**result, "meta": slim_meta}
+    return {**clean, "meta": slim_meta}
 
 
-def _verify_exit_code(command: str, result: dict) -> int:
-    """Nonzero exit when a verify command did NOT cleanly pass.
-
-    So a shell / CI / the run script can trust `$?` instead of parsing JSON for the
-    verdict. Scoped to `verify`: every other command keeps exit 0 on a successful call
-    (`ok` means "executed", not "passed"). The JSON is still printed before we exit, so
-    no information is lost — the code is an ADDITIONAL honest signal, not a replacement.
-
-    verdict `pass`/`skipped` (nothing to verify) and an absent verdict (delegated verify,
-    which carries no meta.verdict) -> 0, so this never breaks the delegated relay. A hard
-    call failure (`ok` false) on verify -> nonzero.
-    """
-    if command != "verify":
+def _verify_exit_code(
+    command: str, result: dict, job_command: str | None = None
+) -> int:
+    """Return nonzero when a completed verification is not a clean pass."""
+    effective_command = job_command if command in {"await", "result"} else command
+    if effective_command != "verify":
         return 0
-    if not isinstance(result, dict) or not result.get("ok"):
+    verification = result
+    if command == "result" and isinstance(result, dict):
+        stored_output = result.get("output")
+        if isinstance(stored_output, dict):
+            verification = stored_output
+    if not isinstance(verification, dict) or not verification.get("ok"):
         return 2
-    verdict = (result.get("meta") or {}).get("verdict")
-    return 0 if verdict in ("pass", "skipped", None) else 2
+    if command == "verify" and verification.get("status") in {"pending", "running"}:
+        return 0
+    verdict = (verification.get("meta") or {}).get("verdict")
+    if verdict is None:
+        verdict = validate_verification_contract(verification.get("content") or "")[
+            "verdict"
+        ]
+    return 0 if verdict == "pass" else 2
 
 
 if __name__ == "__main__":
@@ -773,6 +942,7 @@ if __name__ == "__main__":
         required=True,
         choices=[
             "init",
+            "upgrade",
             "doctor",
             "explore",
             "plan",
@@ -798,7 +968,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--fresh-session",
         action="store_true",
-        help="force a new main session ID, bypassing cache",
+        help="force a new main session ID and bypass evidence reuse",
     )
     parser.add_argument(
         "--work-dir",
@@ -818,7 +988,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--job-command",
         default="explore",
-        choices=["explore", "plan", "analyze", "verify", "sweep"],
+        choices=["explore", "plan", "analyze", "verify"],
         help="workflow command to execute asynchronously via submit",
     )
     parser.add_argument(
@@ -852,17 +1022,25 @@ if __name__ == "__main__":
             raise SystemExit(f"cannot read prompt file: {exc}")
     if (
         args.command
-        in {"explore", "plan", "analyze", "execute", "verify", "submit", "await"}
+        in {"explore", "plan", "analyze", "verify", "submit", "await"}
         and not prompt
     ):
         raise SystemExit("--prompt or --prompt-file is required for this command")
     if args.command in {"status", "result", "worker"} and not args.job_id:
         raise SystemExit("--job-id is required for this command")
 
-    effective_session = resolve_session_id(args.session, fresh=args.fresh_session)
+    effective_session = resolve_session_id(
+        args.session, fresh=args.fresh_session, project_root=work_dir
+    )
+    allow_reuse = not args.fresh_session
     if args.command == "submit":
         result = submit(
-            args.job_command, prompt, effective_session, work_dir, args.model
+            args.job_command,
+            prompt,
+            effective_session,
+            work_dir,
+            args.model,
+            allow_reuse,
         )
     elif args.command == "await":
         result = await_job(
@@ -873,6 +1051,7 @@ if __name__ == "__main__":
             args.model,
             args.poll_interval,
             args.poll_timeout,
+            allow_reuse,
         )
     elif args.command == "status":
         result = get_status(args.job_id)
@@ -881,9 +1060,28 @@ if __name__ == "__main__":
     elif args.command == "worker":
         result = run_worker(args.job_id)
     elif should_run_in_background(args.command):
-        result = submit(args.command, prompt, effective_session, work_dir, args.model)
+        result = submit(
+            args.command,
+            prompt,
+            effective_session,
+            work_dir,
+            args.model,
+            allow_reuse,
+        )
     else:
-        result = run(args.command, prompt, effective_session, work_dir, args.model)
+        result = run(
+            args.command,
+            prompt,
+            effective_session,
+            work_dir,
+            args.model,
+            allow_reuse=allow_reuse,
+        )
+    exit_job_command = args.job_command
+    if args.command == "result" and args.job_id:
+        stored_job = JOB_MANAGER.get_job(args.job_id)
+        if stored_job:
+            exit_job_command = str(stored_job.get("command") or exit_job_command)
     result = _slim_result(result)
     print(json.dumps(result, indent=2) if args.pretty else json.dumps(result))
-    raise SystemExit(_verify_exit_code(args.command, result))
+    raise SystemExit(_verify_exit_code(args.command, result, exit_job_command))

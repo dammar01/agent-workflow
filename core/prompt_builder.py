@@ -37,144 +37,6 @@ def _cap_task(task: str) -> tuple[str, dict | None]:
     }
 
 
-# Shared by both fan-out shapes. Kept in one place so the graph and no-graph plans
-# cannot drift into giving the second agent two different sets of rules.
-_SUBAGENT_RULES = [
-    "- use your `task` tool with the `explore` subagent — read-only, and the one this"
-    " runtime is permitted to spawn. Using it is MANDATORY when the tool is present;"
-    " reading the slices yourself instead is a failed instruction, not a shortcut",
-    "- do NOT target the `general` subagent: it can write, so a read-only primary agent"
-    " is denied from spawning it and the call fails. `scout` is allowed too, but only for"
-    " external dependency/doc lookups — never for slices of this repo",
-    "- spawn ONE sub-agent per slice below, all at once, not one after another",
-    "- each sub-agent is scope-bounded to ITS OWN slice; it must not read outside it",
-    "- keep each sub-agent's report SHORT: max 5 grounded claims, each one line with file:line",
-    "- you merge the reports; sub-agent text is raw material, not the answer",
-    "- tag every merged claim with its origin slice as a leading [cN] (e.g. `[c3] Router routes by command string [core/router.py:16]`)",
-    "- a slice that yields nothing relevant: say so under that slice, do not pad it",
-    "- list the slices you actually dispatched on the `subagents:` line",
-    "- if you do not fan out, say which of these three it was, then read the slices"
-    " yourself in order:",
-    "  · no tool at all → `subagents: none (no spawn tool; tools: <name, name, ...>)`"
-    " naming EVERY tool you do have. Claiming 'no spawn tool' while a `task` tool is in"
-    " your list is a false report",
-    "  · the tool exists but the call was refused → `subagents: none (denied: <the exact"
-    " error/rule text>)`. Do not silently downgrade a refusal into a preference",
-    "  · you chose not to → `subagents: none (declined: <reason>)`",
-    "- never report fan-out you did not perform; an honest sequential read is a valid result, a false claim is not",
-]
-
-# Graph-free partition. Deliberately by INVESTIGATION ANGLE rather than by directory:
-# the second agent does not know the layout before it reads, so "src/ vs lib/" is a
-# guess, while "entry points vs callers vs config" is answerable in any repo.
-_BLIND_SLICES = [
-    "c1: entry points and command/request routing — how execution starts and where it is dispatched",
-    "c2: the core modules that do the work for this task, and the data they pass between them",
-    "c3: callers and consumers of those modules — who would break if they changed (reverse dependencies)",
-    "c4: configuration, defaults, and tests that pin the behaviour under discussion",
-]
-
-
-def _subagent_block(graph_leads: dict | None) -> list[str]:
-    """Explicit fan-out instruction: one sub-agent per slice of the codebase.
-
-    Two shapes. With at least two graph clusters, the clusters ARE the slices — that is
-    the better partition, because it comes from the actual import graph. Without them
-    the work is split by investigation angle instead: a repo with no graphify output is
-    the one where a serial read costs the most, so falling back to no fan-out at all
-    optimised the wrong case.
-
-    Output stays terse because fan-out multiplies response volume; per-slice findings
-    are capped and attribution uses compact tags.
-    """
-    clusters = (
-        []
-        if (graph_leads or {}).get("stale")
-        else ((graph_leads or {}).get("communities") or [])
-    )
-
-    if len(clusters) >= 2:
-        lines = [
-            "[SUBAGENT_PLAN — dispatch these in parallel, then merge]",
-            *_SUBAGENT_RULES,
-        ]
-        for cluster in clusters:
-            members = ", ".join(cluster.get("files") or [])
-            lines.append(f"- c{cluster['community']}: {members}")
-        lines.append("")
-        return lines
-
-    return [
-        "[SUBAGENT_PLAN — dispatch these in parallel, then merge]",
-        "- no dependency graph is available for this project, so the slices below are by"
-        " investigation angle, not by file. Each sub-agent finds its own files.",
-        *_SUBAGENT_RULES,
-        *(f"- {slice_}" for slice_ in _BLIND_SLICES),
-        "- a slice that turns out not to apply to this task: report it empty, do not"
-        " invent scope for it",
-        "",
-    ]
-
-
-def _graph_block(graph_leads: dict | None) -> list[str]:
-    """Ranked shortlist from graphify, framed as leads.
-
-    Framing matters: a graph edge says two things are related, not that a claim is
-    true. Presented as findings these would come back as `grounded` without anyone
-    opening the file.
-    """
-    if not graph_leads or not graph_leads.get("files"):
-        return []
-
-    stale = graph_leads.get("stale")
-    if stale:
-        lines = [
-            "[GRAPH_HINT — from graphify-out/graph.json, but the graph is OLDER than the current sources]",
-            "- treat these as a WEAK hint only, NOT the current structure: files may be renamed, moved, or deleted",
-            "- confirm each still exists and is relevant by reading it; if the graph looks wrong, ignore it and traverse from the task directly",
-        ]
-    else:
-        lines = [
-            "[GRAPH_LEADS — from graphify-out/graph.json; ranked STARTING POINTS, not evidence]",
-            "- open these first, then follow the code; a graph edge is never a substitute for reading the file",
-            "- a file listed here that turns out to be irrelevant is expected — say so rather than forcing it into the answer",
-        ]
-
-    lines.append("candidate_files:")
-    for row in graph_leads["files"]:
-        community = row.get("community")
-        # A stale graph's community numbers are as suspect as its edges — omit them.
-        suffix = "" if stale or community is None else f" [community {community}]"
-        lines.append(f"- {row['file']}{suffix}")
-
-    if not stale and graph_leads.get("communities"):
-        lines.append("clusters:")
-        for cluster in graph_leads["communities"]:
-            members = ", ".join(cluster.get("files") or [])
-            lines.append(f"- community {cluster['community']}: {members}")
-
-    lines.append("")
-    return lines
-
-
-def _compact_leads(graph_leads: dict | None, max_files: int = 6) -> dict | None:
-    """A shorter lead list, clusters dropped.
-
-    The whole prompt travels as one command-line argument and the Windows shell caps
-    that at 8191 characters. Verification prompts are already the longest scaffolding
-    in this file (the severity/origin/routing contract), so the leads they carry have
-    to be the short form — and clusters are the part verification does not use, since
-    it is not fanning out.
-    """
-    if not graph_leads or not graph_leads.get("files"):
-        return graph_leads
-    return {
-        **graph_leads,
-        "files": graph_leads["files"][:max_files],
-        "communities": [],
-    }
-
-
 # Bounds, not preferences. The whole prompt is one command-line argument capped at 8191
 # characters on Windows, so an unbounded file list would push a verification prompt past
 # the shell limit and fail before opencode ran.
@@ -230,11 +92,9 @@ def _sidecar_block(
 ) -> list[str]:
     """Anchor pointing the second agent at the runtime evidence files.
 
-    The ranked leads and cached facts no longer ride in the command-line prompt (that
-    argv is capped at 8191 chars on Windows, and an uncapped lead list is what blew past
-    it). They are written to runtime files the second agent reads itself; this block only
-    NAMES those files. The reading rules and the fan-out protocol live in AGENTS.md so
-    they cost zero prompt bytes per call.
+    Ranked leads and cached facts live in runtime files because the command-line prompt
+    is capped at 8191 characters on Windows. This block only names those sidecars; the
+    reading and fan-out protocol lives in AGENTS.md.
     """
     if not runtime_dir:
         return []
@@ -334,8 +194,7 @@ def build_prompt(
             ]
         )
 
-    # ROLE_VERIFICATION also covers init/doctor/sweep/submit, which want the terse
-    # fallback — only /.verify gets the severity-tiered contract.
+    # Only /.verify gets the severity-tiered contract; other routes use the terse fallback.
     if command == "verify":
         return "\n".join(
             [

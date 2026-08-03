@@ -75,7 +75,7 @@ def local_checks(report: Report) -> None:
     print("\n[LOCAL] no opencode, no quota")
 
     project = Path(tempfile.mkdtemp(prefix="e2e-project-"))
-    (project / ".git").mkdir()
+    subprocess.run(["git", "init", "-q", str(project)], check=True)
     try:
         code, out = _run_cli("--command", "init", "--work-dir", str(project), "--pretty")
         payload = _json_from(out) or {}
@@ -84,6 +84,13 @@ def local_checks(report: Report) -> None:
         report.check(
             "init generates run scripts",
             any((project / ".workflow").glob("run.*")),
+        )
+        runner = next((project / ".workflow").glob("run.*"), None)
+        runner_text = runner.read_text(encoding="utf-8-sig") if runner else ""
+        report.check(
+            "runner keeps sweep on the local command path",
+            "verify','sweep" not in runner_text
+            and "verify sweep " not in runner_text,
         )
         config_path = project / ".workflow" / "config.json"
         if config_path.exists():
@@ -113,6 +120,24 @@ def local_checks(report: Report) -> None:
         code, out = _run_cli("--command", "inspect", "--work-dir", str(project), "--pretty")
         report.check("inspect returns ok", (_json_from(out) or {}).get("ok") is True)
 
+        code, out = _run_cli(
+            "--command", "sweep", "--session", "e2e-local", "--work-dir", str(project), "--pretty"
+        )
+        sweep = _json_from(out) or {}
+        report.check(
+            "sweep runs locally and writes a report",
+            code == 0 and sweep.get("ok") is True
+            and bool(sweep.get("meta", {}).get("report")),
+            f"rc={code}",
+        )
+
+        code, out = _run_cli("--command", "upgrade", "--work-dir", str(project), "--pretty")
+        report.check(
+            "upgrade is exposed by the CLI",
+            code == 0 and (_json_from(out) or {}).get("ok") is True,
+            f"rc={code}",
+        )
+
         code, out = _run_cli("--command", "clean", "--work-dir", str(project), "--pretty")
         report.check("clean returns ok", (_json_from(out) or {}).get("ok") is True)
     finally:
@@ -133,6 +158,18 @@ def local_checks(report: Report) -> None:
         )
     else:
         report.record("shipped example has no placeholder models", SKIP, "example missing")
+
+    from config.settings import COMPONENT_VERSIONS, TOOL_VERSION
+    from core.workflow_runtime import CONFIG_VERSION
+
+    manifest = json.loads((REPO_ROOT / "dist" / "manifest.json").read_text(encoding="utf-8"))
+    report.check(
+        "release versions are synchronized",
+        TOOL_VERSION == CONFIG_VERSION == manifest.get("version") == "3.4.1"
+        and set(COMPONENT_VERSIONS.values()) == {"3.4.1"}
+        and set((manifest.get("versions") or {}).values()) == {"3.4.1"},
+        f"tool={TOOL_VERSION}, config={CONFIG_VERSION}, manifest={manifest.get('version')}",
+    )
 
 
 def integrity_checks(report: Report) -> None:
@@ -195,7 +232,7 @@ def integrity_checks(report: Report) -> None:
         lock_freed = not (facts_path.with_name("facts.jsonl.lock")).exists()
         report.check("fact_store: lock acquires and releases", lock_held and lock_freed)
 
-        # --- lazy upgrade gate (P0.7) ---
+        # --- lazy upgrade gate ---
         cfg_path = workflow_paths(project)["config"]
         config = json.loads(cfg_path.read_text(encoding="utf-8"))
         report.check(
@@ -214,49 +251,23 @@ def integrity_checks(report: Report) -> None:
         report.check("upgrade: regenerates scripts when runtime bumped",
                      len(r2["regenerated_scripts"]) > 0, f"{len(r2['regenerated_scripts'])} script(s)")
 
-        # --- fan-out capability probe (P1.6) ---
+        # --- fan-out capability probe ---
         from core.contract import reported_no_spawn_tool
         from core.workflow_runtime import fanout_capability, set_fanout_capability
 
         report.check(
-            "P1.6: detects opencode 'no spawn tool' self-report",
+            "fan-out: detects opencode 'no spawn tool' self-report",
             reported_no_spawn_tool("subagents: none (no spawn tool; tools: read, grep)")
             and not reported_no_spawn_tool("subagents: c1, c2"),
         )
-        report.check("P1.6: capability unprobed is None", fanout_capability(project) is None)
+        report.check("fan-out: capability unprobed is None", fanout_capability(project) is None)
         set_fanout_capability(project, False)
-        report.check("P1.6: capability persists OFF once learned",
+        report.check("fan-out: capability persists OFF once learned",
                      fanout_capability(project) is False)
     finally:
         shutil.rmtree(project, ignore_errors=True)
 
-    # --- graph-lead framing (P1.7), pure functions ---
-    from core.prompt_builder import _graph_block, _subagent_block
-
-    leads = {
-        "files": [{"file": "a.py", "community": 1}],
-        "communities": [
-            {"community": 1, "files": ["a.py", "b.py"]},
-            {"community": 2, "files": ["c.py"]},
-        ],
-    }
-    fresh_block = "\n".join(_graph_block({**leads, "stale": False}))
-    stale_block = "\n".join(_graph_block({**leads, "stale": True}))
-    report.check("P1.7: fresh graph framed as GRAPH_LEADS with clusters",
-                 "GRAPH_LEADS" in fresh_block and "clusters:" in fresh_block)
-    report.check(
-        "P1.7: stale graph downgraded to weak GRAPH_HINT, clusters dropped",
-        "GRAPH_HINT" in stale_block and "GRAPH_LEADS" not in stale_block
-        and "clusters:" not in stale_block,
-    )
-    fresh_fan = "\n".join(_subagent_block({**leads, "stale": False}))
-    stale_fan = "\n".join(_subagent_block({**leads, "stale": True}))
-    report.check(
-        "P1.7: stale graph falls back to blind fan-out slices",
-        "investigation angle" in stale_fan and "investigation angle" not in fresh_fan,
-    )
-
-    # --- Option A: CONSTRAINTS deduped to AGENTS.md, OUTPUT_FORMAT kept ---
+    # --- active fan-out contract and compact prompt ---
     from config.roles import ROLE_EXPLORATION
     from core.prompt_builder import build_prompt
 
@@ -266,6 +277,9 @@ def integrity_checks(report: Report) -> None:
         session_id="e2e",
         command="explore",
         project_root=str(REPO_ROOT),
+        runtime_dir=str(REPO_ROOT / ".workflow" / "sessions" / "e2e" / "runtime"),
+        has_leads=True,
+        subagent_fanout=True,
     )
     verify_prompt = build_prompt(
         role="verification",
@@ -274,28 +288,28 @@ def integrity_checks(report: Report) -> None:
         command="verify",
         project_root=str(REPO_ROOT),
     )
-    # The verbose routing table moved OUT of the per-call prompt into AGENTS.md; only
-    # the anchor + a pointer to AGENTS.md remain. If the full table leaks back into the
-    # prompt the dedupe has regressed.
+    agents_contract = (REPO_ROOT / "dist" / "config" / "opencode" / "AGENTS.md").read_text(
+        encoding="utf-8"
+    )
     report.check(
-        "OptionA: verify prompt drops the full routing table, points to AGENTS.md",
+        "verify prompt keeps the compact AGENTS.md contract",
         "introduced/regression + in_scope" not in verify_prompt
         and "AGENTS.md" in verify_prompt,
     )
     report.check(
-        "OptionA: evidence prompt drops the verbose rulebook, points to AGENTS.md",
+        "evidence prompt points to sidecars and the canonical fan-out contract",
         "AGENTS.md" in explore_prompt
-        and "never mix them into codebase" not in explore_prompt,
+        and "leads.json" in explore_prompt
+        and "FAN-OUT call" in explore_prompt
+        and "wf-slice" in agents_contract,
     )
-    # OUTPUT_FORMAT is the structural contract executor.py enforces (marker scan). It
-    # must survive the trim, or every delegated call fails invalid_evidence.
     report.check(
-        "OptionA: OUTPUT_FORMAT skeleton kept (executor marker contract intact)",
+        "OUTPUT_FORMAT skeleton remains enforceable",
         "[EVIDENCE]" in explore_prompt and "[DIGEST]" in explore_prompt
         and "[VERIFICATION]" in verify_prompt,
     )
     report.check(
-        "OptionA: verify prompt stays under the Windows 8191-char argv cap",
+        "verify prompt stays under the Windows 8191-char argv cap",
         len(verify_prompt) < 8191,
         f"{len(verify_prompt)} chars",
     )
@@ -327,10 +341,19 @@ def integrity_checks(report: Report) -> None:
         and slim["meta"]["policy"]["verify_mode"] == "delegated"
         and slim["meta"]["job_id"] == "job_1",
     )
-    failure = {"ok": False, "content": "boom", "meta": {"stderr": "trace", "args": ["x"]}}
+    secret = "sk-" + "A" * 36
+    failure = {
+        "ok": False,
+        "content": f"boom {secret}",
+        "meta": {"stderr": f"trace {secret}", "args": ["opencode", secret]},
+    }
+    slim_failure = _slim_result(failure)
     report.check(
-        "slim: failure passes through untouched (stderr/args = diagnosis)",
-        _slim_result(failure) == failure,
+        "slim: failure keeps sanitized diagnostics without raw argv",
+        secret not in json.dumps(slim_failure)
+        and "args" not in slim_failure.get("meta", {})
+        and slim_failure.get("meta", {}).get("argv_count") == 2
+        and "stderr" in slim_failure.get("meta", {}),
     )
 
 
@@ -345,7 +368,8 @@ def installer_checks(report: Report) -> None:
 
     fake_home = Path(tempfile.mkdtemp(prefix="e2e-home-"))
     env = {**os.environ, "PYTHONPATH": str(REPO_ROOT), "PYTHONUTF8": "1",
-           "USERPROFILE": str(fake_home), "HOME": str(fake_home)}
+           "USERPROFILE": str(fake_home), "HOME": str(fake_home),
+           "AGENT_HOME": str(fake_home)}
     try:
         dry = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py")],
@@ -367,6 +391,16 @@ def installer_checks(report: Report) -> None:
         report.check("skills installed", len(skills) >= 10, f"{len(skills)} file(s)")
         settings = fake_home / ".claude" / "settings.json"
         report.check("settings.json installed", settings.exists())
+        intent_map = fake_home / ".claude" / "hooks" / "intent-map.json"
+        report.check("intent-map.json installed", intent_map.exists())
+        manifest = json.loads((REPO_ROOT / "dist" / "manifest.json").read_text(encoding="utf-8"))
+        report.check(
+            "manifest tracks intent-map.json",
+            any(
+                entry.get("path") == "claude/hooks/intent-map.json"
+                for entry in manifest.get("files", [])
+            ),
+        )
 
         if settings.exists():
             try:
@@ -397,8 +431,305 @@ def installer_checks(report: Report) -> None:
             "replace: " not in second.stdout and "create: " not in second.stdout,
             "second apply reported writes" if "create: " in second.stdout else "",
         )
+
+        checked = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+        )
+        report.check(
+            "apply followed by check is clean",
+            checked.returncode == 0,
+            f"rc={checked.returncode}",
+        )
+
+        loaded = json.loads(settings.read_text(encoding="utf-8"))
+        prompt_entries = loaded.setdefault("hooks", {}).setdefault("UserPromptSubmit", [])
+        prompt_entries[0].setdefault("hooks", []).append(
+            {"type": "command", "command": "user-hook --keep"}
+        )
+        settings.write_text(json.dumps(loaded, indent=2) + "\n", encoding="utf-8")
+        command_only = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--apply", "--only-command"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+        )
+        loaded = json.loads(settings.read_text(encoding="utf-8"))
+        hook_text = json.dumps(loaded.get("hooks", {}))
+        report.check(
+            "only-command removes the shipped intent hook from an existing install",
+            command_only.returncode == 0 and "intent-gate-set" not in hook_text,
+            f"rc={command_only.returncode}",
+        )
+        report.check(
+            "only-command preserves a user hook in the shared entry",
+            "user-hook --keep" in hook_text,
+        )
+        checked = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+        )
+        report.check(
+            "command-only install passes check",
+            checked.returncode == 0,
+            f"rc={checked.returncode}",
+        )
+
+        auto_intent = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--apply", "--auto-intent"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+        )
+        loaded = json.loads(settings.read_text(encoding="utf-8"))
+        hook_text = json.dumps(loaded.get("hooks", {}))
+        report.check(
+            "auto-intent restores the shipped intent hook",
+            auto_intent.returncode == 0 and "intent-gate-set" in hook_text,
+            f"rc={auto_intent.returncode}",
+        )
+        report.check(
+            "auto-intent still preserves the user hook",
+            "user-hook --keep" in hook_text,
+        )
+
+        loaded["hooks"].pop("SessionStart", None)
+        settings.write_text(json.dumps(loaded, indent=2) + "\n", encoding="utf-8")
+        settings_drift = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+        )
+        report.check(
+            "check detects installed settings drift",
+            settings_drift.returncode == 1 and "claude/settings.json" in settings_drift.stdout,
+            f"rc={settings_drift.returncode}",
+        )
+        settings_repair = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--apply", "--auto-intent"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+        )
+        report.check("apply repairs installed settings drift", settings_repair.returncode == 0)
+
+        opencode_config = fake_home / ".config" / "opencode" / "opencode.json"
+        opencode = json.loads(opencode_config.read_text(encoding="utf-8"))
+        permission = opencode["agent"]["plan"]["permission"]
+        permission["external_directory"] = "allow"
+        permission["bash"]["cat *"] = "allow"
+        opencode_config.write_text(json.dumps(opencode, indent=2) + "\n", encoding="utf-8")
+        opencode_drift = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+        )
+        report.check(
+            "check detects installed OpenCode policy drift",
+            opencode_drift.returncode == 1 and "opencode/opencode.json" in opencode_drift.stdout,
+            f"rc={opencode_drift.returncode}",
+        )
+        opencode_repair = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--apply", "--auto-intent"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+        )
+        repaired_opencode = json.loads(opencode_config.read_text(encoding="utf-8"))
+        repaired_permission = repaired_opencode["agent"]["plan"]["permission"]
+        repaired_bash = repaired_permission["bash"]
+        report.check(
+            "apply restores enforced OpenCode plan policy",
+            opencode_repair.returncode == 0
+            and repaired_permission["external_directory"] == "deny"
+            and next(iter(repaired_bash.items())) == ("*", "deny")
+            and "cat *" not in repaired_bash,
+            f"rc={opencode_repair.returncode}",
+        )
+        repaired_check = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+        )
+        report.check("repaired install passes check", repaired_check.returncode == 0)
+
+        reordered = json.loads(opencode_config.read_text(encoding="utf-8"))
+        reordered_bash = reordered["agent"]["plan"]["permission"]["bash"]
+        catch_all = reordered_bash.pop("*")
+        reordered_bash["*"] = catch_all
+        opencode_config.write_text(json.dumps(reordered, indent=2) + "\n", encoding="utf-8")
+        order_drift = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+        )
+        report.check(
+            "check detects semantic OpenCode rule-order drift",
+            order_drift.returncode == 1 and "opencode/opencode.json" in order_drift.stdout,
+            f"rc={order_drift.returncode}",
+        )
+        order_repair = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--apply", "--auto-intent"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+        )
+        canonical = json.loads(opencode_config.read_text(encoding="utf-8"))
+        canonical_bash = canonical["agent"]["plan"]["permission"]["bash"]
+        report.check(
+            "apply restores canonical OpenCode rule order",
+            order_repair.returncode == 0
+            and next(iter(canonical_bash.items())) == ("*", "deny"),
+            f"rc={order_repair.returncode}",
+        )
+
+        valid_settings = settings.read_text(encoding="utf-8")
+        settings.write_text("[]\n", encoding="utf-8")
+        non_object_settings = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+        )
+        report.check(
+            "check rejects non-object settings JSON without traceback",
+            non_object_settings.returncode == 1
+            and "claude/settings.json" in non_object_settings.stdout
+            and "Traceback" not in non_object_settings.stderr,
+            f"rc={non_object_settings.returncode}",
+        )
+        settings.write_text(valid_settings, encoding="utf-8")
+
+        valid_opencode = opencode_config.read_text(encoding="utf-8")
+        opencode_config.write_text("[]\n", encoding="utf-8")
+        non_object_opencode = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+        )
+        report.check(
+            "check rejects non-object OpenCode JSON without traceback",
+            non_object_opencode.returncode == 1
+            and "opencode/opencode.json" in non_object_opencode.stdout
+            and "Traceback" not in non_object_opencode.stderr,
+            f"rc={non_object_opencode.returncode}",
+        )
+        opencode_config.write_text(valid_opencode, encoding="utf-8")
+
+        global_agents = fake_home / ".config" / "opencode" / "agents"
+        report.check(
+            "plain install places custom agents in the global fallback",
+            len(list(global_agents.glob("wf-*.md"))) >= 5,
+        )
+        project = Path(tempfile.mkdtemp(prefix="e2e-install-project-"))
+        try:
+            (project / ".git").mkdir()
+            project_install = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPO_ROOT / "install.py"),
+                    "--apply",
+                    "--init-project",
+                    str(project),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+            )
+            report.check(
+                "project install places custom agents in project scope",
+                project_install.returncode == 0
+                and len(list((project / ".opencode" / "agents").glob("wf-*.md"))) >= 5,
+                f"rc={project_install.returncode}",
+            )
+            project_check = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPO_ROOT / "install.py"),
+                    "--check",
+                    "--init-project",
+                    str(project),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+            )
+            report.check(
+                "project-scoped install passes check",
+                project_check.returncode == 0,
+                f"rc={project_check.returncode}",
+            )
+        finally:
+            shutil.rmtree(project, ignore_errors=True)
     finally:
         shutil.rmtree(fake_home, ignore_errors=True)
+
+    rollback_home = Path(tempfile.mkdtemp(prefix="e2e-rollback-home-"))
+    rollback_env = {
+        **os.environ,
+        "PYTHONPATH": str(REPO_ROOT),
+        "PYTHONUTF8": "1",
+        "USERPROFILE": str(rollback_home),
+        "HOME": str(rollback_home),
+        "AGENT_HOME": str(rollback_home),
+    }
+    try:
+        installed = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--apply"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=rollback_env,
+        )
+        receipts = sorted(
+            (rollback_home / ".claude" / "backups").glob("install_*/install_receipt.json")
+        )
+        receipt = json.loads(receipts[-1].read_text(encoding="utf-8")) if receipts else {}
+        receipt_keys = {entry.get("key") for entry in receipt.get("entries", [])}
+        report.check(
+            "receipt v2 covers settings and install mode with post hashes",
+            installed.returncode == 0
+            and receipt.get("schema_version") == 2
+            and {"claude/settings.json", "claude/workflow-install-mode.json"} <= receipt_keys
+            and all(entry.get("post_sha256") for entry in receipt.get("entries", [])),
+            f"rc={installed.returncode}, entries={len(receipt.get('entries', []))}",
+        )
+
+        rolled_back = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--rollback", "--apply"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=rollback_env,
+        )
+        report.check(
+            "clean rollback removes files created by the install",
+            rolled_back.returncode == 0
+            and not (rollback_home / ".claude" / "CLAUDE.md").exists()
+            and not (rollback_home / ".claude" / "settings.json").exists()
+            and not (rollback_home / ".claude" / ".workflow-install-mode.json").exists(),
+            f"rc={rolled_back.returncode}",
+        )
+
+        subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--apply"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=rollback_env,
+            check=True,
+        )
+        edited = rollback_home / ".claude" / "CLAUDE.md"
+        edited.write_text(edited.read_text(encoding="utf-8") + "\nuser edit\n", encoding="utf-8")
+        untouched_peer = rollback_home / ".claude" / "settings.json"
+        refused = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--rollback", "--apply"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=rollback_env,
+        )
+        report.check(
+            "rollback refuses edited destinations without partial mutation",
+            refused.returncode == 2
+            and edited.exists()
+            and edited.read_text(encoding="utf-8").endswith("user edit\n")
+            and untouched_peer.exists(),
+            f"rc={refused.returncode}",
+        )
+    finally:
+        shutil.rmtree(rollback_home, ignore_errors=True)
 
 
 def delegated_checks(report: Report, session_id: str) -> None:
@@ -406,44 +737,61 @@ def delegated_checks(report: Report, session_id: str) -> None:
     print("\n[DELEGATED] real opencode — costs quota")
     from core.contract import REQUIRED_FIELDS
 
-    script = REPO_ROOT / ".workflow" / ("run.ps1" if os.name == "nt" else "run.sh")
-    if not script.exists():
-        report.record("delegated commands", SKIP, "no .workflow/run script")
-        return
-
-    # sweep is local and returns a git-diff report, not delegated evidence.
-    cases = [
-        ("explore", "Sebutkan entry point utama. Maksimal 3 baris.", "evidence"),
-        ("sweep", "scan git diff, identify impact", "local-report"),
-    ]
-    for command, task, contract in cases:
-        runner = (["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)]
-                  if os.name == "nt" else [str(script)])
-        result = subprocess.run(
-            [*runner, command, task, session_id],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            cwd=str(REPO_ROOT),
+    project = Path(tempfile.mkdtemp(prefix="e2e-delegated-project-"))
+    try:
+        subprocess.run(["git", "init", "-q", str(project)], check=True)
+        (project / "app.py").write_text(
+            "def main():\n    return 'ready'\n",
+            encoding="utf-8",
         )
-        payload = _json_from(result.stdout or "")
-        if payload is None:
-            report.record(f"{command} returns JSON", FAIL, "no JSON in output")
-            continue
-        if not report.check(f"{command} returns ok", payload.get("ok") is True,
-                            str(payload.get("meta", {}).get("error_type", ""))):
-            continue
-        content = (payload.get("content") or "").lower()
+        code, output = _run_cli("--command", "init", "--work-dir", str(project), "--pretty")
+        script = project / ".workflow" / ("run.ps1" if os.name == "nt" else "run.sh")
+        if code != 0 or not script.exists():
+            report.record("delegated commands", SKIP, "fresh workflow runner was not generated")
+            return
 
-        if contract == "evidence":
-            report.check(f"{command} carries evidence markers",
-                         any(m in content for m in ("[evidence]", "[digest]", "grounded:")))
-            for field in REQUIRED_FIELDS.get(command, ()):
-                report.check(f"{command} has required field '{field}'", field in content)
-        else:
-            report.check(
-                f"{command} reports changed files",
-                any(k in content for k in ("changed", "diff", "modified", "no changes")),
-                "local git report, not an evidence block",
+        # sweep is local and returns a git-diff report, not delegated evidence.
+        cases = [
+            ("explore", "Sebutkan entry point utama. Maksimal 3 baris.", "evidence"),
+            ("sweep", "scan git diff, identify impact", "local-report"),
+        ]
+        for command, task, contract in cases:
+            runner = (
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)]
+                if os.name == "nt" else [str(script)]
             )
+            result = subprocess.run(
+                [*runner, command, task, session_id],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                cwd=str(project),
+            )
+            payload = _json_from(result.stdout or "")
+            if payload is None:
+                report.record(f"{command} returns JSON", FAIL, "no JSON in output")
+                continue
+            if not report.check(
+                f"{command} returns ok",
+                payload.get("ok") is True,
+                str(payload.get("meta", {}).get("error_type", "")),
+            ):
+                continue
+            content = (payload.get("content") or "").lower()
+
+            if contract == "evidence":
+                report.check(
+                    f"{command} carries evidence markers",
+                    any(m in content for m in ("[evidence]", "[digest]", "grounded:")),
+                )
+                for field in REQUIRED_FIELDS.get(command, ()):
+                    report.check(f"{command} has required field '{field}'", field in content)
+            else:
+                report.check(
+                    f"{command} reports changed files",
+                    any(k in content for k in ("changed", "diff", "modified", "no changes")),
+                    "local git report, not an evidence block",
+                )
+    finally:
+        shutil.rmtree(project, ignore_errors=True)
 
 
 def main() -> int:

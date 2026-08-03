@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Validate that the standalone skill files and CLAUDE.md's command registry agree.
 
-Direction inverted in v3.4.0 (P1.5): `dist/config/claude/skills/<name>.md` is now the
-SINGLE source of truth for every skill body. CLAUDE.md no longer embeds skill bodies —
-it carries only the orchestrator contract plus a command registry — so there is nothing
-to generate anymore. What can still drift is the SET of skills: a new skills/<name>.md
-added without registering `/.name` in CLAUDE.md (or a registry entry with no file).
+`dist/config/claude/skills/<name>.md` is the single source of truth for every skill body.
+CLAUDE.md carries only the orchestrator contract plus a command registry, so there is
+nothing to generate. What can still drift is the set of skills: a new skills/<name>.md
+added without registering `/.name` in CLAUDE.md, or a registry entry with no file.
 
 This tool checks that bijection. It writes nothing.
 

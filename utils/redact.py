@@ -1,13 +1,4 @@
-"""Credential-shaped content: detection and redaction.
-
-Shared on purpose. These patterns started life inside `tools/extract_config.py`, where
-they guarded the maintainer's publish step — so the one path that never had them was the
-runtime evidence path, the only one that reads arbitrary output from another agent every
-single call.
-
-Deliberately broad: a false positive costs one manual look, a false negative costs a
-permanent leak — into an artifact, a fact store, and a transcript at once.
-"""
+"""Detection and redaction of credential-shaped runtime data."""
 import re
 
 SECRET_PATTERNS: list[tuple[re.Pattern, str]] = [
@@ -20,9 +11,16 @@ SECRET_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-]{20,}"), "bearer token"),
     (
         re.compile(
-            r"(?i)\"?(api[_-]?key|secret|password|access[_-]?token)\"?\s*[:=]\s*\"[^\"]{12,}\""
+            r"(?i)\"?(api[_-]?key|secret|password|access[_-]?token)\"?\s*[:=]\s*"
+            r"(?:\"[^\"]{12,}\"|'[^']{12,}'|(?!\[REDACTED:)[^\s,;]{12,})"
         ),
         "inline credential",
+    ),
+    (
+        re.compile(
+            r"(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^@\s]+@"
+        ),
+        "credential-bearing URL",
     ),
 ]
 
@@ -52,3 +50,30 @@ def redact(text: str) -> tuple[str, list[dict]]:
         if count:
             hits.append({"kind": why, "count": count})
     return out, hits
+
+
+def redact_value(value):
+    """Recursively redact JSON-like data without retaining matched values."""
+    counts: dict[str, int] = {}
+
+    def visit(item):
+        if isinstance(item, str):
+            clean, hits = redact(item)
+            for hit in hits:
+                kind = str(hit["kind"])
+                counts[kind] = counts.get(kind, 0) + int(hit["count"])
+            return clean
+        if isinstance(item, dict):
+            return {
+                visit(key) if isinstance(key, str) else key: visit(child)
+                for key, child in item.items()
+            }
+        if isinstance(item, list):
+            return [visit(child) for child in item]
+        if isinstance(item, tuple):
+            return tuple(visit(child) for child in item)
+        return item
+
+    clean = visit(value)
+    hits = [{"kind": kind, "count": count} for kind, count in counts.items()]
+    return clean, hits

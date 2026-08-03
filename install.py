@@ -17,8 +17,9 @@ which every project on the machine reads; a mistake here is not contained to one
 Safety:
 - everything it would overwrite is backed up first, under a timestamped folder
 - managed blocks are replaced BETWEEN markers, so hand-written config around them survives
-- settings.json only gains keys it is missing; existing values are reported, never
-  silently replaced
+- settings.json gains missing keys and refreshes only workflow-owned hook entries;
+  unrelated user hooks and values are preserved
+- rollback verifies destination and backup hashes before restoring or deleting anything
 """
 
 import argparse
@@ -71,16 +72,38 @@ class Plan:
 # guess. A backup directory alone cannot be undone safely: it holds the files that existed
 # BEFORE, with no record of which files the install created, and those must be deleted
 # rather than restored.
+_RECEIPT_SCHEMA_VERSION = 2
 _RECEIPT: list[dict] = []
 
 
-def _record(action: str, dest: Path, key: str, backup: Path | None) -> None:
+def _file_sha256(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _record(
+    action: str,
+    dest: Path,
+    key: str,
+    backup: Path | None,
+    pre_sha256: str | None,
+) -> None:
+    post_sha256 = _file_sha256(dest)
+    if post_sha256 is None:
+        raise OSError(f"installed destination is not a file: {dest}")
     _RECEIPT.append(
         {
             "action": action,
             "key": key,
             "dest": str(dest),
             "backup": str(backup) if backup else None,
+            "pre_sha256": pre_sha256,
+            "post_sha256": post_sha256,
         }
     )
 
@@ -293,41 +316,37 @@ def _install_text(
         if merged == existing:
             plan.add("unchanged", dest)
             return
+        pre_sha256 = _file_sha256(dest)
         saved = _backup(dest, backup_root, plan, apply, key)
         plan.add("merge", dest, how)
-        _record("merge", dest, key, saved)
         if apply:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(merged, encoding="utf-8")
+            _record("merge", dest, key, saved, pre_sha256)
         return
 
     if dest.exists() and _read_text_lenient(dest) == incoming:
         plan.add("unchanged", dest)
         return
 
+    pre_sha256 = _file_sha256(dest)
     if dest.exists():
         saved = _backup(dest, backup_root, plan, apply, key)
         plan.add("replace", dest)
-        _record("replace", dest, key, saved)
     else:
+        saved = None
         plan.add("create", dest)
-        # No backup to restore from: rollback deletes what the install created.
-        _record("create", dest, key, None)
     if apply:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(incoming, encoding="utf-8")
+        _record("replace" if saved else "create", dest, key, saved, pre_sha256)
 
 
 def _hook_script_ids(entry: dict) -> set[str]:
     """Stems of the hook scripts an entry invokes (e.g. `intent-gate-check`).
 
-    These identify an entry as OURS: we ship these scripts, so an entry that runs one is a
-    shipped hook we may refresh — not a user's foreign hook to preserve.
-
-    Extension-agnostic ON PURPOSE: `session-bind.ps1` and its `session-bind.sh` sibling must
-    read as the SAME shipped hook. Keying on the full filename made the POSIX rewrite (.ps1 ->
-    .sh) look like a brand-new hook, so the merge appended the bash entry beside the stale
-    powershell one — a double hook, and `powershell: command not found` on mac from the leftover.
+    Script stems define workflow ownership. Extensions are ignored so `.ps1` and `.sh`
+    variants collapse to one logical hook during a cross-platform install.
     """
     ids: set[str] = set()
     hooks = entry.get("hooks", []) if isinstance(entry, dict) else []
@@ -341,14 +360,8 @@ def _merge_hook_entries(cur_entries: list, tmpl_entries: list) -> tuple[list, in
     """Refresh OUR shipped hook entries (identified by the script they call), append any
     shipped entry we don't yet have, and leave every foreign entry untouched.
 
-    This is what lets a shipped matcher change (e.g. adding Bash to the Pre-flight gate)
-    reach an existing install: the old policy kept the whole event whenever it differed,
-    which froze our own hook at its previous matcher. Ownership is by script stem, so a
-    hook the user added that runs none of our scripts is never modified.
-
-    A template entry COLLAPSES every current entry sharing one of its stems into a single
-    refreshed entry — so a stale `.ps1` entry AND any duplicate a previous cross-platform
-    merge appended are both replaced, never left side by side.
+    Every entry sharing a shipped script stem collapses into one current entry. A user hook
+    that runs none of those scripts is never modified.
     """
     result = list(cur_entries)
     updated = 0
@@ -366,11 +379,23 @@ def _merge_hook_entries(cur_entries: list, tmpl_entries: list) -> tuple[list, in
             continue
         first = matches[0]
         already_current = len(matches) == 1 and result[first] == tmpl_entry
-        for i in reversed(
-            matches
-        ):  # reverse so earlier indices stay valid while deleting
+        preserved: list[dict] = []
+        for i in matches:
+            entry = result[i]
+            if not isinstance(entry, dict):
+                continue
+            kept_hooks = [
+                hook
+                for hook in entry.get("hooks", [])
+                if not (_hook_script_ids({"hooks": [hook]}) & tids)
+            ]
+            if kept_hooks:
+                kept_entry = json.loads(json.dumps(entry))
+                kept_entry["hooks"] = kept_hooks
+                preserved.append(kept_entry)
+        for i in reversed(matches):
             del result[i]
-        result.insert(first, tmpl_entry)
+        result[first:first] = [tmpl_entry, *preserved]
         if not already_current:
             updated += 1
     return result, updated
@@ -409,6 +434,41 @@ def _rewrite_hooks_for_posix(template: dict) -> dict:
     return template
 
 
+def _remove_intent_hook_entries(settings: dict) -> tuple[dict, int]:
+    out = json.loads(json.dumps(settings))
+    hooks = out.get("hooks")
+    if not isinstance(hooks, dict):
+        return out, 0
+    entries = hooks.get("UserPromptSubmit")
+    if not isinstance(entries, list):
+        return out, 0
+    kept: list = []
+    removed = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            kept.append(entry)
+            continue
+        hooks_in = entry.get("hooks")
+        if not isinstance(hooks_in, list):
+            kept.append(entry)
+            continue
+        hooks_out = []
+        for hook in hooks_in:
+            if "intent-gate-set" in _hook_script_ids({"hooks": [hook]}):
+                removed += 1
+            else:
+                hooks_out.append(hook)
+        if hooks_out:
+            retained = json.loads(json.dumps(entry))
+            retained["hooks"] = hooks_out
+            kept.append(retained)
+    if kept:
+        hooks["UserPromptSubmit"] = kept
+    else:
+        hooks.pop("UserPromptSubmit", None)
+    return out, removed
+
+
 def _drop_intent_hook(template: dict, plan: Plan) -> dict:
     """Remove the UserPromptSubmit entries that run intent-gate-set from the template.
 
@@ -416,24 +476,13 @@ def _drop_intent_hook(template: dict, plan: Plan) -> dict:
     event is theirs, and an installer that removed it would be doing exactly what this
     flag exists to prevent.
     """
-    hooks = template.get("hooks")
-    if not isinstance(hooks, dict):
-        return template
-    entries = hooks.get("UserPromptSubmit")
-    if not isinstance(entries, list):
-        return template
-    kept = [e for e in entries if "intent-gate-set" not in _hook_script_ids(e)]
-    if len(kept) == len(entries):
+    out, removed = _remove_intent_hook_entries(template)
+    if not removed:
         return template
     plan.warn(
         "only-command: UserPromptSubmit intent-gate-set hook not registered "
         "(auto-intent runtime gate stays off)"
     )
-    out = json.loads(json.dumps(template))
-    if kept:
-        out["hooks"]["UserPromptSubmit"] = kept
-    else:
-        out["hooks"].pop("UserPromptSubmit", None)
     return out
 
 
@@ -460,20 +509,22 @@ def _install_settings(
         if apply:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(json.dumps(template, indent=2) + "\n", encoding="utf-8")
+            _record("create", dest, "claude/settings.json", None, None)
         return
 
     try:
-        current = json.loads(dest.read_text(encoding="utf-8"))
+        current = json.loads(_read_text_lenient(dest))
     except json.JSONDecodeError as exc:
         plan.warn(f"{dest} is not valid JSON ({exc}); left untouched")
+        return
+    if not isinstance(current, dict):
+        plan.warn(f"{dest} root is not a JSON object; left untouched")
         return
 
     added = [k for k in template if k not in current]
     differing = [k for k in template if k in current and current[k] != template[k]]
 
-    # Merge hooks per event AND per entry: unrelated user events/entries stay untouched, but
-    # OUR OWN shipped hook entries (identified by the script they call) are refreshed so a
-    # shipped matcher change actually reaches an existing install.
+    # Refresh shipped hook entries while preserving hooks owned by the user.
     hook_changes: list[str] = []
     merged_hooks: dict | None = None
     if "hooks" in differing:
@@ -485,22 +536,31 @@ def _install_settings(
             current.get("hooks") if isinstance(current.get("hooks"), dict) else {}
         )
         merged_hooks = dict(cur_hooks or {})
+        if only_command:
+            cleaned, removed = _remove_intent_hook_entries({"hooks": merged_hooks})
+            merged_hooks = cleaned.get("hooks", {})
+            if removed:
+                hook_changes.append(
+                    f"hooks.UserPromptSubmit (removed {removed} shipped intent entr"
+                    f"{'y' if removed == 1 else 'ies'})"
+                )
         for event, tmpl_entries in (tmpl_hooks or {}).items():
-            if event not in (cur_hooks or {}):
+            if event not in merged_hooks:
                 merged_hooks[event] = tmpl_entries
                 hook_changes.append(f"hooks.{event} (added)")
                 continue
+            current_entries = merged_hooks[event]
             if not isinstance(tmpl_entries, list) or not isinstance(
-                cur_hooks[event], list
+                current_entries, list
             ):
                 # Non-list shape we do not understand: keep the user's, report it.
-                if cur_hooks[event] != tmpl_entries:
+                if current_entries != tmpl_entries:
                     plan.warn(
                         f"settings.json[hooks.{event}] differs from the shipped template — "
                         "kept yours (your hook wins)"
                     )
                 continue
-            new_entries, updated = _merge_hook_entries(cur_hooks[event], tmpl_entries)
+            new_entries, updated = _merge_hook_entries(current_entries, tmpl_entries)
             if updated:
                 merged_hooks[event] = new_entries
                 hook_changes.append(
@@ -521,15 +581,16 @@ def _install_settings(
         plan.add("unchanged", dest, "no missing keys")
         return
 
+    pre_sha256 = _file_sha256(dest)
     saved = _backup(dest, backup_root, plan, apply, "claude/settings.json")
     detail = ", ".join([*added, *hook_changes])
-    plan.add("merge", dest, f"add {detail}")
-    _record("merge", dest, "claude/settings.json", saved)
+    plan.add("merge", dest, f"update {detail}")
     if apply:
         current.update({k: template[k] for k in added})
         if merged_hooks is not None:
             current["hooks"] = merged_hooks
         dest.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
+        _record("merge", dest, "claude/settings.json", saved, pre_sha256)
 
 
 def _strip_jsonc(text: str) -> str:
@@ -616,6 +677,51 @@ def _deep_merge_additive(
     return base, added
 
 
+def _merge_opencode_policy(
+    current: dict, incoming: dict, plan: Plan
+) -> tuple[dict, int, int]:
+    """Merge general config additively, but enforce workflow-owned plan permissions."""
+    incoming_copy = json.loads(json.dumps(incoming))
+    incoming_plan = (incoming_copy.get("agent") or {}).get("plan")
+    shipped_permissions = None
+    if isinstance(incoming_plan, dict):
+        shipped_permissions = incoming_plan.pop("permission", None)
+
+    merged = json.loads(json.dumps(current))
+    merged, added = _deep_merge_additive(merged, incoming_copy, "opencode", plan)
+    enforced = 0
+    if isinstance(shipped_permissions, dict):
+        agent = merged.get("agent")
+        if not isinstance(agent, dict):
+            plan.warn("opencode agent config was not an object; replaced for workflow policy")
+            agent = {}
+            merged["agent"] = agent
+        plan_agent = agent.get("plan")
+        if not isinstance(plan_agent, dict):
+            plan.warn("opencode plan agent config was not an object; replaced")
+            plan_agent = {}
+            agent["plan"] = plan_agent
+        permissions = plan_agent.get("permission")
+        if not isinstance(permissions, dict):
+            permissions = {}
+            plan_agent["permission"] = permissions
+        for key, value in shipped_permissions.items():
+            current_value = permissions.get(key)
+            same_value = current_value == value
+            if key == "bash" and isinstance(current_value, dict) and isinstance(value, dict):
+                same_value = list(current_value.items()) == list(value.items())
+            if same_value:
+                continue
+            if key in permissions:
+                plan.warn(
+                    f"opencode plan permission {key!r} replaced by the workflow's "
+                    "read-only policy"
+                )
+            permissions[key] = json.loads(json.dumps(value))
+            enforced += 1
+    return merged, added, enforced
+
+
 def _install_opencode(
     src: Path,
     dest: Path,
@@ -624,9 +730,11 @@ def _install_opencode(
     backup_root: Path,
     project_root: Path | None,
 ) -> None:
-    """Merge the workflow's opencode.json fragment (read-only second_agent permission)
-    into the user's native config additively — MCP servers, providers, and other agents
-    are preserved. Env placeholders are resolved (preflight guarantees they exist)."""
+    """Preserve unrelated OpenCode config while enforcing plan-agent permissions.
+
+    MCP servers, providers, and other agents remain additive. Environment placeholders
+    are resolved after preflight proves the required values exist.
+    """
     incoming = json.loads(
         _resolve_placeholders(src.read_text(encoding="utf-8"), project_root)
     )
@@ -639,21 +747,37 @@ def _install_opencode(
                 f"{dest} is not valid JSON/JSONC — skipped (fix or remove it, then rerun)"
             )
             return
-    merged = json.loads(json.dumps(current))  # deep copy
-    merged, added = _deep_merge_additive(merged, incoming, "opencode", plan)
-    if merged == current:
+        if not isinstance(current, dict):
+            plan.warn(
+                f"{dest} root is not a JSON object; skipped (replace it with an object, then rerun)"
+            )
+            return
+    merged, added, enforced = _merge_opencode_policy(current, incoming, plan)
+    if merged == current and enforced == 0:
         plan.add("unchanged", dest)
         return
     if dest.exists():
+        pre_sha256 = _file_sha256(dest)
         saved = _backup(dest, backup_root, plan, apply, "opencode/opencode.json")
-        plan.add("merge", dest, f"add {added} workflow key(s)")
-        _record("merge", dest, "opencode/opencode.json", saved)
+        plan.add(
+            "merge",
+            dest,
+            f"add {added} workflow key(s), enforce {enforced} permission key(s)",
+        )
     else:
+        pre_sha256 = None
+        saved = None
         plan.add("create", dest)
-        _record("create", dest, "opencode/opencode.json", None)
     if apply:
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+        _record(
+            "merge" if saved else "create",
+            dest,
+            "opencode/opencode.json",
+            saved,
+            pre_sha256,
+        )
 
 
 def _install_deps(plan: Plan, apply: bool) -> None:
@@ -683,12 +807,7 @@ _MODE_FILE = HOME / ".claude" / ".workflow-install-mode.json"
 
 
 def _stored_only_command() -> bool:
-    """The intent mode the last install chose.
-
-    Persisted because an upgrade run carries no flags: without this, `install.py --apply`
-    six months later would quietly restore the auto-intent stanza the user had removed,
-    and nothing in the output would say so.
-    """
+    """The persisted intent mode used when an upgrade supplies no mode flag."""
     try:
         return bool(
             json.loads(_MODE_FILE.read_text(encoding="utf-8")).get("only_command")
@@ -697,13 +816,32 @@ def _stored_only_command() -> bool:
         return False
 
 
-def _store_only_command(value: bool, apply: bool) -> None:
-    if not apply:
+def _store_only_command(
+    value: bool, plan: Plan, apply: bool, backup_root: Path
+) -> None:
+    content = json.dumps({"only_command": bool(value)}, indent=2) + "\n"
+    detail = "command-only (prefix /. required)" if value else "auto-intent"
+    if _MODE_FILE.is_file() and _MODE_FILE.read_bytes() == content.encode("utf-8"):
+        plan.add("unchanged", _MODE_FILE, detail)
         return
-    _MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _MODE_FILE.write_text(
-        json.dumps({"only_command": bool(value)}, indent=2) + "\n", encoding="utf-8"
+
+    pre_sha256 = _file_sha256(_MODE_FILE)
+    saved = (
+        _backup(
+            _MODE_FILE,
+            backup_root,
+            plan,
+            apply,
+            "claude/workflow-install-mode.json",
+        )
+        if _MODE_FILE.exists()
+        else None
     )
+    plan.add("mode", _MODE_FILE, detail)
+    if apply:
+        _MODE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _MODE_FILE.write_text(content, encoding="utf-8")
+        _record("mode", _MODE_FILE, "claude/workflow-install-mode.json", saved, pre_sha256)
 
 
 def _backup_dirs() -> list[Path]:
@@ -746,31 +884,68 @@ def _run_rollback(which: str | None, apply: bool) -> int:
         print(f"  {chosen}")
         return 1
 
-    entries = json.loads(receipt_path.read_text(encoding="utf-8")).get("entries", [])
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"[ROLLBACK] invalid receipt: {exc}")
+        return 1
+    entries = receipt.get("entries", [])
+    if (
+        receipt.get("schema_version") != _RECEIPT_SCHEMA_VERSION
+        or not isinstance(entries, list)
+    ):
+        print(f"[ROLLBACK] {chosen.name} uses an unsupported receipt schema.")
+        print("  Refusing an unverified rollback; restore its backups manually if needed.")
+        return 1
+
     print(f"[ROLLBACK] {chosen.name} ({'APPLY' if apply else 'DRY RUN'})")
-    restored = deleted = skipped = 0
+    conflicts: list[str] = []
+    for item in entries:
+        if not isinstance(item, dict) or not item.get("dest"):
+            conflicts.append("receipt contains an invalid entry")
+            continue
+        dest = Path(item["dest"])
+        backup = Path(item["backup"]) if item.get("backup") else None
+        expected_post = item.get("post_sha256")
+        actual_post = _file_sha256(dest)
+        if not isinstance(expected_post, str) or actual_post != expected_post:
+            conflicts.append(
+                f"{dest}: destination changed "
+                f"(expected {expected_post or 'missing hash'}, found {actual_post or 'missing'})"
+            )
+        expected_pre = item.get("pre_sha256")
+        if backup is not None:
+            backup_hash = _file_sha256(backup)
+            if not isinstance(expected_pre, str) or backup_hash != expected_pre:
+                conflicts.append(
+                    f"{backup}: backup changed or missing "
+                    f"(expected {expected_pre or 'missing hash'}, found {backup_hash or 'missing'})"
+                )
+        elif expected_pre is not None:
+            conflicts.append(f"{dest}: receipt has a pre-install hash but no backup")
+
+    if conflicts:
+        print("  ABORTED: rollback preflight found conflicts; nothing was changed.")
+        for conflict in conflicts:
+            print(f"  !! {conflict}")
+        return 2
+
+    restored = deleted = 0
     for item in entries:
         dest = Path(item["dest"])
         backup = Path(item["backup"]) if item.get("backup") else None
         if backup is not None:
-            if not backup.is_file():
-                print(f"  skip     {dest} — backup missing ({backup})")
-                skipped += 1
-                continue
             print(f"  restore  {dest}")
             restored += 1
             if apply:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(backup, dest)
         else:
-            if not dest.exists():
-                skipped += 1
-                continue
             print(f"  delete   {dest} — created by that install")
             deleted += 1
             if apply:
                 dest.unlink()
-    print(f"\n  restore {restored}, delete {deleted}, skip {skipped}")
+    print(f"\n  restore {restored}, delete {deleted}")
     if not apply:
         print("  dry run — rerun with --apply to write")
     return 0
@@ -803,8 +978,8 @@ def _targets(project_root: Path | None = None) -> list[tuple[Path, Path, str]]:
         ("claude", "skills", HOME / ".claude" / "skills"),
         ("claude", "commands", HOME / ".claude" / "commands"),
         ("claude", "hooks", HOME / ".claude" / "hooks"),
-        # Custom opencode subagents (wf-slice, wf-map, wf-trace, wf-docs, wf-db). The file
-        # stem becomes the agent name. Project scope is the default: opencode reads
+        # The file stem becomes the custom OpenCode agent name. Project scope is the
+        # default: opencode reads
         # <worktree>/.opencode/agents/, so the roster ships without the installer touching
         # the user's global opencode config.
         (
@@ -832,7 +1007,29 @@ def _hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _run_check(manifest: dict) -> int:
+def _settings_would_change(src: Path, dest: Path, only_command: bool) -> bool:
+    plan = Plan()
+    _install_settings(src, dest, plan, False, Path("."), only_command)
+    writes = {"create", "merge", "replace", "mode"}
+    return any(action in writes for action, _target, _detail in plan.actions) or any(
+        "not valid JSON" in warning or "root is not a JSON object" in warning
+        for warning in plan.warnings
+    )
+
+
+def _opencode_would_change(
+    src: Path, dest: Path, project_root: Path | None
+) -> bool:
+    plan = Plan()
+    _install_opencode(src, dest, plan, False, Path("."), project_root)
+    writes = {"create", "merge", "replace"}
+    return any(action in writes for action, _target, _detail in plan.actions) or any(
+        "not valid JSON/JSONC" in warning or "root is not a JSON object" in warning
+        for warning in plan.warnings
+    )
+
+
+def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     """Report drift without writing anything.
 
     Two independent questions: (1) does dist/ still match its manifest — catches a dist
@@ -846,30 +1043,27 @@ def _run_check(manifest: dict) -> int:
     installed_drift: list[str] = []
     installed_missing: list[str] = []
 
-    checks = list(_targets())
+    checks = list(_targets(project_root))
     settings_src = DIST_CONFIG / "claude" / "settings.template.json"
     if settings_src.exists():
         # settings.json is a key-wise JSON merge, not a copy — bundle-check only.
         checks.append((settings_src, None, "claude/settings.template.json"))
     opencode_src = DIST_CONFIG / "opencode" / "opencode.template.json"
     if opencode_src.exists():
-        # opencode.json is a deep additive JSON merge, not a copy — bundle-check only.
+        # opencode.json is merged, not copied, so its installed state is checked below.
         checks.append((opencode_src, None, "opencode/opencode.template.json"))
 
     for source, dest, key in checks:
         dist_text = source.read_text(encoding="utf-8")
         entry = by_path.get(key)
-        if entry and _hash(dist_text) != entry.get("sha256"):
+        if not entry or _hash(dist_text) != entry.get("sha256"):
             bundle_stale.append(key)
         if dest is None:
             continue
-        resolved = _resolve_placeholders(dist_text, None)
+        resolved = _resolve_placeholders(dist_text, project_root)
+        if key == "claude/CLAUDE.md":
+            resolved = _apply_intent_mode(resolved, _stored_only_command())
         if not dest.exists():
-            # Subagents install per-project; --check has no project root, so the global
-            # fallback path being empty proves nothing. Reporting it as missing would be
-            # the same false alarm this check exists to catch.
-            if key.startswith("opencode/agents/"):
-                continue
             installed_missing.append(key)
             continue
         installed = _read_text_lenient(dest)
@@ -881,6 +1075,21 @@ def _run_check(manifest: dict) -> int:
                 installed_drift.append(key)
         elif installed != resolved:
             installed_drift.append(key)
+
+    only_command = _stored_only_command()
+    settings_dest = HOME / ".claude" / "settings.json"
+    if settings_src.exists():
+        if not settings_dest.exists():
+            installed_missing.append("claude/settings.json")
+        elif _settings_would_change(settings_src, settings_dest, only_command):
+            installed_drift.append("claude/settings.json")
+
+    opencode_dest = _opencode_config_path()
+    if opencode_src.exists():
+        if not opencode_dest.exists():
+            installed_missing.append("opencode/opencode.json")
+        elif _opencode_would_change(opencode_src, opencode_dest, project_root):
+            installed_drift.append("opencode/opencode.json")
 
     print("[INSTALL CHECK]")
     print(
@@ -901,10 +1110,14 @@ def _run_check(manifest: dict) -> int:
         for key in installed_missing:
             print(f"    - MISSING {key}")
 
-    # Per-component rollup (P0.7): which component drifted, not just how many files.
+    # Report component ownership so the required version bump is explicit.
     versions = manifest.get("versions") or {}
     if versions:
         changed_keys = set(bundle_stale) | set(installed_drift) | set(installed_missing)
+        if "claude/settings.json" in changed_keys:
+            changed_keys.add("claude/settings.template.json")
+        if "opencode/opencode.json" in changed_keys:
+            changed_keys.add("opencode/opencode.template.json")
         print("  components:")
         for comp, ver in versions.items():
             comp_keys = [k for k, e in by_path.items() if e.get("component") == comp]
@@ -959,10 +1172,12 @@ def main() -> int:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="report drift (installed ~/.claude vs bundle, dist vs manifest); no writes",
+        help="report drift (installed config vs bundle, dist vs manifest); combine with "
+        "--init-project DIR to check project-scoped OpenCode agents",
     )
     args = parser.parse_args()
     apply = args.apply
+    _RECEIPT.clear()
 
     if args.rollback is not None:
         return _run_rollback(args.rollback or None, apply)
@@ -980,11 +1195,11 @@ def main() -> int:
         return 1
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
 
-    if args.check:
-        return _run_check(manifest)
-
     project_root = Path(args.init_project).resolve() if args.init_project else None
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    if args.check:
+        return _run_check(manifest, project_root)
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     backup_root = HOME / ".claude" / "backups" / f"install_{stamp}"
 
     plan = Plan()
@@ -1076,20 +1291,18 @@ def main() -> int:
             if apply:
                 ensure_workflow_workspace(project_root, str(agent_path))
 
-    _store_only_command(args.only_command, apply)
-    plan.add(
-        "mode",
-        "intent",
-        "command-only (prefix /. required)" if args.only_command else "auto-intent",
-    )
+    _store_only_command(args.only_command, plan, apply, backup_root)
 
     # Receipt goes down with the backups, not beside the code: it is only meaningful
     # paired with them, and --rollback refuses to act without it.
     if apply and _RECEIPT:
         backup_root.mkdir(parents=True, exist_ok=True)
-        (backup_root / "install_receipt.json").write_text(
+        receipt_path = backup_root / "install_receipt.json"
+        receipt_tmp = receipt_path.with_suffix(".tmp")
+        receipt_tmp.write_text(
             json.dumps(
                 {
+                    "schema_version": _RECEIPT_SCHEMA_VERSION,
                     "installed_at": datetime.now(timezone.utc).isoformat(),
                     "version": manifest.get("version"),
                     "only_command": bool(args.only_command),
@@ -1101,6 +1314,7 @@ def main() -> int:
             + "\n",
             encoding="utf-8",
         )
+        os.replace(receipt_tmp, receipt_path)
 
     counts: dict[str, int] = {}
     for verb, target, detail in plan.actions:

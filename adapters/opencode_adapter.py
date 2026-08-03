@@ -1,3 +1,4 @@
+import hashlib
 import os
 import threading
 import time
@@ -11,9 +12,10 @@ from config.settings import (
     DEFAULT_TIMEOUT_SECONDS,
     OPENCODE_COMMAND,
 )
-from core.contract import make_error, make_ok
+from core.contract import make_error as _contract_make_error
+from core.contract import make_ok as _contract_make_ok
 from utils import osutil
-from utils.redact import redact
+from utils.redact import redact, redact_value
 from utils.parser import (
     clean_opencode_output,
     ensure_text,
@@ -98,6 +100,61 @@ _CMD_LINE_HEADROOM = 400
 _CMD_LINE_SIGNS = ("command line is too long", "the input line is too long")
 
 
+def _argv_meta(args: list[str]) -> dict:
+    encoded = "\0".join(str(arg) for arg in args).encode("utf-8", errors="replace")
+    return {
+        "argv_count": len(args),
+        "argv_chars": sum(len(str(arg)) for arg in args),
+        "argv_sha256": hashlib.sha256(encoded).hexdigest()[:16],
+    }
+
+
+def _attach_redactions(meta: dict, hits: list[dict]) -> None:
+    if not hits:
+        return
+    counts: dict[str, int] = {}
+    for hit in [*(meta.get("redactions") or []), *hits]:
+        if not isinstance(hit, dict) or not hit.get("kind"):
+            continue
+        kind = str(hit["kind"])
+        counts[kind] = counts.get(kind, 0) + int(hit.get("count") or 0)
+    meta["redactions"] = [
+        {"kind": kind, "count": count} for kind, count in counts.items()
+    ]
+    meta["redaction_count"] = sum(counts.values())
+
+
+def _sanitize_meta(meta: dict | None, extra_hits: list[dict] | None = None) -> dict:
+    clean, hits = redact_value(meta or {})
+    if not isinstance(clean, dict):
+        clean = {}
+    _attach_redactions(clean, [*(extra_hits or []), *hits])
+    return clean
+
+
+def make_error(
+    error_type: str,
+    message: str,
+    next_action: str,
+    meta: dict | None = None,
+    **fields,
+) -> dict:
+    clean_message, message_hits = redact(str(message or ""))
+    clean_next, next_hits = redact(str(next_action or ""))
+    clean_fields, field_hits = redact_value(fields)
+    safe_meta = _sanitize_meta(meta, [*message_hits, *next_hits, *field_hits])
+    return _contract_make_error(
+        error_type, clean_message, clean_next, meta=safe_meta, **clean_fields
+    )
+
+
+def make_ok(content: str, meta: dict | None = None, digest: dict | None = None) -> dict:
+    clean_content, content_hits = redact(content or "")
+    clean_digest, digest_hits = redact_value(digest)
+    safe_meta = _sanitize_meta(meta, [*content_hits, *digest_hits])
+    return _contract_make_ok(clean_content, safe_meta, clean_digest)
+
+
 def _too_long_for_cmd(args: list[str]) -> int | None:
     """Total command-line length when it will not fit, else None. Windows only."""
     if not osutil.IS_WINDOWS:
@@ -130,12 +187,10 @@ class OpenCodeAdapter:
         self.on_progress = on_progress
         self.poll_interval = DEFAULT_POLL_INTERVAL_SECONDS
         self.bootstrap_timeout_seconds = DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS
-        # Which opencode agent runs the delegated call. `plan` is opencode's own
-        # read-only primary and stays the default, so a config predating `wf-second`
-        # keeps working — an upgrade that silently pointed at a missing agent would
-        # break every delegated call at once.
+        # `plan` is the read-only fallback when project config omits a custom agent.
         self.agent = DEFAULT_OPENCODE_AGENT
         self.last_call_meta: dict = {}
+        self.on_session_created = None
 
     def _agent_args(self) -> list[str]:
         return ["--agent", self.agent or DEFAULT_OPENCODE_AGENT]
@@ -157,6 +212,9 @@ class OpenCodeAdapter:
                  'pid', 'kill'} — never raises for timeout.
         """
         started = time.monotonic()
+        self.last_call_meta = _sanitize_meta(
+            {"phase": phase, **_argv_meta(args), "cwd": cwd, "timeout_seconds": timeout}
+        )
         proc = subprocess.Popen(
             args,
             stdout=subprocess.PIPE,
@@ -247,19 +305,21 @@ class OpenCodeAdapter:
             "pid": proc.pid,
             "kill": kill_info or None,
         }
-        self.last_call_meta = {
-            "phase": phase,
-            "args": args,
-            "cwd": cwd,
-            "returncode": meta["returncode"],
-            "timed_out": timed_out,
-            "duration_seconds": meta["duration_seconds"],
-            "timeout_seconds": timeout,
-            "kill": kill_info or None,
-            "output_complete": drained,
-            "idle_seconds": meta["idle_seconds"],
-            "stderr_tail": meta["stderr"][-2000:],
-        }
+        self.last_call_meta = _sanitize_meta(
+            {
+                "phase": phase,
+                **_argv_meta(args),
+                "cwd": cwd,
+                "returncode": meta["returncode"],
+                "timed_out": timed_out,
+                "duration_seconds": meta["duration_seconds"],
+                "timeout_seconds": timeout,
+                "kill": kill_info or None,
+                "output_complete": drained,
+                "idle_seconds": meta["idle_seconds"],
+                "stderr_tail": meta["stderr"][-2000:],
+            }
+        )
         return meta
 
     def _tick(self, phase: str, elapsed: float, idle: float = 0.0) -> None:
@@ -303,7 +363,7 @@ class OpenCodeAdapter:
         env["PYTHONIOENCODING"] = "utf-8"
 
         cwd = self._resolve_work_dir(work_dir)
-        meta: dict = {"args": args, "cwd": cwd}
+        meta: dict = {**_argv_meta(args), "cwd": cwd}
         if workflow_session_id:
             meta["workflow_session_id"] = workflow_session_id
 
@@ -318,7 +378,7 @@ class OpenCodeAdapter:
             meta.update(
                 {"error": str(exc), "returncode": 1, "opencode_session_id": None}
             )
-            return None, meta
+            return None, _sanitize_meta(meta)
 
         meta["duration_seconds"] = outcome["duration_seconds"]
         if outcome["kill"]:
@@ -331,10 +391,9 @@ class OpenCodeAdapter:
                     "returncode": 1,
                     "opencode_session_id": None,
                     "timed_out": True,
-                    "stderr": outcome["stderr"].strip()[-2000:],
                 }
             )
-            return None, meta
+            return None, _sanitize_meta(meta)
 
         combined = outcome["stdout"] + outcome["stderr"]
         session_id = extract_opencode_session_id(combined)
@@ -342,10 +401,11 @@ class OpenCodeAdapter:
             {
                 "returncode": outcome["returncode"],
                 "opencode_session_id": session_id,
-                "stderr": outcome["stderr"].strip()[-2000:],
+                "stderr_tail": outcome["stderr"].strip()[-2000:],
+                "stdout_tail": outcome["stdout"].strip()[-500:],
             }
         )
-        return session_id, meta
+        return session_id, _sanitize_meta(meta)
 
     def run_agent(
         self,
@@ -394,7 +454,7 @@ class OpenCodeAdapter:
                 f"command line is {oversize} chars; the Windows shell caps it at {_CMD_LINE_LIMIT}",
                 next_action=(
                     "Shorten the task text — split it into two narrower delegated calls. "
-                    "The prompt scaffolding is now anchored in AGENTS.md and the evidence "
+                    "The prompt scaffolding is anchored in AGENTS.md and the evidence "
                     "sidecars, so the task is the only caller-controlled size left."
                 ),
                 meta={
@@ -424,8 +484,28 @@ class OpenCodeAdapter:
                 "init_session failed: opencode session id not captured after retry",
                 next_action="Check opencode is logged in and `opencode run` prints a ses_ id; rerun the command.",
                 meta=meta,
-                raw_tail=ensure_text(meta.get("error"))[:500],
+                raw_tail=first_non_empty(
+                    meta.get("error"), meta.get("stderr_tail"), meta.get("stdout_tail")
+                )[:500],
             )
+
+        session["opencode_session_id"] = opencode_session_id
+        if bootstrap_meta is not None and self.on_session_created:
+            try:
+                self.on_session_created(opencode_session_id)
+            except Exception as exc:
+                return make_error(
+                    "session_capture_failed",
+                    "captured OpenCode session id but failed to persist it",
+                    next_action=(
+                        "Check session storage permissions, then retry; the delegated task "
+                        "was not started."
+                    ),
+                    meta={
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "opencode_session_id": opencode_session_id,
+                    },
+                )
 
         result = self.run_agent(prompt, opencode_session_id, model, work_dir)
 
@@ -467,14 +547,14 @@ class OpenCodeAdapter:
                 args, env, cwd, max(5, int(timeout_seconds)), "probe"
             )
         except (OSError, FileNotFoundError) as exc:
-            return {
+            return _sanitize_meta({
                 "alive": False,
                 "reason": "command_not_found",
                 "error": str(exc),
                 "returncode": None,
                 "duration_seconds": None,
                 "timed_out": False,
-            }
+            })
 
         probe_tail = _error_tail(outcome["stderr"], outcome["stdout"])
         rate_limited = _is_rate_limited(probe_tail)
@@ -490,7 +570,7 @@ class OpenCodeAdapter:
         else:
             reason = "probe_ok"
 
-        return {
+        return _sanitize_meta({
             "alive": reason == "probe_ok",
             "reason": reason,
             "rate_limited": rate_limited,
@@ -499,7 +579,7 @@ class OpenCodeAdapter:
             "duration_seconds": outcome["duration_seconds"],
             "timed_out": outcome["timed_out"],
             "stderr_tail": outcome["stderr"].strip()[-500:],
-        }
+        })
 
     def _run_args(self, args: list[str], work_dir: str | None = None) -> dict:
         oversize = _too_long_for_cmd(args)
@@ -533,14 +613,14 @@ class OpenCodeAdapter:
                 "command_not_found",
                 f"command not found: {args[0]}",
                 next_action="Install opencode or fix opencode_command in .workflow/opencode.json.",
-                meta={"error": str(exc), "args": args, "cwd": cwd},
+                meta={"error": str(exc), **_argv_meta(args), "cwd": cwd},
             )
         except OSError as exc:
             return make_error(
                 "unknown",
                 str(exc),
                 next_action="Inspect .workflow/sessions/<session>/logs and rerun; report if it persists.",
-                meta={"error": type(exc).__name__, "args": args, "cwd": cwd},
+                meta={"error": type(exc).__name__, **_argv_meta(args), "cwd": cwd},
             )
 
         if outcome["timed_out"]:
@@ -551,7 +631,7 @@ class OpenCodeAdapter:
             )
             timeout_meta = {
                 "timeout_seconds": self.timeout_seconds,
-                "args": args,
+                **_argv_meta(args),
                 "cwd": cwd,
                 "duration_seconds": outcome["duration_seconds"],
                 "idle_seconds": outcome.get("idle_seconds"),
@@ -584,7 +664,7 @@ class OpenCodeAdapter:
         meta = {
             "returncode": outcome["returncode"],
             "stderr": ensure_text(outcome["stderr"]).strip(),
-            "args": args,
+            **_argv_meta(args),
             "cwd": cwd,
             "duration_seconds": outcome["duration_seconds"],
             "idle_seconds": outcome.get("idle_seconds"),
@@ -647,15 +727,7 @@ class OpenCodeAdapter:
                 raw_tail=raw[:500],
             )
 
-        # Redaction boundary. Everything downstream — the transcript main_agent reads, the
-        # response snapshot, the fact store, the cross-session evidence index — is fed from
-        # this one return, so a credential scrubbed here cannot reach any of them. Scrubbing
-        # at the storage layer instead would be too late: the value would already have been
-        # relayed once.
-        cleaned, redactions = redact(cleaned)
-        if redactions:
-            meta["redactions"] = redactions
-            meta["redaction_count"] = sum(item["count"] for item in redactions)
+        # make_ok sanitizes content and metadata before either can reach persistence.
         return make_ok(cleaned, meta)
 
     @staticmethod

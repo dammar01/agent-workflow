@@ -2,7 +2,10 @@ import hashlib
 import json
 import os
 import re
+import secrets
+import subprocess
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -14,10 +17,74 @@ from config.settings import (
     JOB_DIR,
 )
 from utils import osutil
+from utils.path_guard import safe_path_component
 
 ALIVE_PROGRESSING = "alive-progressing"  # PID up, heartbeat fresh, stream producing
 ALIVE_STALLED = "alive-stalled"  # PID up but silent -> probe before judging
 DEAD = "dead"  # PID gone
+_CLAIM_STALE_SECONDS = 30.0
+_MUTATION_WAIT_SECONDS = 5.0
+
+
+def _process_identity(pid: int | None) -> str | None:
+    """Best-effort process generation identity for PID-reuse checks."""
+    if not pid or pid <= 0:
+        return None
+    native = osutil.pid_create_time(pid)
+    if native is not None:
+        return f"native:{native!r}"
+    if os.name == "nt":
+        return None
+    try:
+        stat_text = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+        start_ticks = stat_text.rsplit(")", 1)[1].split()[19]
+        try:
+            boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(
+                encoding="ascii"
+            ).strip()
+        except OSError:
+            boot_id = "unknown-boot"
+        return f"proc:{boot_id}:{start_ticks}"
+    except (OSError, IndexError):
+        pass
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+            **osutil.hidden_run_kwargs(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    started = (result.stdout or "").strip()
+    return f"ps:{started}" if result.returncode == 0 and started else None
+
+
+def _process_generation_matches(
+    pid: int | None,
+    expected_create_time: int | None,
+    expected_identity: str | None,
+) -> bool | None:
+    """True for the recorded process, False for dead/reused, None if unverifiable."""
+    if not osutil.process_alive(pid):
+        return False
+    if expected_identity is not None:
+        current_identity = _process_identity(pid)
+        return (
+            current_identity == expected_identity
+            if current_identity is not None
+            else None
+        )
+    if expected_create_time is not None:
+        current_create_time = osutil.pid_create_time(pid)
+        return (
+            current_create_time == expected_create_time
+            if current_create_time is not None
+            else None
+        )
+    return None
 
 
 class JobManager:
@@ -33,14 +100,19 @@ class JobManager:
         self.lock_dir = self.job_dir / "locks"
         self.beat_dir = self.job_dir / "beats"
         self.recovery_dir = self.job_dir / "recovery"
+        self.mutation_dir = self.job_dir / "mutations"
+        self.log_dir = self.job_dir / "logs"
         self.job_dir.mkdir(parents=True, exist_ok=True)
         self.lock_dir.mkdir(parents=True, exist_ok=True)
         self.beat_dir.mkdir(parents=True, exist_ok=True)
         self.recovery_dir.mkdir(parents=True, exist_ok=True)
+        self.mutation_dir.mkdir(parents=True, exist_ok=True)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
         self.stall_threshold_seconds = stall_threshold_seconds
         self.max_runtime_seconds = max_runtime_seconds
         self.idle_stall_seconds = idle_stall_seconds
         self.max_global_workers = max_global_workers
+        self._recovery_claim_tokens: dict[str, str] = {}
 
     def create_job(
         self,
@@ -49,9 +121,12 @@ class JobManager:
         session_id: str,
         work_dir: str | None,
         model: str | None,
+        allow_reuse: bool = True,
     ) -> dict:
         task = task or ""
-        request_hash = self._request_hash(workflow_command, task, session_id, work_dir)
+        request_hash = self._request_hash(
+            workflow_command, task, session_id, work_dir, allow_reuse, model
+        )
 
         # Idempotency: identical request already active on this session → reuse it.
         existing = self.active_job_for_session(session_id)
@@ -59,28 +134,35 @@ class JobManager:
             return existing
 
         job_id = self._new_job_id()
-        self._acquire_session_lock(session_id, job_id)
+        lock_token = self._acquire_session_lock(session_id, job_id)
         job = {
             "job_id": job_id,
             "request_hash": request_hash,
             "command": workflow_command,
             "task": task,
             "session_id": session_id,
+            "lock_token": lock_token,
             "work_dir": work_dir,
             "model": model,
+            "allow_reuse": bool(allow_reuse),
             "status": "pending",
             "worker_pid": None,
+            "worker_identity": None,
+            "reservation_owner_pid": os.getpid(),
+            "reservation_owner_create_time": osutil.pid_create_time(os.getpid()),
+            "reservation_owner_identity": _process_identity(os.getpid()),
             "recovery_attempt": 0,
             "created_at": self._now(),
             "started_at": None,
             "completed_at": None,
-            # Liveness (heartbeat) and probe verdicts live in side files, not here —
-            # see touch_heartbeat. `last_heartbeat` stays only as a read fallback for
-            # job records written by an earlier build.
             "output": None,
             "error": None,
         }
-        self._save(job)
+        try:
+            self._save(job)
+        except Exception:
+            self._release_session_lock(job)
+            raise
         return job
 
     def claim_recovery(
@@ -88,65 +170,123 @@ class JobManager:
     ) -> dict:
         """Claim one bounded restart of a dead worker without releasing its session lock."""
         claim_path = self.recovery_dir / f"{self._safe(job_id)}.claim"
+        token = secrets.token_hex(16)
         try:
             fd = os.open(str(claim_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
-            try:
-                stale = (time.time() - claim_path.stat().st_mtime) > stale_after_seconds
-            except OSError:
-                return {"action": "wait", "job": self.get_job(job_id)}
-            if not stale:
+            existing = self._read_side(claim_path)
+            if not self._claim_is_stale(claim_path, stale_after_seconds, existing):
                 return {"action": "wait", "job": self.get_job(job_id)}
             try:
-                claim_path.unlink()
+                self._release_claim_path(
+                    claim_path,
+                    expected_token=(existing or {}).get("token"),
+                    force=existing is None,
+                )
                 fd = os.open(str(claim_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             except (FileNotFoundError, FileExistsError, OSError):
                 return {"action": "wait", "job": self.get_job(job_id)}
 
-        payload = {"job_id": job_id, "claimed_at": self._now(), "owner_pid": os.getpid()}
+        payload = {
+            "job_id": job_id,
+            "claimed_at": self._now(),
+            "owner_pid": os.getpid(),
+            "owner_create_time": osutil.pid_create_time(os.getpid()),
+            "owner_identity": _process_identity(os.getpid()),
+            "token": token,
+        }
         with os.fdopen(fd, "w", encoding="utf-8") as file:
             json.dump(payload, file)
+            file.flush()
+            os.fsync(file.fileno())
+        self._recovery_claim_tokens[job_id] = token
 
-        job = self.get_job(job_id)
-        if not job:
-            self.release_recovery_claim(job_id)
-            return {"action": "missing", "job": None}
-        if osutil.process_alive(job.get("worker_pid")):
-            self.release_recovery_claim(job_id)
-            return {"action": "attach", "job": job}
-
-        attempt = int(job.get("recovery_attempt") or 0)
-        # A stale claim may mean the prior caller died before spawn. Reclaim that same
-        # attempt instead of consuming another one. Once a recovery PID was persisted,
-        # however, a dead PID means that attempt really ran and exhausted the budget.
-        stale_before_spawn = (
-            job.get("recovery_in_progress") is True
-            and job.get("worker_pid") is None
-        )
-        if not stale_before_spawn:
-            if attempt >= max_attempts:
+        with self._job_mutation(job_id):
+            job = self.get_job(job_id)
+            if not job:
                 self.release_recovery_claim(job_id)
-                failed = self.fail_job(
-                    job_id,
-                    f"worker died again after {attempt} recovery attempt(s)",
-                    reaped=True,
+                return {"action": "missing", "job": None}
+            if job.get("status") not in {"pending", "running", "recovering"}:
+                self.release_recovery_claim(job_id)
+                return {"action": "attach", "job": job}
+            worker_pid = job.get("worker_pid")
+            worker_generation = _process_generation_matches(
+                worker_pid,
+                job.get("worker_create_time"),
+                job.get("worker_identity"),
+            )
+            if worker_pid and worker_generation is not False:
+                self.release_recovery_claim(job_id)
+                return {"action": "attach", "job": job}
+            initial_orphan = (
+                job.get("status") == "pending"
+                and job.get("worker_pid") is None
+                and not job.get("recovery_in_progress")
+            )
+            if initial_orphan:
+                owner_pid = job.get("reservation_owner_pid")
+                owner_generation = _process_generation_matches(
+                    owner_pid,
+                    job.get("reservation_owner_create_time"),
+                    job.get("reservation_owner_identity"),
                 )
-                return {"action": "exhausted", "job": failed}
-            job["recovery_attempt"] = attempt + 1
+                if owner_generation is True:
+                    self.release_recovery_claim(job_id)
+                    return {"action": "wait", "job": job}
+                age = self._age_seconds(job.get("created_at"))
+                if age is None or age < stale_after_seconds:
+                    self.release_recovery_claim(job_id)
+                    return {"action": "wait", "job": job}
 
-        # Keep the public status `pending`: check.py from existing workspaces knows
-        # pending/running and would treat a novel `recovering` status as terminal.
-        job["status"] = "pending"
-        job["recovery_in_progress"] = True
-        job["recovery_started_at"] = self._now()
-        job["recovery_reason"] = "worker_died"
-        job["previous_worker_pid"] = job.get("worker_pid")
-        job["worker_pid"] = None
-        job["worker_create_time"] = None
-        job["error"] = None
-        job["output"] = None
-        job.pop("reaped", None)
-        self._save(job)
+            attempt = int(job.get("recovery_attempt") or 0)
+            stale_before_spawn = (
+                job.get("recovery_in_progress") is True
+                and job.get("worker_pid") is None
+            )
+            counts_as_restart = not stale_before_spawn and not initial_orphan
+            if counts_as_restart and attempt >= max_attempts:
+                job["status"] = "failed"
+                job["completed_at"] = self._now()
+                job["error"] = (
+                    f"worker died again after {attempt} recovery attempt(s)"
+                )
+                job["reaped"] = True
+                job.pop("recovery_in_progress", None)
+                self._save(job)
+                exhausted = True
+            else:
+                if counts_as_restart:
+                    job["recovery_attempt"] = attempt + 1
+                job["status"] = "pending"
+                job["recovery_in_progress"] = True
+                job["recovery_started_at"] = self._now()
+                if initial_orphan or (
+                    stale_before_spawn
+                    and job.get("recovery_reason") == "pre_spawn_orphan"
+                ):
+                    job["recovery_reason"] = "pre_spawn_orphan"
+                else:
+                    job["recovery_reason"] = "worker_died"
+                job["previous_worker_pid"] = job.get("worker_pid")
+                job["worker_pid"] = None
+                job["worker_create_time"] = None
+                job["worker_identity"] = None
+                job["reservation_owner_pid"] = os.getpid()
+                job["reservation_owner_create_time"] = osutil.pid_create_time(
+                    os.getpid()
+                )
+                job["reservation_owner_identity"] = _process_identity(os.getpid())
+                job["error"] = None
+                job["output"] = None
+                job.pop("reaped", None)
+                self._save(job)
+                exhausted = False
+
+        if exhausted:
+            self._release_session_lock(job)
+            self.release_recovery_claim(job_id)
+            return {"action": "exhausted", "job": job}
+
         for side in (self._beat_path(job_id), self._probe_path(job_id)):
             try:
                 side.unlink()
@@ -155,20 +295,25 @@ class JobManager:
         return {"action": "recover", "job": job}
 
     def release_recovery_claim(self, job_id: str) -> None:
-        try:
-            (self.recovery_dir / f"{self._safe(job_id)}.claim").unlink()
-        except FileNotFoundError:
-            pass
+        token = self._recovery_claim_tokens.pop(job_id, None)
+        if token:
+            self._release_claim_path(
+                self.recovery_dir / f"{self._safe(job_id)}.claim",
+                expected_token=token,
+            )
 
     def set_worker_pid(self, job_id: str, pid: int | None) -> None:
-        job = self._load(job_id)
-        job["worker_pid"] = pid
-        # Snapshot the creation time NOW, while the PID provably belongs to the worker we
-        # just spawned. A later reap compares against this to tell a live worker from a
-        # recycled PID (Windows). None on POSIX / when unreadable — the reuse guard then
-        # degrades to the prior always-kill behaviour, which is safe.
-        job["worker_create_time"] = osutil.pid_create_time(pid)
-        self._save(job)
+        with self._job_mutation(job_id):
+            job = self._load(job_id)
+            if job.get("status") not in {"pending", "running", "recovering"}:
+                return
+            job["worker_pid"] = pid
+            job["worker_create_time"] = osutil.pid_create_time(pid)
+            job["worker_identity"] = _process_identity(pid)
+            job.pop("reservation_owner_pid", None)
+            job.pop("reservation_owner_create_time", None)
+            job.pop("reservation_owner_identity", None)
+            self._save(job)
 
     def _kill_worker(self, job: dict) -> dict:
         """Terminate a worker by PID — unless the PID was recycled to a different process.
@@ -182,8 +327,16 @@ class JobManager:
             # this runtime's own PID must not let a reap take the runtime down — and on
             # Windows terminate_tree runs `taskkill /T`, which would also kill our children.
             return {"method": "skipped", "ok": False, "reason": "self_pid", "pid": pid}
-        if pid and osutil.pid_reused(pid, job.get("worker_create_time")):
-            return {"method": "skipped", "ok": False, "reason": "pid_reuse_detected", "pid": pid}
+        generation = _process_generation_matches(
+            pid, job.get("worker_create_time"), job.get("worker_identity")
+        )
+        if pid and osutil.process_alive(pid) and generation is False:
+            return {
+                "method": "skipped",
+                "ok": False,
+                "reason": "pid_reuse_detected",
+                "pid": pid,
+            }
         return osutil.terminate_tree(None, pid=pid)
 
     def touch_heartbeat(self, job_id: str, progress: dict | None = None) -> None:
@@ -209,33 +362,30 @@ class JobManager:
         return self._read_side(self._beat_path(job_id))
 
     def mark_running(self, job_id: str) -> dict:
-        job = self._load(job_id)
-        job["status"] = "running"
-        job["started_at"] = job["started_at"] or self._now()
-        self._save(job)
-        return job
-
-    def complete_job(self, job_id: str, output: dict) -> dict:
-        job = self._load(job_id)
-        if job.get("reaped"):
-            # The job was reaped while this worker was still running (rate limit, dead
-            # probe). Letting the late finish flip it back to completed would undo a
-            # decision the caller has already acted on. The payload is kept rather than
-            # dropped: it is real work, just no longer the answer to anyone's question.
-            #
-            # `reaped` alone, not `status == "failed" and reaped`: the flag IS the claim,
-            # and pairing it with a status made the guard depend on two fields landing
-            # together. `reap_stalled` writes both in one atomic save, so a record that
-            # carries the flag has been claimed no matter what its status currently reads.
-            job["late_output"] = output
+        with self._job_mutation(job_id):
+            job = self._load(job_id)
+            if job.get("status") not in {"pending", "recovering"}:
+                return job
+            job["status"] = "running"
+            job["started_at"] = job["started_at"] or self._now()
             self._save(job)
             return job
-        job["status"] = "completed"
-        job.pop("recovery_in_progress", None)
-        job["completed_at"] = self._now()
-        job["output"] = output
-        job["error"] = None
-        self._save(job)
+
+    def complete_job(self, job_id: str, output: dict) -> dict:
+        with self._job_mutation(job_id):
+            job = self._load(job_id)
+            if job.get("status") == "completed":
+                pass
+            elif job.get("reaped") or job.get("status") == "failed":
+                job["late_output"] = output
+                self._save(job)
+            else:
+                job["status"] = "completed"
+                job.pop("recovery_in_progress", None)
+                job["completed_at"] = self._now()
+                job["output"] = output
+                job["error"] = None
+                self._save(job)
         self._release_session_lock(job)
         return job
 
@@ -246,16 +396,30 @@ class JobManager:
         output: dict | None = None,
         reaped: bool = False,
     ) -> dict:
-        job = self._load(job_id)
-        job["status"] = "failed"
-        job.pop("recovery_in_progress", None)
-        job["completed_at"] = self._now()
-        job["error"] = error
-        if output is not None:
-            job["output"] = output
-        if reaped:
-            job["reaped"] = True
-        self._save(job)
+        with self._job_mutation(job_id):
+            job = self._load(job_id)
+            if job.get("status") == "completed":
+                pass
+            elif job.get("status") == "failed":
+                changed = False
+                if output is not None and job.get("output") is None:
+                    job["output"] = output
+                    changed = True
+                if reaped and not job.get("reaped"):
+                    job["reaped"] = True
+                    changed = True
+                if changed:
+                    self._save(job)
+            else:
+                job["status"] = "failed"
+                job.pop("recovery_in_progress", None)
+                job["completed_at"] = self._now()
+                job["error"] = error
+                if output is not None:
+                    job["output"] = output
+                if reaped:
+                    job["reaped"] = True
+                self._save(job)
         self._release_session_lock(job)
         return job
 
@@ -317,17 +481,12 @@ class JobManager:
                         },
                     }
             elif self._exceeded_max_runtime(job):
-                # The one path that can race a live worker: the backstop fires on age while
-                # the PID is still up (or was reused), so the worker may finish and call
-                # complete_job right after this. reaped=True makes that finish land as
-                # late_output instead of resurrecting the job; terminate_tree then stops the
-                # worker from running to completion and burning quota after we stopped waiting.
+                self._kill_worker(job)
                 job = self.fail_job(
                     job_id,
                     f"job exceeded max runtime {self.max_runtime_seconds}s (reaped)",
                     reaped=True,
                 )
-                self._kill_worker(job)
             elif state == ALIVE_STALLED:
                 # Alive but silent. Report it — never reap on suspicion alone.
                 beat = self.read_heartbeat(job_id) or {}
@@ -398,6 +557,7 @@ class JobManager:
         )
         cutoff = time.time() - ttl_days * 86400
         removed = 0
+        logs_removed = 0
         for index, path in enumerate(files):
             if index < keep_last:
                 continue
@@ -415,15 +575,32 @@ class JobManager:
                     for side in (
                         self._beat_path(job.get("job_id", "")),
                         self._probe_path(job.get("job_id", "")),
+                        self.log_path(job.get("job_id", "")),
                     ):
                         try:
                             side.unlink()
+                            if side.parent == self.log_dir:
+                                logs_removed += 1
                         except OSError:
                             pass
                     removed += 1
             except OSError:
                 continue
-        return {"removed": removed, "kept": min(len(files), keep_last)}
+
+        for log_path in self.log_dir.glob("*.log"):
+            if self._path(log_path.stem).exists():
+                continue
+            try:
+                if log_path.stat().st_mtime < cutoff:
+                    log_path.unlink()
+                    logs_removed += 1
+            except OSError:
+                continue
+        return {
+            "removed": removed,
+            "kept": len(files) - removed,
+            "logs_removed": logs_removed,
+        }
 
     def _worker_dead(self, job: dict) -> bool:
         return self.liveness(job) == DEAD
@@ -447,7 +624,10 @@ class JobManager:
         pid = job.get("worker_pid")
         if pid is None:
             return None  # not yet spawned; nothing to reap
-        if not osutil.process_alive(pid):
+        generation = _process_generation_matches(
+            pid, job.get("worker_create_time"), job.get("worker_identity")
+        )
+        if generation is False:
             return DEAD
 
         idle = self._idle_seconds(job)
@@ -556,18 +736,29 @@ class JobManager:
         """
         from core.contract import make_error
 
-        job = self.get_job(job_id) or {}
+        with self._job_mutation(job_id):
+            job = self._load(job_id)
+            if job.get("status") not in {"pending", "running", "recovering"}:
+                terminal = True
+            else:
+                job["status"] = "failed"
+                job["reaped"] = True
+                job["completed_at"] = self._now()
+                job["error"] = message
+                job.pop("recovery_in_progress", None)
+                self._save(job)
+                terminal = False
 
-        # Claim atomically before killing so a concurrent completion becomes late output.
-        try:
-            record = self._load(job_id)
-            record["status"] = "failed"
-            record["reaped"] = True
-            self._save(record)
-        except (OSError, ValueError, KeyError):
-            # Best effort. An unwritable record must not stop the kill below: a worker
-            # left running burns quota against a job nobody is waiting for.
-            pass
+        if terminal:
+            result = self.get_result(job_id)
+            if result.get("status") == "completed":
+                return {
+                    "ok": True,
+                    "job_id": job_id,
+                    "status": "completed",
+                    "output": result.get("output"),
+                }
+            return result
 
         kill = self._kill_worker(job)
         meta = {
@@ -581,20 +772,15 @@ class JobManager:
             meta["probe"] = probe
         output = make_error(error_type, message, next_action=next_action, meta=meta)
 
-        # Attaches the typed error and releases the session lock. `fail_job` reloads the
-        # record, so the `reaped` flag claimed above survives this write. Pass reaped=True
-        # too as a backstop: if the atomic claim's _save above threw (disk full, permission),
-        # the flag was never persisted, and only setting it here keeps a late complete_job
-        # from resurrecting the job.
         failed = self.fail_job(job_id, message, output=output, reaped=True)
         return {**output, "job_id": job_id, "status": failed.get("status", "failed")}
 
     def active_worker_count(self) -> int:
         """Workers in flight across ALL sessions (global concurrency).
 
-        Counts pending jobs (a slot claimed, worker about to spawn) plus running jobs whose
-        PID is still alive. A running-but-dead record (crashed, not yet reaped) does NOT
-        count — it holds no worker. Cheap: a handful of small top-level JSON files.
+        Counts live startup reservations and live workers. A pending/running record whose
+        recorded process generation is gone does not consume capacity, so it can recover
+        without deadlocking on its own stale slot.
         """
         n = 0
         for path in self.job_dir.glob("*.json"):
@@ -606,9 +792,45 @@ class JobManager:
                 continue
             status = rec.get("status")
             if status in {"pending", "recovering"}:
-                n += 1
-            elif status == "running" and osutil.process_alive(rec.get("worker_pid")):
-                n += 1
+                worker_pid = rec.get("worker_pid")
+                if worker_pid:
+                    generation = _process_generation_matches(
+                        worker_pid,
+                        rec.get("worker_create_time"),
+                        rec.get("worker_identity"),
+                    )
+                    if generation is True:
+                        n += 1
+                    elif generation is None:
+                        age = self._age_seconds(
+                            rec.get("recovery_started_at") or rec.get("created_at")
+                        )
+                        if age is None or age <= _CLAIM_STALE_SECONDS:
+                            n += 1
+                    continue
+
+                owner_pid = rec.get("reservation_owner_pid")
+                owner_generation = _process_generation_matches(
+                    owner_pid,
+                    rec.get("reservation_owner_create_time"),
+                    rec.get("reservation_owner_identity"),
+                )
+                if owner_generation is True:
+                    n += 1
+                elif owner_generation is None and owner_pid:
+                    age = self._age_seconds(
+                        rec.get("recovery_started_at") or rec.get("created_at")
+                    )
+                    if age is None or age <= _CLAIM_STALE_SECONDS:
+                        n += 1
+            elif status == "running":
+                generation = _process_generation_matches(
+                    rec.get("worker_pid"),
+                    rec.get("worker_create_time"),
+                    rec.get("worker_identity"),
+                )
+                if generation is not False:
+                    n += 1
         return n
 
     def active_job_for_session(self, session_id: str) -> dict | None:
@@ -631,6 +853,139 @@ class JobManager:
 
     def _probe_path(self, job_id: str) -> Path:
         return self.beat_dir / f"{self._safe(job_id)}.probe.json"
+
+    def _mutation_path(self, job_id: str) -> Path:
+        return self.mutation_dir / f"{self._safe(job_id)}.claim"
+
+    def log_path(self, job_id: str) -> Path:
+        return self.log_dir / f"{self._safe(job_id)}.log"
+
+    @contextmanager
+    def _exclusive_file_guard(self, path: Path, timeout: float = 30.0):
+        """Cross-process advisory lock backed by a persistent one-byte file."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = path.open("a+b")
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        deadline = time.monotonic() + timeout
+        locked = False
+        try:
+            while not locked:
+                try:
+                    handle.seek(0)
+                    if os.name == "nt":
+                        import msvcrt
+
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    locked = True
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"timed out waiting for guard {path}")
+                    time.sleep(0.01)
+            yield
+        finally:
+            if locked:
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            handle.close()
+
+    @contextmanager
+    def capacity_guard(self):
+        """Serialize worker admission and workspace upgrades across processes."""
+        with self._exclusive_file_guard(self.job_dir / ".capacity.guard"):
+            yield
+
+    @contextmanager
+    def _job_mutation(self, job_id: str):
+        path = self._mutation_path(job_id)
+        token = secrets.token_hex(16)
+        deadline = time.monotonic() + _MUTATION_WAIT_SECONDS
+        payload = {
+            "job_id": job_id,
+            "owner_pid": os.getpid(),
+            "owner_create_time": osutil.pid_create_time(os.getpid()),
+            "owner_identity": _process_identity(os.getpid()),
+            "created_at": self._now(),
+            "token": token,
+        }
+
+        while True:
+            try:
+                fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                break
+            except FileExistsError:
+                existing = self._read_side(path)
+                if self._claim_is_stale(path, _CLAIM_STALE_SECONDS, existing):
+                    self._release_claim_path(
+                        path,
+                        expected_token=(existing or {}).get("token"),
+                        force=existing is None,
+                    )
+                    continue
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"timed out waiting to update job {job_id}")
+                time.sleep(0.01)
+
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
+                json.dump(payload, file)
+                file.flush()
+                os.fsync(file.fileno())
+            yield
+        finally:
+            self._release_claim_path(path, expected_token=token)
+
+    @staticmethod
+    def _claim_is_stale(
+        path: Path, stale_after_seconds: float, payload: dict | None
+    ) -> bool:
+        try:
+            age = time.time() - path.stat().st_mtime
+        except OSError:
+            return False
+        if age <= stale_after_seconds:
+            return False
+        if payload:
+            pid = payload.get("owner_pid")
+            generation = _process_generation_matches(
+                pid,
+                payload.get("owner_create_time"),
+                payload.get("owner_identity"),
+            )
+            if generation is True:
+                return False
+        return True
+
+    def _release_claim_path(
+        self,
+        path: Path,
+        expected_token: str | None = None,
+        force: bool = False,
+    ) -> bool:
+        guard_path = path.with_name(f"{path.name}.guard")
+        with self._exclusive_file_guard(guard_path):
+            if not force:
+                current = self._read_side(path)
+                if not current or current.get("token") != expected_token:
+                    return False
+            try:
+                path.unlink()
+                return True
+            except FileNotFoundError:
+                return False
 
     def _write_side(self, path: Path, payload: dict) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -663,63 +1018,114 @@ class JobManager:
             json.dump(job, file, indent=2)
         temp.replace(path)
 
-    def _acquire_session_lock(self, session_id: str, job_id: str) -> None:
+    def _acquire_session_lock(self, session_id: str, job_id: str) -> str:
         lock_path = self._lock_path(session_id)
         lock_path.parent.mkdir(parents=True, exist_ok=True)
+        token = secrets.token_hex(16)
         payload = {
             "session_id": session_id,
             "job_id": job_id,
             "created_at": self._now(),
+            "owner_pid": os.getpid(),
+            "owner_create_time": osutil.pid_create_time(os.getpid()),
+            "owner_identity": _process_identity(os.getpid()),
+            "token": token,
         }
 
-        try:
-            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            existing = self._read_lock(lock_path)
-            existing_job = (
-                self.get_job(existing.get("job_id", "")) if existing else None
-            )
-            if existing_job and existing_job.get("status") in {
-                "pending",
-                "running",
-                "recovering",
-            }:
-                # Reap a dead worker instead of blocking forever.
-                if self._worker_dead(existing_job):
-                    self.fail_job(
-                        existing_job["job_id"],
-                        "worker process died before completing (reaped)",
-                    )
-                elif self._exceeded_max_runtime(existing_job):
-                    # Same live-worker race as get_result's backstop: the existing worker
-                    # may be hung past max runtime yet still alive. Claim with reaped=True so
-                    # a late complete_job cannot resurrect it, and kill the tree so it stops
-                    # burning quota while the new job takes the lock.
-                    self.fail_job(
-                        existing_job["job_id"],
-                        f"job exceeded max runtime {self.max_runtime_seconds}s (reaped)",
-                        reaped=True,
-                    )
-                    self._kill_worker(existing_job)
-                else:
-                    raise ValueError(
-                        f"session {session_id} already has active job {existing_job['job_id']}"
-                    )
-            self._release_lock_path(lock_path)
-            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        for _ in range(3):
+            try:
+                fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                break
+            except FileExistsError:
+                existing = self._read_lock(lock_path)
+                if not existing:
+                    if not self._claim_is_stale(
+                        lock_path, _CLAIM_STALE_SECONDS, None
+                    ):
+                        raise ValueError(
+                            f"session {session_id} lock is being initialized"
+                        )
+                    self._release_lock_path(lock_path, force=True)
+                    continue
 
-        with os.fdopen(fd, "w", encoding="utf-8") as file:
-            json.dump(payload, file, indent=2)
+                existing_job = self.get_job(existing.get("job_id", ""))
+                if existing_job and existing_job.get("status") in {
+                    "pending",
+                    "running",
+                    "recovering",
+                }:
+                    if self._worker_dead(existing_job):
+                        self.fail_job(
+                            existing_job["job_id"],
+                            "worker process died before completing (reaped)",
+                            reaped=True,
+                        )
+                    elif self._exceeded_max_runtime(existing_job):
+                        self._kill_worker(existing_job)
+                        self.fail_job(
+                            existing_job["job_id"],
+                            f"job exceeded max runtime {self.max_runtime_seconds}s (reaped)",
+                            reaped=True,
+                        )
+                    else:
+                        raise ValueError(
+                            f"session {session_id} already has active job {existing_job['job_id']}"
+                        )
+                else:
+                    if existing_job or self._claim_is_stale(
+                        lock_path, _CLAIM_STALE_SECONDS, existing
+                    ):
+                        self._release_lock_path(
+                            lock_path,
+                            expected_job_id=existing.get("job_id"),
+                            expected_token=existing.get("token"),
+                        )
+                    else:
+                        raise ValueError(
+                            f"session {session_id} lock has no job record yet"
+                        )
+        else:
+            raise ValueError(f"session {session_id} lock changed during acquisition")
+
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
+                json.dump(payload, file, indent=2)
+                file.flush()
+                os.fsync(file.fileno())
+        except Exception:
+            self._release_lock_path(
+                lock_path, expected_job_id=job_id, expected_token=token, force=True
+            )
+            raise
+        return token
 
     def _release_session_lock(self, job: dict) -> None:
-        self._release_lock_path(self._lock_path(job["session_id"]))
+        self._release_lock_path(
+            self._lock_path(job["session_id"]),
+            expected_job_id=job.get("job_id"),
+            expected_token=job.get("lock_token"),
+        )
 
-    @staticmethod
-    def _release_lock_path(path: Path) -> None:
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
+    def _release_lock_path(
+        self,
+        path: Path,
+        expected_job_id: str | None = None,
+        expected_token: str | None = None,
+        force: bool = False,
+    ) -> bool:
+        guard_path = path.with_name(f"{path.name}.guard")
+        with self._exclusive_file_guard(guard_path):
+            if not force:
+                current = self._read_lock(path)
+                if not current or current.get("job_id") != expected_job_id:
+                    return False
+                if expected_token and current.get("token") != expected_token:
+                    return False
+            try:
+                path.unlink()
+                return True
+            except FileNotFoundError:
+                return False
 
     @staticmethod
     def _read_lock(path: Path) -> dict | None:
@@ -741,15 +1147,21 @@ class JobManager:
 
     @staticmethod
     def request_hash(
-        command: str, task: str | None, session_id: str, work_dir: str | None
+        command: str,
+        task: str | None,
+        session_id: str,
+        work_dir: str | None,
+        allow_reuse: bool = True,
+        model: str | None = None,
     ) -> str:
-        # task is optional for commands such as sweep; normalize None before hashing.
         raw = "|".join(
             [
                 (command or "").strip().lower(),
                 (task or "").strip(),
                 session_id,
                 work_dir or "",
+                "reuse" if allow_reuse else "fresh",
+                model or "",
             ]
         )
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
@@ -758,7 +1170,7 @@ class JobManager:
 
     @staticmethod
     def _safe(value: str) -> str:
-        return re.sub(r"[^A-Za-z0-9_.-]", "_", value)
+        return safe_path_component(value)
 
     @staticmethod
     def _now() -> str:

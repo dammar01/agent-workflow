@@ -285,7 +285,13 @@ def _anchor_hash(project_root: Path, file: str | None, line: int | None) -> str 
     (used as the light ingest-time verify AND the read-time staleness check)."""
     if not file or not line:
         return None
-    path = Path(project_root) / file
+    try:
+        root = Path(project_root).resolve()
+        path = (root / file).resolve()
+    except (OSError, ValueError):
+        return None
+    if path != root and root not in path.parents:
+        return None
     if not path.is_file():
         return None
     try:
@@ -376,10 +382,6 @@ def _recurrence_counts(
         return {}
     excluded = _safe_component(exclude_session_id) if exclude_session_id else None
     injected_norms = injected or set()
-    # A session's past runs never change: their output.raw.md files are written once and
-    # then only added to. Re-reading every file of every session on every ingest made this
-    # cost grow with the project's whole history, for an answer that only moves when a NEW
-    # run lands. Cache each session's claim set, keyed by what would invalidate it.
     cache = _load_claim_cache(workflow_dir)
     dirty = False
     per_claim: dict[str, set[str]] = {}
@@ -389,14 +391,26 @@ def _recurrence_counts(
             continue
         if excluded and sdir.name == excluded:
             continue
-        runs = sorted(p.name for p in logs.iterdir() if p.is_dir())
-        fingerprint = f"{len(runs)}:{runs[-1] if runs else ''}"
+        runs = sorted((p for p in logs.iterdir() if p.is_dir()), key=lambda p: p.name)
+        fingerprint_parts: list[str] = []
+        for run in runs:
+            out = run / "output.raw.md"
+            try:
+                stat = out.stat()
+                fingerprint_parts.append(
+                    f"{run.name}:{stat.st_mtime_ns}:{stat.st_size}"
+                )
+            except OSError:
+                fingerprint_parts.append(f"{run.name}:missing")
+        fingerprint = hashlib.sha256(
+            "\n".join(fingerprint_parts).encode("utf-8")
+        ).hexdigest()[:24]
         entry = cache.get(sdir.name)
         if entry and entry.get("fingerprint") == fingerprint:
             seen = set(entry.get("claims") or [])
         else:
             seen = set()
-            for run in logs.iterdir():
+            for run in runs:
                 out = run / "output.raw.md"
                 if not out.exists():
                     continue

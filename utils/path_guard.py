@@ -4,8 +4,42 @@ Scans a task string for explicit references to sensitive files or paths
 outside the project root, so obviously-unsafe requests fail early with a
 structured reason instead of a silent opencode permission error.
 """
+import hashlib
 import re
 from pathlib import Path
+
+_WINDOWS_RESERVED_NAMES = {
+    "con",
+    "prn",
+    "aux",
+    "nul",
+    *(f"com{index}" for index in range(1, 10)),
+    *(f"lpt{index}" for index in range(1, 10)),
+}
+_HASHED_COMPONENT_SUFFIX = re.compile(r"--[0-9a-f]{12}$")
+
+
+def safe_path_component(value: str) -> str:
+    """Map an identifier to one portable, collision-resistant path component."""
+    raw = str(value or "")
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]", "_", raw)
+    device_stem = raw.casefold().split(".", 1)[0]
+    portable_plain = (
+        cleaned == raw
+        and cleaned not in {"", ".", ".."}
+        and len(cleaned) <= 120
+        and raw == raw.casefold()
+        and not raw.endswith((".", " "))
+        and device_stem not in _WINDOWS_RESERVED_NAMES
+        and not _HASHED_COMPONENT_SUFFIX.search(raw)
+    )
+    if portable_plain:
+        return cleaned
+    stem = cleaned.strip(". ")[:96] or "session"
+    if stem.casefold().split(".", 1)[0] in _WINDOWS_RESERVED_NAMES:
+        stem = f"id_{stem}"
+    digest = hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:12]
+    return f"{stem}--{digest}"
 
 # Filename patterns specific enough to flag wherever they appear as a token.
 SENSITIVE_PATTERNS = (
@@ -34,6 +68,11 @@ _PATH_TOKEN = re.compile(r"(?:[A-Za-z]:[\\/]|~|/)[^\s\"']*|[^\s\"']+[\\/][^\s\"'
 # Whitespace-delimited word, and the shape that makes one look like a path.
 _WORD = re.compile(r"[^\s\"'`]+")
 _PATH_SHAPE = re.compile(r"[\\/]|^[A-Za-z]:|^~")
+_BARE_FILE = re.compile(
+    r"^[^\\/]+\.[A-Za-z0-9][A-Za-z0-9._-]*?"
+    r"(?:(?::\d+(?:[-:]\d+)?)|(?:#L\d+(?:-L?\d+)?))?$",
+    re.IGNORECASE,
+)
 
 
 def _clean_token(token: str) -> str:
@@ -55,7 +94,7 @@ def validate_scope(task: str, project_root: str | Path) -> tuple[bool, list[str]
         if not token:
             continue
         patterns = SENSITIVE_PATTERNS
-        if _PATH_SHAPE.search(token):
+        if _PATH_SHAPE.search(token) or _BARE_FILE.match(token):
             patterns = SENSITIVE_PATTERNS + SENSITIVE_NAME_PATTERNS
         for pattern in patterns:
             if re.search(pattern, token, re.IGNORECASE):
@@ -63,25 +102,20 @@ def validate_scope(task: str, project_root: str | Path) -> tuple[bool, list[str]
                 break
 
     for token in _PATH_TOKEN.findall(text):
-        candidate = token.strip("\"'.,);")
+        candidate = _clean_token(token)
         if candidate in {"/", "~"}:
             continue
-        # Home-relative path (~/ or ~\) is outside project_root by definition —
-        # flag it without resolving, so we never depend on the home env being set.
         if candidate[:2] in ("~/", "~\\"):
             blocked.append(candidate)
             continue
-        # A "~" not followed by a separator (e.g. "~:1127" line-number shorthand)
-        # is not a filesystem path — skip it. Never call expanduser(): on a worker
-        # with no USERPROFILE/HOMEPATH it raises RuntimeError and crashes the run.
         if candidate.startswith("~"):
             continue
         try:
-            resolved = Path(candidate)
-            if resolved.is_absolute():
-                resolved = resolved.resolve()
-                if root not in resolved.parents and resolved != root:
-                    blocked.append(candidate)
+            path_text = re.sub(r":\d+(?:(?:-|:)\d+)?$", "", candidate)
+            path = Path(path_text)
+            resolved = path.resolve() if path.is_absolute() else (root / path).resolve()
+            if root not in resolved.parents and resolved != root:
+                blocked.append(candidate)
         except (OSError, ValueError):
             continue
 

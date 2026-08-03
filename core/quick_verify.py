@@ -16,8 +16,7 @@ from core.workflow_runtime import now_iso
 from utils import osutil
 
 FILE_TIMEOUT_SECONDS = 20
-# Generated bundles and dumps are read whole to be parsed; a multi-GB one would take
-# the process down. Reported as not_checked rather than silently passed.
+# Bound parse-only checks so generated bundles cannot exhaust the verifier.
 MAX_FILE_BYTES = 2 * 1024 * 1024
 
 # Build artifacts and vendored trees: never the subject of a verification.
@@ -59,32 +58,45 @@ def _run(argv: list[str], project_root: Path) -> tuple[int, str]:
     return proc.returncode, output.strip()
 
 
-def _git_lines(argv: list[str], project_root: Path) -> list[str]:
+def _git_lines(argv: list[str], project_root: Path) -> tuple[list[str], str | None]:
     code, output = _run(argv, project_root)
     if code != 0:
-        return []
-    return [line.strip() for line in output.splitlines() if line.strip()]
+        detail = output or f"git exited {code}"
+        return [], f"{' '.join(argv)}: {detail[:300]}"
+    return [line.strip() for line in output.splitlines() if line.strip()], None
 
 
-def changed_files(project_root: Path) -> list[str]:
-    """Tracked modifications plus untracked new files, relative to project_root.
-
-    Untracked files are included so newly created files are verified too.
-    """
-    tracked = _git_lines(["git", "diff", "--name-only", "HEAD"], project_root)
-    if not tracked:
-        tracked = _git_lines(["git", "diff", "--name-only"], project_root)
-    untracked = _git_lines(
-        ["git", "ls-files", "--others", "--exclude-standard"], project_root
+def _discover_changed_files(project_root: Path) -> tuple[list[str], list[str]]:
+    commands = (
+        ["git", "diff", "--name-only", "--"],
+        ["git", "diff", "--cached", "--name-only", "--"],
+        ["git", "ls-files", "--others", "--exclude-standard"],
     )
+    discovered: list[str] = []
+    errors: list[str] = []
+    for argv in commands:
+        lines, error = _git_lines(argv, project_root)
+        if error:
+            errors.append(error)
+        discovered.extend(lines)
+
     seen: list[str] = []
-    for rel in [*tracked, *untracked]:
-        if rel in seen or not (project_root / rel).is_file():
+    for rel in discovered:
+        if rel in seen:
             continue
         if _IGNORED_PARTS & set(Path(rel).parts):
             continue
         seen.append(rel)
-    return seen
+    return seen, errors
+
+
+def changed_files(project_root: Path) -> list[str]:
+    """Staged, unstaged, and untracked files relative to project_root.
+
+    Untracked files are included so newly created files are verified too.
+    """
+    files, _errors = _discover_changed_files(project_root)
+    return files
 
 
 def _check_json(project_root: Path, rel: str) -> tuple[bool, str]:
@@ -120,8 +132,16 @@ def verify_files(project_root: Path, files: list[str]) -> dict:
     for rel in files:
         suffix = Path(rel).suffix.lower()
 
+        path = project_root / rel
+        if not path.exists():
+            not_checked.append({"file": rel, "reason": "deleted or missing"})
+            continue
+        if not path.is_file():
+            not_checked.append({"file": rel, "reason": "not a regular file"})
+            continue
+
         try:
-            size = (project_root / rel).stat().st_size
+            size = path.stat().st_size
         except OSError as exc:
             not_checked.append({"file": rel, "reason": f"unreadable: {exc}"})
             continue
@@ -163,7 +183,8 @@ def verify_files(project_root: Path, files: list[str]) -> dict:
             continue
         tool, build_name_argv = name_entry
         if shutil.which(tool) is None:
-            continue  # optional; absence is reported once in meta, not per file
+            skipped.append({"file": rel, "reason": f"{tool} name checker not on PATH"})
+            continue
         code, output = _run(build_name_argv(rel), project_root)
         if code != 0 and output:
             name_findings.append({"file": rel, "tool": tool, "detail": output[:600]})
@@ -180,32 +201,36 @@ def verify_files(project_root: Path, files: list[str]) -> dict:
 
 def run(project_root: Path, session_id: str | None = None) -> dict:
     """Contract-shaped result, mirroring a delegated call so callers stay uniform."""
-    files = changed_files(project_root)
+    files, discovery_errors = _discover_changed_files(project_root)
     if not files:
+        verdict = "incomplete" if discovery_errors else "skipped"
+        reason = (
+            "git change discovery failed"
+            if discovery_errors
+            else "no changed, staged, or untracked files detected"
+        )
+        lines = ["[QUICK VERIFY]", f"verdict: {verdict}", f"reason: {reason}"]
+        if discovery_errors:
+            lines.append("discovery_errors:")
+            lines.extend(f"- {error}" for error in discovery_errors)
+        lines.append("note: verify_mode=syntax — no test suite was run")
         return {
             "ok": True,
-            "content": (
-                "[QUICK VERIFY]\n"
-                "verdict: skipped\n"
-                "reason: no changed or untracked files detected\n"
-                "note: verify_mode=syntax — no test suite was run"
-            ),
+            "content": "\n".join(lines),
             "meta": {
                 "mode": "quick",
-                "verdict": "skipped",
+                "verdict": verdict,
                 "checked_at": now_iso(),
                 "project_root": str(project_root),
                 "session_id": session_id,
+                "discovery_errors": discovery_errors,
             },
         }
 
     report = verify_files(project_root, files)
-    if report["failed"]:
+    if report["failed"] or report["name_findings"]:
         verdict = "fail"
-    elif report["not_checked"]:
-        # Changed files we could not check (unsupported type, vanished, unreadable) are a
-        # verification GAP, not a clean bill of health. Calling them "pass" would be a false
-        # all-clear — the whole point of honest verify is that a gap is not a pass.
+    elif report["not_checked"] or report["skipped"] or discovery_errors:
         verdict = "incomplete"
     else:
         verdict = "pass"
@@ -229,6 +254,9 @@ def run(project_root: Path, session_id: str | None = None) -> dict:
     if report["skipped"]:
         lines.append("skipped:")
         lines.extend(f"- {item['file']} — {item['reason']}" for item in report["skipped"])
+    if discovery_errors:
+        lines.append("discovery_errors:")
+        lines.extend(f"- {error}" for error in discovery_errors)
     if not report["name_check_available"]:
         lines.append("name_check: unavailable (pyflakes not installed) — syntax only")
     lines.append(
@@ -245,5 +273,6 @@ def run(project_root: Path, session_id: str | None = None) -> dict:
             "project_root": str(project_root),
             "session_id": session_id,
             "quick_verify": report,
+            "discovery_errors": discovery_errors,
         },
     }

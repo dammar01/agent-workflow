@@ -1,15 +1,18 @@
 # Skill: help
-description: Command reference v3.4.0
+description: Command reference v3.4.1
 
 ## Trigger
 /.help
 
 ## Output
-[COMMAND GUIDE — v3.4.0]
+[COMMAND GUIDE — v3.4.1]
 
 LOCAL (main_agent langsung):
   /.execute -y      implement code (wajib -y)
   /.init            buat/regenerate .workflow/ (scripts, opencode.json, config abs-path)
+  /.upgrade         refresh workspace in-place, preserve sessions
+  /.doctor          .workflow + bundle readiness
+  /.sweep           local git diff impact report
   /.refactor <s>    structural, zero behavior change
   /.commit          commit message (Conventional Commits)
   /.review <f>      one-line per issue review
@@ -23,10 +26,8 @@ DELEGATED (1-call .workflow/run script → second_agent):
   /.explore <hint>  evidence gathering
   /.plan <task>     evidence + rencana terstruktur
   /.analyze <topic> deep analysis | --local: Claude only
-  /.verify          3-step verification (auto setelah /.execute)
-  /.sweep           git diff impact
-  /.doctor          .workflow readiness
+  /.verify          3-step verification (auto bila policy mengaktifkan)
 
 [WORKFLOW] /.explore → /.plan → /.execute -y → /.verify
 [SESSION CACHE] LAST_EXPLORE_RESULT → /.plan,/.analyze | LAST_PLAN_RESULT → /.execute | LAST_EXECUTE_DIFF → /.verify,/.sweep
-[INTENT] Prefix "/." OPSIONAL sejak v3.4.0 — bahasa natural auto-detect lalu langsung jalan ("cek logic X", "gimana flow Y", "kerjakan"). Prefix tetap dipakai sebagai override eksplisit saat tebakan meleset.
+[INTENT] Prefix "/." OPSIONAL — bahasa natural auto-detect lalu langsung jalan ("cek logic X", "gimana flow Y", "kerjakan"). Prefix tetap dipakai sebagai override eksplisit saat tebakan meleset.

@@ -7,7 +7,6 @@ COMMAND_ROUTES = {
     "plan": {"role": ROLE_REASONING, "model": None},
     "analyze": {"role": ROLE_REASONING, "model": None},
     "verify": {"role": ROLE_VERIFICATION, "model": None},
-    "sweep": {"role": ROLE_VERIFICATION, "model": None},
     "submit": {"role": ROLE_VERIFICATION, "model": None},
     "status": {"role": ROLE_EXPLORATION, "model": None},
     "result": {"role": ROLE_EXPLORATION, "model": None},

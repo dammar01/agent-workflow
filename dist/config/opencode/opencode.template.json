@@ -4,7 +4,9 @@
       "permission": {
         "write": "deny",
         "edit": "deny",
+        "external_directory": "deny",
         "bash": {
+          "*": "deny",
           "git status": "allow",
           "git status *": "allow",
           "git log": "allow",
@@ -19,12 +21,9 @@
           "git ls-tree *": "allow",
           "git branch": "allow",
           "git describe *": "allow",
-          "ls": "allow",
-          "ls *": "allow",
-          "cat *": "allow",
-          "rg *": "allow",
-          "grep *": "allow",
-          "find *": "allow",
+          "git diff *--output*": "deny",
+          "git log *--output*": "deny",
+          "git show *--output*": "deny",
           "git add *": "deny",
           "git commit *": "deny",
           "git push *": "deny",
@@ -59,8 +58,7 @@
           "rmdir *": "deny",
           "mv *": "deny",
           "cp *": "deny",
-          "tee *": "deny",
-          "*": "deny"
+          "tee *": "deny"
         }
       }
     }

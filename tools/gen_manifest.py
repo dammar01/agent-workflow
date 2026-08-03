@@ -62,9 +62,7 @@ def _dist_files() -> list[str]:
         ]
     hooks = DIST_CONFIG / "claude" / "hooks"
     if hooks.is_dir():
-        found = sorted(
-            p for p in hooks.iterdir() if p.suffix in {".ps1", ".sh"} and p.is_file()
-        )
+        found = sorted(p for p in hooks.iterdir() if p.is_file())
         paths += [f"claude/hooks/{p.name}" for p in found]
     if (DIST_CONFIG / "opencode" / "AGENTS.md").is_file():
         paths.append("opencode/AGENTS.md")
@@ -88,13 +86,13 @@ def _merge_kind(rel: str) -> str:
         if "/skills/" in rel
         or "/commands/" in rel
         or "/agents/" in rel
-        or rel.endswith((".ps1", ".sh"))
+        or "/hooks/" in rel
         else "merge"
     )
 
 
 def _component(rel: str) -> str:
-    """Which upgrade component a shipped file belongs to (P0.7).
+    """Which upgrade component a shipped file belongs to.
 
     prompt_bundle = the LLM-facing contract (CLAUDE.md, skills, AGENTS.md); runtime =
     everything that is machine wiring (hooks, settings template).

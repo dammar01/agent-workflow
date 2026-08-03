@@ -25,7 +25,7 @@ init otomatis: generate scripts (run/inspect/check) + config abs-path + copy ope
 ## Output
 [INIT]
 bootstrap: $AGENT_PATH = <path>
-generated: run/inspect/check.{ps1,sh} + config.json (v3.4.0, main_py_path abs) + opencode.json (copy) + sessions/ (state/scope/cache/logs/runtime per-session, lazy)
+generated: run/inspect/check.{ps1,sh} + config.json (v3.4.1, main_py_path abs) + opencode.json (copy) + sessions/ (state/scope/cache/logs/runtime per-session, lazy)
 gitignore: .workflow/ ok
 status: READY
 ".workflow siap. Coba /.explore atau /.doctor."
