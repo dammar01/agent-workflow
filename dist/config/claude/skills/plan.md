@@ -25,9 +25,16 @@ DILARANG sajikan tebakan (angka, dependency, regresi) sebagai fakta tak berlabel
 task:            <restatement>
 evidence_source: second_agent (1-call) | graphify+claude (local) | none
 assumptions:     - <statement + atribusi> | (tidak ada: alasan)
-open_questions:  - question: <N>. <keputusan arch/impl yg HANYA user bisa putus; BLOCKING> | <opsi A> | <opsi B>   | (tidak ada: alasan)
-                 Bernomor, opsi dipisah " | ". Jawabannya memang pilihan → opsi WAJIB.
+open_questions:  - question: <N>. <keputusan arch/impl yg HANYA user bisa putus; BLOCKING> | <opsi A> :: <deskripsi A> | <opsi B> :: <deskripsi B>   | (tidak ada: alasan)
+                 Bernomor, opsi dipisah " | ", deskripsi opsional setelah " :: ". Jawabannya memang pilihan → opsi WAJIB.
                  Sajikan lewat pertanyaan interaktif, satu per pertanyaan — jangan paksa user membaca struktur mentah.
+                 Renderer = tool AskUserQuestion. Batasnya keras, langgar = call ditolak:
+                   - MAX 4 pertanyaan per call, tiap pertanyaan 2-4 opsi. Lebih → pecah jadi call berikutnya, jangan padatkan.
+                   - `header` tiap pertanyaan MAX 12 karakter. Teks panjang taruh di `question`, bukan header.
+                   - Pilih-banyak → `multiSelect: true`. Pilih-satu → false. Jangan pakai multiSelect utk pertanyaan biner.
+                   - Bagian " :: " jadi `description` opsi; tanpa deskripsi user menebak arti label.
+                   - User selalu dapat opsi bebas "Other" — jangan buat opsi "lainnya" sendiri.
+                   - AskUserQuestion TIDAK tersedia di subagent. Render di main thread; DILARANG delegasikan tanya-user ke Task/subagent.
 resolvable_uncertainties: - uncertainty: <N>. <bisa ditutup> → cara: <read/grep/explore apa> | (tidak ada)
                  NON-blocking. JANGAN tanyakan ke user — nyatakan asumsi, lanjut.
 steps:           1. <concrete + atribusi> 2. ...

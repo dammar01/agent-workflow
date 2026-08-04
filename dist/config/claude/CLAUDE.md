@@ -162,10 +162,11 @@ Tak ada langkah lanjut yang masuk akal → jangan tulis [NEXT] sama sekali. Jang
 ### Plan/analysis output (structured)
 WAJIB: confidence {problem_understanding, root_cause, solution_path} (low|medium|high — alasan).
 Pisah open_questions (keputusan-user, BLOCKING) vs resolvable_uncertainties (kamu tutup dulu). Jangan campur — nyampur = geser bebanmu ke user.
-Format pertanyaan (dipakai runtime utk render interaktif — patuhi persis):
-- `question: <N>. <pertanyaan> | <opsi A> | <opsi B>` → BLOCKING. Bernomor, opsi dipisah ` | `. Opsi WAJIB kalau jawabannya memang pilihan; pertanyaan terbuka boleh tanpa opsi.
+Format pertanyaan (kontrak teks; runtime `parse_questions` memakainya utk output second_agent, kamu memakainya utk merender AskUserQuestion — patuhi persis):
+- `question: <N>. <pertanyaan> | <opsi A> :: <deskripsi A> | <opsi B> :: <deskripsi B>` → BLOCKING. Bernomor, opsi dipisah ` | `, deskripsi opsional setelah ` :: `. Opsi WAJIB kalau jawabannya memang pilihan; pertanyaan terbuka boleh tanpa opsi.
 - `uncertainty: <N>. <hal yang belum pasti>` → NON-blocking. JANGAN tanyakan ke user. Nyatakan asumsimu, lanjut, sebut cara menutupnya nanti.
 Sajikan open_questions lewat pertanyaan interaktif (satu per pertanyaan), bukan paragraf — user tak perlu membaca struktur mentah untuk menjawab. Nol open_questions → jangan interupsi sama sekali.
+Renderer = tool AskUserQuestion. Batas keras (langgar = call ditolak): MAX 4 pertanyaan per call, 2-4 opsi tiap pertanyaan, `header` MAX 12 karakter, `multiSelect: true` cuma utk pilih-banyak. Bagian ` :: ` jadi `description` opsi. User selalu dapat "Other" — jangan buat opsi "lainnya" sendiri. Tool ini TIDAK tersedia di subagent: render di main thread, DILARANG delegasikan tanya-user ke Task/subagent.
 Keterbacaan: prosa dulu, identifier mesin menyusul. Jangan menaburkan `[file:line]` di tengah kalimat sampai narasinya tenggelam — kumpulkan anchor di akhir klaim atau di baris evidence terpisah. Detail tetap tersedia untuk audit; ia cuma berhenti jadi yang pertama dilihat mata.
 Atribusi: TIAP klaim beri sumber [proxy:file:line]|[main_agent-inference]|[user-provided]|[PLACEHOLDER]. Field kosong → tampilkan + alasan. Bangun dari digest+content.
 Anti-spekulasi: DILARANG masukkan angka/dependency/regresi absen-evidence sebagai fakta. Didorong user ≠ izin ngarang; label [main_agent-inference] atau minta evidence. dependency palsu ubah urutan kerja — tunjukkan bukti coupling atau tandai [ASUMSI].
