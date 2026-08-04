@@ -885,8 +885,12 @@ def _install_project_opencode(project_root: Path, tool_dir: str) -> dict:
     return result
 
 
-def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
-    """Emit run.ps1 + run.sh + inspect.ps1 + inspect.sh so main_agent calls one script.
+def _build_run_scripts(project_root: Path, main_py: str) -> list[tuple[Path, str]]:
+    """Compose run/inspect/check scripts so main_agent calls one script.
+
+    Building is separated from writing so doctor can compare what is on disk against what
+    this function would produce — a script that drifted out of step with the generator is
+    invisible to a check that only asks whether the file exists.
 
     Each script uses a python resolvable on ITS OWN platform: the current-OS script
     gets the exact interpreter; the cross-OS script gets a generic name (python/python3)
@@ -899,7 +903,6 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
     check_py = str(Path(main_py).parent / "check.py")
     root = str(project_root)
     workflow_dir = project_root / WORKFLOW_DIRNAME
-    written: list[str] = []
 
     # Background (job) commands go through await+job-command; the rest run directly.
     run_ps1 = (
@@ -918,12 +921,17 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         # so the PreToolUse hook stops blocking gather tools for the rest of this turn.
         f'  $mk = Join-Path "{root}" ".workflow\\sessions\\$Session\\runtime\\delegated.marker"\n'
         "  if (Test-Path -LiteralPath $mk) { Remove-Item -LiteralPath $mk -Force -ErrorAction SilentlyContinue }\n"
-        f'  & "{ps_py}" "{main_py}" --command await --job-command $Command '
-        f'--prompt $Task --session $Session --work-dir "{root}" --pretty\n'
+        f'  $a = @("{main_py}", "--command", "await", "--job-command", $Command)\n'
         "} else {\n"
-        f'  & "{ps_py}" "{main_py}" --command $Command --prompt $Task '
-        f'--session $Session --work-dir "{root}" --pretty\n'
+        f'  $a = @("{main_py}", "--command", $Command)\n'
         "}\n"
+        # PowerShell drops empty-string arguments on their way to a native exe, so a literal
+        # `--prompt $Task` with no task reaches argparse as a bare `--prompt` and it errors
+        # with "expected one argument". Local commands do not need a prompt at all, so the
+        # flag is only appended when there is something to put after it.
+        'if ($Task) { $a += @("--prompt", $Task) }\n'
+        f'$a += @("--session", $Session, "--work-dir", "{root}", "--pretty")\n'
+        f'& "{ps_py}" @a\n'
     )
     run_sh = (
         "#!/usr/bin/env bash\n"
@@ -938,12 +946,15 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
         # Pre-flight gate: clear the marker before dispatching (delegation satisfies the gate).
         f'    MK="{root}/.workflow/sessions/$SESSION/runtime/delegated.marker"\n'
         '    [ -f "$MK" ] && rm -f "$MK"\n'
-        f'    exec "{sh_py}" "{main_py}" --command await --job-command "$COMMAND" '
-        f'--prompt "$TASK" --session "$SESSION" --work-dir "{root}" --pretty ;;\n'
+        f'    ARGS=("{main_py}" --command await --job-command "$COMMAND") ;;\n'
         "  *)\n"
-        f'    exec "{sh_py}" "{main_py}" --command "$COMMAND" --prompt "$TASK" '
-        f'--session "$SESSION" --work-dir "{root}" --pretty ;;\n'
+        f'    ARGS=("{main_py}" --command "$COMMAND") ;;\n'
         "esac\n"
+        # Kept in step with the PowerShell branch: no task, no --prompt. Local commands do
+        # not take one, and an empty value buys nothing on either platform.
+        'if [ -n "$TASK" ]; then ARGS+=(--prompt "$TASK"); fi\n'
+        f'ARGS+=(--session "$SESSION" --work-dir "{root}" --pretty)\n'
+        f'exec "{sh_py}" "${{ARGS[@]}}"\n'
     )
     inspect_ps1 = (
         f'& "{ps_py}" "{main_py}" --command inspect --work-dir "{root}" --pretty\n'
@@ -969,26 +980,93 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
     # Generate only the current OS's flavour: Windows gets .ps1, POSIX gets .sh. The other
     # flavour is dead weight on this machine and only confuses the Bash-allowlist matcher.
     want_ext = osutil.script_ext()
-    for name, content in (
-        ("run.ps1", run_ps1),
-        ("run.sh", run_sh),
-        ("inspect.ps1", inspect_ps1),
-        ("inspect.sh", inspect_sh),
-        ("check.ps1", check_ps1),
-        ("check.sh", check_sh),
-    ):
-        if name.rsplit(".", 1)[-1] != want_ext:
+    return [
+        (workflow_dir / name, content)
+        for name, content in (
+            ("run.ps1", run_ps1),
+            ("run.sh", run_sh),
+            ("inspect.ps1", inspect_ps1),
+            ("inspect.sh", inspect_sh),
+            ("check.ps1", check_ps1),
+            ("check.sh", check_sh),
+        )
+        if name.rsplit(".", 1)[-1] == want_ext
+    ]
+
+
+def _read_script(path: Path) -> str | None:
+    """Current on-disk text, or None when it is missing or unreadable.
+
+    utf-8-sig strips a BOM if present and is harmless when absent, so every comparison
+    against generated content is about the content, never about how a previous writer
+    (or an editor, or PowerShell) chose to encode it.
+    """
+    try:
+        return path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _foreign_os_scripts(project_root: Path) -> list[Path]:
+    """Entry scripts for the OTHER platform that are still sitting in .workflow/.
+
+    Earlier builds wrote both flavours, so a workspace can carry a .sh that no generator
+    has touched since. Nothing on this machine runs it, so nothing notices when it falls
+    out of step — and a copy of the project handed to a colleague on Linux would run that
+    stale file. Left for the caller to delete rather than silently repaired here.
+    """
+    want_ext = osutil.script_ext()
+    other = "sh" if want_ext == "ps1" else "ps1"
+    workflow_dir = project_root / WORKFLOW_DIRNAME
+    return [
+        path
+        for path in (
+            workflow_dir / f"{stem}.{other}" for stem in ("run", "inspect", "check")
+        )
+        if path.exists()
+    ]
+
+
+def script_drift(project_root: Path, main_py: str) -> list[dict]:
+    """Scripts on disk that no longer match what the generator produces.
+
+    Each entry is {'script', 'state'} with state 'missing', 'content_differs', or
+    'foreign_os_leftover'. A drifted script keeps working right up until the CLI it calls
+    changes shape underneath it — the on-disk run.sh routed `sweep` through `--job-command`
+    for a whole release cycle after the generator stopped doing so, because nothing
+    compared the two.
+    """
+    drifted: list[dict] = []
+    for path, content in _build_run_scripts(project_root, main_py):
+        current = _read_script(path)
+        if current is None:
+            drifted.append({"script": path.name, "state": "missing"})
+        elif current != content:
+            drifted.append({"script": path.name, "state": "content_differs"})
+    drifted.extend(
+        {"script": path.name, "state": "foreign_os_leftover"}
+        for path in _foreign_os_scripts(project_root)
+    )
+    return drifted
+
+
+def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
+    """Write the scripts _build_run_scripts composes; return the paths actually rewritten.
+
+    Also deletes leftovers for the other platform: keeping a script no generator maintains
+    is worse than not having one, because it looks usable.
+    """
+    written: list[str] = []
+    for path in _foreign_os_scripts(project_root):
+        try:
+            path.unlink()
+            written.append(f"removed {path}")
+        except OSError:
+            pass  # not ours to force; doctor keeps reporting it
+    for path, content in _build_run_scripts(project_root, main_py):
+        if _read_script(path) == content:
             continue
-        path = workflow_dir / name
-        # utf-8-sig on read strips a BOM if present and is harmless when absent, so the
-        # comparison is about content, never about how the previous writer encoded it.
-        if path.exists():
-            try:
-                if path.read_text(encoding="utf-8-sig") == content:
-                    continue
-            except OSError:
-                pass  # unreadable -> rewrite it
-        if name.endswith(".ps1"):
+        if path.suffix == ".ps1":
             # UTF-8 BOM: Windows PowerShell 5.1 reads a no-BOM file as ANSI/Win-1252,
             # which corrupts any non-ASCII byte (em-dash, accented path) -> parse error.
             atomic_write_text(path, content, encoding="utf-8-sig")
@@ -996,7 +1074,6 @@ def _generate_run_scripts(project_root: Path, main_py: str) -> list[str]:
             atomic_write_text(
                 path, content
             )  # .sh stays plain UTF-8 (BOM breaks the shebang)
-        if name.endswith(".sh"):
             osutil.make_executable(path)
         written.append(str(path))
     return written
@@ -2347,6 +2424,37 @@ def run_doctor(
         recommended_fixes.append(
             "Run `--command upgrade` to regenerate .workflow scripts and backfill new config keys"
         )
+
+    # Script drift: the entry scripts are the only way in, so one that no longer matches the
+    # generator routes commands the CLI has since stopped accepting. An issue, not a note —
+    # a workspace whose front door rejects its own commands is not ready.
+    tool_main_py = configured_path or resolver.get("path")
+    if tool_main_py:
+        drifted = script_drift(project_root, str(tool_main_py))
+        checks["run_script_drift"] = drifted or "none"
+        if drifted:
+            issues.append(
+                "entry script drift: "
+                + ", ".join(f"{d['script']} ({d['state']})" for d in drifted)
+            )
+            if any(d["state"] != "foreign_os_leftover" for d in drifted):
+                recommended_fixes.append(
+                    "Run `--command upgrade` to rewrite the drifted .workflow entry script(s)"
+                )
+            # upgrade deletes these, but it cannot always: a read-only mount, a network
+            # share, another process holding the handle. Naming the manual route as well
+            # keeps a workspace from sitting at NOT_READY with only advice that failed.
+            leftovers = [
+                d["script"] for d in drifted if d["state"] == "foreign_os_leftover"
+            ]
+            if leftovers:
+                recommended_fixes.append(
+                    "Run `--command upgrade` to remove the other platform's leftover "
+                    f"script(s): {', '.join(f'.workflow/{name}' for name in leftovers)} "
+                    "— delete them by hand if upgrade has already run and they remain"
+                )
+    else:
+        checks["run_script_drift"] = "SKIPPED — agent-workflow main.py path unresolved"
 
     # second_agent MCP safety: enumerate opencode MCP servers, flag any that exceed
     # the read-only evidence role (write/exec/fs/db/browser/etc).

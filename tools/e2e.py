@@ -309,12 +309,75 @@ def integrity_checks(report: Report) -> None:
             )
         else:
             script.write_text("# drifted\n", encoding="utf-8")
+            from core.workflow_runtime import script_drift
+
+            seen = script_drift(project, str(REPO_ROOT / "main.py"))
+            report.check(
+                "doctor: reports a drifted entry script",
+                any(
+                    d["script"] == script.name and d["state"] == "content_differs"
+                    for d in seen
+                ),
+                json.dumps(seen),
+            )
             r3 = upgrade_workflow_workspace(project, str(REPO_ROOT / "main.py"))
             report.check(
                 "upgrade: rewrites a drifted script",
                 len(r3["regenerated_scripts"]) > 0,
                 f"{len(r3['regenerated_scripts'])} script(s)",
             )
+            report.check(
+                "doctor: drift clears once upgrade has rewritten the script",
+                script_drift(project, str(REPO_ROOT / "main.py")) == [],
+            )
+            # A leftover from the other platform is unmaintained by every generator that
+            # runs here, so it must be reported and then removed — not quietly kept.
+            other = script.with_suffix(".sh" if script.suffix == ".ps1" else ".ps1")
+            other.write_text("# stale cross-OS leftover\n", encoding="utf-8")
+            report.check(
+                "doctor: flags an entry script left behind for the other OS",
+                any(
+                    d["script"] == other.name and d["state"] == "foreign_os_leftover"
+                    for d in script_drift(project, str(REPO_ROOT / "main.py"))
+                ),
+            )
+            upgrade_workflow_workspace(project, str(REPO_ROOT / "main.py"))
+            report.check(
+                "upgrade: removes the other OS's leftover entry script",
+                not other.exists(),
+            )
+
+            # The entry script is the only sanctioned way in, and local commands take no
+            # task. PowerShell drops empty-string arguments to a native exe, so a literal
+            # `--prompt $Task` used to reach argparse as a bare flag and every local
+            # command died at the door. Exercised through the script, not the CLI: calling
+            # main.py directly would never have caught it.
+            runner = (
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(script),
+                ]
+                if script.suffix == ".ps1"
+                else [str(script)]
+            )
+            for command in ("doctor", "inspect"):
+                res = subprocess.run(
+                    [*runner, command],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    cwd=str(project),
+                )
+                report.check(
+                    f"entry script: `{command}` runs with no task argument",
+                    res.returncode == 0 and _json_from(res.stdout or "") is not None,
+                    f"rc={res.returncode} {(res.stderr or '')[:160]}",
+                )
 
         # --- fan-out capability probe ---
         from core.contract import reported_no_spawn_tool
@@ -332,6 +395,30 @@ def integrity_checks(report: Report) -> None:
         report.check(
             "fan-out: capability persists OFF once learned",
             fanout_capability(project) is False,
+        )
+
+        # A dispatch that forgot its [cN] tags stays unconfirmed — but it must not read as
+        # "no fan-out was attempted", which is the one thing that did not happen.
+        from core.contract import FANOUT_MISMATCH, detect_subagent_usage
+
+        untagged = detect_subagent_usage(
+            "subagents: c0, c1 (dispatched wf-slice)\n- Router routes by command [x.py:1]"
+        )
+        report.check(
+            "fan-out: an untagged dispatch keeps its declared clusters visible",
+            untagged["mode"] == FANOUT_MISMATCH
+            and untagged["used"] is False
+            and untagged["fanout_clusters"] == []
+            and untagged["declared_clusters"] == ["c0", "c1"],
+            json.dumps(untagged),
+        )
+        corroborated = detect_subagent_usage(
+            "subagents: c0, c1\n[c0] Router routes by command [x.py:1]"
+        )
+        report.check(
+            "fan-out: declaration plus [cN] tags still counts as a real fan-out",
+            corroborated["used"] is True
+            and corroborated["fanout_clusters"] == ["c0", "c1"],
         )
     finally:
         shutil.rmtree(project, ignore_errors=True)
@@ -382,6 +469,46 @@ def integrity_checks(report: Report) -> None:
         "verify prompt stays under the Windows 8191-char argv cap",
         len(verify_prompt) < 8191,
         f"{len(verify_prompt)} chars",
+    )
+    report.check(
+        "fan-out: the shipped roster is allowlisted in permission.task",
+        (
+            lambda policy: policy.get("*") == "deny"
+            and {
+                path.stem
+                for path in (
+                    REPO_ROOT / "dist" / "config" / "opencode" / "agents"
+                ).glob("*.md")
+            }
+            <= {name for name, action in policy.items() if action == "allow"}
+        )(
+            json.loads(
+                (
+                    REPO_ROOT / "dist" / "config" / "opencode" / "opencode.template.json"
+                ).read_text(encoding="utf-8")
+            )["agent"]["plan"]["permission"].get("task", {})
+        ),
+    )
+
+    # Shipped docs quote a version back at the user; the code has exactly one.
+    stamped = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "tools" / "stamp_version.py"), "--check"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=str(REPO_ROOT),
+    )
+    report.check(
+        "docs carry the same version the code reports",
+        stamped.returncode == 0,
+        # The report prints through the console codepage; stamp_version's output carries
+        # an em dash, so keep the detail ASCII rather than crashing on cp1252.
+        (stamped.stdout or "")
+        .encode("ascii", "ignore")
+        .decode()
+        .strip()
+        .replace("\n", " ")[:200],
     )
 
     # --- stdout slimming: drop heavy diagnostic meta on success only ---

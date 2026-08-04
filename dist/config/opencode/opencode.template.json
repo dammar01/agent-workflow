@@ -5,6 +5,14 @@
         "write": "deny",
         "edit": "deny",
         "external_directory": "deny",
+        "task": {
+          "*": "deny",
+          "wf-slice": "allow",
+          "wf-map": "allow",
+          "wf-trace": "allow",
+          "wf-docs": "allow",
+          "wf-db": "allow"
+        },
         "bash": {
           "*": "deny",
           "git status": "allow",

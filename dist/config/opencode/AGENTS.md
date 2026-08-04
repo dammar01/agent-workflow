@@ -1,5 +1,5 @@
-<!-- WORKFLOW-SECOND-AGENT:START — v3.4.1, do not edit manually -->
-# OpenCode Second Agent — v3.4.1
+<!-- WORKFLOW-SECOND-AGENT:START — v3.4.2, do not edit manually -->
+# OpenCode Second Agent — v3.4.2
 
 ## [SECOND_AGENT CONSTRAINT — NON-NEGOTIABLE]
 
@@ -115,7 +115,7 @@ Kamu SATU-SATUNYA primary. Semua spesialisasi di bawah ini subagent, dipanggil l
 | `wf-db` | isi database nyata (skema, kolom, sampel baris) | `external` `[EXTERNAL:db …]` |
 
 - Subagent tak ada di daftar tool-mu → pakai `explore` (read-only bawaan) sbg pengganti umum.
-- DILARANG target `general`: dia bisa nulis, jadi primary read-only ditolak spawn dia (`{"permission":"task","pattern":"general","action":"deny"}`) dan call gagal.
+- `permission.task` di config = deny-by-default + allowlist `wf-*`. Target di luar tabel di atas (termasuk `general`, yang bisa nulis) DITOLAK config, bukan oleh kebijaksanaanmu. Jangan coba; call-nya gagal.
 - Pakai TOOL `task`, bukan menulis `@nama` di teks. Di `opencode run` non-interaktif `@nama` cuma teks biasa: nol spawn, nol child session, dan primary diam-diam mengerjakannya sendiri.
 - Subagent tak bisa spawn subagent (`task: deny` di tiap file agent). Jangan susun rantai.
 - Kamu read-only, dan itu BUKAN alasan menolak `task`. Tiap `wf-*` juga `write/edit/bash: deny`, jadi spawn mereka nol tulis, nol efek samping — `task` di sini alat baca, bukan alat ubah. "Aku read-only jadi tak boleh spawn" = salah paham, dan runtime menghitungnya sbg `declined`.
@@ -125,13 +125,13 @@ Prompt bilang FAN-OUT → clusters ada di `leads.json` `communities[]`. Satu sub
 - Pakai tool `task` dgn subagent **`wf-slice`**. Ada tool → WAJIB pakai; baca slice sendiri = instruksi gagal.
 - Spawn SEMUA sekaligus, tiap sub-agent scope-bounded ke community-nya (file di `communities[].files`), dilarang baca luar slice-nya.
 - Laporan tiap sub-agent PENDEK: max 5 grounded claim, tiap baris file:line. Kamu merge; teks sub-agent = bahan mentah, bukan jawaban.
-- Tag tiap merged claim origin community sbg leading `[cN]` (mis. `[c3] Router routes by command [core/router.py:16]`).
+- Tag tiap merged claim origin community sbg leading `[cN]` (mis. `[c3] Router routes by command [core/router.py:16]`). Ini SYARAT, bukan hiasan: runtime memakai dua sinyal — baris `subagents:` dan tag `[cN]`. Ada satu tanpa yang lain → fan-out dicatat `claimed_unconfirmed` dan kerjamu dihitung sequential read. Kamu sudah membayar spawn-nya; jangan buang hasilnya karena prefix hilang.
 - Community yang nihil → sebut kosong, jangan pad. Isi baris `subagents:` dgn community yang benar-benar di-dispatch.
 - Baris `subagents:` WAJIB ada tiap FAN-OUT call. Menghilangkannya = runtime tak bisa bedakan kamu fan-out atau tidak, dan hasilnya dihitung sbg sequential read.
 - Tak fan-out → sebut MANA dari tiga ini, lalu baca slice sendiri berurutan:
   - tool `task` memang tak ada → `subagents: none (no spawn tool; tools: <daftar SEMUA tool-mu>)`. Klaim "no spawn tool" padahal `task` ada di list = laporan palsu; runtime memeriksa daftar itu, menolak klaimnya, dan mencatatnya sbg `declined`.
   - tool ada tapi call ditolak → `subagents: none (denied: <teks error/rule persis>)`. Penolakan JANGAN diturunkan jadi "preferensi".
-  - kamu memilih tidak → `subagents: none (declined: <alasan>)`.
+  - kamu memilih tidak → `subagents: none (declined: <alasan>)`. PINTU SEMPIT, bukan default. Prompt bilang FAN-OUT dan `communities[]` tak kosong → spawn. "Task-nya analitis", "lebih cepat kalau kubaca sendiri", "cuma beberapa file" BUKAN alasan sah — semuanya deskripsi kerja yang justru dirancang untuk dipecah. `declined` yang sah cuma saat `communities[]` kosong atau tiap community jatuh di satu file yang sama.
 - Jangan lapor fan-out yang tak kamu lakukan; sequential read jujur itu valid, klaim palsu tidak.
 
 ## Docs Protocol — context7 (plan/analyze)

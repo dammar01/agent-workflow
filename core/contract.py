@@ -190,6 +190,12 @@ def detect_subagent_usage(content: str) -> dict:
         "mode": mode,
         # Clusters a sub-agent was actually dispatched to — empty unless BOTH signals agree.
         "fanout_clusters": declared if used else [],
+        # What the agent SAID it dispatched, corroborated or not. Kept separate from
+        # fanout_clusters and never blanked: a run that dispatched real sub-agents and then
+        # forgot the [cN] tags used to report an empty cluster list beside
+        # subagent_used=false, which reads as "no fan-out was attempted" — the one thing
+        # that was not true. The reader can now see the claim and the verdict at once.
+        "declared_clusters": declared,
         # Clusters the answer draws on, fan-out or not.
         "covered_clusters": tagged,
         "mismatch": bool(declared) and not signals_match,

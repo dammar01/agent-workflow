@@ -1,4 +1,4 @@
-# agent-workflow v3.4.1
+# agent-workflow v3.4.2
 
 Runtime orkestrasi mandiri untuk alur kerja dua-agent. Tanpa dependency pihak ketiga.
 
@@ -70,7 +70,36 @@ git --version
 
 ---
 
-## Install (v3.4.1)
+## Install (v3.4.2)
+
+### Anggota tim baru — urutan lengkap dari nol
+
+Empat langkah, dijalankan sekali per mesin (kecuali langkah 4, sekali per project):
+
+```bash
+git clone <repo> && cd agent-workflow      # 1. ambil tool-nya
+python install.py --apply                  # 2. pasang config agent global
+export AGENT_PATH="$PWD/main.py"           # 3. beri tahu runtime letak main.py
+                                           #    (permanenkan — lihat "Set AGENT_PATH")
+python main.py --command init --work-dir /path/to/project-anda   # 4. per project
+```
+
+Verifikasi sebelum memakainya:
+
+```bash
+python install.py --check                  # bundle + instalasi global
+cd /path/to/project-anda && .workflow/run.sh doctor    # .workflow\run.ps1 di Windows
+```
+
+`doctor` harus melaporkan `READY` dengan nol issue. Selain itu, baca `recommended_fixes`
+sebelum melanjutkan — status `NOT_READY` berarti ada pintu masuk yang benar-benar rusak,
+bukan sekadar catatan gaya.
+
+Skrip entry di `.workflow/` memanggang path absolut mesin tempat `init` dijalankan, jadi
+langkah 4 milik masing-masing orang. Mengcommit `.workflow/` ke repo bersama tidak akan
+menolong siapa pun; `init` sudah menambahkannya ke `.gitignore`.
+
+### Detail installer
 
 Clone → jalankan satu script → terkonfigurasi.
 
@@ -213,7 +242,7 @@ python $env:AGENT_PATH --command init --work-dir "C:/path/to/target-app" --prett
 
 - `.workflow/config.json` — path absolut `main.py`/`check.py`, sehingga runner dapat menemukan tool tanpa mengandalkan `AGENT_PATH`
 - `.workflow/opencode.json` — salinan project-local, boleh kamu ubah
-- skrip runner untuk **kedua** platform: `run.ps1` `run.sh` `inspect.ps1` `inspect.sh` `check.ps1` `check.sh`
+- skrip runner untuk platform yang sedang berjalan: `run` `inspect` `check` — `.ps1` di Windows, `.sh` di POSIX
 - `.workflow/sessions/` kosong — state per-sesi dibuat lazy saat panggilan terdelegasi pertama
 - entri `.workflow/` ditambahkan ke `.gitignore` root project
 
@@ -223,9 +252,11 @@ Skrip `.sh` diberi bit executable saat dibuat. Kalau repo dipindah lewat media y
 chmod +x .workflow/*.sh
 ```
 
-**Batasan portabilitas.** Kedua set skrip memang selalu ditulis, tapi keduanya memanggang **path absolut dari mesin tempat `init` dijalankan**. Yang generik hanya nama interpreter: skrip untuk OS saat init memakai path Python persis yang terdeteksi, skrip lintas-OS memakai `python`/`python3` yang di-resolve lewat `PATH`. Path ke `main.py` dan `--work-dir` tetap absolut dan spesifik-OS.
+**Batasan portabilitas.** Skrip memanggang **path absolut dari mesin tempat `init` dijalankan** — path ke `main.py`, `--work-dir`, dan interpreter Python yang terdeteksi. Tak ada satu pun yang portabel lintas mesin.
 
-Konsekuensinya: `run.sh` yang dihasilkan di Windows berisi path bergaya `C:\...` dan **tidak akan jalan** di Linux/macOS, begitu pula sebaliknya. Ketika repo, path tool, atau OS berubah — termasuk WSL versus Windows asli — jalankan `upgrade` dari environment baru.
+Karena itu hanya flavour OS yang sedang berjalan yang ditulis, dan `init`/`upgrade` **menghapus** skrip flavour lain yang tertinggal dari build lama. Sebuah `run.sh` yang dihasilkan di Windows berisi path bergaya `C:\...`, tidak akan jalan di Linux/macOS, dan tidak dipelihara generator mana pun di mesin itu — menyimpannya hanya membuatnya tampak dapat dipakai. Setiap anggota tim menjalankan `init` (atau `upgrade`) sendiri di environment masing-masing; itu juga berlaku saat berpindah antara WSL dan Windows asli.
+
+`doctor` membandingkan isi skrip di disk dengan hasil generator dan melaporkannya di `run_script_drift` — `missing`, `content_differs`, atau `foreign_os_leftover`. Semuanya dihitung sebagai issue: skrip inilah satu-satunya pintu masuk, dan yang sudah melenceng akan merutekan command yang sudah tidak diterima CLI.
 
 ## Upgrade workspace
 
@@ -418,7 +449,7 @@ File adapter project-local ini boleh diubah per project. Saat `init`, source-nya
 
 `model: null` berarti pakai model default OpenCode.
 
-Kunci reliability (v3.4.1):
+Kunci reliability (v3.4.2):
 
 | Kunci | Default | Arti |
 | --- | --- | --- |
@@ -629,7 +660,7 @@ pernah tercatat, runtime gagal sebagai `session_capture_failed` dan clean run di
 Request berbeda pada session yang masih terkunci tetap ditolak sebagai
 `job_already_running`.
 
-### Liveness worker (v3.4.1)
+### Liveness worker (v3.4.2)
 
 PID yang hidup **tidak** berarti sedang bekerja. Worker karena itu melaporkan heartbeat sekaligus usia output stream, lalu job diklasifikasi tiga keadaan:
 
@@ -720,7 +751,7 @@ Disebut terbuka karena diam soal ini akan membuat runtime terlihat lebih menjami
 
 ## Referensi
 
-- Catatan rilis: [`prompt/v3.4.1/changelog.md`](prompt/v3.4.1/changelog.md)
+- Catatan rilis: [`prompt/v3.4.2/changelog.md`](prompt/v3.4.2/changelog.md)
 - Kontrak canonical main_agent: [`dist/config/claude/CLAUDE.md`](dist/config/claude/CLAUDE.md)
 - Kontrak canonical second_agent: [`dist/config/opencode/AGENTS.md`](dist/config/opencode/AGENTS.md)
 - Runtime entry point: [`main.py`](main.py)

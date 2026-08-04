@@ -142,8 +142,11 @@ def _evidence_context(
 # permanent limitation.
 _FANOUT_WARNINGS = {
     FANOUT_MISMATCH: (
-        "second_agent declared sub-agents but tagged no claims with [cN]; "
-        "treat the fan-out as unconfirmed"
+        "second_agent declared sub-agents but tagged no claims with [cN], so the "
+        "dispatch cannot be corroborated — see meta.declared_clusters for what it "
+        "claimed. The sub-agents may well have run; the missing tags are what make it "
+        "unprovable. Treat the fan-out as unconfirmed, and read the merged claims as "
+        "the primary agent's own work"
     ),
     FANOUT_DENIED: (
         "sub-agent spawn was refused by a permission rule, not missing. Check the "
@@ -694,6 +697,8 @@ class Executor:
             meta["fanout_mode"] = usage["mode"]
             meta["subagent_fanout_clusters"] = usage["fanout_clusters"]
             meta["covered_clusters"] = usage["covered_clusters"]
+            if usage["declared_clusters"] and not usage["used"]:
+                meta["declared_clusters"] = usage["declared_clusters"]
             warning = _FANOUT_WARNINGS.get(usage["mode"])
             if usage.get("false_incapable_report"):
                 # Say it plainly. The agent broke a rule its own prompt states, and the
