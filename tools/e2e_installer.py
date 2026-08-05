@@ -41,6 +41,7 @@ def installer_checks(report: Report) -> None:
             encoding="utf-8",
             errors="replace",
             env=env,
+            cwd=str(fake_home),
         )
         report.check("dry run exits clean", dry.returncode == 0, f"rc={dry.returncode}")
         report.check("dry run writes nothing", not (fake_home / ".claude").exists())
@@ -53,6 +54,7 @@ def installer_checks(report: Report) -> None:
             encoding="utf-8",
             errors="replace",
             env=env,
+            cwd=str(fake_home),
         )
         report.check(
             "apply exits clean", applied.returncode == 0, f"rc={applied.returncode}"
@@ -107,6 +109,7 @@ def installer_checks(report: Report) -> None:
             encoding="utf-8",
             errors="replace",
             env=env,
+            cwd=str(fake_home),
         )
         report.check(
             "re-install is idempotent",
@@ -121,6 +124,7 @@ def installer_checks(report: Report) -> None:
             encoding="utf-8",
             errors="replace",
             env=env,
+            cwd=str(fake_home),
         )
         report.check(
             "apply followed by check is clean",
@@ -148,6 +152,7 @@ def installer_checks(report: Report) -> None:
             encoding="utf-8",
             errors="replace",
             env=env,
+            cwd=str(fake_home),
         )
         loaded = json.loads(settings.read_text(encoding="utf-8"))
         hook_text = json.dumps(loaded.get("hooks", {}))
@@ -167,6 +172,7 @@ def installer_checks(report: Report) -> None:
             encoding="utf-8",
             errors="replace",
             env=env,
+            cwd=str(fake_home),
         )
         report.check(
             "command-only install passes check",
@@ -181,6 +187,7 @@ def installer_checks(report: Report) -> None:
             encoding="utf-8",
             errors="replace",
             env=env,
+            cwd=str(fake_home),
         )
         loaded = json.loads(settings.read_text(encoding="utf-8"))
         hook_text = json.dumps(loaded.get("hooks", {}))
@@ -203,6 +210,7 @@ def installer_checks(report: Report) -> None:
             encoding="utf-8",
             errors="replace",
             env=env,
+            cwd=str(fake_home),
         )
         report.check(
             "check detects installed settings drift",
@@ -217,6 +225,7 @@ def installer_checks(report: Report) -> None:
             encoding="utf-8",
             errors="replace",
             env=env,
+            cwd=str(fake_home),
         )
         report.check(
             "apply repairs installed settings drift", settings_repair.returncode == 0
@@ -237,6 +246,7 @@ def installer_checks(report: Report) -> None:
             encoding="utf-8",
             errors="replace",
             env=env,
+            cwd=str(fake_home),
         )
         report.check(
             "check detects installed OpenCode policy drift",
@@ -251,6 +261,7 @@ def installer_checks(report: Report) -> None:
             encoding="utf-8",
             errors="replace",
             env=env,
+            cwd=str(fake_home),
         )
         repaired_opencode = json.loads(provider_config.read_text(encoding="utf-8"))
         repaired_permission = repaired_opencode["agent"]["plan"]["permission"]
@@ -270,6 +281,7 @@ def installer_checks(report: Report) -> None:
             encoding="utf-8",
             errors="replace",
             env=env,
+            cwd=str(fake_home),
         )
         report.check("repaired install passes check", repaired_check.returncode == 0)
 
@@ -287,6 +299,7 @@ def installer_checks(report: Report) -> None:
             encoding="utf-8",
             errors="replace",
             env=env,
+            cwd=str(fake_home),
         )
         report.check(
             "check detects semantic OpenCode rule-order drift",
@@ -301,6 +314,7 @@ def installer_checks(report: Report) -> None:
             encoding="utf-8",
             errors="replace",
             env=env,
+            cwd=str(fake_home),
         )
         canonical = json.loads(provider_config.read_text(encoding="utf-8"))
         canonical_bash = canonical["agent"]["plan"]["permission"]["bash"]
@@ -320,6 +334,7 @@ def installer_checks(report: Report) -> None:
             encoding="utf-8",
             errors="replace",
             env=env,
+            cwd=str(fake_home),
         )
         report.check(
             "check rejects non-object settings JSON without traceback",
@@ -339,6 +354,7 @@ def installer_checks(report: Report) -> None:
             encoding="utf-8",
             errors="replace",
             env=env,
+            cwd=str(fake_home),
         )
         report.check(
             "check rejects non-object OpenCode JSON without traceback",
@@ -373,6 +389,7 @@ def installer_checks(report: Report) -> None:
                 encoding="utf-8",
                 errors="replace",
                 env=env,
+                cwd=str(fake_home),
             )
             report.check(
                 "init installs the project opencode boundary",

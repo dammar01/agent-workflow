@@ -1,9 +1,6 @@
 """Readiness checks: doctor, sweep, bundle integrity, MCP scan, prune."""
 
-import hashlib
-import json
 import os
-import re
 import shutil
 import subprocess
 from datetime import datetime, timedelta, timezone
@@ -12,8 +9,6 @@ from pathlib import Path
 from adapters.opencode_install import provider_callable
 from core.workspace_paths import (
     LOCK_TTL_SECONDS,
-    PROVIDER_CONFIG_NAME,
-    WORKFLOW_DIRNAME,
     atomic_write_json,
     atomic_write_text,
     now_iso,

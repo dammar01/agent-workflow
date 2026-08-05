@@ -1,17 +1,11 @@
-import hashlib
 import json
 import os
 import re
-import secrets
-import shutil
-import subprocess
-import threading
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 from config.settings import DEFAULT_PROVIDER, TOOL_VERSION
 from utils import osutil
-from utils.path_guard import safe_path_component
 
 
 # Moved out in the v3.4.3 split; re-exported so existing importers of

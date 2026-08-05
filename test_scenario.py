@@ -37,10 +37,12 @@ from checks.redaction import _test_redaction_boundary
 from checks.verify_gaps import _test_quick_verify_gaps
 from checks.jobs import _test_submit_admission
 from checks.workspace import _test_project_session_isolation, _test_workspace_release_guards
+from checks.messages import _test_no_code_in_messages
 from checks.provider import _test_provider_seam
 
 def run_tests() -> None:
     _test_provider_seam()
+    _test_no_code_in_messages()
     fake_opencode = FakeOpenCodeAdapter()
     temp_root = Path(tempfile.mkdtemp(prefix="agent-workflow-test-"))
     original_popen = main.subprocess.Popen

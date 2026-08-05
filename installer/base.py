@@ -28,17 +28,12 @@ HOME = (
     else Path.home()
 )
 
-# The merge policy is shared with core.workflow_runtime (which installs the project-scoped
-# boundary). Importing it keeps one definition of the deny-rule enforcement instead of two
-# copies that drift apart. REPO_ROOT is already sys.path[0] under `python install.py`; the
-# insert covers being imported from elsewhere (tools/e2e.py).
+# REPO_ROOT is already sys.path[0] under `python install.py`; the insert covers being
+# imported from elsewhere (tools/e2e.py), and every installer module below relies on it
+# to reach core.* — installer/settings.py imports the shared OpenCode merge policy that
+# way, so one definition of the deny-rule enforcement serves both installer and runtime.
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-
-from core.opencode_policy import (  # noqa: E402
-    load_json_or_jsonc,
-    merge_opencode_policy,
-)
 
 MARKERS = {
     "claude/CLAUDE.md": ("WORKFLOW-MAIN-AGENT:START", "WORKFLOW-MAIN-AGENT:END"),

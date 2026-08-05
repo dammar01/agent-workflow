@@ -24,15 +24,9 @@ Safety:
 """
 
 import argparse
-import hashlib
 import json
 import os
-import re
-import shutil
-import subprocess
-import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
 # Split out in v3.4.3; re-exported so `main()` below and any external caller keep
 # addressing install.py exactly as before.

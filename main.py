@@ -1,17 +1,17 @@
-import os
 import secrets
-import subprocess
 import sys
-import time
+
+# Looks unused to a linter and is NOT: core/job_lifecycle.py reaches it as
+# `_main().subprocess`, and test_scenario.py patches `main.subprocess.Popen` to
+# intercept worker spawn. Deleting it breaks both, silently and at runtime only.
+import subprocess  # noqa: F401
 from pathlib import Path
 
-from core.contract import make_error, validate_verification_contract
+from core.contract import make_error
 from core.executor import Executor
-from core.job_manager import DEAD, JobManager
+from core.job_manager import JobManager
 from core.session_manager import SessionManager
-from utils import osutil
 from utils.path_guard import safe_path_component
-from utils.redact import redact_value
 from core.workflow_runtime import (
     acquire_runtime_lock,
     detect_project_root,
@@ -27,16 +27,14 @@ from core.workflow_runtime import (
     workspace_versions,
 )
 from config.settings import (
-    DEFAULT_CONTENT_PREVIEW_CHARS,
-    DEFAULT_IDLE_STALL_SECONDS,
+    # These two are read as `_main().DEFAULT_*` from core/result_shaping.py, and the
+    # harness lowers them on `main` to exercise the ref_only threshold. Imported here
+    # so that indirection has something to find — not unused, just used elsewhere.
+    DEFAULT_CONTENT_PREVIEW_CHARS,  # noqa: F401
+    DEFAULT_SLIM_CONTENT_MIN_CHARS,  # noqa: F401
     DEFAULT_JOB_POLL_INTERVAL_SECONDS,
     DEFAULT_JOB_POLL_TIMEOUT_SECONDS,
-    DEFAULT_MAX_PROBES,
-    DEFAULT_PROBE_RECHECK_SECONDS,
     DEFAULT_PROBE_TIMEOUT_SECONDS,
-    DEFAULT_SLIM_CONTENT_MIN_CHARS,
-    DEFAULT_STALL_THRESHOLD_SECONDS,
-    SLIM_CONTENT_ENV,
     load_provider_config,
     load_provider_config_for,
     get_cached_main_session_id,
