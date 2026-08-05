@@ -27,13 +27,16 @@ from core.workflow_runtime import (
     workspace_versions,
 )
 from config.settings import (
+    DEFAULT_CONTENT_PREVIEW_CHARS,
     DEFAULT_IDLE_STALL_SECONDS,
     DEFAULT_JOB_POLL_INTERVAL_SECONDS,
     DEFAULT_JOB_POLL_TIMEOUT_SECONDS,
     DEFAULT_MAX_PROBES,
     DEFAULT_PROBE_RECHECK_SECONDS,
     DEFAULT_PROBE_TIMEOUT_SECONDS,
+    DEFAULT_SLIM_CONTENT_MIN_CHARS,
     DEFAULT_STALL_THRESHOLD_SECONDS,
+    SLIM_CONTENT_ENV,
     load_opencode_config,
     load_opencode_config_for,
     get_cached_main_session_id,
@@ -885,8 +888,45 @@ def _without_raw_args(value):
     return value
 
 
-def _slim_result(result: dict) -> dict:
-    """Redact every payload and trim bulky success-only diagnostics."""
+def _as_ref_only(result: dict) -> dict:
+    """Swap the evidence text for a preview plus the path it is already archived at.
+
+    Refuses in the two cases where the trade stops paying:
+      - no artifact on disk — the payload is then the ONLY copy, and trimming it destroys
+        the evidence instead of relocating it;
+      - content short enough that the preview reclaims nothing worth the loss.
+    """
+    content = result.get("content")
+    if not isinstance(content, str) or len(content) <= DEFAULT_SLIM_CONTENT_MIN_CHARS:
+        return result
+    ref = result.get("evidence_ref")
+    artifact = str((ref or {}).get("artifact_path") or "") if isinstance(ref, dict) else ""
+    if not artifact:
+        return result
+    meta = result.get("meta")
+    return {
+        **result,
+        "content": (
+            f"{content[:DEFAULT_CONTENT_PREVIEW_CHARS].rstrip()}\n\n"
+            f"[content truncated — full evidence at {artifact}]"
+        ),
+        "meta": {
+            **(meta if isinstance(meta, dict) else {}),
+            "content_mode": "ref_only",
+            "content_full_chars": len(content),
+        },
+    }
+
+
+def _slim_result(result: dict, slim_content: bool | None = None) -> dict:
+    """Redact every payload and trim bulky success-only diagnostics.
+
+    `slim_content` additionally drops the evidence text in favour of the artifact pointer
+    (see _as_ref_only). Left to the AI_PROXY_SLIM_CONTENT environment variable when not
+    passed; tests pass it directly so they need no environment of their own.
+    """
+    if slim_content is None:
+        slim_content = os.getenv(SLIM_CONTENT_ENV, "") not in ("", "0", "false", "False")
     clean, redactions = redact_value(_without_raw_args(result))
     if not isinstance(clean, dict):
         return clean
@@ -899,9 +939,12 @@ def _slim_result(result: dict) -> dict:
             int(hit.get("count") or 0) for hit in redactions
         )
     if not clean.get("ok"):
+        # An error message is never archived to an artifact, so there is no pointer that
+        # could stand in for it. Failures keep their text whatever the flag says.
         return clean
     slim_meta = {k: v for k, v in meta.items() if k not in _HEAVY_META_KEYS}
-    return {**clean, "meta": slim_meta}
+    clean = {**clean, "meta": slim_meta}
+    return _as_ref_only(clean) if slim_content else clean
 
 
 def _verify_exit_code(

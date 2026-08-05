@@ -310,6 +310,23 @@ def split_claim(claim: str) -> dict:
     text = _BRACKET_REF.sub(take, body)
     # Collapse the whitespace and dangling punctuation the removal leaves behind.
     text = re.sub(r"\s{2,}", " ", text).strip().rstrip(" ,;")
+
+    # Not every anchor arrives bracketed, and the prompt is the reason: its `grounded:`
+    # line asks for a bare `claim + file:line` while the `durable_facts:` line directly
+    # below asks for `[file:line]`. Only the bracketed shape was ever collected, so a run
+    # whose every claim named its file could still come back with refs=[] on all of them —
+    # the anchors were in the prose, just never lifted out of it. `contract_warnings` has
+    # always read the bare shape via _FILE_LINE; this is the same regex, applied where the
+    # refs are actually built.
+    #
+    # Bare anchors are COPIED, not moved. A trailing `[core/router.py:16]` is bookkeeping
+    # appended to a finished sentence and can be lifted out cleanly; a bare one is usually
+    # load-bearing grammar ("dispatch happens in main.py:48"), and removing it leaves prose
+    # that reads like it was truncated. Fallback only: a claim that brackets its anchors
+    # has already said which identifiers are bookkeeping, and that answer is better than
+    # this one.
+    if not refs:
+        refs = list(dict.fromkeys(_FILE_LINE.findall(text)))
     return {"text": text, "refs": refs}
 
 
@@ -319,6 +336,89 @@ def readable_claims(content: str, section: str = "grounded") -> list[dict]:
     Detail stays available for audit; it just stops being the thing the eye lands on.
     """
     return [split_claim(claim) for claim in _section(content, section)]
+
+
+# Commands whose prompt ships a [DIGEST] template. Absent here means absent by design
+# (verify carries its own contract, checked by validate_verification_contract).
+_DIGEST_COMMANDS = {"explore", "analyze", "plan"}
+# `confidence:` is the LAST field of the digest template, so its absence from a digest that
+# started is the cheapest available proof that the block never finished.
+_DIGEST_TAIL = re.compile(r"^\s*confidence\s*:", re.IGNORECASE | re.MULTILINE)
+_CODE_FENCE = re.compile(r"^\s*```", re.MULTILINE)
+# Closers that address the USER. The output is evidence material handed to another program;
+# a question at the end of it is a conversational turn that nothing will ever answer. Kept
+# to explicit phrases rather than "ends with ?" — a grounded claim may legitimately quote
+# one, and a false positive here would cap confidence on a clean run.
+_TRAILING_NOISE = re.compile(
+    r"(what would you like|how can i help|would you like me to|shall i |let me know"
+    r"|specify (a |the )?command|apa yang ingin|mau saya|silakan pilih)",
+    re.IGNORECASE,
+)
+_TRAILING_WINDOW = 400
+# Warnings that mean the payload itself is damaged, not merely off-template. The reader has
+# to know the difference: an off-template answer is still an answer, a truncated one is a
+# fragment wearing ok:true. Membership carries a real penalty — executor caps confidence to
+# `low` on any of these — so a signal only belongs here if being wrong about it is rarer
+# than being right.
+#
+# `unbalanced_code_fence` deliberately does NOT qualify, though it is still reported. An odd
+# fence count usually does mean a block was left open, but "usually" is the problem: prose
+# that quotes a lone ``` , or evidence quoting a document whose fences it only partly
+# reproduces, lands here too. It is also redundant — a truncated payload has already lost
+# its digest, and the two digest checks say so far more reliably. Paying a cap-to-low on a
+# duplicate signal with a false-positive tail buys nothing and misprices clean runs.
+STRUCTURAL_KINDS = ("digest_missing", "digest_incomplete")
+
+
+def _structural_warnings(command: str, body: str) -> list[dict]:
+    """Signals that the output stopped early, read off its own template.
+
+    Deliberately structural rather than phrase-matching. A run was observed returning
+    ok:true with content cut mid-word — `...hooks not tested in e` — and no digest at all.
+    No amount of "does it end with 'still reading'" catches that; a missing terminal
+    section does, and costs one substring search.
+    """
+    warnings: list[dict] = []
+    if command in _DIGEST_COMMANDS:
+        if "[DIGEST]" not in body:
+            warnings.append(
+                {
+                    "kind": "digest_missing",
+                    "detail": (
+                        "no [DIGEST] block — the contract's terminal section never arrived"
+                    ),
+                }
+            )
+        else:
+            tail = body.split("[DIGEST]", 1)[1]
+            if not _DIGEST_TAIL.search(tail) or extract_digest(body) is None:
+                warnings.append(
+                    {
+                        "kind": "digest_incomplete",
+                        "detail": (
+                            "[DIGEST] block is missing its summary/confidence tail — "
+                            "output likely truncated mid-block"
+                        ),
+                    }
+                )
+    if len(_CODE_FENCE.findall(body)) % 2:
+        warnings.append(
+            {
+                "kind": "unbalanced_code_fence",
+                "detail": "odd number of ``` fences — a code block was left open",
+            }
+        )
+    if _TRAILING_NOISE.search(body[-_TRAILING_WINDOW:]):
+        warnings.append(
+            {
+                "kind": "trailing_non_evidence",
+                "detail": (
+                    "output ends by addressing the user (menu/offer/question) instead of "
+                    "closing on evidence"
+                ),
+            }
+        )
+    return warnings
 
 
 def contract_warnings(command: str, content: str) -> list[dict]:
@@ -363,6 +463,7 @@ def contract_warnings(command: str, content: str) -> list[dict]:
             }
         )
 
+    warnings.extend(_structural_warnings(command, body))
     return warnings
 
 

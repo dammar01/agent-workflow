@@ -384,7 +384,11 @@ def _reasoning_format() -> list[str]:
         "confidence: low | medium | high",
         "",
         "grounded:",
-        "- <claim + file:line> (WAJIB evidence; no file:line → do not put here)",
+        # Bracketed, matching `durable_facts` below. The two lines used to disagree — this
+        # one asked for a bare `claim + file:line` — and the anchor extractor only ever
+        # read brackets, so the section the contract defines BY its evidence was the one
+        # section whose evidence never reached `meta.claims[].refs`.
+        "- <claim> [file:line] (WAJIB evidence; no file:line → do not put here)",
         "",
         "durable_facts:",
         "- [config|pattern|invariant] <fact that persists across code changes> [file:line] | none",

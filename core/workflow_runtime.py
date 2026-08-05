@@ -9,6 +9,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from config.settings import TOOL_VERSION
 from utils import osutil
 from utils.path_guard import safe_path_component
 
@@ -21,7 +22,12 @@ WORKFLOW_DIRNAME = ".workflow"
 LOCK_TTL_SECONDS = 300
 JSON_INDENT = 2
 ARCHIVE_KEEP = 20
-CONFIG_VERSION = "3.4.2"
+# Derived, not restated. `tools/stamp_version.py` makes TOOL_VERSION the single source for
+# every version string that ships, but this one was a hand-maintained literal outside its
+# TARGETS — guarded only by an e2e assertion, which reports the drift after it exists
+# rather than preventing it. The config schema is versioned in lockstep with the tool, so
+# the two numbers were never independent; only their maintenance was.
+CONFIG_VERSION = TOOL_VERSION
 
 
 def now_iso() -> str:

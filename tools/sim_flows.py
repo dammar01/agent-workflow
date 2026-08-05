@@ -52,6 +52,12 @@ def record(stage, name, expected, observed, ok):
     )
 
 
+# The two `grounded` claims below carry their anchors in DIFFERENT shapes on purpose.
+# This fixture used to bracket both, which is the shape the anchor extractor wanted — so the
+# simulation passed while live runs came back with refs=[] on every claim, because the prompt
+# asked second_agent for the bare shape. A fixture written in the format the code prefers
+# tests the fixture, not the code. Anchors are unaffected by the change either way:
+# _extract_anchors scans file:line across the raw content and never looks at the brackets.
 EVIDENCE = """
 INFO  2026-05-09T12:10:24 +1ms service=session.prompt session.id=ses_sim001 step=0 loop
 > build - gpt-5.3-codex
@@ -59,7 +65,7 @@ INFO  2026-05-09T12:10:24 +1ms service=session.prompt session.id=ses_sim001 step
 confidence: high
 grounded:
 - entry point defined [app/main.py:1]
-- helper defined [app/util.py:1]
+- helper defined app/util.py:1
 entry_points:
 - app/main.py:1
 uncertainties:
@@ -290,6 +296,37 @@ def simulate():
             f"reused={stale_ref.get('reused')}, new_calls={len(adapter.calls) - before_calls}",
             stale_ref.get("reused") is not True
             and len(adapter.calls) - before_calls == 1,
+        )
+
+        # --- S4c ref_only content stays recoverable ---------------------------
+        # Slimming only pays if the pointer it leaves behind actually resolves. That read
+        # is a NEW dependency — nothing before this exercised the path where main_agent
+        # must open the artifact to see what the payload no longer carries — so it is
+        # checked against a real workspace rather than a fabricated path.
+        # The fixture is a few hundred chars, well under the shipped 1000-char floor, so
+        # the thresholds are lowered for this one scenario instead of padding the fixture
+        # into something that no longer looks like real evidence.
+        keep = (main.DEFAULT_SLIM_CONTENT_MIN_CHARS, main.DEFAULT_CONTENT_PREVIEW_CHARS)
+        main.DEFAULT_SLIM_CONTENT_MIN_CHARS, main.DEFAULT_CONTENT_PREVIEW_CHARS = 50, 60
+        try:
+            fresh = main.run("explore", "map the slim path", "sim-session", work_dir)
+            slim = main._slim_result(fresh, slim_content=True)
+        finally:
+            main.DEFAULT_SLIM_CONTENT_MIN_CHARS, main.DEFAULT_CONTENT_PREVIEW_CHARS = keep
+        artifact = Path((fresh.get("evidence_ref") or {}).get("artifact_path") or "")
+        recovered = artifact.read_text(encoding="utf-8") if artifact.is_file() else ""
+        record(
+            "S4c",
+            "ref_only names an artifact that holds the withheld evidence",
+            "content shrinks, meta.content_mode=ref_only, named artifact readable and complete",
+            f"mode={slim.get('meta', {}).get('content_mode')}, "
+            f"chars={len(slim.get('content') or '')} of {len(fresh.get('content') or '')}, "
+            f"artifact_readable={bool(recovered)}",
+            slim.get("meta", {}).get("content_mode") == "ref_only"
+            and len(slim.get("content") or "") < len(fresh.get("content") or "")
+            and str(artifact) in (slim.get("content") or "")
+            and "[EVIDENCE]" in recovered
+            and len(recovered) >= len(fresh.get("content") or ""),
         )
 
         # --- S5 non-evidence output ------------------------------------------

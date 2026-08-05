@@ -210,6 +210,66 @@ def integrity_checks(report: Report) -> None:
         workflow_paths,
     )
 
+    # --- claim anchors + structural output checks (pure) ---
+    from core.contract import STRUCTURAL_KINDS, contract_warnings, split_claim
+
+    bracketed = split_claim("entry point defined [app/main.py:1]")
+    bare = split_claim("dispatch happens in app/main.py:48 before the lock")
+    report.check(
+        "split_claim extracts anchors bracketed AND bare",
+        # The bare shape is the one `grounded:` asked for, and the only one never collected:
+        # every claim in a live run could name its file and still report refs=[]. It went
+        # unnoticed because the sim fixture bracketed both of its claims.
+        bracketed["refs"] == ["app/main.py:1"]
+        and bare["refs"] == ["app/main.py:48"]
+        # A bracketed anchor is bookkeeping and leaves the prose; a bare one is grammar and
+        # stays in it.
+        and "app/main.py:1" not in bracketed["text"]
+        and "app/main.py:48" in bare["text"],
+        f"bracketed={bracketed}, bare={bare}",
+    )
+
+    _EV = "[EVIDENCE]\ngrounded:\n- thing defined [app/main.py:1]\nuncertainties:\n- none\n"
+    truncated_kinds = {w["kind"] for w in contract_warnings("plan", _EV)}
+    report.check(
+        "contract_warnings flags a missing digest",
+        # Observed: a plan returned ok:true with content cut mid-word and no [DIGEST] at
+        # all, and meta.contract_warnings was absent — no rule read the terminal section, so
+        # a fragment and a finished answer were indistinguishable to the caller.
+        "digest_missing" in truncated_kinds,
+        str(sorted(truncated_kinds)),
+    )
+
+    _CLOSED = _EV + "[DIGEST]\nsummary: ok.\nconfidence: high\n"
+    noisy_kinds = {
+        w["kind"]
+        for w in contract_warnings("plan", _CLOSED + "\nWhat would you like to do next?\n")
+    }
+    report.check(
+        "contract_warnings flags a trailing question to the user",
+        "trailing_non_evidence" in noisy_kinds and "digest_missing" not in noisy_kinds,
+        str(sorted(noisy_kinds)),
+    )
+    report.check(
+        "contract_warnings stays quiet on a well-formed payload",
+        contract_warnings("plan", _CLOSED) == [],
+        str(contract_warnings("plan", _CLOSED)),
+    )
+
+    odd_fence_kinds = {
+        w["kind"] for w in contract_warnings("plan", _CLOSED + "\n```\ndangling\n")
+    }
+    report.check(
+        "an odd code fence warns but never caps confidence",
+        # It is reported, because a reader may want to know. It is NOT structural, because
+        # membership there costs a cap to `low`, and this signal is both duplicated by the
+        # digest checks and wrong often enough — prose quoting a lone fence reaches it too.
+        "unbalanced_code_fence" in odd_fence_kinds
+        and "unbalanced_code_fence" not in STRUCTURAL_KINDS
+        and not odd_fence_kinds & set(STRUCTURAL_KINDS),
+        f"kinds={sorted(odd_fence_kinds)}, structural={list(STRUCTURAL_KINDS)}",
+    )
+
     # --- config validation (pure, no workspace needed) ---
     from core.workflow_runtime import default_commands, default_policies
 
@@ -552,6 +612,58 @@ def integrity_checks(report: Report) -> None:
         and "args" not in slim_failure.get("meta", {})
         and slim_failure.get("meta", {}).get("argv_count") == 2
         and "stderr" in slim_failure.get("meta", {}),
+    )
+
+    # --- content slimming (opt-in) ---
+    # The result carries the full evidence text AND evidence_ref.artifact_path, which points
+    # at the same bytes on disk. Delegation exists to keep raw code out of main_agent's
+    # window; shipping both puts it back. Opt-in, because a consumer reading `content`
+    # without checking `content_mode` would silently see a preview.
+    ARTIFACT = r"C:\logs\run_1\output.raw.md"
+    long_evidence = "[EVIDENCE]\n" + ("grounded claim padding. " * 200)
+    with_ref = {
+        "ok": True,
+        "content": long_evidence,
+        "digest": {"summary": "s"},
+        "evidence_ref": {"artifact_path": ARTIFACT, "anchors": 2, "reused": False},
+        "meta": {"job_id": "job_2"},
+    }
+    default_slim = _slim_result(with_ref)
+    report.check(
+        "slim: content stays full unless asked",
+        default_slim["content"] == long_evidence
+        and "content_mode" not in default_slim["meta"],
+        f"chars={len(default_slim['content'])}",
+    )
+
+    ref_only = _slim_result(with_ref, slim_content=True)
+    report.check(
+        "slim: ref_only swaps content for a pointer to the artifact",
+        len(ref_only["content"]) < len(long_evidence)
+        and ARTIFACT in ref_only["content"]
+        and ref_only["meta"]["content_mode"] == "ref_only"
+        and ref_only["meta"]["content_full_chars"] == len(long_evidence)
+        # The digest is the whole point of slimming — it must survive intact, and so must
+        # the pointer the reader needs to recover what was withheld.
+        and ref_only["digest"] == {"summary": "s"}
+        and ref_only["evidence_ref"]["artifact_path"] == ARTIFACT,
+        f"chars={len(ref_only['content'])} of {len(long_evidence)}",
+    )
+
+    no_ref = {key: value for key, value in with_ref.items() if key != "evidence_ref"}
+    report.check(
+        "slim: ref_only refuses when there is no artifact to point at",
+        # Without a readable copy on disk, dropping the text destroys the only one there is.
+        _slim_result(no_ref, slim_content=True)["content"] == long_evidence,
+        "content preserved",
+    )
+
+    short = {**with_ref, "content": "[EVIDENCE]\nshort."}
+    report.check(
+        "slim: ref_only leaves short content alone",
+        # Below the threshold there is nothing to save and everything to lose.
+        _slim_result(short, slim_content=True)["content"] == "[EVIDENCE]\nshort.",
+        "below threshold",
     )
 
 

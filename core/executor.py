@@ -11,6 +11,7 @@ from core.contract import (
     FANOUT_INCAPABLE,
     FANOUT_MISMATCH,
     FANOUT_UNREPORTED,
+    STRUCTURAL_KINDS,
     cap_confidence,
     contract_warnings,
     detect_subagent_usage,
@@ -660,6 +661,14 @@ class Executor:
                     {k: v for k, v in prompt_meta.items() if k.startswith("task_")}
                 )
 
+            # A damaged payload needs its own field, not a line inside a warnings list.
+            # The confidence cap below cannot carry this one: capping edits the digest, and
+            # the worst case here IS a missing digest — the run that returned content cut
+            # mid-word had nothing left to cap, so the only surviving signal was ok:true.
+            damaged = [issue["kind"] for issue in issues if issue["kind"] in STRUCTURAL_KINDS]
+            if damaged:
+                result.setdefault("meta", {})["content_incomplete"] = damaged
+
             # Conditions the second agent cannot grade itself, applied to the number
             # main_agent reads. Each signal is already computed above; this is the wiring.
             caps: list[tuple[str, str]] = []
@@ -672,6 +681,14 @@ class Executor:
                     caps.append(("low", "grounded claims carry no file:line"))
                 elif issue["kind"] == "missing_fields":
                     caps.append(("medium", f"contract: {issue['detail']}"))
+                elif issue["kind"] in STRUCTURAL_KINDS:
+                    # Truncated output is not partially right — the reasoning that would
+                    # have qualified the conclusion is the part that went missing.
+                    caps.append(("low", f"output structurally incomplete: {issue['kind']}"))
+                elif issue["kind"] == "trailing_non_evidence":
+                    caps.append(
+                        ("medium", "output closes by addressing the user, not on evidence")
+                    )
             if _scope_incomplete(result.get("content") or ""):
                 caps.append(("medium", "scope_not_covered is non-empty"))
             if caps and digest is not None:

@@ -25,6 +25,40 @@ DEAD = "dead"  # PID gone
 _CLAIM_STALE_SECONDS = 30.0
 _MUTATION_WAIT_SECONDS = 5.0
 
+# --- What in this file is load-bearing, and for whom -------------------------------------
+#
+# This is a job scheduler for one person on one machine, and the size is fair to question.
+# The answer is not uniform, so it is written down rather than re-derived each time someone
+# reads the line count and reaches for a rewrite.
+#
+# Earns its place even single-user:
+#   _acquire_session_lock  - two Claude sessions on ONE project root is the case that forced
+#                            per-session state to exist; without it their jobs overwrite each
+#                            other. This is the concurrency that actually happens.
+#   capacity_guard /
+#   active_worker_count    - a burst of parallel main-agents would otherwise spawn unbounded
+#                            opencode processes. The ceiling has to be enforced across
+#                            processes to be a ceiling at all.
+#   claim_recovery         - bounded restart after a dead worker. One attempt, then it stops.
+#   liveness               - alive-but-silent and dead need opposite responses; collapsing
+#                            them either kills working jobs or waits forever on dead ones.
+#
+# Costs more than it returns HERE, kept because it is cheap and correct where it does apply:
+#   _process_identity      - the /proc and `ps` branches never execute on a Windows host;
+#                            osutil.pid_create_time answers first. They are the POSIX path.
+#   _process_generation_matches
+#                          - the None (unverifiable) branch exists for platforms that expose
+#                            no process generation. Callers must still handle it.
+#   _exclusive_file_guard  - cross-process advisory locking on mutation files. Single-process
+#                            runs never contend for these.
+#   the retry loop in _acquire_session_lock
+#                          - contention it retries against needs a second live main-agent.
+#
+# Nothing above is dead code, and none of it should be deleted on those grounds alone. If
+# single-user ever becomes a first-class configuration, the second group is what a flag
+# would gate — not a rewrite.
+# -----------------------------------------------------------------------------------------
+
 
 def _process_identity(pid: int | None) -> str | None:
     """Best-effort process generation identity for PID-reuse checks."""

@@ -19,6 +19,37 @@
 
 $ErrorActionPreference = 'Stop'
 
+# Fail-open leaves no trace, and that is the problem: a hook that dies on a malformed
+# registry exits 0 exactly like a hook that found nothing to block, so the enforcement
+# layer can be dead for an entire session with nothing to show for it. This records the
+# fault and still exits 0 — the gate stays non-wedging, it just stops being silent about
+# breaking. Written ONLY on real faults, never on the normal allow/block paths, and
+# overwritten rather than appended so it cannot grow.
+$RuntimeDir = $null
+function Write-HookWarning([string]$Kind, [string]$Message) {
+    try {
+        # Session dir when it is known. The fault most worth recording — an unparseable
+        # registry — happens BEFORE that dir can be resolved, so a session-only location
+        # would miss exactly the case this exists for; ~/.claude is the fallback.
+        $dir = $RuntimeDir
+        if ([string]::IsNullOrWhiteSpace($dir)) {
+            $dir = Join-Path $env:USERPROFILE '.claude'
+        }
+        if ([string]::IsNullOrWhiteSpace($dir)) { return }
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $payload = [ordered]@{
+            hook      = 'intent-gate-check'
+            kind      = $Kind
+            message   = $Message
+            timestamp = (Get-Date).ToUniversalTime().ToString('o')
+        }
+        [System.IO.File]::WriteAllText(
+            (Join-Path $dir 'hook-warning.json'),
+            ($payload | ConvertTo-Json -Depth 3)
+        )
+    } catch { }
+}
+
 try {
     $raw = [Console]::In.ReadToEnd()
     if ([string]::IsNullOrWhiteSpace($raw)) { exit 0 }
@@ -67,7 +98,8 @@ try {
 
     # pending DELEGATED + gather tool -> HARD block
     $cmd = "?"
-    try { $cmd = ([string]((Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json).command)) } catch { }
+    try { $cmd = ([string]((Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json).command)) }
+    catch { Write-HookWarning 'marker_unreadable' $_.Exception.Message }
 
     $what = if ($toolName -eq 'Bash') { "a shell read (cat/rg/grep/git show) -- reading the codebase is second_agent's job" } else { "a bulk-gather tool" }
     $reason = @"
@@ -81,6 +113,7 @@ False positive? Escapes: set `$env:WORKFLOW_LOCAL_MODE=1, create $localFlag, or 
     exit 2
 }
 catch {
-    # on any hook error, fail-open (never wedge the agent)
+    # on any hook error, fail-open (never wedge the agent) — but leave the reason behind
+    Write-HookWarning 'hook_error' $_.Exception.Message
     exit 0
 }

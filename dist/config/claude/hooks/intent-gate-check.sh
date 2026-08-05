@@ -8,7 +8,38 @@
 RAW="$(cat)"
 [ -z "$RAW" ] && exit 0
 CLAUDE_HOOK_RAW="$RAW" python3 <<'PY'
-import os, sys, json, re
+import os, sys, json, re, datetime
+
+# Fail-open leaves no trace, and that is the problem: a hook that dies on a malformed
+# registry exits 0 exactly like a hook that found nothing to block, so the enforcement
+# layer can be dead for an entire session with nothing to show for it. Record the fault
+# and still exit 0 — non-wedging, just no longer silent. Written ONLY on real faults,
+# never on the normal allow/block paths, and overwritten rather than appended.
+runtime_dir = None
+
+
+def hook_warning(kind, message):
+    try:
+        # Session dir when it is known. The fault most worth recording — an unparseable
+        # registry — happens BEFORE that dir can be resolved, so a session-only location
+        # would miss exactly the case this exists for; ~/.claude is the fallback.
+        target = runtime_dir or os.path.join(os.path.expanduser("~"), ".claude")
+        if not target:
+            return
+        os.makedirs(target, exist_ok=True)
+        payload = {
+            "hook": "intent-gate-check",
+            "kind": kind,
+            "message": str(message),
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        }
+        with open(
+            os.path.join(target, "hook-warning.json"), "w", encoding="utf-8"
+        ) as fh:
+            json.dump(payload, fh, indent=2)
+    except Exception:
+        pass
+
 
 try:
     raw = os.environ.get("CLAUDE_HOOK_RAW", "")
@@ -68,8 +99,9 @@ try:
     try:
         with open(marker, "r", encoding="utf-8") as f:
             cmd = str(json.load(f).get("command") or "?")
-    except Exception:
+    except Exception as exc:
         cmd = "?"
+        hook_warning("marker_unreadable", exc)
 
     what = (
         "a shell read (cat/rg/grep/git show) -- reading the codebase is second_agent's job"
@@ -87,7 +119,8 @@ try:
     sys.exit(2)
 except SystemExit:
     raise
-except Exception:
-    # on any hook error, fail-open (never wedge the agent)
+except Exception as exc:
+    # on any hook error, fail-open (never wedge the agent) — but leave the reason behind
+    hook_warning("hook_error", exc)
     sys.exit(0)
 PY

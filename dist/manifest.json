@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "ea6ba1252cb89831b6d9cf5f9d3d9e5d31bfacb4ba22100e249fcad174c4beaf",
-      "bytes": 22541,
+      "sha256": "f61647f8ff80dc12b111e161c35368e4b6129ce72ac8102b33b35321166499a0",
+      "bytes": 22762,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -266,15 +266,15 @@
     },
     {
       "path": "claude/hooks/intent-gate-check.ps1",
-      "sha256": "9b9f19e9dc689f1c4116d25c252c7ed9cf961267455462216c0f850e96c0dfb1",
-      "bytes": 3984,
+      "sha256": "ac4f56c8272ec24dc8c6a2303510ad045f43ae36281e26631cb63733b4c52a51",
+      "bytes": 5631,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/intent-gate-check.sh",
-      "sha256": "57ecf879a50e63ea32aabffc141222cd105e226e95d9b5254a10778d9e4b4e71",
-      "bytes": 3579,
+      "sha256": "dd5a9b49de8bd43c35697e438bc0d09534207abd0f7ccadd5620a07ef02ad229",
+      "bytes": 5050,
       "merge": "replace",
       "component": "runtime"
     },
@@ -315,8 +315,8 @@
     },
     {
       "path": "opencode/AGENTS.md",
-      "sha256": "0f7867e34ee0a2ef89a80fc05051666fa0f4be0b084095e92e96597c812df8e5",
-      "bytes": 16786,
+      "sha256": "ea3590e08bfb43bac0b7bc11dabd093e300a4ba447a8291c51f45a8a9c064b4f",
+      "bytes": 17240,
       "merge": "merge",
       "component": "prompt_bundle"
     },

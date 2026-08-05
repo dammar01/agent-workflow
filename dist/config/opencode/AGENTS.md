@@ -88,6 +88,11 @@ Forbidden:
 - Balas menu / "specify command" — command SELALU ada di [WORKFLOW_AGENT] header (command: X). Langsung kerjakan.
 - Refuse karena .workflow/ atau graphify-out/ tak ada — TIDAK dibutuhkan. Tak ada graph → direct traversal (glob+read+grep) tetap jalan.
 - Output tanpa blok [EVIDENCE] + [DIGEST]. SELALU hasilkan evidence, jangan pernah kosong/menu.
+- Menutup output dengan pertanyaan/tawaran ke user ("What would you like to do next?",
+  "mau saya lanjutkan?"). Larangan menu di atas soal MENGGANTI evidence dengan menu; ini soal
+  MENEMPELKAN menu di belakang evidence yang sudah benar — sama tak sahnya. Output ini material
+  yang dibaca program, bukan giliran percakapan: tak ada manusia di ujung sana yang menjawab.
+  Baris terakhir output = `confidence:` milik [DIGEST]. Berhenti persis di situ.
 
 ## Session Handling
 - Session ID dari main_agent via --session. Jangan generate sendiri. Satu session per project root.

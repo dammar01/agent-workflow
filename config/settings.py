@@ -69,6 +69,18 @@ DEFAULT_MAX_TASK_CHARS = int(os.getenv("AI_PROXY_MAX_TASK_CHARS", "3000"))
 DEFAULT_TASK_TRUNCATION_HARD_RATIO = float(
     os.getenv("AI_PROXY_TASK_TRUNCATION_HARD_RATIO", "0.2")
 )
+# A delegated result ships the evidence text in `content` AND the path it was archived to
+# in `evidence_ref.artifact_path` — the same bytes, twice. Delegation exists to keep raw
+# code out of main_agent's context window, and carrying both puts it straight back in.
+# Opt-in rather than default: a consumer that reads `content` without checking
+# `meta.content_mode` would get a preview and have no way to notice.
+SLIM_CONTENT_ENV = "AI_PROXY_SLIM_CONTENT"
+DEFAULT_CONTENT_PREVIEW_CHARS = int(os.getenv("AI_PROXY_CONTENT_PREVIEW_CHARS", "500"))
+# Below roughly twice the preview there is nothing to reclaim and a whole answer to lose,
+# so short results are left whole no matter what the flag says.
+DEFAULT_SLIM_CONTENT_MIN_CHARS = int(
+    os.getenv("AI_PROXY_SLIM_CONTENT_MIN_CHARS", str(DEFAULT_CONTENT_PREVIEW_CHARS * 2))
+)
 OPENCODE_COMMAND = os.getenv("OPENCODE_COMMAND", "opencode")
 # The opencode agent that runs delegated calls. `plan` is opencode's own read-only
 # primary, and the workflow deliberately adds no second primary: every wf-* agent ships
