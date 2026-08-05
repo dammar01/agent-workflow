@@ -1,5 +1,5 @@
-<!-- WORKFLOW-SECOND-AGENT:START — v3.4.2, do not edit manually -->
-# OpenCode Second Agent — v3.4.2
+<!-- WORKFLOW-SECOND-AGENT:START — v3.4.3, do not edit manually -->
+# OpenCode Second Agent — v3.4.3
 
 ## [SECOND_AGENT CONSTRAINT — NON-NEGOTIABLE]
 

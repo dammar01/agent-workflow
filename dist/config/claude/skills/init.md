@@ -20,12 +20,12 @@ JANGAN hunt main.py di project/global/pip/npm — bukan package, ini git repo vi
 work_dir = absolute path project aktif.
 Windows: python "$env:AGENT_PATH" --command init --work-dir "<work_dir>" --pretty
 POSIX:   python3 "$AGENT_PATH" --command init --work-dir "<work_dir>" --pretty
-init otomatis: generate scripts (run/inspect/check) + config abs-path + copy opencode.json + sessions/ scaffold + .gitignore (.workflow/). state/scope/cache/logs/runtime = per-session, dibuat lazy saat delegated call pertama (BUKAN di root).
+init otomatis: generate scripts (run/inspect/check) + config abs-path + copy second_agent.json + sessions/ scaffold + .gitignore (.workflow/). state/scope/cache/logs/runtime = per-session, dibuat lazy saat delegated call pertama (BUKAN di root).
 
 ## Output
 [INIT]
 bootstrap: $AGENT_PATH = <path>
-generated: run/inspect/check.{ps1,sh} + config.json (v3.4.2, main_py_path abs) + opencode.json (copy) + sessions/ (state/scope/cache/logs/runtime per-session, lazy)
+generated: run/inspect/check.{ps1,sh} + config.json (v3.4.3, main_py_path abs) + second_agent.json (copy) + sessions/ (state/scope/cache/logs/runtime per-session, lazy)
 gitignore: .workflow/ ok
 status: READY
 ".workflow siap. Coba /.explore atau /.doctor."

@@ -1,4 +1,4 @@
-# agent-workflow v3.4.2
+# agent-workflow v3.4.3
 
 Runtime orkestrasi mandiri untuk alur kerja dua-agent. Tanpa dependency pihak ketiga.
 
@@ -70,7 +70,7 @@ git --version
 
 ---
 
-## Install (v3.4.2)
+## Install (v3.4.3)
 
 ### Anggota tim baru — urutan lengkap dari nol
 
@@ -241,7 +241,7 @@ python $env:AGENT_PATH --command init --work-dir "C:/path/to/target-app" --prett
 `init` bersifat idempoten: membuat scaffolding yang belum ada dan meregenerasi enam runner script. Ia tidak mem-backfill key pada config lama; gunakan `upgrade` untuk itu.
 
 - `.workflow/config.json` — path absolut `main.py`/`check.py`, sehingga runner dapat menemukan tool tanpa mengandalkan `AGENT_PATH`
-- `.workflow/opencode.json` — salinan project-local, boleh kamu ubah
+- `.workflow/second_agent.json` — salinan project-local, boleh kamu ubah
 - skrip runner untuk platform yang sedang berjalan: `run` `inspect` `check` — `.ps1` di Windows, `.sh` di POSIX
 - `.workflow/sessions/` kosong — state per-sesi dibuat lazy saat panggilan terdelegasi pertama
 - entri `.workflow/` ditambahkan ke `.gitignore` root project
@@ -281,11 +281,12 @@ python $env:AGENT_PATH --command upgrade --work-dir "C:/path/to/target-app" --pr
 
 - menolak berjalan ketika ada delegated job aktif;
 - meregenerasi runner scripts dan me-repoint path tool;
-- mem-backfill key `.workflow/config.json` dan `.workflow/opencode.json` secara additive;
+- memigrasi kunci v3.4.2 (`opencode_*` → `provider_*`, `.workflow/opencode.json` → `.workflow/second_agent.json`) sekali, memindahkan nilainya;
+- mem-backfill key `.workflow/config.json` dan `.workflow/second_agent.json` secara additive;
 - mempertahankan nilai user dan seluruh `sessions/`;
 - tidak mengirim prompt, tidak memanggil second_agent, dan tidak menjalankan verify.
 
-Command biasa tidak menjalankan **full workspace upgrade**. Delegated call dapat mem-backfill `.workflow/config.json` saat memuat state, tetapi tidak meregenerasi scripts atau mem-backfill `.workflow/opencode.json`. Karena backfill itu juga memperbarui marker versi, warning runner dan status `doctor: NEEDS_UPGRADE` dapat hilang sesudah delegated call pertama walaupun dua bagian tadi masih stale. Karena itu jalankan `upgrade` secara eksplisit sebelum memakai workspace versi lama.
+Command biasa tidak menjalankan **full workspace upgrade**. Delegated call dapat mem-backfill `.workflow/config.json` saat memuat state, tetapi tidak meregenerasi scripts atau mem-backfill `.workflow/second_agent.json`. Karena backfill itu juga memperbarui marker versi, warning runner dan status `doctor: NEEDS_UPGRADE` dapat hilang sesudah delegated call pertama walaupun dua bagian tadi masih stale. Karena itu jalankan `upgrade` secara eksplisit sebelum memakai workspace versi lama.
 
 ---
 
@@ -420,13 +421,17 @@ Tidak ada key `auto_verify_method`. Dua key yang valid dan ortogonal adalah:
 
 Key pensiun `commands.autoverify` dimigrasikan saat upgrade. Salah ketik key lain tidak menimbulkan error dan akan jatuh ke default.
 
-### `.workflow/opencode.json`
+### `.workflow/second_agent.json`
 
-File adapter project-local ini boleh diubah per project. Saat `init`, source-nya adalah `config/opencode.json` bila file lokal itu ada, atau `config/opencode.example.json` pada clone bersih. Loader melengkapi key yang belum tersimpan dengan default source secara in-memory; `upgrade` menuliskannya ke file secara additive. Bentuk efektifnya:
+File adapter project-local ini boleh diubah per project. Namanya mengikuti PERAN, bukan vendor — sejak v3.4.3 provider second_agent dipilih lewat config, jadi file ini tidak lagi mengasumsikan OpenCode. Workspace v3.4.2 yang masih memakai `.workflow/opencode.json` dimigrasi sekali saat `upgrade` (nilainya dipindah, kunci lama dihapus). Jangan dikelirukan dengan `<project_root>/opencode.json` dan `~/.config/opencode/opencode.json`, yang memang milik OpenCode sendiri dan tetap bernama begitu.
+
+Saat `init`, source-nya adalah `config/second_agent.json` bila file lokal itu ada, atau `config/second_agent.example.json` pada clone bersih. Loader melengkapi key yang belum tersimpan dengan default source secara in-memory; `upgrade` menuliskannya ke file secara additive. Bentuk efektifnya:
 
 ```json
 {
-  "opencode_command": "opencode",
+  "provider": "opencode",
+  "provider_command": "opencode",
+  "provider_agent": "plan",
   "default_model": null,
   "timeout_seconds": 1800,
   "bootstrap_timeout_seconds": 180,
@@ -449,7 +454,7 @@ File adapter project-local ini boleh diubah per project. Saat `init`, source-nya
 
 `model: null` berarti pakai model default OpenCode.
 
-Kunci reliability (v3.4.2):
+Kunci reliability (v3.4.3):
 
 | Kunci | Default | Arti |
 | --- | --- | --- |
@@ -590,10 +595,10 @@ python3 main.py --command clean --work-dir /path/to/target-app --pretty
 ```text
 <target-app>/.workflow/
 ├─ config.json              # statis, dibuat saat init
-├─ opencode.json            # salinan project-local
+├─ second_agent.json        # salinan project-local, config provider
 ├─ facts.jsonl              # fact store lintas sesi
 ├─ evidence.jsonl           # index artifact immutable lintas sesi
-├─ provider-sessions/       # ID sesi OpenCode, terisolasi per project
+├─ provider-sessions/       # ID sesi provider, terisolasi per project
 ├─ .gitignore
 ├─ run.ps1  run.sh          # entry point 1-panggilan
 ├─ inspect.ps1  inspect.sh  # daftar job
@@ -660,7 +665,7 @@ pernah tercatat, runtime gagal sebagai `session_capture_failed` dan clean run di
 Request berbeda pada session yang masih terkunci tetap ditolak sebagai
 `job_already_running`.
 
-### Liveness worker (v3.4.2)
+### Liveness worker (v3.4.3)
 
 PID yang hidup **tidak** berarti sedang bekerja. Worker karena itu melaporkan heartbeat sekaligus usia output stream, lalu job diklasifikasi tiga keadaan:
 
@@ -699,7 +704,7 @@ opencode run <prompt> --print-logs --log-level INFO
 Runtime mengurai `session.id=ses_...` dari log dan menyimpannya. Panggilan berikutnya memakai ulang sesi itu:
 
 ```text
-opencode run <prompt> -s <opencode_session_id>
+opencode run <prompt> -s <provider_session_id>
 ```
 
 Baris log OpenCode dan banner model dibuang dari `content`; isi jawaban asisten dipertahankan utuh.
@@ -742,7 +747,7 @@ Disebut terbuka karena diam soal ini akan membuat runtime terlihat lebih menjami
 - **Probe PING memakai kuota.** Job yang terus stalled dapat diprobe berulang sesuai cadence; default `await` adalah 120 detik.
 - **Tuning liveness belum seragam di jalur attach.** `check.py --wait` memakai default tool untuk ambang stalled dan probe ulang, bukan nilai project-local.
 - **`job_max_runtime_seconds` project-local belum aktif.** Hard ceiling masih berasal dari default source atau env `AI_PROXY_JOB_MAX_RUNTIME_SECONDS`.
-- **Deteksi upgrade dapat tertutupi backfill parsial.** Delegated load memperbarui marker versi `config.json` tanpa meregenerasi scripts atau `opencode.json`, sehingga warning berikutnya dan `doctor` dapat menganggap workspace current.
+- **Deteksi upgrade dapat tertutupi backfill parsial.** Delegated load memperbarui marker versi `config.json` tanpa meregenerasi scripts atau `second_agent.json`, sehingga warning berikutnya dan `doctor` dapat menganggap workspace current.
 - **Deteksi staleness graph hanya mengikuti source `.py`.** Perubahan bahasa lain tidak masuk fingerprint runtime; Stop hook Graphify merupakan layer Claude terpisah dan tidak tersedia di semua main agent.
 - **Path graph lintas-OS belum dinormalisasi penuh.** Snapshot yang dibuat di Windows lalu dibaca dari POSIX/WSL dapat tetap menghasilkan candidate path ber-backslash; refresh graph secara manual dari environment aktif bila ini terjadi.
 - **Skrip runner tidak portabel lintas-OS.** Path absolut dipanggang saat init/upgrade; pindah repo, path, atau OS berarti jalankan upgrade dari environment baru.
@@ -751,7 +756,7 @@ Disebut terbuka karena diam soal ini akan membuat runtime terlihat lebih menjami
 
 ## Referensi
 
-- Catatan rilis: [`prompt/v3.4.2/changelog.md`](prompt/v3.4.2/changelog.md)
+- Catatan rilis: [`prompt/v3.4.3/changelog.md`](prompt/v3.4.3/changelog.md)
 - Kontrak canonical main_agent: [`dist/config/claude/CLAUDE.md`](dist/config/claude/CLAUDE.md)
 - Kontrak canonical second_agent: [`dist/config/opencode/AGENTS.md`](dist/config/opencode/AGENTS.md)
 - Runtime entry point: [`main.py`](main.py)

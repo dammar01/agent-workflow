@@ -1,14 +1,14 @@
 {
-  "version": "3.4.2",
+  "version": "3.4.3",
   "versions": {
-    "prompt_bundle": "3.4.2",
-    "runtime": "3.4.2"
+    "prompt_bundle": "3.4.3",
+    "runtime": "3.4.3"
   },
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "f61647f8ff80dc12b111e161c35368e4b6129ce72ac8102b33b35321166499a0",
-      "bytes": 22762,
+      "sha256": "08a7f67d4f013e4577f37cefbb7f04825cab17e15bf121bf314d509271f464cc",
+      "bytes": 22766,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -42,7 +42,7 @@
     },
     {
       "path": "claude/skills/doctor.md",
-      "sha256": "c333d3aec189eec8b8e9ecd1f3df2f1fb7417292ae0fe8905f6d4e78c0b1b331",
+      "sha256": "484a240c617e5258ceda9db8fea4e244854dfa5526e57b7808afcaf92078c572",
       "bytes": 1672,
       "merge": "replace",
       "component": "prompt_bundle"
@@ -63,15 +63,15 @@
     },
     {
       "path": "claude/skills/help.md",
-      "sha256": "3f20be8a8782774cce36c02ac7866bfe348e729049b1ed4b85114d2c267fe660",
-      "bytes": 1474,
+      "sha256": "c5e3f73a5cfd17cb4b47901cbcbb6bfccadb16e8d4e992e0af4f9925762daf27",
+      "bytes": 1478,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/skills/init.md",
-      "sha256": "df956284dc55f61b2d4d973cc0931fbf1d413b497adf27e6e5cfcd6948f90ceb",
-      "bytes": 1694,
+      "sha256": "21bfadea296906f83f194b69da7d6c855e54eef2a7bbac9c7dc5e713d6f1cdb7",
+      "bytes": 1702,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -315,7 +315,7 @@
     },
     {
       "path": "opencode/AGENTS.md",
-      "sha256": "ea3590e08bfb43bac0b7bc11dabd093e300a4ba447a8291c51f45a8a9c064b4f",
+      "sha256": "6a6d91c2b3eee167be5f5a0484c0ddee77d0b3f829bc27ee0668b19394498309",
       "bytes": 17240,
       "merge": "merge",
       "component": "prompt_bundle"

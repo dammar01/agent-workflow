@@ -1,15 +1,15 @@
 # Skill: help
-description: Command reference v3.4.2
+description: Command reference v3.4.3
 
 ## Trigger
 /.help
 
 ## Output
-[COMMAND GUIDE — v3.4.2]
+[COMMAND GUIDE — v3.4.3]
 
 LOCAL (main_agent langsung):
   /.execute -y      implement code (wajib -y)
-  /.init            buat/regenerate .workflow/ (scripts, opencode.json, config abs-path)
+  /.init            buat/regenerate .workflow/ (scripts, second_agent.json, config abs-path)
   /.upgrade         refresh workspace in-place, preserve sessions
   /.doctor          .workflow + bundle readiness
   /.sweep           local git diff impact report
