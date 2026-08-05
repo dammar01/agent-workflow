@@ -23,8 +23,8 @@ from utils.parser import ensure_text, first_non_empty
 # another provider names its sessions differently and prefixes its logs differently.
 _SESSION_ID_PATTERNS = (
     r"(?:session\.id=|service=session\s+id=)(ses_[A-Za-z0-9]+)",
-    r"\bid=(ses_[A-Za-z0-9]+)",           # generic key=value log
-    r"\b(ses_[A-Za-z0-9]{6,})\b",          # bare session token, last resort
+    r"\bid=(ses_[A-Za-z0-9]+)",  # generic key=value log
+    r"\b(ses_[A-Za-z0-9]{6,})\b",  # bare session token, last resort
 )
 _LOG_LINE = re.compile(r"^(TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\s+\d{4}-\d{2}-\d{2}T")
 _QUOTED_LINE = re.compile(r"^>\s+")
@@ -412,12 +412,19 @@ class OpenCodeAdapter:
             meta["kill"] = outcome["kill"]
 
         if outcome["timed_out"]:
+            error_tail = _error_tail(outcome["stderr"], outcome["stdout"])
             meta.update(
                 {
                     "error": f"bootstrap timeout after {budget}s",
                     "returncode": 1,
                     "provider_session_id": None,
+                    "salvaged_session_id": self.extract_session_id(
+                        outcome["stdout"] + outcome["stderr"]
+                    ),
                     "timed_out": True,
+                    "rate_limited": _is_rate_limited(error_tail),
+                    "stderr_tail": outcome["stderr"].strip()[-2000:],
+                    "stdout_tail": outcome["stdout"].strip()[-500:],
                 }
             )
             return None, _sanitize_meta(meta)
@@ -506,14 +513,27 @@ class OpenCodeAdapter:
 
         if not provider_session_id:
             meta = dict(bootstrap_meta or {})
+            raw_tail = first_non_empty(
+                meta.get("error"), meta.get("stderr_tail"), meta.get("stdout_tail")
+            )[:500]
+            if meta.get("rate_limited"):
+                return make_error(
+                    "rate_limited",
+                    "opencode could not open a session: the provider is refusing on quota",
+                    next_action=(
+                        "Second agent is out of quota. Wait for the limit to reset, switch "
+                        "model in .workflow/second_agent.json, or check the provider account — "
+                        "do NOT resubmit immediately."
+                    ),
+                    meta=meta,
+                    raw_tail=raw_tail,
+                )
             return make_error(
                 "session_capture_failed",
                 "init_session failed: opencode session id not captured after retry",
                 next_action="Check opencode is logged in and `opencode run` prints a ses_ id; rerun the command.",
                 meta=meta,
-                raw_tail=first_non_empty(
-                    meta.get("error"), meta.get("stderr_tail"), meta.get("stdout_tail")
-                )[:500],
+                raw_tail=raw_tail,
             )
 
         session["provider_session_id"] = provider_session_id

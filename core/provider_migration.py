@@ -20,13 +20,16 @@ provider session, and dropping the field would make every existing session re-bo
 from pathlib import Path
 
 from core.workspace_paths import (
+    LEGACY_PROVIDER_CONFIG_NAME,
     PROVIDER_CONFIG_NAME,
     WORKFLOW_DIRNAME,
     atomic_write_json,
     read_json_file,
 )
 
-LEGACY_CONFIG_NAME = "opencode.json"
+# One definition, shared with the resolver in core/workspace_paths. Two hand-written
+# copies of a filename is what let the reader and the writer drift apart in the first place.
+LEGACY_CONFIG_NAME = LEGACY_PROVIDER_CONFIG_NAME
 
 # old key -> new key
 CONFIG_KEY_MOVES = {

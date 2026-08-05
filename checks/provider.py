@@ -25,6 +25,7 @@ from checks.support import (
     extract_session_id,
 )
 
+
 def _test_provider_seam() -> None:
     """The v3.4.3 seam: registry selection plus the hard-rename migration.
 
@@ -167,6 +168,85 @@ def _test_provider_seam() -> None:
         "a migrated workspace must still resolve to a registered provider",
     )
 
+    # Read the migrated config back THROUGH the resolver the runtime actually uses.
+    # Everything above asserts the write side, and the write side was never the bug: the
+    # v3.4.3 rename produced a correct second_agent.json that no reader opened, because
+    # the resolver still named the v3.4.2 file. Every project silently ran on tool
+    # defaults — wrong model, wrong timeouts, wrong quota — and this suite stayed green.
+    from config.settings import (
+        PROVIDER_CONFIG_FILE,
+        load_provider_config_for,
+        resolve_provider_config_for,
+    )
+
+    resolved = resolve_provider_config_for(temp_root)
+    assert_true(
+        resolved["source"] == "project",
+        f"the project's own config must win over the tool default: {resolved!r}",
+    )
+    assert_true(
+        Path(resolved["path"]) == workflow_dir / "second_agent.json",
+        f"the resolver must open the CURRENT filename: {resolved['path']}",
+    )
+    assert_true(
+        resolved["error"] is None,
+        f"a well-formed config must resolve without error: {resolved['error']!r}",
+    )
+    assert_true(
+        load_provider_config_for(temp_root).get("timeout_seconds") == 999,
+        "the user's tuned value must reach the reader, not just the file on disk",
+    )
+    assert_true(
+        load_provider_config_for(temp_root).get("provider_command")
+        == "opencode-custom",
+        "a migrated key must be readable through the resolver too",
+    )
+
+    # A v3.4.2 workspace that never ran upgrade still has the legacy filename. It must
+    # keep working: the fallback is what makes fixing the resolver safe to ship.
+    legacy_root = Path(tempfile.mkdtemp(prefix="provider-legacy-"))
+    legacy_dir = legacy_root / ".workflow"
+    legacy_dir.mkdir(parents=True)
+    atomic_write_json(legacy_dir / "opencode.json", {"timeout_seconds": 777})
+    legacy_resolved = resolve_provider_config_for(legacy_root)
+    assert_true(
+        legacy_resolved["source"] == "project_legacy"
+        and legacy_resolved["config"].get("timeout_seconds") == 777,
+        f"an un-upgraded workspace must still be read: {legacy_resolved!r}",
+    )
+
+    # No project config at all is a legitimate state, not an error.
+    bare_root = Path(tempfile.mkdtemp(prefix="provider-bare-"))
+    (bare_root / ".workflow").mkdir(parents=True)
+    bare = resolve_provider_config_for(bare_root)
+    assert_true(
+        bare["source"] == "tool_default"
+        and bare["error"] is None
+        and Path(bare["path"]) == Path(PROVIDER_CONFIG_FILE),
+        f"absence must fall back cleanly, without inventing an error: {bare!r}",
+    )
+
+    # Malformed is NOT absence. The runtime stays up on defaults, but the substitution
+    # has to be recorded — an unreported swap is the failure mode this whole check exists
+    # to catch, just arriving through a stray comma instead of a rename.
+    broken_root = Path(tempfile.mkdtemp(prefix="provider-broken-"))
+    broken_dir = broken_root / ".workflow"
+    broken_dir.mkdir(parents=True)
+    (broken_dir / "second_agent.json").write_text(
+        '{"timeout_seconds": }', encoding="utf-8"
+    )
+    broken = resolve_provider_config_for(broken_root)
+    assert_true(
+        broken["error"] is not None and broken["source"] == "tool_default",
+        f"an unreadable config must report the fallback, not hide it: {broken!r}",
+    )
+    assert_true(
+        broken["config"].get("timeout_seconds") is not None,
+        "the runtime must survive a malformed config rather than lose its settings",
+    )
+    for stray in (legacy_root, bare_root, broken_root):
+        shutil.rmtree(stray, ignore_errors=True)
+
     # The acceptance criterion for the whole v3.4.3 refactor: a provider with its OWN
     # session-id shape and log format can be added without touching core/. Asserted
     # rather than argued, because "the code looks general enough" is how it regresses.
@@ -197,7 +277,9 @@ def _test_provider_seam() -> None:
                 l for l in (text or "").splitlines() if not l.startswith("sid=")
             ).strip()
 
-        def probe(self, session_id=None, model=None, work_dir=None, timeout_seconds=None):
+        def probe(
+            self, session_id=None, model=None, work_dir=None, timeout_seconds=None
+        ):
             return {"ok": True, "content": "alive", "meta": {}}
 
         def run(self, prompt, session, model=None, work_dir=None):

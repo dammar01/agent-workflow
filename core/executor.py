@@ -194,6 +194,30 @@ class Executor:
 
         return Router(load_provider_config_for(project_root))
 
+    def _config_provenance(self, project_root) -> dict:
+        """Which provider config the route's values actually came from.
+
+        Recorded on every call because the failure it exposes is invisible otherwise: a
+        project that ships `.workflow/second_agent.json` and still shows
+        `config_source: tool_default` is running on settings it never chose, and the
+        model in this same metadata block is the proof.
+        """
+        if self._router_override:
+            return {"config_source": "injected_router"}
+        try:
+            from config.settings import resolve_provider_config_for
+
+            resolved = resolve_provider_config_for(project_root)
+        except Exception as exc:
+            return {"config_source": "unresolved", "config_error": str(exc)}
+        meta = {
+            "config_source": resolved.get("source"),
+            "config_path": resolved.get("path"),
+        }
+        if resolved.get("error"):
+            meta["config_error"] = resolved["error"]
+        return meta
+
     @staticmethod
     def _audit_redactions(
         project_root: Path, session_id: str, command: str, redactions: list[dict]
@@ -577,6 +601,7 @@ class Executor:
                     _resp_chars // 4 if _resp_chars is not None else None
                 ),
                 "token_source": "estimated",
+                **self._config_provenance(project_root),
                 **prompt_meta,
                 **adapter_meta,
             }

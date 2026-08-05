@@ -29,6 +29,10 @@ WORKFLOW_DIRNAME = ".workflow"
 # on upgrade. Distinct from OpenCode's own config files (~/.config/opencode/opencode.json
 # and <project_root>/opencode.json), which keep their vendor names.
 PROVIDER_CONFIG_NAME = "second_agent.json"
+# The v3.4.2 name. Kept as a constant rather than a literal because the last rename left
+# one reader still spelling it by hand, and a project whose file no longer matched fell
+# through to the tool defaults without a word — see resolve_provider_config below.
+LEGACY_PROVIDER_CONFIG_NAME = "opencode.json"
 LOCK_TTL_SECONDS = 300
 JSON_INDENT = 2
 ARCHIVE_KEEP = 20
@@ -126,6 +130,31 @@ def workflow_paths(
         "sweep_report": sweep_report,
         "logs_dir": logs_dir,
     }
+
+
+def resolve_provider_config(project_root) -> tuple[Path | None, str]:
+    """Locate a project's provider config. Returns (path, source).
+
+    `source` is part of the answer, not a debugging extra. When v3.4.3 renamed the file
+    from `opencode.json` to `second_agent.json`, one resolver kept the old literal — so
+    every project silently ran on the tool defaults: another model, another timeout, no
+    error anywhere. The only visible symptom was quota burning on a provider nobody had
+    selected. Resolution lives here, next to the names it resolves, so the next rename
+    has one place to miss instead of several.
+
+    A `None` path means no project-local file exists at all, which is a legitimate state
+    for a workspace that never tuned anything — the caller falls back to the tool default
+    knowingly rather than by accident.
+    """
+    workflow_dir = Path(project_root) / WORKFLOW_DIRNAME
+    for name, source in (
+        (PROVIDER_CONFIG_NAME, "project"),
+        (LEGACY_PROVIDER_CONFIG_NAME, "project_legacy"),
+    ):
+        candidate = workflow_dir / name
+        if candidate.exists():
+            return candidate, source
+    return None, "tool_default"
 
 
 def _tool_paths(agent_workflow_path: str | None) -> dict:

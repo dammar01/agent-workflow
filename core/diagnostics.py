@@ -64,7 +64,13 @@ def python_callable() -> tuple[bool, str]:
 def run_doctor(
     project_root: Path, provider_command: str, session_id: str | None = None
 ) -> dict:
-    from core.workflow_runtime import needs_upgrade, resolve_agent_workflow_path, script_drift, validate_config, workspace_versions
+    from core.workflow_runtime import (
+        needs_upgrade,
+        resolve_agent_workflow_path,
+        script_drift,
+        validate_config,
+        workspace_versions,
+    )
 
     paths = workflow_paths(project_root, session_id)
     issues: list[str] = []
@@ -257,6 +263,42 @@ def run_doctor(
                 )
     else:
         checks["run_script_drift"] = "SKIPPED — agent-workflow main.py path unresolved"
+
+    try:
+        from config.settings import resolve_provider_config_for
+        from core.workspace_paths import PROVIDER_CONFIG_NAME
+
+        resolved = resolve_provider_config_for(project_root)
+        provider_config = {
+            "source": resolved.get("source"),
+            "path": resolved.get("path"),
+            "default_model": resolved.get("config", {}).get("default_model"),
+        }
+        if resolved.get("error"):
+            provider_config["error"] = resolved["error"]
+        checks["provider_config"] = provider_config
+
+        project_file = paths["workflow_dir"] / PROVIDER_CONFIG_NAME
+        if resolved.get("error"):
+            issues.append(
+                f"provider config unreadable: {resolved.get('path')} — {resolved['error']}; "
+                "running on tool defaults instead"
+            )
+            recommended_fixes.append(
+                f"Fix the JSON in {resolved.get('path')}, or delete it to fall back deliberately"
+            )
+        elif project_file.exists() and resolved.get("source") != "project":
+            issues.append(
+                f"provider config ignored: {project_file} exists but the runtime resolved "
+                f"'{resolved.get('source')}' ({resolved.get('path')}) — model/timeout tuning "
+                "in this project is not being applied"
+            )
+            recommended_fixes.append(
+                "Provider config resolution is picking the wrong file — report this; "
+                "as a stopgap, tune the resolved file instead"
+            )
+    except Exception as exc:
+        checks["provider_config"] = f"SKIPPED — {exc}"
 
     # second_agent MCP safety: enumerate opencode MCP servers, flag any that exceed
     # the read-only evidence role (write/exec/fs/db/browser/etc).
@@ -580,8 +622,7 @@ def run_sweep(project_root: Path, session_id: str | None = None) -> dict:
     return {
         "ok": True,
         "content": (
-            f"sweep {verdict}: {reason}; "
-            f"{len(changed_files)} changed file(s)"
+            f"sweep {verdict}: {reason}; " f"{len(changed_files)} changed file(s)"
         ),
         "meta": {
             "verdict": verdict,
@@ -601,9 +642,11 @@ def prune_sessions(project_root: Path, ttl_days: int = 7, keep_last: int = 20) -
     if not sessions_dir.exists() and not provider_dir.exists():
         return {"removed": 0, "kept": 0}
     dirs = sorted(
-        (p for p in sessions_dir.iterdir() if p.is_dir())
-        if sessions_dir.exists()
-        else (),
+        (
+            (p for p in sessions_dir.iterdir() if p.is_dir())
+            if sessions_dir.exists()
+            else ()
+        ),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
@@ -620,9 +663,11 @@ def prune_sessions(project_root: Path, ttl_days: int = 7, keep_last: int = 20) -
         except OSError:
             continue
     provider_files = sorted(
-        (p for p in provider_dir.glob("*.json") if p.is_file())
-        if provider_dir.exists()
-        else (),
+        (
+            (p for p in provider_dir.glob("*.json") if p.is_file())
+            if provider_dir.exists()
+            else ()
+        ),
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )

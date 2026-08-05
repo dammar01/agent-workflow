@@ -171,24 +171,68 @@ def set_cached_main_session_id(session_id: str, project_root=None) -> None:
     temp.replace(cache_path)
 
 
-def load_provider_config(path: Path = PROVIDER_CONFIG_FILE) -> dict:
+def _load_provider_config_checked(path) -> tuple[dict, str | None]:
+    """Read one provider config file. Returns (config, error).
+
+    A missing file is not an error — only the caller knows whether absence is expected.
+    A file that EXISTS but cannot be parsed is: returning defaults there is how a stray
+    comma discards every tuned value in silence, and the runtime then reports perfect
+    health while running on settings nobody wrote.
+    """
     config = default_provider_config()
     try:
         with Path(path).open("r", encoding="utf-8") as file:
             loaded = json.load(file)
-    except (OSError, json.JSONDecodeError):
-        return config
+    except FileNotFoundError:
+        return config, None
+    except (OSError, json.JSONDecodeError) as exc:
+        return config, f"{type(exc).__name__}: {exc}"
 
-    if isinstance(loaded, dict):
-        config.update({key: value for key, value in loaded.items() if value is not None})
-        if not isinstance(config.get("routes"), dict):
-            config["routes"] = COMMAND_ROUTES
+    if not isinstance(loaded, dict):
+        return config, "provider config is not a JSON object"
+
+    config.update({key: value for key, value in loaded.items() if value is not None})
+    if not isinstance(config.get("routes"), dict):
+        config["routes"] = COMMAND_ROUTES
+    return config, None
+
+
+def load_provider_config(path: Path = PROVIDER_CONFIG_FILE) -> dict:
+    config, _ = _load_provider_config_checked(path)
     return config
+
+
+def resolve_provider_config_for(project_root) -> dict:
+    """Resolve a project's effective provider config, with where it came from.
+
+    Returns `{config, source, path, error}`. The provenance travels with the values so
+    a wrong-looking model can be traced to the file that supplied it in one step,
+    instead of being reconstructed from three files after the fact.
+    """
+    # Deferred: core.workspace_paths imports TOOL_VERSION from this module, so a
+    # top-level import here would close the cycle. Same pattern as _tool_paths.
+    from core.workspace_paths import resolve_provider_config
+
+    path, source = resolve_provider_config(project_root)
+    if path is None:
+        config, error = _load_provider_config_checked(PROVIDER_CONFIG_FILE)
+        return {
+            "config": config,
+            "source": source,
+            "path": str(PROVIDER_CONFIG_FILE),
+            "error": error,
+        }
+
+    config, error = _load_provider_config_checked(path)
+    if error is not None:
+        # Keep the runtime alive on tool defaults — refusing to run would turn a typo
+        # into an outage — but record that the substitution happened. `path` stays on
+        # the file we tried, because that is the one the user has to fix.
+        config, _ = _load_provider_config_checked(PROVIDER_CONFIG_FILE)
+        source = "tool_default"
+    return {"config": config, "source": source, "path": str(path), "error": error}
 
 
 def load_provider_config_for(project_root) -> dict:
     """Prefer the project-local .workflow/second_agent.json, falling back to the tool default."""
-    local = Path(project_root) / ".workflow" / "opencode.json"
-    if local.exists():
-        return load_provider_config(local)
-    return load_provider_config()
+    return resolve_provider_config_for(project_root)["config"]
