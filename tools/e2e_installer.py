@@ -1,0 +1,504 @@
+"""Installer behaviour against a throwaway HOME."""
+
+from tools.e2e_support import (
+    Path,
+    REPO_ROOT,
+    Report,
+    SKIP,
+    json,
+    os,
+    shutil,
+    subprocess,
+    sys,
+    tempfile,
+)
+
+
+def installer_checks(report: Report) -> None:
+    """Install into a throwaway HOME. Installing onto the machine that produced dist/
+    only ever proves idempotency — it never exercises the create path a new user hits.
+    """
+    print("\n[INSTALLER] against a throwaway HOME")
+
+    if not (REPO_ROOT / "dist" / "manifest.json").exists():
+        report.record("installer dry run", SKIP, "dist/ not extracted")
+        return
+
+    fake_home = Path(tempfile.mkdtemp(prefix="e2e-home-"))
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(REPO_ROOT),
+        "PYTHONUTF8": "1",
+        "USERPROFILE": str(fake_home),
+        "HOME": str(fake_home),
+        "AGENT_HOME": str(fake_home),
+    }
+    try:
+        dry = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py")],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        report.check("dry run exits clean", dry.returncode == 0, f"rc={dry.returncode}")
+        report.check("dry run writes nothing", not (fake_home / ".claude").exists())
+        report.check("dry run says so", "DRY RUN" in dry.stdout)
+
+        applied = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--apply"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        report.check(
+            "apply exits clean", applied.returncode == 0, f"rc={applied.returncode}"
+        )
+
+        claude_md = fake_home / ".claude" / "CLAUDE.md"
+        report.check("CLAUDE.md installed", claude_md.exists())
+        skills = list((fake_home / ".claude" / "skills").glob("*.md"))
+        report.check("skills installed", len(skills) >= 10, f"{len(skills)} file(s)")
+        settings = fake_home / ".claude" / "settings.json"
+        report.check("settings.json installed", settings.exists())
+        intent_map = fake_home / ".claude" / "hooks" / "intent-map.json"
+        report.check("intent-map.json installed", intent_map.exists())
+        manifest = json.loads(
+            (REPO_ROOT / "dist" / "manifest.json").read_text(encoding="utf-8")
+        )
+        report.check(
+            "manifest tracks intent-map.json",
+            any(
+                entry.get("path") == "claude/hooks/intent-map.json"
+                for entry in manifest.get("files", [])
+            ),
+        )
+
+        if settings.exists():
+            try:
+                loaded = json.loads(settings.read_text(encoding="utf-8"))
+                report.check(
+                    "settings.json is valid JSON", True, f"{len(loaded)} key(s)"
+                )
+                hook_text = json.dumps(loaded.get("hooks", {}))
+                report.check(
+                    "hook path resolved to this HOME",
+                    "{{HOME}}" not in hook_text,
+                    "placeholder left unresolved" if "{{HOME}}" in hook_text else "",
+                )
+            except json.JSONDecodeError as exc:
+                report.check("settings.json is valid JSON", False, str(exc))
+
+        leftover = [
+            str(p.relative_to(fake_home))
+            for p in fake_home.rglob("*")
+            if p.is_file()
+            and "{{HOME}}" in p.read_text(encoding="utf-8", errors="ignore")
+        ]
+        report.check("no unresolved placeholders", not leftover, str(leftover[:3]))
+
+        second = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--apply"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        report.check(
+            "re-install is idempotent",
+            "replace: " not in second.stdout and "create: " not in second.stdout,
+            "second apply reported writes" if "create: " in second.stdout else "",
+        )
+
+        checked = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        report.check(
+            "apply followed by check is clean",
+            checked.returncode == 0,
+            f"rc={checked.returncode}",
+        )
+
+        loaded = json.loads(settings.read_text(encoding="utf-8"))
+        prompt_entries = loaded.setdefault("hooks", {}).setdefault(
+            "UserPromptSubmit", []
+        )
+        prompt_entries[0].setdefault("hooks", []).append(
+            {"type": "command", "command": "user-hook --keep"}
+        )
+        settings.write_text(json.dumps(loaded, indent=2) + "\n", encoding="utf-8")
+        command_only = subprocess.run(
+            [
+                sys.executable,
+                str(REPO_ROOT / "install.py"),
+                "--apply",
+                "--only-command",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        loaded = json.loads(settings.read_text(encoding="utf-8"))
+        hook_text = json.dumps(loaded.get("hooks", {}))
+        report.check(
+            "only-command removes the shipped intent hook from an existing install",
+            command_only.returncode == 0 and "intent-gate-set" not in hook_text,
+            f"rc={command_only.returncode}",
+        )
+        report.check(
+            "only-command preserves a user hook in the shared entry",
+            "user-hook --keep" in hook_text,
+        )
+        checked = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        report.check(
+            "command-only install passes check",
+            checked.returncode == 0,
+            f"rc={checked.returncode}",
+        )
+
+        auto_intent = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--apply", "--auto-intent"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        loaded = json.loads(settings.read_text(encoding="utf-8"))
+        hook_text = json.dumps(loaded.get("hooks", {}))
+        report.check(
+            "auto-intent restores the shipped intent hook",
+            auto_intent.returncode == 0 and "intent-gate-set" in hook_text,
+            f"rc={auto_intent.returncode}",
+        )
+        report.check(
+            "auto-intent still preserves the user hook",
+            "user-hook --keep" in hook_text,
+        )
+
+        loaded["hooks"].pop("SessionStart", None)
+        settings.write_text(json.dumps(loaded, indent=2) + "\n", encoding="utf-8")
+        settings_drift = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        report.check(
+            "check detects installed settings drift",
+            settings_drift.returncode == 1
+            and "claude/settings.json" in settings_drift.stdout,
+            f"rc={settings_drift.returncode}",
+        )
+        settings_repair = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--apply", "--auto-intent"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        report.check(
+            "apply repairs installed settings drift", settings_repair.returncode == 0
+        )
+
+        provider_config = fake_home / ".config" / "opencode" / "opencode.json"
+        opencode = json.loads(provider_config.read_text(encoding="utf-8"))
+        permission = opencode["agent"]["plan"]["permission"]
+        permission["external_directory"] = "allow"
+        permission["bash"]["cat *"] = "allow"
+        provider_config.write_text(
+            json.dumps(opencode, indent=2) + "\n", encoding="utf-8"
+        )
+        opencode_drift = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        report.check(
+            "check detects installed OpenCode policy drift",
+            opencode_drift.returncode == 1
+            and "opencode/opencode.json" in opencode_drift.stdout,
+            f"rc={opencode_drift.returncode}",
+        )
+        opencode_repair = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--apply", "--auto-intent"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        repaired_opencode = json.loads(provider_config.read_text(encoding="utf-8"))
+        repaired_permission = repaired_opencode["agent"]["plan"]["permission"]
+        repaired_bash = repaired_permission["bash"]
+        report.check(
+            "apply restores enforced OpenCode plan policy",
+            opencode_repair.returncode == 0
+            and repaired_permission["external_directory"] == "deny"
+            and next(iter(repaired_bash.items())) == ("*", "deny")
+            and "cat *" not in repaired_bash,
+            f"rc={opencode_repair.returncode}",
+        )
+        repaired_check = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        report.check("repaired install passes check", repaired_check.returncode == 0)
+
+        reordered = json.loads(provider_config.read_text(encoding="utf-8"))
+        reordered_bash = reordered["agent"]["plan"]["permission"]["bash"]
+        catch_all = reordered_bash.pop("*")
+        reordered_bash["*"] = catch_all
+        provider_config.write_text(
+            json.dumps(reordered, indent=2) + "\n", encoding="utf-8"
+        )
+        order_drift = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        report.check(
+            "check detects semantic OpenCode rule-order drift",
+            order_drift.returncode == 1
+            and "opencode/opencode.json" in order_drift.stdout,
+            f"rc={order_drift.returncode}",
+        )
+        order_repair = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--apply", "--auto-intent"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        canonical = json.loads(provider_config.read_text(encoding="utf-8"))
+        canonical_bash = canonical["agent"]["plan"]["permission"]["bash"]
+        report.check(
+            "apply restores canonical OpenCode rule order",
+            order_repair.returncode == 0
+            and next(iter(canonical_bash.items())) == ("*", "deny"),
+            f"rc={order_repair.returncode}",
+        )
+
+        valid_settings = settings.read_text(encoding="utf-8")
+        settings.write_text("[]\n", encoding="utf-8")
+        non_object_settings = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        report.check(
+            "check rejects non-object settings JSON without traceback",
+            non_object_settings.returncode == 1
+            and "claude/settings.json" in non_object_settings.stdout
+            and "Traceback" not in non_object_settings.stderr,
+            f"rc={non_object_settings.returncode}",
+        )
+        settings.write_text(valid_settings, encoding="utf-8")
+
+        valid_opencode = provider_config.read_text(encoding="utf-8")
+        provider_config.write_text("[]\n", encoding="utf-8")
+        non_object_opencode = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+        )
+        report.check(
+            "check rejects non-object OpenCode JSON without traceback",
+            non_object_opencode.returncode == 1
+            and "opencode/opencode.json" in non_object_opencode.stdout
+            and "Traceback" not in non_object_opencode.stderr,
+            f"rc={non_object_opencode.returncode}",
+        )
+        provider_config.write_text(valid_opencode, encoding="utf-8")
+
+        global_agents = fake_home / ".config" / "opencode" / "agents"
+        report.check(
+            "plain install places custom agents in the global fallback",
+            len(list(global_agents.glob("wf-*.md"))) >= 5,
+        )
+        project = Path(tempfile.mkdtemp(prefix="e2e-install-project-"))
+        try:
+            (project / ".git").mkdir()
+            # init owns scaffolding now; the installer finds the workspace by cwd instead
+            # of taking a --init-project flag.
+            project_init = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPO_ROOT / "main.py"),
+                    "--command",
+                    "init",
+                    "--work-dir",
+                    str(project),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+            )
+            report.check(
+                "init installs the project opencode boundary",
+                project_init.returncode == 0 and (project / "opencode.json").exists(),
+                f"rc={project_init.returncode}",
+            )
+            project_install = subprocess.run(
+                [sys.executable, str(REPO_ROOT / "install.py"), "--apply"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+                cwd=str(project),
+            )
+            report.check(
+                "install inside a project keeps custom agents global",
+                project_install.returncode == 0
+                and len(list(global_agents.glob("wf-*.md"))) >= 5
+                and not (project / ".opencode" / "agents").exists(),
+                f"rc={project_install.returncode}",
+            )
+            project_check = subprocess.run(
+                [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+                cwd=str(project),
+            )
+            report.check(
+                "project-scoped install passes check",
+                project_check.returncode == 0,
+                f"rc={project_check.returncode}",
+            )
+        finally:
+            shutil.rmtree(project, ignore_errors=True)
+    finally:
+        shutil.rmtree(fake_home, ignore_errors=True)
+
+    rollback_home = Path(tempfile.mkdtemp(prefix="e2e-rollback-home-"))
+    rollback_env = {
+        **os.environ,
+        "PYTHONPATH": str(REPO_ROOT),
+        "PYTHONUTF8": "1",
+        "USERPROFILE": str(rollback_home),
+        "HOME": str(rollback_home),
+        "AGENT_HOME": str(rollback_home),
+    }
+    try:
+        installed = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--apply"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=rollback_env,
+        )
+        receipts = sorted(
+            (rollback_home / ".claude" / "backups").glob(
+                "install_*/install_receipt.json"
+            )
+        )
+        receipt = (
+            json.loads(receipts[-1].read_text(encoding="utf-8")) if receipts else {}
+        )
+        receipt_keys = {entry.get("key") for entry in receipt.get("entries", [])}
+        report.check(
+            "receipt v2 covers settings and install mode with post hashes",
+            installed.returncode == 0
+            and receipt.get("schema_version") == 2
+            and {"claude/settings.json", "claude/workflow-install-mode.json"}
+            <= receipt_keys
+            and all(entry.get("post_sha256") for entry in receipt.get("entries", [])),
+            f"rc={installed.returncode}, entries={len(receipt.get('entries', []))}",
+        )
+
+        rolled_back = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--rollback", "--apply"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=rollback_env,
+        )
+        report.check(
+            "clean rollback removes files created by the install",
+            rolled_back.returncode == 0
+            and not (rollback_home / ".claude" / "CLAUDE.md").exists()
+            and not (rollback_home / ".claude" / "settings.json").exists()
+            and not (
+                rollback_home / ".claude" / ".workflow-install-mode.json"
+            ).exists(),
+            f"rc={rolled_back.returncode}",
+        )
+
+        subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--apply"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=rollback_env,
+            check=True,
+        )
+        edited = rollback_home / ".claude" / "CLAUDE.md"
+        edited.write_text(
+            edited.read_text(encoding="utf-8") + "\nuser edit\n", encoding="utf-8"
+        )
+        untouched_peer = rollback_home / ".claude" / "settings.json"
+        refused = subprocess.run(
+            [sys.executable, str(REPO_ROOT / "install.py"), "--rollback", "--apply"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=rollback_env,
+        )
+        report.check(
+            "rollback refuses edited destinations without partial mutation",
+            refused.returncode == 2
+            and edited.exists()
+            and edited.read_text(encoding="utf-8").endswith("user edit\n")
+            and untouched_peer.exists(),
+            f"rc={refused.returncode}",
+        )
+    finally:
+        shutil.rmtree(rollback_home, ignore_errors=True)

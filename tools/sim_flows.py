@@ -35,10 +35,10 @@ from core.workflow_runtime import (  # noqa: E402
     upgrade_workflow_workspace,
     workflow_paths,
 )
-from utils.parser import (
-    clean_opencode_output,
-    extract_opencode_session_id,
-)  # noqa: E402
+from adapters.opencode_adapter import OpenCodeAdapter  # noqa: E402
+
+clean_output = OpenCodeAdapter.clean_output
+extract_session_id = OpenCodeAdapter.extract_session_id
 import check  # noqa: E402
 import main  # noqa: E402
 
@@ -156,10 +156,10 @@ class SimAdapter:
         body = self.body_for.get(command, self.default_body)
         return {
             "ok": True,
-            "content": clean_opencode_output(body),
+            "content": clean_output(body),
             "meta": {
                 "simulated": True,
-                "opencode_session_id": extract_opencode_session_id(body)
+                "provider_session_id": extract_session_id(body)
                 or "ses_sim001",
                 "args": ["opencode", "run", prompt],
             },
@@ -191,7 +191,7 @@ def simulate():
     adapter = SimAdapter()
     main.SESSION_MANAGER = SessionManager(temp_root / "provider-sessions")
     main.JOB_MANAGER = JobManager(temp_root / "jobs")
-    main.EXECUTOR = Executor(opencode=adapter, session_manager=main.SESSION_MANAGER)
+    main.EXECUTOR = Executor(adapter=adapter, session_manager=main.SESSION_MANAGER)
     check.JOB_MANAGER = main.JOB_MANAGER
     original_popen = main.subprocess.Popen
 
@@ -203,13 +203,15 @@ def simulate():
             "config.json": paths["config"].exists(),
             "sessions/": (paths["workflow_dir"] / "sessions").is_dir(),
             "run scripts": bool(list(paths["workflow_dir"].glob("run.*"))),
-            "opencode.json": (paths["workflow_dir"] / "opencode.json").exists(),
+            "second_agent.json": (
+                paths["workflow_dir"] / "second_agent.json"
+            ).exists(),
             ".gitignore": (paths["workflow_dir"] / ".gitignore").exists(),
         }
         record(
             "S1",
             "init bootstraps workspace",
-            "ok=True, config+sessions+run scripts+opencode.json present",
+            "ok=True, config+sessions+run scripts+second_agent.json present",
             f"ok={init['ok']}, {created}",
             init["ok"] and all(created.values()),
         )
@@ -263,9 +265,9 @@ def simulate():
         record(
             "S3c",
             "provider session captured",
-            "meta.opencode_session_id == ses_sim001",
-            str(explore["meta"].get("opencode_session_id")),
-            explore["meta"].get("opencode_session_id") == "ses_sim001",
+            "meta.provider_session_id == ses_sim001",
+            str(explore["meta"].get("provider_session_id")),
+            explore["meta"].get("provider_session_id") == "ses_sim001",
         )
 
         # --- S4 evidence reuse on identical query ----------------------------
@@ -332,7 +334,7 @@ def simulate():
         # --- S5 non-evidence output ------------------------------------------
         menu = SimAdapter()
         menu.default_body = "Specify a command: explore, plan, analyze, verify."
-        menu_exec = Executor(opencode=menu, session_manager=main.SESSION_MANAGER)
+        menu_exec = Executor(adapter=menu, session_manager=main.SESSION_MANAGER)
         menu_session = main.SESSION_MANAGER.load_or_create("menu-session")
         menu_res = menu_exec.execute(
             "analyze", "assess the design", menu_session, work_dir
@@ -444,7 +446,7 @@ def simulate():
                 return super().run(*a, **kw)
 
         main.EXECUTOR = Executor(
-            opencode=BlockingAdapter(), session_manager=main.SESSION_MANAGER
+            adapter=BlockingAdapter(), session_manager=main.SESSION_MANAGER
         )
         holder_out = []
         holder = threading.Thread(
@@ -470,7 +472,7 @@ def simulate():
             and holder_out
             and holder_out[0]["ok"],
         )
-        main.EXECUTOR = Executor(opencode=adapter, session_manager=main.SESSION_MANAGER)
+        main.EXECUTOR = Executor(adapter=adapter, session_manager=main.SESSION_MANAGER)
 
         lock_file = workflow_paths(project, "lock-session")["lock"]
         record(
@@ -555,7 +557,7 @@ def simulate():
 
         # --- S14 recovery worker reuses the captured provider session --------------
         rec_session = main.SESSION_MANAGER.load_or_create("recovery-session")
-        main.SESSION_MANAGER.update_opencode_session_id(rec_session, "ses_recover999")
+        main.SESSION_MANAGER.update_provider_session_id(rec_session, "ses_recover999")
         rec_job = main.JOB_MANAGER.create_job(
             "explore",
             "finish the interrupted mapping",
@@ -578,11 +580,11 @@ def simulate():
             f"action={claim['action']}, ok={rec_out['ok']}, "
             f"continuation={'Continue the interrupted task' in last['prompt']}, "
             f"task_in_prompt={'finish the interrupted mapping' in last['prompt']}, "
-            f"provider={last['session'].get('opencode_session_id')}",
+            f"provider={last['session'].get('provider_session_id')}",
             claim["action"] == "recover"
             and rec_out["ok"]
             and "Continue the interrupted task" in last["prompt"]
-            and last["session"].get("opencode_session_id") == "ses_recover999",
+            and last["session"].get("provider_session_id") == "ses_recover999",
         )
 
         # --- S15 session isolation ----------------------------------------------

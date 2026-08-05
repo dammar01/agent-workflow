@@ -30,30 +30,8 @@ def first_non_empty(*values) -> str:
     return ""
 
 
-_SESSION_ID_PATTERNS = (
-    r"(?:session\.id=|service=session\s+id=)(ses_[A-Za-z0-9]+)",
-    r"\bid=(ses_[A-Za-z0-9]+)",           # generic key=value log
-    r"\b(ses_[A-Za-z0-9]{6,})\b",          # bare session token, last resort
-)
-
-
-def extract_opencode_session_id(text: str) -> str | None:
-    body = ensure_text(text)
-    for pattern in _SESSION_ID_PATTERNS:
-        match = re.search(pattern, body)
-        if match:
-            return match.group(1)
-    return None
-
-
-def clean_opencode_output(text: str) -> str:
-    lines = ensure_text(text).splitlines()
-    kept = []
-    for line in lines:
-        stripped = line.strip()
-        if re.match(r"^(TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\s+\d{4}-\d{2}-\d{2}T", stripped):
-            continue
-        if re.match(r"^>\s+", stripped):
-            continue
-        kept.append(line)
-    return "\n".join(kept).strip()
+# Session-id extraction and log cleaning moved to the adapter in v3.4.3
+# (adapters/opencode_adapter.py). Both were OpenCode-shaped — `ses_` tokens and
+# OpenCode's own log prefixes — so keeping them here would have forced every future
+# provider to emit OpenCode's output format. What stays in this module is the part
+# that is genuinely provider-independent.

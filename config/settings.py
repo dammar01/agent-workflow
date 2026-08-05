@@ -10,7 +10,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SESSION_DIR = BASE_DIR / "storage" / "sessions"
 CACHE_FILE = BASE_DIR / "storage" / "cache.json"
 JOB_DIR = BASE_DIR / "storage" / "jobs"
-OPENCODE_CONFIG_FILE = BASE_DIR / "config" / "opencode.json"
+PROVIDER_CONFIG_FILE = BASE_DIR / "config" / "second_agent.json"
+# Which adapter serves as second_agent. Read by adapters.registry; a workspace
+# config.json may override it per project.
+DEFAULT_PROVIDER = os.getenv("AI_PROXY_PROVIDER", "opencode")
 
 TOOL_VERSION = "3.4.2"
 MAIN_PY = BASE_DIR / "main.py"
@@ -85,7 +88,7 @@ OPENCODE_COMMAND = os.getenv("OPENCODE_COMMAND", "opencode")
 # The opencode agent that runs delegated calls. `plan` is opencode's own read-only
 # primary, and the workflow deliberately adds no second primary: every wf-* agent ships
 # as a subagent that `plan` spawns through the `task` tool.
-DEFAULT_OPENCODE_AGENT = os.getenv("AI_PROXY_OPENCODE_AGENT", "plan")
+DEFAULT_PROVIDER_AGENT = os.getenv("AI_PROXY_OPENCODE_AGENT", "plan")
 # How long a learned "this project cannot fan out" verdict stands before it is retried.
 # It is inferred from one sentence the second agent wrote about itself, and that sentence
 # has been wrong: an agent listed `task` among its tools and still called itself incapable.
@@ -101,10 +104,11 @@ DEFAULT_JOB_POLL_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_JOB_POLL_TIMEOUT_SECO
 DEFAULT_MAX_GLOBAL_WORKERS = int(os.getenv("AI_PROXY_MAX_GLOBAL_WORKERS", "6"))
 
 
-def default_opencode_config() -> dict:
+def default_provider_config() -> dict:
     return {
-        "opencode_command": OPENCODE_COMMAND,
-        "opencode_agent": DEFAULT_OPENCODE_AGENT,
+        "provider": DEFAULT_PROVIDER,
+        "provider_command": OPENCODE_COMMAND,
+        "provider_agent": DEFAULT_PROVIDER_AGENT,
         "default_model": None,
         "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
         "bootstrap_timeout_seconds": DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,
@@ -166,8 +170,8 @@ def set_cached_main_session_id(session_id: str, project_root=None) -> None:
     temp.replace(cache_path)
 
 
-def load_opencode_config(path: Path = OPENCODE_CONFIG_FILE) -> dict:
-    config = default_opencode_config()
+def load_provider_config(path: Path = PROVIDER_CONFIG_FILE) -> dict:
+    config = default_provider_config()
     try:
         with Path(path).open("r", encoding="utf-8") as file:
             loaded = json.load(file)
@@ -181,9 +185,9 @@ def load_opencode_config(path: Path = OPENCODE_CONFIG_FILE) -> dict:
     return config
 
 
-def load_opencode_config_for(project_root) -> dict:
-    """Prefer the project-local .workflow/opencode.json, falling back to the tool default."""
+def load_provider_config_for(project_root) -> dict:
+    """Prefer the project-local .workflow/second_agent.json, falling back to the tool default."""
     local = Path(project_root) / ".workflow" / "opencode.json"
     if local.exists():
-        return load_opencode_config(local)
-    return load_opencode_config()
+        return load_provider_config(local)
+    return load_provider_config()

@@ -2,10 +2,10 @@ from config.roles import VALID_ROLES
 from config.routing import COMMAND_ROUTES
 from config.settings import (
     DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,
-    DEFAULT_OPENCODE_AGENT,
+    DEFAULT_PROVIDER_AGENT,
     DEFAULT_POLL_INTERVAL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
-    load_opencode_config,
+    load_provider_config,
 )
 
 
@@ -17,7 +17,7 @@ class Router:
     """
 
     def __init__(self, config: dict | None = None) -> None:
-        self.config = config or load_opencode_config()
+        self.config = config or load_provider_config()
 
     def route(self, command: str, model_override: str | None = None) -> dict:
         normalized = command.strip().lower()
@@ -38,10 +38,10 @@ class Router:
             "command": normalized,
             "role": role,
             "model": model,
-            "opencode_command": self.config.get("opencode_command", "opencode"),
-            "opencode_agent": cfg_route.get("agent")
-            or self.config.get("opencode_agent")
-            or DEFAULT_OPENCODE_AGENT,
+            "provider_command": self.config.get("provider_command", "opencode"),
+            "provider_agent": cfg_route.get("agent")
+            or self.config.get("provider_agent")
+            or DEFAULT_PROVIDER_AGENT,
             "timeout_seconds": timeout,
             "bootstrap_timeout_seconds": self.config.get(
                 "bootstrap_timeout_seconds", DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS

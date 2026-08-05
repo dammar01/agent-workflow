@@ -22,28 +22,41 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
+from config.providers import PROVIDER_BUNDLES  # noqa: E402
+
 DIST_DIR = REPO_ROOT / "dist"
 DIST_CONFIG = DIST_DIR / "config"
 MANIFEST = DIST_DIR / "manifest.json"
 
 # Same one-time target map extract_config.py writes, so a rebuilt manifest is byte-identical
 # in structure to a bootstrapped one.
+def _provider_targets() -> dict:
+    """Destination map for every declared provider bundle (config/providers.py)."""
+    targets = {}
+    for name, bundle in PROVIDER_BUNDLES.items():
+        home = f"{{{{HOME}}}}/{bundle['home_dir']}"
+        dist_name, dest_name = bundle["instructions"]
+        targets[f"{name}/{dist_name}"] = f"{home}/{dest_name}"
+        if bundle.get("agents_dir"):
+            targets[f"{name}/{bundle['agents_dir']}"] = f"{home}/{bundle['agents_dir']}"
+        if bundle.get("global_config"):
+            dist_name, dest_name = bundle["global_config"]
+            targets[f"{name}/{dist_name}"] = f"{home}/{dest_name}"
+        if bundle.get("project_config"):
+            dist_name, dest_name = bundle["project_config"]
+            targets[f"{name}/{dist_name}"] = f"{{{{PROJECT_ROOT}}}}/{dest_name}"
+    return targets
+
+
 TARGETS = {
     "claude/CLAUDE.md": "{{HOME}}/.claude/CLAUDE.md",
     "claude/skills": "{{HOME}}/.claude/skills",
     "claude/commands": "{{HOME}}/.claude/commands",
     "claude/hooks": "{{HOME}}/.claude/hooks",
     "claude/settings.template.json": "{{HOME}}/.claude/settings.json",
-    "opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",
-    # Subagents are part of the workflow's own toolchain, not a per-project artifact: they
-    # install globally so every project the workflow manages gets the same roster without a
-    # copy landing in each worktree.
-    "opencode/agents": "{{HOME}}/.config/opencode/agents",
-    "opencode/opencode.template.json": "{{HOME}}/.config/opencode/opencode.json",
-    # Secret-file denial lives in the PROJECT config, not the user's global one. opencode
-    # merges project over global, so the boundary follows the projects this workflow
-    # manages instead of quietly rewriting how the user's other work behaves.
-    "opencode/opencode.project.json": "{{PROJECT_ROOT}}/opencode.json",
+    **_provider_targets(),
 }
 
 
@@ -68,21 +81,25 @@ def _dist_files() -> list[str]:
     if hooks.is_dir():
         found = sorted(p for p in hooks.iterdir() if p.is_file())
         paths += [f"claude/hooks/{p.name}" for p in found]
-    if (DIST_CONFIG / "opencode" / "AGENTS.md").is_file():
-        paths.append("opencode/AGENTS.md")
-    agents = DIST_CONFIG / "opencode" / "agents"
-    if agents.is_dir():
-        paths += [
-            f"opencode/agents/{p.name}"
-            for p in sorted(agents.glob("*.md"))
-            if p.is_file()
-        ]
+    for name, bundle in PROVIDER_BUNDLES.items():
+        dist_name, _ = bundle["instructions"]
+        if (DIST_CONFIG / name / dist_name).is_file():
+            paths.append(f"{name}/{dist_name}")
+        agents_dir = bundle.get("agents_dir")
+        agents = DIST_CONFIG / name / agents_dir if agents_dir else None
+        if agents is not None and agents.is_dir():
+            paths += [
+                f"{name}/{agents_dir}/{p.name}"
+                for p in sorted(agents.glob("*.md"))
+                if p.is_file()
+            ]
     if (DIST_CONFIG / "claude" / "settings.template.json").is_file():
         paths.append("claude/settings.template.json")
-    if (DIST_CONFIG / "opencode" / "opencode.template.json").is_file():
-        paths.append("opencode/opencode.template.json")
-    if (DIST_CONFIG / "opencode" / "opencode.project.json").is_file():
-        paths.append("opencode/opencode.project.json")
+    for name, bundle in PROVIDER_BUNDLES.items():
+        for key in ("global_config", "project_config"):
+            entry = bundle.get(key)
+            if entry and (DIST_CONFIG / name / entry[0]).is_file():
+                paths.append(f"{name}/{entry[0]}")
     return paths
 
 

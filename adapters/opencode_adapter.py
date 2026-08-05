@@ -1,5 +1,6 @@
 import hashlib
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -7,7 +8,7 @@ import subprocess
 
 from config.settings import (
     DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,
-    DEFAULT_OPENCODE_AGENT,
+    DEFAULT_PROVIDER_AGENT,
     DEFAULT_POLL_INTERVAL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
     OPENCODE_COMMAND,
@@ -16,12 +17,17 @@ from core.contract import make_error as _contract_make_error
 from core.contract import make_ok as _contract_make_ok
 from utils import osutil
 from utils.redact import redact, redact_value
-from utils.parser import (
-    clean_opencode_output,
-    ensure_text,
-    extract_opencode_session_id,
-    first_non_empty,
+from utils.parser import ensure_text, first_non_empty
+
+# OpenCode's own output shapes. They belong to the adapter, not to a shared parser:
+# another provider names its sessions differently and prefixes its logs differently.
+_SESSION_ID_PATTERNS = (
+    r"(?:session\.id=|service=session\s+id=)(ses_[A-Za-z0-9]+)",
+    r"\bid=(ses_[A-Za-z0-9]+)",           # generic key=value log
+    r"\b(ses_[A-Za-z0-9]{6,})\b",          # bare session token, last resort
 )
+_LOG_LINE = re.compile(r"^(TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\s+\d{4}-\d{2}-\d{2}T")
+_QUOTED_LINE = re.compile(r"^>\s+")
 
 # Upper bound on captured stdout/stderr per stream (~4MB of text). A well-behaved evidence
 # run is a few hundred KB; this only clamps a runaway/pathological process so it cannot
@@ -188,12 +194,33 @@ class OpenCodeAdapter:
         self.poll_interval = DEFAULT_POLL_INTERVAL_SECONDS
         self.bootstrap_timeout_seconds = DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS
         # `plan` is the read-only fallback when project config omits a custom agent.
-        self.agent = DEFAULT_OPENCODE_AGENT
+        self.agent = DEFAULT_PROVIDER_AGENT
         self.last_call_meta: dict = {}
         self.on_session_created = None
 
     def _agent_args(self) -> list[str]:
-        return ["--agent", self.agent or DEFAULT_OPENCODE_AGENT]
+        return ["--agent", self.agent or DEFAULT_PROVIDER_AGENT]
+
+    @staticmethod
+    def extract_session_id(text: str) -> str | None:
+        """First `ses_*` token OpenCode reports, searched most specific first."""
+        body = ensure_text(text)
+        for pattern in _SESSION_ID_PATTERNS:
+            match = re.search(pattern, body)
+            if match:
+                return match.group(1)
+        return None
+
+    @staticmethod
+    def clean_output(text: str) -> str:
+        """Drop OpenCode's log lines and quoted echoes, keep the answer."""
+        kept = []
+        for line in ensure_text(text).splitlines():
+            stripped = line.strip()
+            if _LOG_LINE.match(stripped) or _QUOTED_LINE.match(stripped):
+                continue
+            kept.append(line)
+        return "\n".join(kept).strip()
 
     def _popen_capture(
         self,
@@ -376,7 +403,7 @@ class OpenCodeAdapter:
             outcome = self._popen_capture(args, env, cwd, budget, "bootstrap")
         except (OSError, FileNotFoundError) as exc:
             meta.update(
-                {"error": str(exc), "returncode": 1, "opencode_session_id": None}
+                {"error": str(exc), "returncode": 1, "provider_session_id": None}
             )
             return None, _sanitize_meta(meta)
 
@@ -389,18 +416,18 @@ class OpenCodeAdapter:
                 {
                     "error": f"bootstrap timeout after {budget}s",
                     "returncode": 1,
-                    "opencode_session_id": None,
+                    "provider_session_id": None,
                     "timed_out": True,
                 }
             )
             return None, _sanitize_meta(meta)
 
         combined = outcome["stdout"] + outcome["stderr"]
-        session_id = extract_opencode_session_id(combined)
+        session_id = self.extract_session_id(combined)
         meta.update(
             {
                 "returncode": outcome["returncode"],
-                "opencode_session_id": session_id,
+                "provider_session_id": session_id,
                 "stderr_tail": outcome["stderr"].strip()[-2000:],
                 "stdout_tail": outcome["stdout"].strip()[-500:],
             }
@@ -465,19 +492,19 @@ class OpenCodeAdapter:
                 },
             )
 
-        opencode_session_id = session.get("opencode_session_id")
+        provider_session_id = session.get("provider_session_id")
         bootstrap_meta = None
 
-        if not opencode_session_id:
-            opencode_session_id, bootstrap_meta = self.init_session(
+        if not provider_session_id:
+            provider_session_id, bootstrap_meta = self.init_session(
                 model, work_dir, workflow_session_id=session.get("session_id")
             )
-            if not opencode_session_id:
-                opencode_session_id, bootstrap_meta = self.init_session(
+            if not provider_session_id:
+                provider_session_id, bootstrap_meta = self.init_session(
                     model, work_dir, workflow_session_id=session.get("session_id")
                 )
 
-        if not opencode_session_id:
+        if not provider_session_id:
             meta = dict(bootstrap_meta or {})
             return make_error(
                 "session_capture_failed",
@@ -489,10 +516,10 @@ class OpenCodeAdapter:
                 )[:500],
             )
 
-        session["opencode_session_id"] = opencode_session_id
+        session["provider_session_id"] = provider_session_id
         if bootstrap_meta is not None and self.on_session_created:
             try:
-                self.on_session_created(opencode_session_id)
+                self.on_session_created(provider_session_id)
             except Exception as exc:
                 return make_error(
                     "session_capture_failed",
@@ -503,16 +530,16 @@ class OpenCodeAdapter:
                     ),
                     meta={
                         "error": f"{type(exc).__name__}: {exc}",
-                        "opencode_session_id": opencode_session_id,
+                        "provider_session_id": provider_session_id,
                     },
                 )
 
-        result = self.run_agent(prompt, opencode_session_id, model, work_dir)
+        result = self.run_agent(prompt, provider_session_id, model, work_dir)
 
         if bootstrap_meta is not None:
             result["meta"]["bootstrap"] = bootstrap_meta
-            result["meta"]["opencode_session_id"] = (
-                result["meta"].get("opencode_session_id") or opencode_session_id
+            result["meta"]["provider_session_id"] = (
+                result["meta"].get("provider_session_id") or provider_session_id
             )
 
         return result
@@ -620,7 +647,7 @@ class OpenCodeAdapter:
             return make_error(
                 "command_not_found",
                 f"command not found: {args[0]}",
-                next_action="Install opencode or fix opencode_command in .workflow/opencode.json.",
+                next_action="Install opencode or fix provider_command in .workflow/second_agent.json.",
                 meta={"error": str(exc), **_argv_meta(args), "cwd": cwd},
             )
         except OSError as exc:
@@ -648,17 +675,17 @@ class OpenCodeAdapter:
             if _is_rate_limited(_error_tail(outcome["stderr"], outcome["stdout"])):
                 return make_error(
                     "rate_limited",
-                    clean_opencode_output(raw) or "opencode hit a provider rate limit",
+                    self.clean_output(raw) or "opencode hit a provider rate limit",
                     next_action=(
                         "Second agent is out of quota. Wait for the limit to reset, switch "
-                        "model in .workflow/opencode.json, or check the provider account — "
+                        "model in .workflow/second_agent.json, or check the provider account — "
                         "do NOT resubmit immediately."
                     ),
                     meta=timeout_meta,
                 )
             return make_error(
                 "timeout",
-                clean_opencode_output(raw),
+                self.clean_output(raw),
                 next_action="Increase timeout_seconds (0 = no limit) or narrow the task, then retry.",
                 meta=timeout_meta,
             )
@@ -676,9 +703,9 @@ class OpenCodeAdapter:
             "cwd": cwd,
             "duration_seconds": outcome["duration_seconds"],
             "idle_seconds": outcome.get("idle_seconds"),
-            "opencode_session_id": extract_opencode_session_id(combined),
+            "provider_session_id": self.extract_session_id(combined),
         }
-        cleaned = clean_opencode_output(raw)
+        cleaned = self.clean_output(raw)
 
         if outcome["returncode"] != 0:
             err_tail = _error_tail(meta["stderr"])
@@ -690,7 +717,7 @@ class OpenCodeAdapter:
                     or "opencode refused: provider rate limit / quota exhausted",
                     next_action=(
                         "Second agent is out of quota. Wait for the limit to reset, switch "
-                        "model in .workflow/opencode.json, or check the provider account — "
+                        "model in .workflow/second_agent.json, or check the provider account — "
                         "do NOT resubmit immediately."
                     ),
                     meta=meta,

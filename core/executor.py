@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from adapters.opencode_adapter import OpenCodeAdapter
+from adapters.base import SecondAgentAdapter
+from adapters.registry import resolve_adapter
 from config.settings import (
     DEFAULT_MAX_TASK_CHARS,
     DEFAULT_TASK_TRUNCATION_HARD_RATIO,
@@ -173,21 +174,25 @@ class Executor:
     def __init__(
         self,
         router: Router | None = None,
-        opencode: OpenCodeAdapter | None = None,
+        adapter: SecondAgentAdapter | None = None,
         session_manager=None,
+        provider: str | None = None,
     ) -> None:
         self.router = router or Router()
         self._router_override = router is not None
-        self.opencode = opencode or OpenCodeAdapter()
+        # An injected adapter wins outright (tests, callers that already built one).
+        # Otherwise the provider is resolved from config rather than named here —
+        # that hard-coded name was the reason a second provider was unreachable.
+        self.adapter = adapter or resolve_adapter(provider)
         self.session_manager = session_manager
 
     def _router_for(self, project_root) -> Router:
         """Use an injected router as-is; otherwise route via project-local opencode config."""
         if self._router_override:
             return self.router
-        from config.settings import load_opencode_config_for
+        from config.settings import load_provider_config_for
 
-        return Router(load_opencode_config_for(project_root))
+        return Router(load_provider_config_for(project_root))
 
     @staticmethod
     def _audit_redactions(
@@ -488,49 +493,49 @@ class Executor:
         if not handoff.get("ok"):
             return handoff
 
-        self.opencode.command = route.get(
-            "opencode_command", getattr(self.opencode, "command", "opencode")
+        self.adapter.command = route.get(
+            "provider_command", getattr(self.adapter, "command", "opencode")
         )
-        self.opencode.agent = route.get(
-            "opencode_agent", getattr(self.opencode, "agent", None)
+        self.adapter.agent = route.get(
+            "provider_agent", getattr(self.adapter, "agent", None)
         )
-        self.opencode.timeout_seconds = route.get(
-            "timeout_seconds", getattr(self.opencode, "timeout_seconds", 0)
+        self.adapter.timeout_seconds = route.get(
+            "timeout_seconds", getattr(self.adapter, "timeout_seconds", 0)
         )
-        self.opencode.no_timeout = (
-            self.opencode.timeout_seconds is None or self.opencode.timeout_seconds <= 0
+        self.adapter.no_timeout = (
+            self.adapter.timeout_seconds is None or self.adapter.timeout_seconds <= 0
         )
         if route.get("bootstrap_timeout_seconds") is not None:
-            self.opencode.bootstrap_timeout_seconds = route["bootstrap_timeout_seconds"]
+            self.adapter.bootstrap_timeout_seconds = route["bootstrap_timeout_seconds"]
         if route.get("poll_interval_seconds") is not None:
-            self.opencode.poll_interval = route["poll_interval_seconds"]
+            self.adapter.poll_interval = route["poll_interval_seconds"]
         # Only the adapter's poll loop can emit liveness while opencode blocks.
-        self.opencode.on_progress = on_progress
+        self.adapter.on_progress = on_progress
 
         adapter_session = dict(session)
         adapter_session["session_id"] = session_id
 
-        def persist_new_session(opencode_session_id: str) -> None:
-            adapter_session["opencode_session_id"] = opencode_session_id
-            session["opencode_session_id"] = opencode_session_id
+        def persist_new_session(provider_session_id: str) -> None:
+            adapter_session["provider_session_id"] = provider_session_id
+            session["provider_session_id"] = provider_session_id
             if effective_session_manager is not None:
-                effective_session_manager.update_opencode_session_id(
-                    session, opencode_session_id
+                effective_session_manager.update_provider_session_id(
+                    session, provider_session_id
                 )
 
         session_callback_bound = False
         try:
-            if hasattr(self.opencode, "on_session_created"):
+            if hasattr(self.adapter, "on_session_created"):
                 session_callback_bound = True
-                self.opencode.on_session_created = persist_new_session
+                self.adapter.on_session_created = persist_new_session
         except Exception:
             session_callback_bound = False
         try:
-            self.opencode.last_call_meta = {}
+            self.adapter.last_call_meta = {}
         except Exception:
             pass
         try:
-            result = self.opencode.run(
+            result = self.adapter.run(
                 prompt,
                 adapter_session,
                 route.get("model"),
@@ -538,10 +543,10 @@ class Executor:
             )
             result, _ = _sanitize_result(result)
         finally:
-            self.opencode.on_progress = None
+            self.adapter.on_progress = None
             if session_callback_bound:
                 try:
-                    self.opencode.on_session_created = None
+                    self.adapter.on_session_created = None
                 except Exception:
                     pass
             # Archive exit, duration, kill, and stderr metadata for failure diagnosis,
@@ -555,7 +560,7 @@ class Executor:
             _resp_chars = len(_content) if isinstance(_content, str) else None
             adapter_meta, meta_redactions = redact_value(
                 _without_raw_args(
-                    getattr(self.opencode, "last_call_meta", None) or {}
+                    getattr(self.adapter, "last_call_meta", None) or {}
                 )
             )
             if not isinstance(adapter_meta, dict):
@@ -564,7 +569,7 @@ class Executor:
                 "command": normalized_command,
                 "role": route.get("role"),
                 "model": route.get("model"),
-                "timeout_seconds": self.opencode.timeout_seconds,
+                "timeout_seconds": self.adapter.timeout_seconds,
                 "prompt_chars": _prompt_chars,
                 "response_chars": _resp_chars,
                 "estimated_input_tokens": _prompt_chars // 4,
@@ -593,20 +598,20 @@ class Executor:
             session_id=session_id,
         )
 
-        opencode_session_id = result.get("meta", {}).get(
-            "opencode_session_id"
-        ) or adapter_session.get("opencode_session_id") or session.get(
-            "opencode_session_id"
+        provider_session_id = result.get("meta", {}).get(
+            "provider_session_id"
+        ) or adapter_session.get("provider_session_id") or session.get(
+            "provider_session_id"
         )
         if (
             result.get("ok")
-            and opencode_session_id
-            and not session.get("opencode_session_id")
+            and provider_session_id
+            and not session.get("provider_session_id")
         ):
-            session["opencode_session_id"] = opencode_session_id
+            session["provider_session_id"] = provider_session_id
             if effective_session_manager is not None:
-                effective_session_manager.update_opencode_session_id(
-                    session, opencode_session_id
+                effective_session_manager.update_provider_session_id(
+                    session, provider_session_id
                 )
 
         redactions = (result.get("meta") or {}).get("redactions")

@@ -38,6 +38,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
+
+from config.providers import PROVIDER_BUNDLES  # noqa: E402
+
 DIST_DIR = REPO_ROOT / "dist" / "config"
 MANIFEST = REPO_ROOT / "dist" / "manifest.json"
 
@@ -49,7 +52,17 @@ ALLOWLIST = [
     (".claude/skills", "claude/skills", "dir:*.md"),
     (".claude/commands", "claude/commands", "dir:*.md"),
     (".claude/hooks", "claude/hooks", "dir:*.ps1,*.sh,intent-map.json"),
-    (".config/opencode/AGENTS.md", "opencode/AGENTS.md", "file"),
+    *(
+        # One entry per declared provider bundle (config/providers.py) rather than a
+        # literal per vendor. Still an explicit allowlist: a provider only appears here
+        # once someone declares its bundle, so no glob can widen this by accident.
+        (
+            f"{bundle['home_dir']}/{bundle['instructions'][1]}",
+            f"{name}/{bundle['instructions'][0]}",
+            "file",
+        )
+        for name, bundle in PROVIDER_BUNDLES.items()
+    ),
 ]
 
 # settings.json is filtered key-wise rather than copied: the file mixes shareable

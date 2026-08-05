@@ -37,8 +37,8 @@ from config.settings import (
     DEFAULT_SLIM_CONTENT_MIN_CHARS,
     DEFAULT_STALL_THRESHOLD_SECONDS,
     SLIM_CONTENT_ENV,
-    load_opencode_config,
-    load_opencode_config_for,
+    load_provider_config,
+    load_provider_config_for,
     get_cached_main_session_id,
     set_cached_main_session_id,
 )
@@ -50,24 +50,30 @@ EXECUTOR = Executor(session_manager=SESSION_MANAGER)
 JOB_MANAGER = JobManager()
 BACKGROUND_COMMANDS = {"explore", "plan", "analyze", "verify"}
 
-
-def _finalize_verify_result(command: str, result: dict) -> dict:
-    if command.strip().lower() != "verify" or not isinstance(result, dict):
-        return result
-    if not result.get("ok"):
-        return result
-
-    meta = result.setdefault("meta", {})
-    if meta.get("mode") == "quick" or "quick_verify" in meta:
-        return result
-
-    assessment = validate_verification_contract(result.get("content") or "")
-    meta["verdict"] = assessment["verdict"]
-    meta["verify_contract"] = assessment
-    warnings = assessment.get("warnings") or []
-    if warnings:
-        meta.setdefault("contract_warnings", []).extend(warnings)
-    return result
+# Split out in v3.4.3. Re-exported so every existing caller of `main.<name>`
+# keeps working; the singletons above stay here because this is the entry point.
+from core.job_lifecycle import (  # noqa: E402,F401
+    _apply_job_thresholds,
+    _job_config,
+    _max_probes,
+    _probe_recheck_seconds,
+    _spawn_worker,
+    await_job,
+    check_stalled_job,
+    get_result,
+    get_status,
+    run_worker,
+    should_run_in_background,
+    submit,
+)
+from core.result_shaping import (  # noqa: E402,F401
+    _as_ref_only,
+    _finalize_verify_result,
+    _HEAVY_META_KEYS,
+    _slim_result,
+    _verify_exit_code,
+    _without_raw_args,
+)
 
 
 def _session_storage_id(session_id: str) -> str:
@@ -129,9 +135,9 @@ def run(
         return {"ok": True, "content": "workflow workspace initialized", "meta": meta}
 
     if normalized_command == "doctor":
-        config = load_opencode_config()
+        config = load_provider_config()
         return run_doctor(
-            project_root, config.get("opencode_command", "opencode"), session_id
+            project_root, config.get("provider_command", "opencode"), session_id
         )
 
     if normalized_command == "upgrade":
@@ -202,7 +208,7 @@ def run(
                 next_action="Repair or remove the project-local provider session file, then retry.",
                 meta={"project_root": str(project_root)},
             )
-        if require_provider_session and not session.get("opencode_session_id"):
+        if require_provider_session and not session.get("provider_session_id"):
             return make_error(
                 "session_capture_failed",
                 "cannot recover interrupted job because its OpenCode session ID was not captured",
@@ -236,241 +242,6 @@ def run(
         release_runtime_lock(lock_path, session_id, lock_claim.get("token"))
 
 
-def submit(
-    command: str,
-    task: str,
-    session_id: str,
-    work_dir: str | None = None,
-    model: str | None = None,
-    allow_reuse: bool = True,
-) -> dict:
-    normalized_command = command.strip().lower()
-    if normalized_command not in BACKGROUND_COMMANDS:
-        return make_error(
-            "job_submit_error",
-            f"unsupported submit target: {command}",
-            next_action="Use a delegated command (explore/plan/analyze/verify).",
-            meta={"command": normalized_command},
-        )
-
-    expected_hash = JOB_MANAGER.request_hash(
-        normalized_command, task, session_id, work_dir, allow_reuse, model
-    )
-    recovering = False
-
-    def capacity_error() -> dict:
-        return make_error(
-            "worker_capacity",
-            f"global worker limit reached ({JOB_MANAGER.max_global_workers} active)",
-            next_action="Wait for an in-flight delegated job to finish, then retry.",
-            meta={
-                "command": normalized_command,
-                "max_global_workers": JOB_MANAGER.max_global_workers,
-            },
-        )
-
-    try:
-        with JOB_MANAGER.capacity_guard():
-            active = JOB_MANAGER.active_job_for_session(session_id)
-            if active:
-                if active.get("request_hash") != expected_hash:
-                    active_id = active["job_id"]
-                    return make_error(
-                        "job_already_running",
-                        f"session {session_id} already has active job {active_id}",
-                        next_action=(
-                            f"Wait for {active_id} or run: "
-                            f".workflow/check.{osutil.script_ext()} {active_id} --wait"
-                        ),
-                        meta={"command": normalized_command},
-                        active_job_id=active_id,
-                    )
-
-                if active.get("worker_pid") and JOB_MANAGER.liveness(active) != DEAD:
-                    return {
-                        "ok": True,
-                        "job_id": active["job_id"],
-                        "status": active["status"],
-                        "submitted_at": active["created_at"],
-                        "meta": {
-                            "pid": active.get("worker_pid"),
-                            "reused": True,
-                            "recovery": False,
-                        },
-                    }
-
-                pending_reservation = (
-                    active.get("status") == "pending"
-                    and active.get("worker_pid") is None
-                )
-                if (
-                    not pending_reservation
-                    and JOB_MANAGER.active_worker_count()
-                    >= JOB_MANAGER.max_global_workers
-                ):
-                    return capacity_error()
-
-                recovery = JOB_MANAGER.claim_recovery(active["job_id"])
-                action = recovery.get("action")
-                job = recovery.get("job") or active
-                if action in {"wait", "attach"}:
-                    waiting_for_recovery = bool(job.get("recovery_in_progress"))
-                    return {
-                        "ok": True,
-                        "job_id": job["job_id"],
-                        "status": job.get("status", "pending"),
-                        "submitted_at": job["created_at"],
-                        "meta": {
-                            "pid": job.get("worker_pid"),
-                            "reused": True,
-                            "recovery": waiting_for_recovery,
-                            "recovery_pending": waiting_for_recovery,
-                        },
-                    }
-                if action == "exhausted":
-                    return make_error(
-                        "worker_died",
-                        f"job {job['job_id']} exhausted its single recovery attempt",
-                        next_action=(
-                            "The session lock was released. Report the interruption or "
-                            "invoke the original task again as a clean run; do not send "
-                            "continue automatically."
-                        ),
-                        meta={
-                            "reason": "recovery_exhausted",
-                            "job_id": job["job_id"],
-                            "recovery_attempt": job.get("recovery_attempt", 1),
-                        },
-                    )
-                if action != "recover":
-                    return make_error(
-                        "job_submit_error",
-                        f"cannot recover active job {active['job_id']}",
-                        next_action="Inspect the job record, then retry the original task.",
-                        meta={"reason": action or "recovery_unknown"},
-                    )
-                recovering = True
-            else:
-                if JOB_MANAGER.active_worker_count() >= JOB_MANAGER.max_global_workers:
-                    return capacity_error()
-                try:
-                    job = JOB_MANAGER.create_job(
-                        normalized_command,
-                        task,
-                        session_id,
-                        work_dir,
-                        model,
-                        allow_reuse,
-                    )
-                except ValueError as exc:
-                    active = JOB_MANAGER.active_job_for_session(session_id)
-                    active_id = active["job_id"] if active else None
-                    next_action = (
-                        f"Wait for {active_id} or run: "
-                        f".workflow/check.{osutil.script_ext()} {active_id} --wait"
-                        if active_id
-                        else "Wait for the active job to finish, then retry."
-                    )
-                    return make_error(
-                        "job_already_running",
-                        str(exc),
-                        next_action=next_action,
-                        meta={"command": normalized_command},
-                        active_job_id=active_id,
-                    )
-    except OSError as exc:
-        return make_error(
-            "job_submit_error",
-            str(exc),
-            next_action="Check that the job store is writable, then retry.",
-            meta={"command": normalized_command, "error": type(exc).__name__},
-        )
-
-    try:
-        worker = _spawn_worker(job["job_id"], work_dir)
-        if not worker["ok"]:
-            JOB_MANAGER.fail_job(job["job_id"], worker["content"])
-            return worker
-        JOB_MANAGER.set_worker_pid(job["job_id"], worker["meta"]["pid"])
-        return {
-            "ok": True,
-            "job_id": job["job_id"],
-            "status": job["status"],
-            "submitted_at": job["created_at"],
-            "meta": {
-                "pid": worker["meta"]["pid"],
-                "reused": recovering,
-                "recovery": recovering,
-                "recovery_attempt": job.get("recovery_attempt", 0),
-            },
-        }
-    finally:
-        if recovering:
-            JOB_MANAGER.release_recovery_claim(job["job_id"])
-
-
-def get_status(job_id: str) -> dict:
-    job = JOB_MANAGER.get_job(job_id)
-    if not job:
-        return {"ok": False, "job_id": job_id, "status": "not_found", "meta": {}}
-    return {"ok": True, **job}
-
-
-def get_result(job_id: str) -> dict:
-    return JOB_MANAGER.get_result(job_id)
-
-
-def should_run_in_background(command: str) -> bool:
-    return command.strip().lower() in BACKGROUND_COMMANDS
-
-
-def _job_config(work_dir: str | None) -> dict:
-    return load_opencode_config_for(detect_project_root(work_dir))
-
-
-def _apply_job_thresholds(work_dir: str | None) -> None:
-    """Push the project's stall/idle thresholds onto the shared JobManager.
-
-    These live in .workflow/opencode.json next to the other adapter timings, but the
-    JobManager is constructed at import time with the tool defaults — so without this
-    a project that tuned them got the defaults anyway.
-    """
-    config = _job_config(work_dir)
-    try:
-        JOB_MANAGER.stall_threshold_seconds = int(
-            config.get("stall_threshold_seconds", DEFAULT_STALL_THRESHOLD_SECONDS)
-        )
-        JOB_MANAGER.idle_stall_seconds = int(
-            config.get("idle_stall_seconds", DEFAULT_IDLE_STALL_SECONDS)
-        )
-    except (TypeError, ValueError):
-        pass
-
-
-def _probe_recheck_seconds(work_dir: str | None) -> float:
-    try:
-        return max(
-            10.0,
-            float(
-                _job_config(work_dir).get(
-                    "probe_recheck_seconds", DEFAULT_PROBE_RECHECK_SECONDS
-                )
-            ),
-        )
-    except (TypeError, ValueError):
-        return float(DEFAULT_PROBE_RECHECK_SECONDS)
-
-
-def _max_probes(work_dir: str | None) -> int:
-    try:
-        return max(
-            1,
-            int(_job_config(work_dir).get("max_probes", DEFAULT_MAX_PROBES)),
-        )
-    except (TypeError, ValueError):
-        return DEFAULT_MAX_PROBES
-
-
 def _warn_if_workspace_stale(work_dir: str | None) -> None:
     """Warn when the workspace version differs; upgrade remains explicit."""
     try:
@@ -496,10 +267,14 @@ def probe_second_agent(work_dir: str | None = None, model: str | None = None) ->
     "hung, never coming back" — the worker PID looks identical in both cases.
     """
     project_root = detect_project_root(work_dir)
-    config = load_opencode_config_for(project_root)
-    from adapters.opencode_adapter import OpenCodeAdapter
+    config = load_provider_config_for(project_root)
+    from adapters.registry import resolve_adapter
 
-    adapter = OpenCodeAdapter(command=config.get("opencode_command", "opencode"))
+    adapter = resolve_adapter(
+        project_root=project_root,
+        config=config,
+        command=config.get("provider_command", "opencode"),
+    )
     return adapter.probe(
         model=model or config.get("default_model"),
         work_dir=str(project_root),
@@ -507,207 +282,6 @@ def probe_second_agent(work_dir: str | None = None, model: str | None = None) ->
             config.get("probe_timeout_seconds", DEFAULT_PROBE_TIMEOUT_SECONDS)
         ),
     )
-
-
-def check_stalled_job(
-    job_id: str, work_dir: str | None = None, model: str | None = None
-) -> dict | None:
-    """Two independent checks on a stalled job; either failure reaps it.
-
-    1. Is the worker PID still a live process?
-    2. Does the second agent answer a trivial prompt in a SEPARATE session?
-
-    Check 2 is what check 1 cannot do. A rate-limited opencode holds the PID and keeps
-    the poll loop turning, so PID liveness reports health for a job that will never
-    return. Asking a fresh session is the only way to distinguish "quota exhausted" from
-    "genuinely working" — and it must be a fresh session, because the stuck one is the
-    thing under suspicion.
-
-    Returns the terminal result when the job was reaped, or None to keep waiting.
-    """
-    job = JOB_MANAGER.get_job(job_id) or {}
-    pid = job.get("worker_pid")
-
-    if pid is None or not osutil.process_alive(pid):
-        return JOB_MANAGER.reap_stalled(
-            job_id,
-            "worker_died",
-            f"worker process {pid} is gone while job {job_id} was still running (reaped)",
-            next_action=(
-                "Check .workflow job logs for the worker traceback, then resubmit the command."
-            ),
-        )
-
-    probe = probe_second_agent(work_dir, model)
-    try:
-        JOB_MANAGER.record_probe(job_id, probe)
-    except (OSError, KeyError, ValueError):
-        pass
-
-    if probe.get("alive"):
-        return None
-
-    if probe.get("rate_limited") or probe.get("reason") == "probe_rate_limited":
-        return JOB_MANAGER.reap_stalled(
-            job_id,
-            "rate_limited",
-            (
-                f"job {job_id} stalled and the second agent is refusing on quota "
-                f"({probe.get('reason')}) — reaped instead of waiting out the limit"
-            ),
-            next_action=(
-                "Second agent is out of quota. Wait for the limit to reset, switch model in "
-                ".workflow/opencode.json, or check the provider account, then rerun the command."
-            ),
-            probe=probe,
-        )
-
-    if probe.get("stream_failed") or probe.get("reason") == "probe_stream_failed":
-        # A partial provider stream is transient; reap the stalled job for resubmission.
-        return JOB_MANAGER.reap_stalled(
-            job_id,
-            "streaming_failed",
-            (
-                f"job {job_id} stalled and the probe's provider stream dropped "
-                f"({probe.get('reason')}) — reaped as transient, not as an outage"
-            ),
-            next_action=(
-                "The provider stream is dropping, not refusing. Resubmit the command; if it "
-                "dies again, split the task into two narrower calls. Do NOT wait for a quota reset."
-            ),
-            probe=probe,
-        )
-
-    return JOB_MANAGER.reap_stalled(
-        job_id,
-        "second_agent_unavailable",
-        (
-            f"job {job_id} stalled and a fresh-session probe also failed "
-            f"({probe.get('reason')}) — reaped"
-        ),
-        next_action=(
-            "Second agent is not answering at all. Check `opencode run` works manually "
-            "and that it is logged in, then rerun the command."
-        ),
-        probe=probe,
-    )
-
-
-def await_job(
-    command: str,
-    task: str,
-    session_id: str,
-    work_dir: str | None = None,
-    model: str | None = None,
-    poll_interval: float = DEFAULT_JOB_POLL_INTERVAL_SECONDS,
-    poll_timeout: int = DEFAULT_JOB_POLL_TIMEOUT_SECONDS,
-    allow_reuse: bool = True,
-) -> dict:
-    if command.strip().lower() == "sweep":
-        return run("sweep", task, session_id, work_dir, model)
-
-    _apply_job_thresholds(work_dir)
-    _warn_if_workspace_stale(work_dir)
-    submitted = submit(command, task, session_id, work_dir, model, allow_reuse)
-    if not submitted.get("ok"):
-        return submitted
-
-    job_id = submitted["job_id"]
-    started_at = time.monotonic()
-    interval = poll_interval if poll_interval > 0 else DEFAULT_JOB_POLL_INTERVAL_SECONDS
-    recheck_base = _probe_recheck_seconds(work_dir)
-    max_probes = _max_probes(work_dir)
-    last_probe_at: float | None = None
-    probe_count = 0
-    recheck = recheck_base
-
-    while True:
-        result = get_result(job_id)
-        if (result.get("meta") or {}).get("error_type") == "worker_died" and (
-            result.get("meta") or {}
-        ).get("recoverable"):
-            return {
-                "ok": False,
-                "content": result.get("content"),
-                "meta": {
-                    **dict(result.get("meta") or {}),
-                    "job_id": job_id,
-                    "submitted_at": submitted.get("submitted_at"),
-                },
-            }
-        if (result.get("meta") or {}).get("error_type") == "worker_stalled":
-            now = time.monotonic()
-            if probe_count < max_probes and (
-                last_probe_at is None or (now - last_probe_at) >= recheck
-            ):
-                last_probe_at = now
-                probe_count += 1
-                reaped = check_stalled_job(job_id, work_dir, model)
-                if reaped is not None:
-                    if reaped.get("status") == "completed":
-                        continue
-                    meta = dict(reaped.get("meta") or {})
-                    meta.setdefault("job_id", job_id)
-                    meta.setdefault("submitted_at", submitted.get("submitted_at"))
-                    meta.setdefault("probe_count", probe_count)
-                    return {
-                        "ok": False,
-                        "content": reaped.get("content") or f"job {job_id} reaped",
-                        "meta": meta,
-                    }
-                # Probe came back alive: back off before spending the next one.
-                recheck = min(recheck * 2, recheck_base * 8)
-        if result.get("status") == "completed":
-            output = result.get("output") or {}
-            if isinstance(output, dict):
-                output = _finalize_verify_result(command, output)
-                meta = output.setdefault("meta", {})
-                meta.setdefault("job_id", job_id)
-                meta.setdefault("submitted_at", submitted.get("submitted_at"))
-                meta.setdefault("worker_pid", submitted.get("meta", {}).get("pid"))
-                return output
-            return {
-                "ok": False,
-                "content": f"job {job_id} returned invalid output payload",
-                "meta": {
-                    "job_id": job_id,
-                    "submitted_at": submitted.get("submitted_at"),
-                },
-            }
-
-        if result.get("status") == "failed":
-            meta = dict(result.get("meta") or {})
-            meta.setdefault("job_id", job_id)
-            meta.setdefault("submitted_at", submitted.get("submitted_at"))
-            return {
-                "ok": False,
-                "content": result.get("content") or f"job {job_id} failed",
-                "meta": meta,
-            }
-
-        if result.get("status") == "pending":
-            queued = JOB_MANAGER.get_job(job_id) or {}
-            if queued.get("worker_pid") is None:
-                resumed = submit(
-                    command, task, session_id, work_dir, model, allow_reuse
-                )
-                if not resumed.get("ok"):
-                    return resumed
-                submitted = resumed
-
-        if poll_timeout > 0 and (time.monotonic() - started_at) >= poll_timeout:
-            return {
-                "ok": False,
-                "content": f"await timeout after {poll_timeout}s",
-                "meta": {
-                    "job_id": job_id,
-                    "status": result.get("status"),
-                    "submitted_at": submitted.get("submitted_at"),
-                    "worker_pid": submitted.get("meta", {}).get("pid"),
-                },
-            }
-
-        time.sleep(interval)
 
 
 def _inspect(project_root, session_id: str | None = None) -> dict:
@@ -757,218 +331,6 @@ def _inspect(project_root, session_id: str | None = None) -> dict:
         "meta": {"project_root": str(project_root)},
     }
 
-
-def run_worker(job_id: str) -> dict:
-    job = JOB_MANAGER.get_job(job_id)
-    if not job:
-        return {"ok": False, "job_id": job_id, "status": "not_found", "meta": {}}
-
-    # The worker is authoritative for its own PID. Parent-side registration is only a
-    # fast-path; this closes the small spawn-to-persist race after caller interruption.
-    JOB_MANAGER.set_worker_pid(job_id, os.getpid())
-    running = JOB_MANAGER.mark_running(job_id)
-    if running.get("status") != "running":
-        return make_error(
-            "worker_died",
-            f"job {job_id} became terminal before its worker started",
-            next_action="Inspect the terminal job result; do not restart this worker.",
-            meta={"job_id": job_id, "status": running.get("status")},
-        )
-    JOB_MANAGER.touch_heartbeat(job_id, {"phase": "starting", "elapsed_seconds": 0})
-
-    def _beat(progress: dict) -> None:
-        JOB_MANAGER.touch_heartbeat(job_id, progress)
-
-    try:
-        effective_task = job["task"]
-        require_provider_session = int(job.get("recovery_attempt") or 0) > 0
-        if require_provider_session:
-            effective_task = (
-                f"Continue the interrupted task for job {job_id}.\n"
-                f"Original task: {job['task']}\n"
-                "Inspect the existing session state. Resume unfinished work only; "
-                "do not repeat completed findings. Return the normal evidence contract."
-            )
-
-        output = run(
-            job["command"],
-            effective_task,
-            job["session_id"],
-            job.get("work_dir"),
-            job.get("model"),
-            on_progress=_beat,
-            allow_reuse=bool(job.get("allow_reuse", True)),
-            require_provider_session=require_provider_session,
-        )
-        output.setdefault("meta", {}).setdefault("job_id", job_id)
-        if output.get("ok"):
-            JOB_MANAGER.complete_job(job_id, output)
-        else:
-            JOB_MANAGER.fail_job(
-                job_id, output.get("content") or "worker failed", output=output
-            )
-        return output
-    except Exception as exc:
-        JOB_MANAGER.fail_job(job_id, str(exc))
-        return {
-            "ok": False,
-            "job_id": job_id,
-            "status": "failed",
-            "content": str(exc),
-            "meta": {},
-        }
-
-
-def _spawn_worker(job_id: str, work_dir: str | None = None) -> dict:
-    args = [
-        sys.executable,
-        __file__,
-        "--command",
-        "worker",
-        "--job-id",
-        job_id,
-    ]
-    log_path = JOB_MANAGER.log_path(job_id)
-    log_handle = subprocess.DEVNULL
-    try:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_handle = open(log_path, "w", encoding="utf-8", errors="replace")
-    except OSError:
-        log_handle = subprocess.DEVNULL  # never block spawning on logging
-    try:
-        proc = subprocess.Popen(
-            args,
-            cwd=work_dir,
-            stdin=subprocess.DEVNULL,
-            stdout=log_handle,
-            stderr=(
-                subprocess.STDOUT
-                if log_handle is not subprocess.DEVNULL
-                else subprocess.DEVNULL
-            ),
-            **osutil.detached_popen_kwargs(),
-        )
-    except OSError as exc:
-        return make_error(
-            "unknown",
-            str(exc),
-            next_action="Check python is on PATH and the job dir is writable, then retry.",
-            meta={"error": type(exc).__name__},
-        )
-    finally:
-        if log_handle is not subprocess.DEVNULL:
-            log_handle.close()  # child inherited its own fd; parent copy not needed
-    meta = {"pid": proc.pid}
-    if log_handle is not subprocess.DEVNULL:
-        meta["log"] = str(log_path)
-    return {"ok": True, "content": "worker started", "meta": meta}
-
-
-_HEAVY_META_KEYS = frozenset(
-    {"args", "stderr", "stderr_tail", "stdout", "cwd", "raw", "bootstrap"}
-)
-
-
-def _without_raw_args(value):
-    if isinstance(value, dict):
-        raw_args = value.get("args")
-        clean = {
-            key: _without_raw_args(child)
-            for key, child in value.items()
-            if key != "args"
-        }
-        if isinstance(raw_args, (list, tuple)):
-            clean.setdefault("argv_count", len(raw_args))
-            clean.setdefault("argv_chars", sum(len(str(arg)) for arg in raw_args))
-        return clean
-    if isinstance(value, list):
-        return [_without_raw_args(child) for child in value]
-    if isinstance(value, tuple):
-        return tuple(_without_raw_args(child) for child in value)
-    return value
-
-
-def _as_ref_only(result: dict) -> dict:
-    """Swap the evidence text for a preview plus the path it is already archived at.
-
-    Refuses in the two cases where the trade stops paying:
-      - no artifact on disk — the payload is then the ONLY copy, and trimming it destroys
-        the evidence instead of relocating it;
-      - content short enough that the preview reclaims nothing worth the loss.
-    """
-    content = result.get("content")
-    if not isinstance(content, str) or len(content) <= DEFAULT_SLIM_CONTENT_MIN_CHARS:
-        return result
-    ref = result.get("evidence_ref")
-    artifact = str((ref or {}).get("artifact_path") or "") if isinstance(ref, dict) else ""
-    if not artifact:
-        return result
-    meta = result.get("meta")
-    return {
-        **result,
-        "content": (
-            f"{content[:DEFAULT_CONTENT_PREVIEW_CHARS].rstrip()}\n\n"
-            f"[content truncated — full evidence at {artifact}]"
-        ),
-        "meta": {
-            **(meta if isinstance(meta, dict) else {}),
-            "content_mode": "ref_only",
-            "content_full_chars": len(content),
-        },
-    }
-
-
-def _slim_result(result: dict, slim_content: bool | None = None) -> dict:
-    """Redact every payload and trim bulky success-only diagnostics.
-
-    `slim_content` additionally drops the evidence text in favour of the artifact pointer
-    (see _as_ref_only). Left to the AI_PROXY_SLIM_CONTENT environment variable when not
-    passed; tests pass it directly so they need no environment of their own.
-    """
-    if slim_content is None:
-        slim_content = os.getenv(SLIM_CONTENT_ENV, "") not in ("", "0", "false", "False")
-    clean, redactions = redact_value(_without_raw_args(result))
-    if not isinstance(clean, dict):
-        return clean
-    meta = clean.get("meta")
-    if not isinstance(meta, dict):
-        return clean
-    if redactions:
-        meta["boundary_redactions"] = redactions
-        meta["boundary_redaction_count"] = sum(
-            int(hit.get("count") or 0) for hit in redactions
-        )
-    if not clean.get("ok"):
-        # An error message is never archived to an artifact, so there is no pointer that
-        # could stand in for it. Failures keep their text whatever the flag says.
-        return clean
-    slim_meta = {k: v for k, v in meta.items() if k not in _HEAVY_META_KEYS}
-    clean = {**clean, "meta": slim_meta}
-    return _as_ref_only(clean) if slim_content else clean
-
-
-def _verify_exit_code(
-    command: str, result: dict, job_command: str | None = None
-) -> int:
-    """Return nonzero when a completed verification is not a clean pass."""
-    effective_command = job_command if command in {"await", "result"} else command
-    if effective_command != "verify":
-        return 0
-    verification = result
-    if command == "result" and isinstance(result, dict):
-        stored_output = result.get("output")
-        if isinstance(stored_output, dict):
-            verification = stored_output
-    if not isinstance(verification, dict) or not verification.get("ok"):
-        return 2
-    if command == "verify" and verification.get("status") in {"pending", "running"}:
-        return 0
-    verdict = (verification.get("meta") or {}).get("verdict")
-    if verdict is None:
-        verdict = validate_verification_contract(verification.get("content") or "")[
-            "verdict"
-        ]
-    return 0 if verdict == "pass" else 2
 
 
 if __name__ == "__main__":
