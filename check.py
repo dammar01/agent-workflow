@@ -20,6 +20,24 @@ _PROBE_RECHECK_SECONDS = float(DEFAULT_PROBE_RECHECK_SECONDS)
 # stalled job, and back off between them. Past the budget, stop probing — job_max_runtime
 # still reaps a job that never returns.
 _MAX_PROBES = DEFAULT_MAX_PROBES
+# A record can still read "running" while its worker is gone: get_result keeps the first
+# dead worker recoverable instead of failing it. Polling must treat that as finished
+# anyway, the same way the await loop does in core/job_lifecycle.py.
+_TERMINAL_ERROR_TYPES = {"worker_died"}
+
+
+def _terminal_meta(result: dict) -> dict:
+    """Fields that end polling for a record get_result left in a non-final status."""
+    meta = result.get("meta") or {}
+    error_type = meta.get("error_type")
+    if not error_type:
+        return {}
+    fields = {"error_type": error_type}
+    if error_type in _TERMINAL_ERROR_TYPES:
+        fields["done"] = True
+        if meta.get("next_action"):
+            fields["next_action"] = meta["next_action"]
+    return fields
 
 
 def _status_payload(job_id: str) -> dict:
@@ -33,14 +51,7 @@ def _status_payload(job_id: str) -> dict:
         # not_found is terminal because no record can later complete.
         "done": status in {"completed", "failed", "not_found"},
     }
-    error_type = (result.get("meta") or {}).get("error_type")
-    if error_type:
-        payload["error_type"] = error_type
-    if error_type == "worker_died":
-        payload["done"] = True
-        next_action = (result.get("meta") or {}).get("next_action")
-        if next_action:
-            payload["next_action"] = next_action
+    payload.update(_terminal_meta(result))
     if result.get("content") and status != "completed":
         payload["content"] = result["content"]
     return payload
@@ -94,13 +105,19 @@ def _result_payload(job_id: str):
         output = result.get("output") or {}
         return True, output.get("content") or ""
 
-    return False, {
+    status = result.get("status", "not_found")
+    payload = {
         "ok": False,
         "job_id": job_id,
-        "status": result.get("status", "not_found"),
-        "done": result.get("status") in {"completed", "failed", "not_found"},
-        **({"content": result.get("content")} if result.get("content") else {}),
+        "status": status,
+        "done": status in {"completed", "failed", "not_found"},
     }
+    # Same terminal rule as _status_payload — the two paths diverging here is what made
+    # an attach on a killed worker poll until timeout.
+    payload.update(_terminal_meta(result))
+    if result.get("content"):
+        payload["content"] = result["content"]
+    return False, payload
 
 
 def _wait_for_status(job_id: str, poll_interval: float, poll_timeout: int) -> dict:
@@ -113,7 +130,9 @@ def _wait_for_status(job_id: str, poll_interval: float, poll_timeout: int) -> di
     while True:
         payload = _status_payload(job_id)
         payload = _resume_pending_reservation(job_id, payload)
-        if payload["status"] not in {"pending", "running"}:
+        # `done` can be set while the status still reads running: a dead worker's record
+        # is left recoverable rather than failed, so status alone never ends the loop.
+        if payload.get("done") or payload["status"] not in {"pending", "running"}:
             return payload
 
         now = time.monotonic()
@@ -154,7 +173,7 @@ def _wait_for_result(job_id: str, poll_interval: float, poll_timeout: int):
                 ok, payload = _result_payload(job_id)
         if ok:
             return True, payload
-        if payload["status"] not in {"pending", "running"}:
+        if payload.get("done") or payload["status"] not in {"pending", "running"}:
             return False, payload
 
         now = time.monotonic()

@@ -37,6 +37,8 @@ from config.settings import (
     DEFAULT_PROBE_TIMEOUT_SECONDS,
     load_provider_config,
     load_provider_config_for,
+    MAIN_SESSION_CACHE_TTL_SECONDS,
+    cached_main_session_age,
     get_cached_main_session_id,
     set_cached_main_session_id,
 )
@@ -97,12 +99,37 @@ def resolve_session_id(
         return session_id
     if not fresh:
         cached = get_cached_main_session_id(cache_root)
-        if cached:
+        if cached and _cached_session_still_current(cached, cache_root):
+            # Restamp: a session that keeps resolving must not age out mid-use.
+            set_cached_main_session_id(cached, cache_root)
             return cached
     new_id = f"{generate_main_session_id()}_{secrets.token_hex(3)}"
     if session_id == "default":
         set_cached_main_session_id(new_id, cache_root)
     return new_id
+
+
+def _cached_session_still_current(session_id: str, cache_root) -> bool:
+    """Whether a cached "default" session may still claim new work.
+
+    The cache used to be written once and read forever, so the first session ever run
+    against a project captured every later call that fell back to "default" — its jobs,
+    its lock, its logs. A cached session stays current only while it is still working,
+    or while it was resolved recently enough to still be the one at the keyboard.
+    """
+    try:
+        from core.job_manager import JobManager
+
+        if JobManager().active_job_for_session(session_id):
+            return True
+    except (OSError, ValueError):
+        # Job state unreadable — fall through to the age check rather than guessing.
+        pass
+    age = cached_main_session_age(cache_root)
+    if age is None:
+        # Pre-TTL cache file with no stamp. Honour it once; the restamp above gives it one.
+        return True
+    return age < MAIN_SESSION_CACHE_TTL_SECONDS
 
 
 def run(
@@ -130,6 +157,11 @@ def run(
                 next_action="Fix the reported workspace path/config issue, then retry init.",
                 meta={"project_root": str(project_root)},
             )
+        # init scaffolds; it deliberately never rewrites an existing config.json — that is
+        # upgrade's job, and only upgrade holds the active-job guard for it. Say so, or a
+        # workspace built by an older tool looks freshly initialized until the next
+        # delegated call prints the drift warning out of nowhere.
+        _warn_if_workspace_stale(work_dir)
         return {"ok": True, "content": "workflow workspace initialized", "meta": meta}
 
     if normalized_command == "doctor":

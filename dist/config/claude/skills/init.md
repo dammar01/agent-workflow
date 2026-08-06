@@ -21,11 +21,13 @@ work_dir = absolute path project aktif.
 Windows: python "$env:AGENT_PATH" --command init --work-dir "<work_dir>" --pretty
 POSIX:   python3 "$AGENT_PATH" --command init --work-dir "<work_dir>" --pretty
 init otomatis: generate scripts (run/inspect/check) + config abs-path + copy second_agent.json + sessions/ scaffold + .gitignore (.workflow/). state/scope/cache/logs/runtime = per-session, dibuat lazy saat delegated call pertama (BUKAN di root).
+init SCAFFOLD, bukan pembaruan: config.json dan second_agent.json yang SUDAH ADA tidak ditimpa (tak ada active-job guard di init — itu milik /.upgrade). Workspace dari build lama tetap versi lama sesudah init. `meta.upgrade_needed: true` + `meta.versions` di output = jalankan /.upgrade.
 
 ## Output
 [INIT]
 bootstrap: $AGENT_PATH = <path>
 generated: run/inspect/check.{ps1,sh} + config.json (v3.4.3, main_py_path abs) + second_agent.json (copy) + sessions/ (state/scope/cache/logs/runtime per-session, lazy)
 gitignore: .workflow/ ok
+upgrade_needed: <meta.upgrade_needed> (true → sebut versi dari meta.versions + tawarkan /.upgrade)
 status: READY
 ".workflow siap. Coba /.explore atau /.doctor."

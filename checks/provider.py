@@ -3,6 +3,8 @@
 import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -244,7 +246,67 @@ def _test_provider_seam() -> None:
         broken["config"].get("timeout_seconds") is not None,
         "the runtime must survive a malformed config rather than lose its settings",
     )
-    for stray in (legacy_root, bare_root, broken_root):
+    # A key the runtime does not know is a THIRD outcome, distinct from both of the above:
+    # the file parses, its valid keys apply, and only the misspelled one is inert. Reported
+    # as warnings rather than an error precisely so it does not discard the working keys —
+    # asserted here because "unknown key" silently succeeding is the failure this closes.
+    typo_root = Path(tempfile.mkdtemp(prefix="provider-typo-"))
+    typo_dir = typo_root / ".workflow"
+    typo_dir.mkdir(parents=True)
+    atomic_write_json(
+        typo_dir / "second_agent.json",
+        {"timeout_second": 3600, "max_probes": "five", "idle_stall_seconds": 111},
+    )
+    typo = resolve_provider_config_for(typo_root)
+    assert_true(
+        typo["error"] is None and typo["source"] == "project",
+        f"a typo must not be treated as an unreadable file: {typo!r}",
+    )
+    assert_true(
+        any("timeout_second" in w for w in typo["warnings"]),
+        f"an unknown key must be reported, not silently accepted: {typo['warnings']!r}",
+    )
+    assert_true(
+        any("max_probes" in w for w in typo["warnings"]),
+        f"a wrong-typed knob must be reported too: {typo['warnings']!r}",
+    )
+    assert_true(
+        typo["config"].get("idle_stall_seconds") == 111,
+        "the keys that ARE correct must still apply alongside the warnings",
+    )
+
+    # Every knob in config/settings.py is parsed at import time, so a mistyped env var used
+    # to raise before argparse ran — taking `doctor` down with it, the one command whose job
+    # is to say what broke. Asserted through a real subprocess import: the guarantee is about
+    # module import, and calling the helper directly would not prove it.
+    env = dict(os.environ, AI_PROXY_TIMEOUT_SECONDS="45m", AI_PROXY_MAX_PROBES="-3")
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from config.settings import DEFAULT_TIMEOUT_SECONDS, DEFAULT_MAX_PROBES;"
+            "print(DEFAULT_TIMEOUT_SECONDS, DEFAULT_MAX_PROBES)",
+        ],
+        cwd=str(Path(__file__).resolve().parent.parent),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert_true(
+        probe.returncode == 0,
+        f"a mistyped env var must not crash the import: {probe.stderr.strip()}",
+    )
+    assert_true(
+        probe.stdout.split() == ["1800", "3"],
+        f"a rejected env value must fall back to the built-in default: {probe.stdout!r}",
+    )
+    assert_true(
+        "AI_PROXY_TIMEOUT_SECONDS" in probe.stderr
+        and "AI_PROXY_MAX_PROBES" in probe.stderr,
+        f"the warning must name the offending env var: {probe.stderr!r}",
+    )
+
+    for stray in (legacy_root, bare_root, broken_root, typo_root):
         shutil.rmtree(stray, ignore_errors=True)
 
     # The acceptance criterion for the whole v3.4.3 refactor: a provider with its OWN

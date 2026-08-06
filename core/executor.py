@@ -19,6 +19,7 @@ from core.contract import (
     extract_digest,
     make_error,
     readable_claims,
+    validate_verification_contract,
 )
 from core import fact_store
 from core import evidence_store
@@ -168,6 +169,103 @@ _FANOUT_WARNINGS = {
         "is unknown; treat the result as a sequential read"
     ),
 }
+
+
+# Markers that say the reply is evidence rather than conversation. Kept as one list so the
+# gap detector and the failure path below cannot drift apart.
+_EVIDENCE_MARKERS = (
+    "[evidence]",
+    "[digest]",
+    "[exploration result]",
+    "entry_points",
+    "grounded:",
+    "assumptions:",
+    "scope_covered",
+)
+
+# Verify warnings that describe the SHAPE of the reply, not its findings. A run that
+# emitted a complete [VERIFICATION] block and honestly declared INCOMPLETE is finished
+# work and must never be re-prompted; one missing the fields never got there.
+_VERIFY_SHAPE_KINDS = {
+    "missing_fields",
+    "empty_section",
+    "checks_missing",
+    "invalid_confidence",
+}
+
+
+def _contract_gap(command: str, role: str, result) -> dict | None:
+    """Did the reply stop before the contract, or is it simply not evidence?
+
+    Distinct from a failed call, and distinct from a refusal. The observed case: the
+    second agent reads every file, then hits its own context ceiling and hands back a
+    work-state summary ending in "continue if you have next steps" — real work done,
+    contract never emitted. Treating that as failure throws away a completed read and
+    sends the user to /.local for evidence that already exists.
+
+    Returns None when there is nothing to continue: a failed call, a shape that is
+    already correct, or a verdict the agent reached deliberately.
+    """
+    if not isinstance(result, dict) or not result.get("ok"):
+        return None
+    content = result.get("content") or ""
+    meta = result.get("meta") or {}
+
+    if command == "verify":
+        if meta.get("mode") == "quick" or "quick_verify" in meta:
+            return None
+        assessment = validate_verification_contract(content)
+        shape = [
+            warning
+            for warning in assessment.get("warnings") or []
+            if warning.get("kind") in _VERIFY_SHAPE_KINDS
+        ]
+        if not shape:
+            return None
+        return {
+            "reason": "verification contract fields absent",
+            "missing": [warning.get("detail") for warning in shape],
+            "wants": (
+                "the full [VERIFICATION] block — verdict, blocking_findings, "
+                "escalations, notes, checks_run, not_verified, confidence — "
+                "followed by [DIGEST]"
+            ),
+        }
+
+    if role in ("exploration", "reasoning"):
+        body = content.lower()
+        if not any(marker in body for marker in _EVIDENCE_MARKERS):
+            return {
+                "reason": "no evidence contract in the reply",
+                "missing": ["none of the evidence section markers are present"],
+                "wants": "the normal [EVIDENCE] block followed by [DIGEST]",
+            }
+        damaged = [
+            issue["kind"]
+            for issue in contract_warnings(command, content)
+            if issue["kind"] in STRUCTURAL_KINDS
+        ]
+        if damaged:
+            return {
+                "reason": "reply ended before its digest",
+                "missing": damaged,
+                "wants": "the missing [DIGEST] block",
+            }
+    return None
+
+
+def _continuation_prompt(command: str, gap: dict) -> str:
+    """Ask for the missing part only — the work itself already happened."""
+    missing = "; ".join(str(item) for item in gap.get("missing") or []) or "unknown"
+    return (
+        f"Your previous reply for this {command} call stopped before the required "
+        f"output: {gap['reason']} ({missing}).\n"
+        "The work you already did in this session still counts. Do NOT redo it and do "
+        "NOT start over.\n"
+        f"Reply with {gap['wants']}, built from what you already found. If some part is "
+        "genuinely unverified, say so in the field it belongs to rather than omitting "
+        "the field."
+    )
 
 
 class Executor:
@@ -558,6 +656,7 @@ class Executor:
             self.adapter.last_call_meta = {}
         except Exception:
             pass
+        continuation_meta: dict = {}
         try:
             result = self.adapter.run(
                 prompt,
@@ -566,6 +665,44 @@ class Executor:
                 work_dir,
             )
             result, _ = _sanitize_result(result)
+
+            # One bounded continuation. A reply that never reached its contract is not the
+            # same failure as a refusal or a dead call: the session is alive and holding the
+            # work, so asking for the missing block costs one call and saves the whole read.
+            # Strictly once — a second agent that cannot produce the contract twice will not
+            # produce it on the tenth try, and a loop here would spend quota discovering that.
+            gap = _contract_gap(normalized_command, route.get("role"), result)
+            if gap:
+                continuation_meta = {
+                    "continuation_reason": gap["reason"],
+                    "continuation_missing": gap["missing"],
+                    "continuation_attempts": 0,
+                    "continuation_recovered": False,
+                }
+                # Without a captured provider session the follow-up would open a NEW thread,
+                # which has none of the work and would simply answer from nothing.
+                if adapter_session.get("provider_session_id"):
+                    continuation_meta["continuation_attempts"] = 1
+                    retry = self.adapter.run(
+                        _continuation_prompt(normalized_command, gap),
+                        adapter_session,
+                        route.get("model"),
+                        work_dir,
+                    )
+                    retry, _ = _sanitize_result(retry)
+                    if retry.get("ok") and not _contract_gap(
+                        normalized_command, route.get("role"), retry
+                    ):
+                        continuation_meta["continuation_recovered"] = True
+                        continuation_meta["continuation_first_reply_chars"] = len(
+                            result.get("content") or ""
+                        )
+                        result = retry
+                else:
+                    continuation_meta["continuation_skipped"] = (
+                        "no provider_session_id captured — a follow-up would start an "
+                        "empty thread instead of continuing this one"
+                    )
         finally:
             self.adapter.on_progress = None
             if session_callback_bound:
@@ -604,6 +741,7 @@ class Executor:
                 **self._config_provenance(project_root),
                 **prompt_meta,
                 **adapter_meta,
+                **continuation_meta,
             }
             call_meta, persisted_meta_redactions = redact_value(call_meta)
             _attach_redactions(
@@ -615,6 +753,11 @@ class Executor:
                 session_id,
                 call_meta,
             )
+
+        if continuation_meta:
+            # Rides out on the result too, not just the archived call meta: whether an
+            # answer arrived first-try or needed a nudge changes how much to trust it.
+            result.setdefault("meta", {}).update(continuation_meta)
 
         write_response_snapshot(
             project_root,
@@ -649,19 +792,25 @@ class Executor:
 
         if route["role"] in ("exploration", "reasoning"):
             body = (result.get("content") or "").lower()
-            markers = (
-                "[evidence]",
-                "[digest]",
-                "[exploration result]",
-                "entry_points",
-                "grounded:",
-                "assumptions:",
-                "scope_covered",
-            )
-            if not any(m in body for m in markers):
+            if not any(m in body for m in _EVIDENCE_MARKERS):
+                # Only reachable once the continuation above has already been tried and
+                # failed (or was impossible for want of a session to continue). The detail
+                # matters to the user: "it would not answer" and "it was never asked twice"
+                # call for different next steps.
+                attempted = continuation_meta.get("continuation_attempts")
+                detail = (
+                    "second_agent returned non-evidence output (menu/refusal/question), "
+                    "not analysis"
+                )
+                if attempted:
+                    detail += "; a continuation in the same session was requested and still returned none"
+                elif continuation_meta.get("continuation_skipped"):
+                    detail += (
+                        f"; no continuation was possible ({continuation_meta['continuation_skipped']})"
+                    )
                 return make_error(
                     "invalid_evidence",
-                    "second_agent returned non-evidence output (menu/refusal/question), not analysis",
+                    detail,
                     next_action="STOP. Warn user [PROXY GAGAL]. Do NOT auto-fallback. Ask user: retry or /.local? (yes/no).",
                     meta=result.get("meta", {}),
                     raw_preview=(result.get("content") or "")[:240],

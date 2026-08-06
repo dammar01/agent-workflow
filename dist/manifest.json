@@ -70,8 +70,8 @@
     },
     {
       "path": "claude/skills/init.md",
-      "sha256": "21bfadea296906f83f194b69da7d6c855e54eef2a7bbac9c7dc5e713d6f1cdb7",
-      "bytes": 1702,
+      "sha256": "f84d5432c47804283bd9bea6d05d28aaa858c0611432d3142c7bc7a906fb9bd7",
+      "bytes": 2093,
       "merge": "replace",
       "component": "prompt_bundle"
     },

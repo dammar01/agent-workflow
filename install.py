@@ -83,6 +83,75 @@ from installer.settings import (  # noqa: E402,F401
 )
 
 
+_ENV_BLOCK_MARKER = "# >>> agent-workflow AGENT_PATH >>>"
+_ENV_BLOCK_END = "# <<< agent-workflow AGENT_PATH <<<"
+
+
+def _persist_agent_path(agent_path, apply: bool) -> None:
+    """Set AGENT_PATH for future shells. Opt-in, because it writes outside the repo.
+
+    Printing the command and leaving the user to paste it is where `init` most often
+    fails later, with a symptom that points at .workflow/ rather than at an env var that
+    was never set. But this is the one part of the installer that outlives the repo — a
+    registry value and a shell profile survive deleting the checkout — so it stays behind
+    an explicit flag and says exactly what it wrote.
+
+    Deliberately NOT recorded in the install receipt: every receipt entry is a file, and
+    an entry without a backup is DELETED on rollback. A profile path in that list would
+    make `--rollback` erase the user's .bashrc. The undo is printed instead.
+    """
+    target = str(agent_path)
+    if os.name == "nt":
+        print()
+        print(f"  set AGENT_PATH (user environment) = {target}")
+        print(r"    location: HKCU\Environment  — persists across sessions")
+        print(
+            '    undo: [Environment]::SetEnvironmentVariable("AGENT_PATH",$null,"User")'
+        )
+        if not apply:
+            print("    DRY RUN — not written.")
+            return
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE
+        ) as key:
+            winreg.SetValueEx(key, "AGENT_PATH", 0, winreg.REG_SZ, target)
+        try:
+            # Without the broadcast the value is live only for processes started after the
+            # next logon; explorer-spawned shells pick it up immediately with it.
+            import ctypes
+
+            ctypes.windll.user32.SendMessageTimeoutW(
+                0xFFFF, 0x001A, 0, "Environment", 0x0002, 5000, None
+            )
+        except Exception as exc:  # pragma: no cover - cosmetic refresh only
+            print(f"    (written; environment broadcast skipped: {exc})")
+        print("    written.")
+        return
+
+    shell = os.environ.get("SHELL", "")
+    profile = HOME / (".zshrc" if shell.endswith("zsh") else ".bashrc")
+    existing = ""
+    if profile.exists():
+        existing = profile.read_text(encoding="utf-8")
+    line = f'export AGENT_PATH="{target}"'
+    print()
+    print(f"  set AGENT_PATH (shell profile) = {target}")
+    print(f"    location: {profile}  — appended, nothing overwritten")
+    print(f"    undo: delete the block between {_ENV_BLOCK_MARKER} and {_ENV_BLOCK_END}")
+    if line in existing:
+        print("    already present — nothing to do.")
+        return
+    if not apply:
+        print("    DRY RUN — not written.")
+        return
+    block = f"\n{_ENV_BLOCK_MARKER}\n{line}\n{_ENV_BLOCK_END}\n"
+    with profile.open("a", encoding="utf-8") as handle:
+        handle.write(block)
+    print(f"    appended:\n      {line}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Install agent-workflow config")
     parser.add_argument(
@@ -107,6 +176,13 @@ def main() -> int:
         metavar="BACKUP_ID",
         help="undo an install from its receipt (default: the most recent). Dry run unless "
         "--apply is also given",
+    )
+    parser.add_argument(
+        "--set-env",
+        action="store_true",
+        help="also persist AGENT_PATH for future shells (Windows: HKCU\\Environment; "
+        "POSIX: appended to ~/.bashrc or ~/.zshrc). Opt-in because it writes outside "
+        "the repo and outlives it. Dry run unless --apply is also given",
     )
     parser.add_argument(
         "--check",
@@ -271,7 +347,9 @@ def main() -> int:
     else:
         print("  warnings: none")
 
-    if os.environ.get("AGENT_PATH") != str(agent_path):
+    if args.set_env:
+        _persist_agent_path(agent_path, apply)
+    elif os.environ.get("AGENT_PATH") != str(agent_path):
         print()
         print("  set AGENT_PATH so `init` can bootstrap new projects:")
         if os.name == "nt":
@@ -280,6 +358,7 @@ def main() -> int:
             )
         else:
             print(f'    export AGENT_PATH="{agent_path}"')
+        print("    or re-run this installer with --set-env to have it written for you")
 
     if not apply:
         print()

@@ -39,6 +39,7 @@ findings:
 - entry point at app/main.py
 [DIGEST]
 summary: OpenCode response.
+confidence: high
 INFO  2026-05-09T12:10:28 +0ms service=session.idle publishing
 """.strip()
         return {

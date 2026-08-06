@@ -144,6 +144,15 @@ def run_doctor(
         except Exception:
             lock_state = "stale"
     checks["lock_state"] = lock_state
+    if lock_state == "stale":
+        # "stale" alone is a diagnosis that stops at the adjective: it names the state and
+        # leaves the user to guess the remedy. A stale lock blocks every delegated call in
+        # this session, so the way out belongs next to the finding, not in the docs.
+        recommended_fixes.append(
+            f"Session lock older than {LOCK_TTL_SECONDS}s and blocking delegated calls: "
+            f"run `--command clean` for this session, or delete {paths['lock']} "
+            "once no worker is still running"
+        )
 
     reports_writable, reports_error = check_writable(paths["doctor_report"])
     checks["reports_folder_writable"] = reports_writable
@@ -276,7 +285,16 @@ def run_doctor(
         }
         if resolved.get("error"):
             provider_config["error"] = resolved["error"]
+        provider_warnings = resolved.get("warnings") or []
+        provider_config["warnings"] = provider_warnings or "none"
         checks["provider_config"] = provider_config
+        if provider_warnings:
+            # A recommended fix, not an issue: the file parsed and its valid keys applied.
+            # Only the flagged knobs are inert, so this must not read as NOT_READY.
+            recommended_fixes.append(
+                f"Review {resolved.get('path')}: {len(provider_warnings)} knob "
+                f"warning(s) — {'; '.join(provider_warnings)}"
+            )
 
         project_file = paths["workflow_dir"] / PROVIDER_CONFIG_NAME
         if resolved.get("error"):

@@ -3,9 +3,11 @@
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import check
@@ -292,6 +294,24 @@ def _test_project_session_isolation() -> None:
             "session cache must use canonical project root and fresh must replace explicit IDs",
         )
 
+        # An abandoned session must not keep capturing "default" calls forever. Age the
+        # stamp past the TTL with no active job: the next resolve hands out a new ID and
+        # rewrites the cache, so later calls follow the new session, not the first one.
+        cache_file = settings._main_session_cache_path(project_a)
+        aged = json.loads(cache_file.read_text(encoding="utf-8"))
+        aged["updated_at"] = (
+            datetime.now(timezone.utc)
+            - timedelta(seconds=settings.MAIN_SESSION_CACHE_TTL_SECONDS + 60)
+        ).isoformat()
+        cache_file.write_text(json.dumps(aged), encoding="utf-8")
+        session_after_ttl = main.resolve_session_id("default", project_root=project_a)
+        assert_true(
+            session_after_ttl != session_a
+            and main.resolve_session_id("default", project_root=project_a)
+            == session_after_ttl,
+            "an idle session past the cache TTL must be replaced, then cached in its place",
+        )
+
         main.SESSION_MANAGER = main._DEFAULT_SESSION_MANAGER
         manager_a = main._session_manager_for(project_a)
         manager_b = main._session_manager_for(project_b)
@@ -382,3 +402,103 @@ def _test_project_session_isolation() -> None:
         main.SESSION_MANAGER = original_manager
         main.EXECUTOR = original_executor
         _shutil.rmtree(root, ignore_errors=True)
+
+
+def _test_init_upgrade_and_session_guard() -> None:
+    """init must not hand back a stale workspace, and the entry script must refuse
+    a default session on a delegated command.
+
+    Both used to be reported rather than enforced: `upgrade_needed` was a return field
+    and session=default was a stderr line. The caller reads neither — the JSON result is
+    consumed programmatically and the run script is dispatched as a background task whose
+    stderr nobody opens. A safeguard that only fires where nobody looks is not one.
+    """
+    from core.workflow_runtime import (
+        needs_upgrade,
+        workflow_paths,
+        workspace_versions,
+    )
+    from utils import osutil
+
+    root = Path(tempfile.mkdtemp(prefix="init-upgrade-"))
+    try:
+        agent_path = os.getenv("AGENT_PATH") or str(
+            Path(__file__).resolve().parent.parent / "main.py"
+        )
+        fresh = ensure_workflow_workspace(root, agent_path)
+        assert_true(
+            fresh["auto_upgrade"] is None and not fresh["upgrade_needed"],
+            f"a workspace created right now has nothing to upgrade: {fresh['auto_upgrade']!r}",
+        )
+
+        # Stamp it with an older build, exactly as a workspace scaffolded before an update
+        # would be, then run init again — the path a user takes without knowing to upgrade.
+        config_path = workflow_paths(root)["config"]
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config["runtime"]["tool_version"] = "0.0.1-old"
+        config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        assert_true(
+            needs_upgrade(root), "test fixture failed to make the workspace look stale"
+        )
+
+        again = ensure_workflow_workspace(root, agent_path)
+        assert_true(
+            isinstance(again["auto_upgrade"], dict),
+            f"init on a stale workspace must upgrade it, not just report it: {again['auto_upgrade']!r}",
+        )
+        assert_true(
+            not again["upgrade_needed"],
+            "upgrade_needed must describe the state the caller is LEFT in, not the one it walked into",
+        )
+        assert_true(
+            workspace_versions(root)["installed_tool_version"]
+            == workspace_versions(root)["current_tool_version"],
+            "the version stamp must be current after init auto-upgrades",
+        )
+
+        # The generated entry script, run for real. Only the refusal path is exercised:
+        # on success it would dispatch an actual delegated call.
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in ("MAIN_SESSION_ID", "AI_PROXY_ALLOW_DEFAULT_SESSION")
+        }
+        workflow_dir = workflow_paths(root)["workflow_dir"]
+        if osutil.script_ext() == "ps1":
+            argv = [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(workflow_dir / "run.ps1"),
+            ]
+        else:
+            argv = ["bash", str(workflow_dir / "run.sh")]
+        refused = subprocess.run(
+            argv + ["analyze", "probe task"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert_true(
+            refused.returncode == 2,
+            f"a delegated call with no session must be refused, not dispatched: rc={refused.returncode} {refused.stdout!r}",
+        )
+        assert_true(
+            "MAIN_SESSION_ID" in refused.stderr,
+            f"the refusal must name what to pass instead: {refused.stderr!r}",
+        )
+
+        allowed = subprocess.run(
+            argv + ["doctor"],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert_true(
+            allowed.returncode != 2,
+            f"a local command must keep working without a session: rc={allowed.returncode} {allowed.stderr!r}",
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)

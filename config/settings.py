@@ -2,6 +2,8 @@ import hashlib
 import os
 import json
 import secrets
+import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from config.routing import COMMAND_ROUTES
@@ -32,46 +34,94 @@ COMPONENT_VERSIONS = {
     "runtime": TOOL_VERSION,
 }
 
+
+def _env_number(name: str, default, cast):
+    """One env knob, parsed defensively.
+
+    Every knob below is read at import time, so a bare `int(os.getenv(...))` turns a
+    mistyped env var into an ImportError-shaped crash before argparse ever runs — and it
+    takes `doctor` down with it, the one command whose job is to say what broke. The
+    knobs are named `_SECONDS` and `_HOURS`, which is exactly the naming that invites
+    someone to write `45m`. Degrade to the built-in default and name the culprit instead.
+
+    Negative values are refused for the same reason: no knob here has a meaning below
+    zero, and a negative timeout fails much later, far from the env var that caused it.
+    Zero IS allowed — several knobs use it deliberately to mean "disabled".
+    """
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = cast(raw.strip())
+    except (TypeError, ValueError):
+        print(
+            f"[config] WARN: {name}={raw!r} is not a valid {cast.__name__}; "
+            f"using default {default}",
+            file=sys.stderr,
+        )
+        return default
+    if value < 0:
+        print(
+            f"[config] WARN: {name}={value} is negative; using default {default}",
+            file=sys.stderr,
+        )
+        return default
+    return value
+
+
+def _env_int(name: str, default: int) -> int:
+    return _env_number(name, default, int)
+
+
+def _env_float(name: str, default: float) -> float:
+    return _env_number(name, default, float)
+
+# How long a cached "default" session stays reusable with no active job. Sliding: every
+# resolve restamps it, so a session in continuous use never expires, while one left behind
+# is replaced instead of capturing the next agent's work. Deliberately longer than the lock
+# TTLs — a main agent idles for minutes at a time while the user types.
+MAIN_SESSION_CACHE_TTL_SECONDS = _env_int(
+    "AI_PROXY_MAIN_SESSION_CACHE_TTL_SECONDS", 3600
+)
+
 # Overall delegated-call timeout; 0 disables it.
-DEFAULT_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_TIMEOUT_SECONDS", "1800"))
+DEFAULT_TIMEOUT_SECONDS = _env_int("AI_PROXY_TIMEOUT_SECONDS", 1800)
 # Bootstrap only says "READY"; it must never inherit the long task budget.
-DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS = int(
-    os.getenv("AI_PROXY_BOOTSTRAP_TIMEOUT_SECONDS", "180")
+DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS = _env_int(
+    "AI_PROXY_BOOTSTRAP_TIMEOUT_SECONDS", 180
 )
 # Gap between liveness ticks while opencode runs.
-DEFAULT_POLL_INTERVAL_SECONDS = float(
-    os.getenv("AI_PROXY_POLL_INTERVAL_SECONDS", "2")
-)
+DEFAULT_POLL_INTERVAL_SECONDS = _env_float("AI_PROXY_POLL_INTERVAL_SECONDS", 2.0)
 # No heartbeat for this long while the PID is still alive => stalled, probe it.
-DEFAULT_STALL_THRESHOLD_SECONDS = int(
-    os.getenv("AI_PROXY_STALL_THRESHOLD_SECONDS", "360")
+DEFAULT_STALL_THRESHOLD_SECONDS = _env_int(
+    "AI_PROXY_STALL_THRESHOLD_SECONDS", 360
 )
 # Unlike heartbeat age, this measures how long the output stream has been idle.
-DEFAULT_IDLE_STALL_SECONDS = int(os.getenv("AI_PROXY_IDLE_STALL_SECONDS", "240"))
-DEFAULT_PROBE_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_PROBE_TIMEOUT_SECONDS", "45"))
+DEFAULT_IDLE_STALL_SECONDS = _env_int("AI_PROXY_IDLE_STALL_SECONDS", 240)
+DEFAULT_PROBE_TIMEOUT_SECONDS = _env_int("AI_PROXY_PROBE_TIMEOUT_SECONDS", 45)
 # Cadence for re-probing a stalled job.
-DEFAULT_PROBE_RECHECK_SECONDS = int(os.getenv("AI_PROXY_PROBE_RECHECK_SECONDS", "120"))
+DEFAULT_PROBE_RECHECK_SECONDS = _env_int("AI_PROXY_PROBE_RECHECK_SECONDS", 120)
 # Max fresh-session probes for one stalled job before probing stops entirely. Each probe
 # spends quota, so a job that stays alive-but-silent must not re-probe forever — after the
 # budget the job_max_runtime backstop is what ends it. The recheck interval also backs off
 # (doubles) between probes so the budget is not spent in one tight burst.
-DEFAULT_MAX_PROBES = int(os.getenv("AI_PROXY_MAX_PROBES", "3"))
+DEFAULT_MAX_PROBES = _env_int("AI_PROXY_MAX_PROBES", 3)
 # Hard ceiling: a job running past this is failed even if its PID looks alive.
 # Backstop for the OOM case, where the worker dies in a way PID checks miss.
-DEFAULT_JOB_MAX_RUNTIME_SECONDS = int(
-    os.getenv("AI_PROXY_JOB_MAX_RUNTIME_SECONDS", "5400")
+DEFAULT_JOB_MAX_RUNTIME_SECONDS = _env_int(
+    "AI_PROXY_JOB_MAX_RUNTIME_SECONDS", 5400
 )
 # The delegated prompt is passed as ONE CLI arg (Windows caps argv at 8191 chars; the
 # adapter's _too_long_for_cmd is the hard backstop). Scaffolding is fixed cost, so the
 # task string is the only variable-size part worth capping here — cap it before assembly
 # so a long task degrades to a visible truncation instead of a deterministic call failure.
-DEFAULT_MAX_TASK_CHARS = int(os.getenv("AI_PROXY_MAX_TASK_CHARS", "3000"))
+DEFAULT_MAX_TASK_CHARS = _env_int("AI_PROXY_MAX_TASK_CHARS", 3000)
 # Fraction of the task that may be cut before the call is refused instead of degraded.
 # A tail trimmed off a long instruction usually costs nothing; losing a third of it means
 # the second agent answered a different question than the one asked — and it answers with
 # full confidence either way, which is the part that misleads.
-DEFAULT_TASK_TRUNCATION_HARD_RATIO = float(
-    os.getenv("AI_PROXY_TASK_TRUNCATION_HARD_RATIO", "0.2")
+DEFAULT_TASK_TRUNCATION_HARD_RATIO = _env_float(
+    "AI_PROXY_TASK_TRUNCATION_HARD_RATIO", 0.2
 )
 # A delegated result ships the evidence text in `content` AND the path it was archived to
 # in `evidence_ref.artifact_path` — the same bytes, twice. Delegation exists to keep raw
@@ -79,11 +129,11 @@ DEFAULT_TASK_TRUNCATION_HARD_RATIO = float(
 # Opt-in rather than default: a consumer that reads `content` without checking
 # `meta.content_mode` would get a preview and have no way to notice.
 SLIM_CONTENT_ENV = "AI_PROXY_SLIM_CONTENT"
-DEFAULT_CONTENT_PREVIEW_CHARS = int(os.getenv("AI_PROXY_CONTENT_PREVIEW_CHARS", "500"))
+DEFAULT_CONTENT_PREVIEW_CHARS = _env_int("AI_PROXY_CONTENT_PREVIEW_CHARS", 500)
 # Below roughly twice the preview there is nothing to reclaim and a whole answer to lose,
 # so short results are left whole no matter what the flag says.
-DEFAULT_SLIM_CONTENT_MIN_CHARS = int(
-    os.getenv("AI_PROXY_SLIM_CONTENT_MIN_CHARS", str(DEFAULT_CONTENT_PREVIEW_CHARS * 2))
+DEFAULT_SLIM_CONTENT_MIN_CHARS = _env_int(
+    "AI_PROXY_SLIM_CONTENT_MIN_CHARS", DEFAULT_CONTENT_PREVIEW_CHARS * 2
 )
 OPENCODE_COMMAND = os.getenv("OPENCODE_COMMAND", "opencode")
 # The opencode agent that runs delegated calls. `plan` is opencode's own read-only
@@ -95,14 +145,14 @@ DEFAULT_PROVIDER_AGENT = os.getenv("AI_PROXY_OPENCODE_AGENT", "plan")
 # has been wrong: an agent listed `task` among its tools and still called itself incapable.
 # Without an expiry the wrong verdict is permanent, because a project with fan-out off
 # stops sending the fan-out plan and can never produce the evidence that would undo it.
-DEFAULT_FANOUT_RECHECK_HOURS = float(os.getenv("AI_PROXY_FANOUT_RECHECK_HOURS", "24"))
-DEFAULT_JOB_POLL_INTERVAL_SECONDS = float(os.getenv("AI_PROXY_JOB_POLL_INTERVAL_SECONDS", "2"))
-DEFAULT_JOB_POLL_TIMEOUT_SECONDS = int(os.getenv("AI_PROXY_JOB_POLL_TIMEOUT_SECONDS", "0"))
+DEFAULT_FANOUT_RECHECK_HOURS = _env_float("AI_PROXY_FANOUT_RECHECK_HOURS", 24.0)
+DEFAULT_JOB_POLL_INTERVAL_SECONDS = _env_float("AI_PROXY_JOB_POLL_INTERVAL_SECONDS", 2.0)
+DEFAULT_JOB_POLL_TIMEOUT_SECONDS = _env_int("AI_PROXY_JOB_POLL_TIMEOUT_SECONDS", 0)
 # Global ceiling on concurrent in-flight delegated workers across ALL sessions. Per-session
 # concurrency is already 1 (session lock); this bounds the machine-wide fan-out so a burst of
 # parallel main-agents cannot spawn unbounded opencode processes. Admission is serialized
 # across processes so the configured ceiling is a hard bound for this runtime version.
-DEFAULT_MAX_GLOBAL_WORKERS = int(os.getenv("AI_PROXY_MAX_GLOBAL_WORKERS", "6"))
+DEFAULT_MAX_GLOBAL_WORKERS = _env_int("AI_PROXY_MAX_GLOBAL_WORKERS", 6)
 
 
 def default_provider_config() -> dict:
@@ -136,15 +186,35 @@ def _main_session_cache_path(project_root=None) -> Path:
 
 def get_cached_main_session_id(project_root=None) -> str | None:
     """Read the cached main agent session ID from cache file."""
+    return (read_cached_main_session(project_root) or {}).get("main_session_id")
+
+
+def read_cached_main_session(project_root=None) -> dict | None:
+    """Cached session record, stamp included, so callers can age it out."""
     cache_path = _main_session_cache_path(project_root)
     try:
         with cache_path.open("r", encoding="utf-8") as file:
             cache = json.load(file)
-        if isinstance(cache, dict):
-            return cache.get("main_session_id")
+        if isinstance(cache, dict) and cache.get("main_session_id"):
+            return cache
     except (OSError, json.JSONDecodeError):
         pass
     return None
+
+
+def cached_main_session_age(project_root=None) -> float | None:
+    """Seconds since the cached session was last resolved; None if unknown."""
+    cache = read_cached_main_session(project_root) or {}
+    stamp = cache.get("updated_at")
+    if not stamp:
+        return None
+    try:
+        recorded = datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
+        return None
+    if recorded.tzinfo is None:
+        recorded = recorded.replace(tzinfo=timezone.utc)
+    return max(0.0, (datetime.now(timezone.utc) - recorded).total_seconds())
 
 
 def set_cached_main_session_id(session_id: str, project_root=None) -> None:
@@ -160,6 +230,9 @@ def set_cached_main_session_id(session_id: str, project_root=None) -> None:
         cache = {}
 
     cache["main_session_id"] = session_id
+    # Restamped on every resolve, not only on first write: the stamp is what separates a
+    # session still in use from one that was abandoned.
+    cache["updated_at"] = datetime.now(timezone.utc).isoformat()
     if project_root is not None:
         cache["project_root"] = str(Path(project_root).resolve())
     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -171,43 +244,83 @@ def set_cached_main_session_id(session_id: str, project_root=None) -> None:
     temp.replace(cache_path)
 
 
-def _load_provider_config_checked(path) -> tuple[dict, str | None]:
-    """Read one provider config file. Returns (config, error).
+def validate_provider_config(loaded: dict) -> list[str]:
+    """Knob-level sanity for a provider config file. Returns warnings, never raises.
+
+    Same silent failure the file-level check already guards against, one level down: a
+    misspelled key does nothing at all, yet reads as "configured". `"timeout_second"` is
+    accepted, the runtime keeps using 1800, and doctor reports perfect health while the
+    user waits for a timeout they believe they changed.
+
+    Warnings, not errors: an unknown key must not discard the keys that ARE correct.
+    """
+    warnings: list[str] = []
+    known = default_provider_config()
+    for key, value in loaded.items():
+        if key not in known:
+            warnings.append(f"{key}: unknown key (typo? the runtime ignores it)")
+            continue
+        default = known[key]
+        if value is None or default is None:
+            # None means "unset" on the way in, and a None default (default_model,
+            # agent_workflow_path) carries no type to check against.
+            continue
+        # bool is a subclass of int, so an int knob set to `true` would slip past a
+        # plain isinstance — compare bool-ness explicitly, as validate_config does.
+        if isinstance(default, bool):
+            if not isinstance(value, bool):
+                warnings.append(f"{key}: {type(value).__name__}, expected bool")
+        elif isinstance(value, bool) or not isinstance(value, type(default)):
+            warnings.append(
+                f"{key}: {type(value).__name__}, expected {type(default).__name__}"
+            )
+        elif isinstance(default, (int, float)) and value < 0:
+            warnings.append(f"{key}: {value} is negative (the runtime ignores it)")
+    return warnings
+
+
+def _load_provider_config_checked(path) -> tuple[dict, str | None, list[str]]:
+    """Read one provider config file. Returns (config, error, warnings).
 
     A missing file is not an error — only the caller knows whether absence is expected.
     A file that EXISTS but cannot be parsed is: returning defaults there is how a stray
     comma discards every tuned value in silence, and the runtime then reports perfect
     health while running on settings nobody wrote.
+
+    `error` means the file was unusable and tool defaults were substituted wholesale.
+    `warnings` means individual knobs were ignored while the rest of the file applied —
+    a distinct outcome that must not be reported as a broken file.
     """
     config = default_provider_config()
     try:
         with Path(path).open("r", encoding="utf-8") as file:
             loaded = json.load(file)
     except FileNotFoundError:
-        return config, None
+        return config, None, []
     except (OSError, json.JSONDecodeError) as exc:
-        return config, f"{type(exc).__name__}: {exc}"
+        return config, f"{type(exc).__name__}: {exc}", []
 
     if not isinstance(loaded, dict):
-        return config, "provider config is not a JSON object"
+        return config, "provider config is not a JSON object", []
 
+    warnings = validate_provider_config(loaded)
     config.update({key: value for key, value in loaded.items() if value is not None})
     if not isinstance(config.get("routes"), dict):
         config["routes"] = COMMAND_ROUTES
-    return config, None
+    return config, None, warnings
 
 
 def load_provider_config(path: Path = PROVIDER_CONFIG_FILE) -> dict:
-    config, _ = _load_provider_config_checked(path)
+    config, _, _ = _load_provider_config_checked(path)
     return config
 
 
 def resolve_provider_config_for(project_root) -> dict:
     """Resolve a project's effective provider config, with where it came from.
 
-    Returns `{config, source, path, error}`. The provenance travels with the values so
-    a wrong-looking model can be traced to the file that supplied it in one step,
-    instead of being reconstructed from three files after the fact.
+    Returns `{config, source, path, error, warnings}`. The provenance travels with the
+    values so a wrong-looking model can be traced to the file that supplied it in one
+    step, instead of being reconstructed from three files after the fact.
     """
     # Deferred: core.workspace_paths imports TOOL_VERSION from this module, so a
     # top-level import here would close the cycle. Same pattern as _tool_paths.
@@ -215,22 +328,29 @@ def resolve_provider_config_for(project_root) -> dict:
 
     path, source = resolve_provider_config(project_root)
     if path is None:
-        config, error = _load_provider_config_checked(PROVIDER_CONFIG_FILE)
+        config, error, warnings = _load_provider_config_checked(PROVIDER_CONFIG_FILE)
         return {
             "config": config,
             "source": source,
             "path": str(PROVIDER_CONFIG_FILE),
             "error": error,
+            "warnings": warnings,
         }
 
-    config, error = _load_provider_config_checked(path)
+    config, error, warnings = _load_provider_config_checked(path)
     if error is not None:
         # Keep the runtime alive on tool defaults — refusing to run would turn a typo
         # into an outage — but record that the substitution happened. `path` stays on
         # the file we tried, because that is the one the user has to fix.
-        config, _ = _load_provider_config_checked(PROVIDER_CONFIG_FILE)
+        config, _, _ = _load_provider_config_checked(PROVIDER_CONFIG_FILE)
         source = "tool_default"
-    return {"config": config, "source": source, "path": str(path), "error": error}
+    return {
+        "config": config,
+        "source": source,
+        "path": str(path),
+        "error": error,
+        "warnings": warnings,
+    }
 
 
 def load_provider_config_for(project_root) -> dict:

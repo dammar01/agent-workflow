@@ -36,7 +36,12 @@ from checks.facts import _test_evidence_reuse, _test_facts_concurrency
 from checks.redaction import _test_redaction_boundary
 from checks.verify_gaps import _test_quick_verify_gaps
 from checks.jobs import _test_submit_admission
-from checks.workspace import _test_project_session_isolation, _test_workspace_release_guards
+from checks.workspace import (
+    _test_init_upgrade_and_session_guard,
+    _test_project_session_isolation,
+    _test_workspace_release_guards,
+)
+from checks.continuation import _test_contract_continuation
 from checks.messages import _test_no_code_in_messages
 from checks.provider import _test_provider_seam
 
@@ -344,6 +349,34 @@ def run_tests() -> None:
         timeout_status = check._wait_for_status(timeout_job["job_id"], 0.05, 1)
         assert_true(timeout_status["status"] == "pending", "timed out status must preserve current job state")
         assert_true(timeout_status.get("timed_out") is True, "timed out wait must mark timed_out")
+
+        # A worker killed mid-flight leaves the record "running" and recoverable. Both
+        # attach loops must still finish on it instead of polling until timeout.
+        dead_attach = main.JOB_MANAGER.create_job(
+            "explore", "dead attach", "dead-attach-session", work_dir, None
+        )
+        main.JOB_MANAGER.set_worker_pid(dead_attach["job_id"], 999999999)
+        main.JOB_MANAGER.mark_running(dead_attach["job_id"])
+        dead_result_ok, dead_result_payload = check._result_payload(dead_attach["job_id"])
+        assert_true(
+            not dead_result_ok
+            and dead_result_payload.get("error_type") == "worker_died"
+            and dead_result_payload.get("done") is True
+            and dead_result_payload.get("next_action"),
+            f"result payload must mark a dead worker terminal and relay next_action: {dead_result_payload}",
+        )
+        dead_wait_ok, dead_wait_payload = check._wait_for_result(dead_attach["job_id"], 0.05, 5)
+        assert_true(
+            not dead_wait_ok and dead_wait_payload.get("timed_out") is not True,
+            f"result wait must exit on a dead worker instead of timing out: {dead_wait_payload}",
+        )
+        dead_wait_status = check._wait_for_status(dead_attach["job_id"], 0.05, 5)
+        assert_true(
+            dead_wait_status.get("done") is True
+            and dead_wait_status.get("timed_out") is not True,
+            f"status wait must exit on a dead worker instead of timing out: {dead_wait_status}",
+        )
+        main.JOB_MANAGER.fail_job(dead_attach["job_id"], "test cleanup")
 
         # 11. Structured errors, idempotency, reaper, digest, guard, router
         from core.contract import extract_digest, make_error, validate_verification_contract
@@ -914,6 +947,8 @@ confidence: high — all requested checks ran
         _test_submit_admission()
         _test_workspace_release_guards()
         _test_project_session_isolation()
+        _test_init_upgrade_and_session_guard()
+        _test_contract_continuation()
 
         print("test_scenario: success")
     finally:

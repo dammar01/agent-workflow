@@ -157,6 +157,23 @@ def integrity_checks(report: Report) -> None:
             == COMPONENT_VERSIONS["runtime"],
             str(config.get("runtime", {}).get("runtime_version")),
         )
+        # init on a workspace stamped by an older build must REPORT the drift, not silently
+        # hand back a stale workspace — and must still not rewrite the config itself.
+        stale_config = json.loads(cfg_path.read_text(encoding="utf-8"))
+        stale_config["version"] = "0.0.0"
+        cfg_path.write_text(json.dumps(stale_config, indent=2), encoding="utf-8")
+        stale_init = ensure_workflow_workspace(project, str(REPO_ROOT / "main.py"))
+        after_init = json.loads(cfg_path.read_text(encoding="utf-8"))
+        report.check(
+            "init: reports version drift without rewriting config",
+            stale_init.get("upgrade_needed") is True
+            and stale_init.get("versions", {}).get("installed_config_version") == "0.0.0"
+            and after_init.get("version") == "0.0.0",
+            f"upgrade_needed={stale_init.get('upgrade_needed')} "
+            f"config={after_init.get('version')}",
+        )
+        cfg_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
         # nothing changed since init -> scripts must NOT be rewritten (lazy skip)
         r1 = upgrade_workflow_workspace(project, str(REPO_ROOT / "main.py"))
         report.check(

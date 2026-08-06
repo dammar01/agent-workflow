@@ -268,7 +268,11 @@ def upgrade_workflow_workspace(
     agent_workflow_path: str | None,
     _capacity_guarded: bool = False,
 ) -> dict:
-    """Bring an existing .workflow/ up to the running build. Manual-run, never automatic.
+    """Bring an existing .workflow/ up to the running build.
+
+    Run on demand, and also by ensure_workflow_workspace when init lands on a workspace
+    stamped by an older build — leaving that to the user meant every later fix reached
+    only the workspaces whose owner remembered a second command.
 
     Regenerates the derived parts (run/inspect/check scripts, config defaults, adapter
     config keys) and leaves everything owned by the user or by a live flow alone —
@@ -748,12 +752,21 @@ def _build_run_scripts(project_root: Path, main_py: str) -> list[tuple[Path, str
         '[string]$Task="",'
         "[string]$Session=$env:MAIN_SESSION_ID)\n"
         'if (-not $Session) { $Session = "default" }\n'
-        'if ($Session -eq "default") { [Console]::Error.WriteLine("[workflow] WARN: session=default - pass MAIN_SESSION_ID (arg 3) for concurrent-safe isolation") }\n'
+        "$bg = @('explore','plan','analyze','verify')\n"
+        # session=default on a DELEGATED command is not a warning-shaped problem: two main
+        # agents on one project silently share a lock, state and logs, and each overwrites
+        # the other's evidence. This used to print to stderr and proceed — but the caller
+        # runs this as a background task and never reads that stream, so the one safeguard
+        # was invisible exactly when it fired. Refuse instead. Local commands are unaffected:
+        # a shared default session costs them nothing.
+        'if ($Session -eq "default" -and ($bg -contains $Command) -and -not $env:AI_PROXY_ALLOW_DEFAULT_SESSION) {\n'
+        '  [Console]::Error.WriteLine("[workflow] ERROR: session=default on delegated command \'$Command\'. Concurrent main agents on this project would share one lock, state and log directory and overwrite each other. Pass MAIN_SESSION_ID as argument 3 (the value from the [SESSION BINDING] block). To override deliberately: set AI_PROXY_ALLOW_DEFAULT_SESSION=1.")\n'
+        "  exit 2\n"
+        "}\n"
         # Pre-dispatch task-size warning: the runtime truncates the task at
         # DEFAULT_MAX_TASK_CHARS, silently. Surface it BEFORE dispatch so main_agent shortens
         # the instruction instead of blindly pre-splitting into two calls.
         f'if ($Task.Length -gt {DEFAULT_MAX_TASK_CHARS}) {{ [Console]::Error.WriteLine("[workflow] WARN: task is $($Task.Length) chars > {DEFAULT_MAX_TASK_CHARS}-char cap; it WILL be truncated. Shorten the instruction (do not paste evidence into the task) rather than pre-splitting into multiple calls.") }}\n'
-        "$bg = @('explore','plan','analyze','verify')\n"
         "if ($bg -contains $Command) {\n"
         # Pre-flight gate: dispatching a delegated run satisfies the gate -> clear the marker
         # so the PreToolUse hook stops blocking gather tools for the rest of this turn.
@@ -777,7 +790,15 @@ def _build_run_scripts(project_root: Path, main_py: str) -> list[tuple[Path, str
         'COMMAND="${1:?command required}"\n'
         'TASK="${2:-}"\n'
         'SESSION="${3:-${MAIN_SESSION_ID:-default}}"\n'
-        '[ "$SESSION" = "default" ] && echo "[workflow] WARN: session=default - pass MAIN_SESSION_ID for concurrent-safe isolation" >&2\n'
+        # Same refusal as the PowerShell branch, same reasoning: a shared default session
+        # is fatal for delegated commands and harmless for local ones.
+        'if [ "$SESSION" = "default" ] && [ -z "${AI_PROXY_ALLOW_DEFAULT_SESSION:-}" ]; then\n'
+        '  case " explore plan analyze verify " in\n'
+        '    *" $COMMAND "*)\n'
+        '      echo "[workflow] ERROR: session=default on delegated command \'$COMMAND\'. Concurrent main agents on this project would share one lock, state and log directory and overwrite each other. Pass MAIN_SESSION_ID as argument 3 (the value from the [SESSION BINDING] block). To override deliberately: set AI_PROXY_ALLOW_DEFAULT_SESSION=1." >&2\n'
+        "      exit 2 ;;\n"
+        "  esac\n"
+        "fi\n"
         f'[ "${{#TASK}}" -gt {DEFAULT_MAX_TASK_CHARS} ] && echo "[workflow] WARN: task is ${{#TASK}} chars > {DEFAULT_MAX_TASK_CHARS}-char cap; it WILL be truncated. Shorten the instruction rather than pre-splitting." >&2\n'
         'case " explore plan analyze verify " in\n'
         '  *" $COMMAND "*)\n'
@@ -952,12 +973,35 @@ def ensure_workflow_workspace(
     generated_scripts = _generate_run_scripts(project_root, tool["main_py_path"])
 
     gitignore_updated = ensure_root_gitignore_entry(project_root)
+
+    # A pre-existing config.json is left untouched above, so init on an older workspace
+    # used to hand back one still stamped by a previous build and merely SAY so in a
+    # return field nobody reads. Every later fix then propagates only to whoever
+    # remembered to run upgrade separately. Close it here: upgrade is idempotent and
+    # writes only what differs, so running it is cheap and running it twice is a no-op.
+    auto_upgrade: dict | str | None = None
+    if status != "created" and needs_upgrade(project_root):
+        try:
+            auto_upgrade = upgrade_workflow_workspace(project_root, agent_workflow_path)
+        except ValueError as exc:
+            # A live job or an unreadable config. Init still succeeded at scaffolding, so
+            # do not fail it — but hand back the exact next command instead of a flag.
+            auto_upgrade = (
+                f"SKIPPED — {exc}. Resolve that, then run "
+                f"`--command upgrade --work-dir {project_root}`"
+            )
+
     return {
         "project_root": str(project_root),
         "workflow_dir": str(paths["workflow_dir"]),
         "created_files": created_files,
         "existing_files": existing_files,
         "gitignore_updated": gitignore_updated,
+        "auto_upgrade": auto_upgrade,
+        # Recomputed AFTER the auto-upgrade above, so this reports the state the caller
+        # is actually left with rather than the one it walked in on.
+        "upgrade_needed": needs_upgrade(project_root),
+        "versions": workspace_versions(project_root),
         "provider_config": opencode_copied,
         "project_opencode": project_opencode,
         "generated_scripts": generated_scripts,
