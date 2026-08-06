@@ -271,10 +271,16 @@ def _install_project_boundary(project_root: Path, tool_dir: str) -> dict:
     here would scaffold an opencode boundary into a workspace configured for something
     else. A provider with no bundle or no installer is reported, not guessed at — a
     boundary that silently did not install is the gap doctor exists to catch.
+
+    The provider config is resolved and passed in the same way `main.py` resolves it
+    before building an adapter. Reading only the workspace config.json here would let a
+    project whose second_agent.json names another provider RUN that provider while being
+    installed opencode's boundary — the exact mismatch this dispatch exists to prevent.
     """
     from config.providers import PROVIDER_BUNDLES, provider_install_module
+    from config.settings import load_provider_config_for
 
-    provider = provider_for(project_root)
+    provider = provider_for(project_root, load_provider_config_for(project_root))
     skipped = {
         "path": None,
         "status": "provider_unsupported",

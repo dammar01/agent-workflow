@@ -339,8 +339,14 @@ def integrity_checks(report: Report) -> None:
         command="verify",
         project_root=str(REPO_ROOT),
     )
+    from config.providers import bundle_for
+
     agents_contract = (
-        REPO_ROOT / "dist" / "config" / "opencode" / "AGENTS.md"
+        REPO_ROOT
+        / "dist"
+        / "config"
+        / "opencode"
+        / bundle_for("opencode")["instructions"][0]
     ).read_text(encoding="utf-8")
     report.check(
         "verify prompt keeps the compact AGENTS.md contract",

@@ -133,120 +133,120 @@
     },
     {
       "path": "claude/commands/.analyze.md",
-      "sha256": "df38460201e60160d693879b9ec29de453ad79265aad60d6e43d41e3d4f34519",
-      "bytes": 203,
+      "sha256": "f2465079e856df3e7f62257992abb26301effffe9187d4127c802d42b75ab291",
+      "bytes": 168,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/commands/.caveman.md",
-      "sha256": "5ac246ae93b8e37db506cfc14e1c8116b48b33e95ba95d28a394935465fa5729",
-      "bytes": 203,
+      "sha256": "4c4c3c48864e9a40dbad6e309d8550b40c2908b7c1e5ab4acbaa987fbf4922f5",
+      "bytes": 168,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/commands/.commit.md",
-      "sha256": "38ccda298c4dc09759b03d85424948c323e3fae130c64a78cc95a61ff272ef6e",
-      "bytes": 200,
+      "sha256": "27ccb15cef40da449f7a408395dc7932da93f41ca2e4ef33df19b4127f9d8d05",
+      "bytes": 166,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/commands/.compress.md",
-      "sha256": "5870030425fd7f1dd71aaeb6eba44f99eece1370c73a32ce44fb09c9dfbb6339",
-      "bytes": 206,
+      "sha256": "b736b539eeeb18e88ffca347b4ae74d0bd022b6b0d638ffdf534f20f764bf5f8",
+      "bytes": 170,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/commands/.doctor.md",
-      "sha256": "ecef01793634a378e761ccd21401ffa7081d523591bc7be24c8f1217004fa900",
-      "bytes": 200,
+      "sha256": "71dc43c553362af75ad615ea5cba8dca8dab4bd79b407dfa9d67baf688429f9f",
+      "bytes": 166,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/commands/.execute.md",
-      "sha256": "b91b98816c40343b59878fe8644685a60ca4490bba071770101dba0b05a73aee",
-      "bytes": 203,
+      "sha256": "d2c11758107b6a45c8fd2318893e624d2d97c0daad5882eae4d826fb11b93b73",
+      "bytes": 168,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/commands/.explore.md",
-      "sha256": "086c913c25174dd7a31f70ebe212ce0923d33e7c0f896043074f3085726ac09f",
-      "bytes": 203,
+      "sha256": "aba9eb58968ea210f7298939e014d1127b435da5f767603c451cedbb12239436",
+      "bytes": 168,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/commands/.help.md",
-      "sha256": "b68fcf420e6962830a979ab88099115dc7bff4576d323e9b94cc1379367b0d26",
-      "bytes": 194,
+      "sha256": "f308ecce1e44b50f3397d509fb0a412457c42e8510e26fb82cccf7854c099d53",
+      "bytes": 162,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/commands/.init.md",
-      "sha256": "46c8d8d8510989fd199da496c7a834f23ea189da3701849f7921c8396abbcfcc",
-      "bytes": 194,
+      "sha256": "3e9ef00a930fb23c7b16a82510b95799b7b7bbdc028679975b6b7dc9e20115e9",
+      "bytes": 162,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/commands/.local.md",
-      "sha256": "a9e42fd552aee18cf99127a7c360e17299e7323b0e594f2cbe837ff26a4da9f9",
-      "bytes": 197,
+      "sha256": "c8b7fafaf61078bea988c060077011f20d41b63864dbb25dd67555eb1313a7c4",
+      "bytes": 164,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/commands/.memory.md",
-      "sha256": "5c05a8993a974d0d659dba17f80a0c6d1f1f75c7541f57ffaf9added386d309e",
-      "bytes": 200,
+      "sha256": "54a1e86dd76f16c715740e0af16523ff41fbf04422eb8875318fb376c7b39172",
+      "bytes": 166,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/commands/.plan.md",
-      "sha256": "979ca09d4b1a70035e3f066b96b47dc62481240dc7f866ca57d4da4c277c915c",
-      "bytes": 194,
+      "sha256": "781a8dc2868c7c8af675b19e2935c53ffe5dda6db91f9b2865d8752b03c35e45",
+      "bytes": 162,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/commands/.refactor.md",
-      "sha256": "d0064be290f6a359e23c80ca3ef409256bf54a6ac0a45e88a38cb7398378474a",
-      "bytes": 206,
+      "sha256": "2b2929bb03d14fbc0247277eb553edc193db7f3fa9a3d621d7cbe2e1cc2ef007",
+      "bytes": 170,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/commands/.review.md",
-      "sha256": "1c887cf4de87ce397434d456586cef2d8df9b33ade3b8cba8bb3dd7489c27622",
-      "bytes": 200,
+      "sha256": "8aab1043afb483918023ae92b4054ce2ea218116000039ff17ba03a193970caf",
+      "bytes": 166,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/commands/.sweep.md",
-      "sha256": "9cf6a92d850014ff69f424fa661d4bb658431df889a924a13f46081ff7eee707",
-      "bytes": 197,
+      "sha256": "76dc7c353b5608e56f7d7f4a63fbe0d10c1e8b40c0deb81d66019f7f656a341d",
+      "bytes": 164,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/commands/.upgrade.md",
-      "sha256": "133c058da9375179efecf73560f2f705c912cf0da108fa051ab5cded58629abf",
-      "bytes": 203,
+      "sha256": "f84c74137387cf9f135035b0a64df1d67577b33c5fd62d12c7319bd08d6e5ea1",
+      "bytes": 168,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/commands/.verify.md",
-      "sha256": "642fcf250d4e8a90c93abc029820063dcee492bcb4b82757bb54364b98e75ecf",
-      "bytes": 200,
+      "sha256": "e6a0e81f0868d38e36ae1f2cb645bbb34477c3c9de5018c39ef53fd398a1663b",
+      "bytes": 166,
       "merge": "replace",
       "component": "prompt_bundle"
     },

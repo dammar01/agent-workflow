@@ -120,11 +120,19 @@ def _component(rel: str) -> str:
     prompt_bundle = the LLM-facing contract (CLAUDE.md, skills, AGENTS.md); runtime =
     everything that is machine wiring (hooks, settings template).
     """
+    # Each provider's instruction file is prompt_bundle for the same reason CLAUDE.md is:
+    # it is contract text an LLM reads. Derived from the bundles so a second provider is
+    # classified correctly instead of silently landing in `runtime`.
+    instructions = {
+        f"{name}/{bundle['instructions'][0]}"
+        for name, bundle in PROVIDER_BUNDLES.items()
+    }
     if (
         "/skills/" in rel
         or "/commands/" in rel
         or "/agents/" in rel
-        or rel in ("claude/CLAUDE.md", "opencode/AGENTS.md")
+        or rel == "claude/CLAUDE.md"
+        or rel in instructions
     ):
         return "prompt_bundle"
     return "runtime"

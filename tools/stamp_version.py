@@ -23,6 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from config.providers import PROVIDER_BUNDLES  # noqa: E402
 from config.settings import TOOL_VERSION  # noqa: E402
 
 # path -> substrings that mark a line as carrying the CURRENT version. A line is rewritten
@@ -41,10 +42,6 @@ TARGETS: dict[str, tuple[str, ...]] = {
         "WORKFLOW-MAIN-AGENT:START",
         "## Workflow Main Agent —",
     ),
-    "dist/config/opencode/AGENTS.md": (
-        "WORKFLOW-SECOND-AGENT:START",
-        "# OpenCode Second Agent —",
-    ),
     "dist/config/claude/skills/doctor.md": (".workflow/config.json : v",),
     "dist/config/claude/skills/help.md": (
         "description: Command reference v",
@@ -52,6 +49,16 @@ TARGETS: dict[str, tuple[str, ...]] = {
     ),
     "dist/config/claude/skills/init.md": ("generated: run/inspect/check",),
 }
+
+# Each provider's instruction file carries the same banner. Derived rather than listed so
+# a second provider is stamped by existing, not by someone remembering to add a line here.
+# The title anchor stays loose ("Second Agent —" matches "# OpenCode Second Agent — v…")
+# because the provider's own name is in it.
+for _name, _bundle in PROVIDER_BUNDLES.items():
+    TARGETS[f"dist/config/{_name}/{_bundle['instructions'][0]}"] = (
+        "WORKFLOW-SECOND-AGENT:START",
+        "Second Agent —",
+    )
 
 _SEMVER = re.compile(r"\d+\.\d+\.\d+")
 
