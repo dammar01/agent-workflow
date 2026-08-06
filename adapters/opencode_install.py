@@ -4,9 +4,10 @@ Held apart from core/ on purpose: this is the only place that knows
 the provider's config filenames and CLI name, so a second provider
 gets a sibling module instead of edits scattered through the runtime.
 
-`config/providers.py` names this module as opencode's `install_module`, so the two
-functions the installer dispatches through — `load_config` and `merge_policy` — are the
-provider-facing contract. Everything else here is opencode's own business."""
+`config/providers.py` names this module as opencode's `install_module`, so the three
+functions dispatched through it — `load_config`, `merge_policy`, and
+`install_project_config` — are the provider-facing contract. Everything else here is
+opencode's own business."""
 
 import json
 import shutil
@@ -54,7 +55,7 @@ def _copy_provider_config(project_root: Path, tool_dir: str) -> str | None:
     return None
 
 
-def _install_project_opencode(project_root: Path, tool_dir: str) -> dict:
+def install_project_config(project_root: Path, tool_dir: str) -> dict:
     """Install/refresh <project_root>/opencode.json — the secret-file boundary the
     second_agent runs under.
 
@@ -62,6 +63,10 @@ def _install_project_opencode(project_root: Path, tool_dir: str) -> dict:
     project scaffolded without it is exactly the gap doctor reports. Permissions are
     ENFORCED on every call (init and upgrade alike), so a boundary someone edited loose is
     repaired; every other key in the file stays the user's.
+
+    Reached by name through the bundle's `install_module`, never called directly by the
+    runtime: which file the boundary lives in, and what a permission looks like inside it,
+    is opencode's answer rather than a shape every provider shares.
     """
     from config.providers import bundle_for
 

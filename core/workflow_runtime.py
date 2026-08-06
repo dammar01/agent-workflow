@@ -12,10 +12,10 @@ from utils import osutil
 # core.workflow_runtime keep working unchanged.
 from adapters.opencode_install import (  # noqa: E402,F401
     _copy_provider_config,
-    _install_project_opencode,
     _merge_provider_config,
     provider_callable,
 )
+from adapters.registry import provider_for  # noqa: E402
 from core.diagnostics import (  # noqa: E402,F401
     _bundle_integrity,
     _classify_mcp,
@@ -263,6 +263,37 @@ def needs_upgrade(project_root: Path) -> bool:
     )
 
 
+def _install_project_boundary(project_root: Path, tool_dir: str) -> dict:
+    """Install the second_agent's project boundary through whichever provider owns it.
+
+    Dispatched rather than called directly: the boundary is a provider-shaped file
+    (opencode's is <project_root>/opencode.json), so hardcoding one provider's installer
+    here would scaffold an opencode boundary into a workspace configured for something
+    else. A provider with no bundle or no installer is reported, not guessed at — a
+    boundary that silently did not install is the gap doctor exists to catch.
+    """
+    from config.providers import PROVIDER_BUNDLES, provider_install_module
+
+    provider = provider_for(project_root)
+    skipped = {
+        "path": None,
+        "status": "provider_unsupported",
+        "keys_added": 0,
+        "permissions_enforced": 0,
+        "warnings": [
+            f"provider '{provider}' ships no project boundary installer; "
+            f"<project_root> was left untouched"
+        ],
+    }
+    if provider not in PROVIDER_BUNDLES:
+        return skipped
+    module = provider_install_module(provider)
+    installer = getattr(module, "install_project_config", None)
+    if installer is None:
+        return skipped
+    return installer(project_root, tool_dir)
+
+
 def upgrade_workflow_workspace(
     project_root: Path,
     agent_workflow_path: str | None,
@@ -362,7 +393,7 @@ def upgrade_workflow_workspace(
     opencode_added = _merge_provider_config(project_root, tool["tool_dir"])
     # Refresh the project boundary too. Skipping it here would mean a deny-rule added in a
     # newer build never reaches a workspace that was scaffolded on an older one.
-    project_opencode = _install_project_opencode(project_root, tool["tool_dir"])
+    project_boundary = _install_project_boundary(project_root, tool["tool_dir"])
 
     # Always render; the generator writes only what actually differs. The old gate keyed on
     # the runtime version bumping, which meant a generator change shipped without a version
@@ -379,7 +410,7 @@ def upgrade_workflow_workspace(
         "config_updated": config_changed,
         "provider_migration": provider_migration,
         "opencode_keys_added": opencode_added,
-        "project_opencode": project_opencode,
+        "project_opencode": project_boundary,
         "diverged_from_defaults": diverged_defaults(config),
         "regenerated_scripts": scripts,
         "gitignore_updated": gitignore_updated,
@@ -969,7 +1000,9 @@ def ensure_workflow_workspace(
 
     tool = _tool_paths(agent_workflow_path)
     opencode_copied = _copy_provider_config(project_root, tool["tool_dir"])
-    project_opencode = _install_project_opencode(project_root, tool["tool_dir"])
+    # Comes after the config.json write above: the boundary dispatch reads
+    # runtime.second_agent from it to learn which provider this workspace runs.
+    project_boundary = _install_project_boundary(project_root, tool["tool_dir"])
     generated_scripts = _generate_run_scripts(project_root, tool["main_py_path"])
 
     gitignore_updated = ensure_root_gitignore_entry(project_root)
@@ -1003,7 +1036,7 @@ def ensure_workflow_workspace(
         "upgrade_needed": needs_upgrade(project_root),
         "versions": workspace_versions(project_root),
         "provider_config": opencode_copied,
-        "project_opencode": project_opencode,
+        "project_opencode": project_boundary,
         "generated_scripts": generated_scripts,
         "tool": tool,
     }

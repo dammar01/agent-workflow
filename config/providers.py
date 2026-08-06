@@ -15,8 +15,8 @@ is how the installer reaches that equivalent: a name to dispatch through, not an
 to describe what it does.
 
 Adding a provider means: a `dist/config/<name>/` folder, an entry here, an install module
-answering `load_config`/`merge_policy`, and an adapter registered in
-`adapters/registry.py`. No build-tool edits, no installer edits.
+answering `load_config`/`merge_policy`/`install_project_config`, and an adapter registered
+in `adapters/registry.py`. No build-tool edits, no installer edits.
 """
 
 import importlib
@@ -45,8 +45,9 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # provider might load, the merge writes exactly one file.
         "config_candidates": ("opencode.json", "opencode.jsonc", "config.json"),
         # Provider policy lives with the provider (see the module docstring). The module
-        # answers `merge_policy(current, incoming, warn)` and `load_config(path)`; how it
-        # enforces anything is its own business.
+        # answers `load_config(path)`, `merge_policy(current, incoming, warn)`, and
+        # `install_project_config(project_root, tool_dir)`; how it enforces anything is
+        # its own business.
         "install_module": "adapters.opencode_install",
     },
 }
