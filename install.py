@@ -58,9 +58,13 @@ from installer.base import (  # noqa: E402,F401
     _strip_section,
     _targets,
 )
+
+# After installer.base: it is what puts REPO_ROOT on sys.path when install.py is imported
+# rather than run directly (tools/e2e.py does exactly that).
+from config.providers import PROVIDER_BUNDLES  # noqa: E402
 from installer.check import (  # noqa: E402,F401
     _detect_project_root,
-    _opencode_would_change,
+    _provider_config_would_change,
     _run_check,
     _settings_would_change,
 )
@@ -74,10 +78,10 @@ from installer.settings import (  # noqa: E402,F401
     _drop_intent_hook,
     _hook_script_ids,
     _install_deps,
-    _install_opencode,
+    _install_provider_config,
     _install_settings,
     _merge_hook_entries,
-    _opencode_config_path,
+    _provider_config_path,
     _remove_intent_hook_entries,
     _rewrite_hooks_for_posix,
 )
@@ -259,16 +263,18 @@ def main() -> int:
             backup_root,
             args.only_command,
         )
-    opencode_src = DIST_CONFIG / "opencode" / "opencode.template.json"
-    if opencode_src.exists():
-        _install_opencode(
-            opencode_src,
-            _opencode_config_path(),
-            plan,
-            apply,
-            backup_root,
-            project_root,
-        )
+    for provider, bundle in PROVIDER_BUNDLES.items():
+        provider_src = DIST_CONFIG / provider / bundle["global_config"][0]
+        if provider_src.exists():
+            _install_provider_config(
+                provider,
+                provider_src,
+                _provider_config_path(provider),
+                plan,
+                apply,
+                backup_root,
+                project_root,
+            )
     # <project_root>/opencode.json (the secret-file boundary) is NOT installed here. It
     # belongs to a workspace, so init/upgrade owns it — see
     # core.workflow_runtime._install_project_opencode. The upgrade call below reaches it.

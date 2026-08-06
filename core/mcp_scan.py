@@ -47,20 +47,29 @@ _MCP_INSPECT = ("laravel-boost", "laravel_boost", "laravelboost")
 _MCP_WRITE_TOOLS = ("tinker", "migrate", "seed", "db:wipe", "eval")
 
 
-def _mcp_config_candidates(project_root: Path) -> list[Path]:
+def _mcp_config_candidates(project_root: Path, provider: str | None = None) -> list[Path]:
+    """Config files that could declare MCP servers, project-local first.
+
+    The provider half comes from that provider's bundle rather than a literal path, so a
+    project running a second_agent other than opencode is scanned instead of silently
+    reported clean.
+    """
+    from adapters.registry import provider_for
+    from config.providers import PROVIDER_BUNDLES, provider_config_candidates
+
     try:
         home = Path.home()
     except RuntimeError:
         home = Path(
             os.environ.get("USERPROFILE") or os.environ.get("HOME") or str(project_root)
         )
-    oc = home / ".config" / "opencode"
-    return [
-        project_root / WORKFLOW_DIRNAME / PROVIDER_CONFIG_NAME,
-        oc / "opencode.json",
-        oc / "opencode.jsonc",
-        oc / "config.json",
-    ]
+    resolved = provider or provider_for(project_root)
+    candidates = [project_root / WORKFLOW_DIRNAME / PROVIDER_CONFIG_NAME]
+    # An unbundled provider is a config shape nothing here knows how to locate. Scanning
+    # nothing is honest; guessing opencode's paths would report another provider clean.
+    if resolved in PROVIDER_BUNDLES:
+        candidates.extend(provider_config_candidates(resolved, home))
+    return candidates
 
 
 def _classify_mcp(name: str, spec) -> tuple[str, bool, str]:
@@ -131,7 +140,7 @@ def _mcp_reachable(spec) -> tuple[bool | None, str]:
 
 
 def _scan_mcp(project_root: Path) -> dict:
-    """Enumerate MCP servers opencode exposes to second_agent + a safety verdict."""
+    """Enumerate MCP servers the provider exposes to second_agent + a safety verdict."""
     servers: list[dict] = []
     sources: list[str] = []
     seen: set[str] = set()

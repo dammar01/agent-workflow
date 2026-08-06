@@ -18,11 +18,12 @@ from installer.base import (
     _resolve_placeholders,
     _targets,
 )
+from config.providers import PROVIDER_BUNDLES
 from installer.rollback import _stored_only_command
 from installer.settings import (
-    _install_opencode,
+    _install_provider_config,
     _install_settings,
-    _opencode_config_path,
+    _provider_config_path,
 )
 
 def _settings_would_change(src: Path, dest: Path, only_command: bool) -> bool:
@@ -35,11 +36,11 @@ def _settings_would_change(src: Path, dest: Path, only_command: bool) -> bool:
     )
 
 
-def _opencode_would_change(
-    src: Path, dest: Path, project_root: Path | None
+def _provider_config_would_change(
+    provider: str, src: Path, dest: Path, project_root: Path | None
 ) -> bool:
     plan = Plan()
-    _install_opencode(src, dest, plan, False, Path("."), project_root)
+    _install_provider_config(provider, src, dest, plan, False, Path("."), project_root)
     writes = {"create", "merge", "replace"}
     return any(action in writes for action, _target, _detail in plan.actions) or any(
         "not valid JSON/JSONC" in warning or "root is not a JSON object" in warning
@@ -81,13 +82,19 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     if settings_src.exists():
         # settings.json is a key-wise JSON merge, not a copy — bundle-check only.
         checks.append((settings_src, None, "claude/settings.template.json"))
-    opencode_src = DIST_CONFIG / "opencode" / "opencode.template.json"
-    if opencode_src.exists():
-        # opencode.json is merged, not copied, so its installed state is checked below.
-        checks.append((opencode_src, None, "opencode/opencode.template.json"))
-    project_src = DIST_CONFIG / "opencode" / "opencode.project.json"
-    if project_src.exists():
-        checks.append((project_src, None, "opencode/opencode.project.json"))
+    # Provider configs are merged, not copied, so their installed state is checked below
+    # rather than compared byte-for-byte here.
+    provider_checks = []
+    for provider, bundle in PROVIDER_BUNDLES.items():
+        global_src = DIST_CONFIG / provider / bundle["global_config"][0]
+        project_src = DIST_CONFIG / provider / bundle["project_config"][0]
+        if global_src.exists():
+            checks.append((global_src, None, f"{provider}/{bundle['global_config'][0]}"))
+        if project_src.exists():
+            checks.append(
+                (project_src, None, f"{provider}/{bundle['project_config'][0]}")
+            )
+        provider_checks.append((provider, bundle, global_src, project_src))
 
     for source, dest, key in checks:
         dist_text = source.read_text(encoding="utf-8")
@@ -120,29 +127,37 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
         elif _settings_would_change(settings_src, settings_dest, only_command):
             installed_drift.append("claude/settings.json")
 
-    opencode_dest = _opencode_config_path()
-    if opencode_src.exists():
-        if not opencode_dest.exists():
-            installed_missing.append("opencode/opencode.json")
-        elif _opencode_would_change(opencode_src, opencode_dest, project_root):
-            installed_drift.append("opencode/opencode.json")
-
     # The project config carries the secret-file denial. Checking only the global one let
     # --check report OK while the boundary was missing or had been edited away — the exact
     # state a check exists to catch.
     project_scope_note = None
-    if project_src.exists():
+    for provider, bundle, global_src, project_src in provider_checks:
+        if global_src.exists():
+            installed_key = f"{provider}/{bundle['global_config'][1]}"
+            global_dest = _provider_config_path(provider)
+            if not global_dest.exists():
+                installed_missing.append(installed_key)
+            elif _provider_config_would_change(
+                provider, global_src, global_dest, project_root
+            ):
+                installed_drift.append(installed_key)
+        if not project_src.exists():
+            continue
+        project_key = f"{provider}/{bundle['project_config'][0]}"
         if project_root:
-            project_dest = project_root / "opencode.json"
+            project_dest = project_root / bundle["project_config"][1]
             if not project_dest.exists():
-                installed_missing.append("opencode/opencode.project.json")
-            elif _opencode_would_change(project_src, project_dest, project_root):
-                installed_drift.append("opencode/opencode.project.json")
+                installed_missing.append(project_key)
+            elif _provider_config_would_change(
+                provider, project_src, project_dest, project_root
+            ):
+                installed_drift.append(project_key)
         else:
             # Say so rather than pass quietly: an unchecked boundary is not a clean one.
             project_scope_note = (
                 "no .workflow/ found from this directory — the project boundary "
-                "(<project_root>/opencode.json) was NOT checked. Run init there first."
+                f"(<project_root>/{bundle['project_config'][1]}) was NOT checked. "
+                "Run init there first."
             )
 
     print("[INSTALL CHECK]")
@@ -172,8 +187,11 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
         changed_keys = set(bundle_stale) | set(installed_drift) | set(installed_missing)
         if "claude/settings.json" in changed_keys:
             changed_keys.add("claude/settings.template.json")
-        if "opencode/opencode.json" in changed_keys:
-            changed_keys.add("opencode/opencode.template.json")
+        # A drifted installed config means its template is what the version bump covers.
+        for provider, bundle, _global_src, _project_src in provider_checks:
+            template, installed = bundle["global_config"]
+            if f"{provider}/{installed}" in changed_keys:
+                changed_keys.add(f"{provider}/{template}")
         print("  components:")
         for comp, ver in versions.items():
             comp_keys = [k for k, e in by_path.items() if e.get("component") == comp]

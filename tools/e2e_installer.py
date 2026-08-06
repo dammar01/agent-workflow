@@ -1,5 +1,6 @@
 """Installer behaviour against a throwaway HOME."""
 
+from config.providers import bundle_for, provider_home
 from tools.e2e_support import (
     Path,
     REPO_ROOT,
@@ -231,7 +232,9 @@ def installer_checks(report: Report) -> None:
             "apply repairs installed settings drift", settings_repair.returncode == 0
         )
 
-        provider_config = fake_home / ".config" / "opencode" / "opencode.json"
+        opencode_bundle = bundle_for("opencode")
+        opencode_home = provider_home("opencode", fake_home)
+        provider_config = opencode_home / opencode_bundle["global_config"][1]
         opencode = json.loads(provider_config.read_text(encoding="utf-8"))
         permission = opencode["agent"]["plan"]["permission"]
         permission["external_directory"] = "allow"
@@ -365,7 +368,7 @@ def installer_checks(report: Report) -> None:
         )
         provider_config.write_text(valid_opencode, encoding="utf-8")
 
-        global_agents = fake_home / ".config" / "opencode" / "agents"
+        global_agents = opencode_home / opencode_bundle["agents_dir"]
         report.check(
             "plain install places custom agents in the global fallback",
             len(list(global_agents.glob("wf-*.md"))) >= 5,

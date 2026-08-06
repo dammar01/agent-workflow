@@ -2,7 +2,11 @@
 
 Held apart from core/ on purpose: this is the only place that knows
 the provider's config filenames and CLI name, so a second provider
-gets a sibling module instead of edits scattered through the runtime."""
+gets a sibling module instead of edits scattered through the runtime.
+
+`config/providers.py` names this module as opencode's `install_module`, so the two
+functions the installer dispatches through — `load_config` and `merge_policy` — are the
+provider-facing contract. Everything else here is opencode's own business."""
 
 import json
 import shutil
@@ -16,6 +20,25 @@ from core.workspace_paths import (
     atomic_write_text,
     read_json_file,
 )
+
+def load_config(path: Path):
+    """Read one of this provider's config files. Tolerates JSONC, because opencode does."""
+    from core.opencode_policy import load_json_or_jsonc
+
+    return load_json_or_jsonc(path)
+
+
+def merge_policy(current: dict, incoming: dict, warn) -> tuple[dict, int, int]:
+    """Merge shipped config into an existing one, enforcing workflow-owned permissions.
+
+    The installer reaches this by name, never by importing `core.opencode_policy`
+    directly — that module encodes opencode's `agent.plan.permission` + root `permission`
+    shape, which is one provider's answer rather than a contract every provider can meet.
+    """
+    from core.opencode_policy import merge_opencode_policy
+
+    return merge_opencode_policy(current, incoming, warn)
+
 
 def _copy_provider_config(project_root: Path, tool_dir: str) -> str | None:
     """Copy the tool's second_agent.json into .workflow so it is project-local and overridable."""
@@ -40,10 +63,12 @@ def _install_project_opencode(project_root: Path, tool_dir: str) -> dict:
     ENFORCED on every call (init and upgrade alike), so a boundary someone edited loose is
     repaired; every other key in the file stays the user's.
     """
-    from core.opencode_policy import load_json_or_jsonc, merge_opencode_policy
+    from config.providers import bundle_for
 
-    src = Path(tool_dir) / "dist" / "config" / "opencode" / "opencode.project.json"
-    dest = project_root / "opencode.json"
+    bundle = bundle_for("opencode")
+    src_name, dest_name = bundle["project_config"]
+    src = Path(tool_dir) / "dist" / "config" / "opencode" / src_name
+    dest = project_root / dest_name
     result: dict = {
         "path": str(dest),
         "status": "source_missing",
@@ -60,7 +85,7 @@ def _install_project_opencode(project_root: Path, tool_dir: str) -> dict:
     current: dict = {}
     if dest.exists():
         try:
-            current = load_json_or_jsonc(dest)
+            current = load_config(dest)
         except json.JSONDecodeError:
             warnings.append(
                 f"{dest} is not valid JSON/JSONC — left untouched (fix or remove it, then rerun)"
@@ -74,7 +99,7 @@ def _install_project_opencode(project_root: Path, tool_dir: str) -> dict:
             result["status"] = "invalid_root"
             return result
 
-    merged, added, enforced = merge_opencode_policy(current, incoming, warnings.append)
+    merged, added, enforced = merge_policy(current, incoming, warnings.append)
     result["keys_added"] = added
     result["permissions_enforced"] = enforced
     if merged == current and enforced == 0:

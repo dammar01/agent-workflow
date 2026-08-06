@@ -1,4 +1,4 @@
-"""settings.json and the OpenCode config: hook merging and policy enforcement.
+"""settings.json and the second_agent provider config: hook merging and policy enforcement.
 
 Kept apart from the check layer because these WRITE. The distinction matters for
 rollback: everything here appends to the receipt, and a check must not.
@@ -11,7 +11,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-from core.opencode_policy import load_json_or_jsonc, merge_opencode_policy
+from config.providers import (
+    bundle_for,
+    provider_config_path,
+    provider_install_module,
+)
 from installer.base import (
     HOME,
     REPO_ROOT,
@@ -276,41 +280,44 @@ def _install_settings(
         _record("merge", dest, "claude/settings.json", saved, pre_sha256)
 
 
-def _opencode_config_path() -> Path:
-    """The native opencode config file to merge into. Prefer an existing .jsonc (the
-    common opencode default), else .json. opencode reads either from this directory."""
-    directory = HOME / ".config" / "opencode"
-    jsonc = directory / "opencode.jsonc"
-    if jsonc.exists():
-        return jsonc
-    return directory / "opencode.json"
+def _provider_config_path(provider: str) -> Path:
+    """The native config file to merge into, resolved from the provider's bundle."""
+    return provider_config_path(provider, HOME)
 
 
-def _install_opencode(
+def _install_provider_config(
+    provider: str,
     src: Path,
     dest: Path,
     plan: Plan,
     apply: bool,
     backup_root: Path,
     project_root: Path | None,
-    key: str = "opencode/opencode.json",
+    key: str | None = None,
 ) -> None:
-    """Preserve unrelated OpenCode config while enforcing workflow permissions.
+    """Preserve unrelated provider config while enforcing workflow permissions.
 
     MCP servers, providers, and other agents remain additive. Environment placeholders
     are resolved after preflight proves the required values exist.
 
-    `key` names the receipt/backup slot. The global and the project config both come
-    through here, and a shared key would have them overwrite each other's backup — the
-    second install would then be unrollbackable.
+    Reading and merging both go through the provider's `install_module`: what counts as a
+    permission, and where it lives in the file, is the provider's shape rather than
+    something this layer can assume.
+
+    `key` names the receipt/backup slot, defaulting to the global config's slot. The
+    global and the project config both come through here, and a shared key would have
+    them overwrite each other's backup — the second install would then be unrollbackable.
     """
+    if key is None:
+        key = f"{provider}/{bundle_for(provider)['global_config'][1]}"
+    policy = provider_install_module(provider)
     incoming = json.loads(
         _resolve_placeholders(src.read_text(encoding="utf-8"), project_root)
     )
     current: dict = {}
     if dest.exists():
         try:
-            current = load_json_or_jsonc(dest)
+            current = policy.load_config(dest)
         except json.JSONDecodeError:
             plan.warn(
                 f"{dest} is not valid JSON/JSONC — skipped (fix or remove it, then rerun)"
@@ -321,7 +328,7 @@ def _install_opencode(
                 f"{dest} root is not a JSON object; skipped (replace it with an object, then rerun)"
             )
             return
-    merged, added, enforced = merge_opencode_policy(current, incoming, plan.warn)
+    merged, added, enforced = policy.merge_policy(current, incoming, plan.warn)
     if merged == current and enforced == 0:
         plan.add("unchanged", dest)
         return

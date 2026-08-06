@@ -30,14 +30,22 @@ HOME = (
 
 # REPO_ROOT is already sys.path[0] under `python install.py`; the insert covers being
 # imported from elsewhere (tools/e2e.py), and every installer module below relies on it
-# to reach core.* — installer/settings.py imports the shared OpenCode merge policy that
-# way, so one definition of the deny-rule enforcement serves both installer and runtime.
+# to reach core.* and config.* — installer/settings.py dispatches to the provider's own
+# merge policy that way, so one definition of the deny-rule enforcement serves both
+# installer and runtime.
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+_SECOND_AGENT_MARKERS = ("WORKFLOW-SECOND-AGENT:START", "WORKFLOW-SECOND-AGENT:END")
+
+# The marker strings are the workflow's, the file they sit in is the provider's — so the
+# key is derived from the bundle while the pair stays literal.
 MARKERS = {
     "claude/CLAUDE.md": ("WORKFLOW-MAIN-AGENT:START", "WORKFLOW-MAIN-AGENT:END"),
-    "opencode/AGENTS.md": ("WORKFLOW-SECOND-AGENT:START", "WORKFLOW-SECOND-AGENT:END"),
+    **{
+        f"{name}/{bundle['instructions'][0]}": _SECOND_AGENT_MARKERS
+        for name, bundle in PROVIDER_BUNDLES.items()
+    },
 }
 
 # settings.json keys required by the workflow; other template values stay optional.

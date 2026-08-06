@@ -9,6 +9,7 @@ import os
 import re
 from pathlib import Path
 
+from config.providers import PROVIDER_BUNDLES
 from core.workspace_paths import read_json_file
 
 
@@ -55,9 +56,13 @@ def _installed_path_for(
 # bytes legitimately differ from dist: content outside the markers is the user's, and
 # {{HOME}}/{{PROJECT_ROOT}} inside the block are resolved at install time. Comparing whole
 # files here reported drift on every single run, which trained the reader to ignore it.
+_SECOND_AGENT_MARKERS = ("WORKFLOW-SECOND-AGENT:START", "WORKFLOW-SECOND-AGENT:END")
 _MANAGED_MARKERS = {
     "claude/CLAUDE.md": ("WORKFLOW-MAIN-AGENT:START", "WORKFLOW-MAIN-AGENT:END"),
-    "opencode/AGENTS.md": ("WORKFLOW-SECOND-AGENT:START", "WORKFLOW-SECOND-AGENT:END"),
+    **{
+        f"{name}/{bundle['instructions'][0]}": _SECOND_AGENT_MARKERS
+        for name, bundle in PROVIDER_BUNDLES.items()
+    },
 }
 
 
