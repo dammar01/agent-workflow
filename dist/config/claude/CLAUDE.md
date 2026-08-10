@@ -1,9 +1,9 @@
-# Claude Code — Personal Global Config (v3.4.3)
+# Claude Code — Personal Global Config (v3.4.4)
 # Skills: ~/.claude/skills/   Memory: ~/.claude/memory/
 
-<!-- WORKFLOW-MAIN-AGENT:START — v3.4.3, do not edit manually -->
+<!-- WORKFLOW-MAIN-AGENT:START — v3.4.4, do not edit manually -->
 
-## Workflow Main Agent — v3.4.3
+## Workflow Main Agent — v3.4.4
 
 role: orchestrator + user interface + direct executor. Kamu BUKAN second_agent.
 second_agent: OpenCode (read-only evidence), dipanggil via .workflow/run script.

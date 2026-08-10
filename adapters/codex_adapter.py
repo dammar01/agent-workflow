@@ -14,10 +14,12 @@ not a rename of it:
    `on_session_created` the moment it is seen rather than after the run, so a call that
    dies mid-way still leaves a resumable session behind.
 3. Continuing work is a different subcommand, not a flag: `codex exec resume <id> -`.
-   That subcommand accepts NEITHER `-C/--cd` NOR `--sandbox` — cwd and sandbox are
-   inherited from the session being resumed. The sandbox is re-asserted through
-   `-c sandbox_mode=...` anyway, so a resumed call cannot end up looser than the call
-   that opened it.
+   It accepts a NARROWER option set than `exec`: no `-C/--cd`, no `--sandbox`, and no
+   `--color`. Those are parser-level refusals — the call dies with `unexpected argument`
+   before codex runs, which is why passing one is a total outage of continuation rather
+   than a degraded call. cwd and sandbox are inherited from the session being resumed,
+   and the sandbox is re-asserted through `-c sandbox_mode=...` anyway, so a resumed call
+   cannot end up looser than the call that opened it.
 4. Policy is per-invocation, not a config file. Codex reads `~/.codex/config.toml`, but
    every value in it can be overridden with `-c key=value` on the command line, and the
    sandbox has its own `-s` flag. So this provider ships no global config to merge: the
@@ -59,12 +61,18 @@ CODEX_SANDBOX = os.getenv("CODEX_SANDBOX", "read-only")
 # contract is emitted at the end, and the tail is what the runtime consumes.
 MAX_CAPTURE_CHARS = 4_000_000
 
-# `thread.started` is the documented first event, but the id also appears in the persisted
-# rollout header as `session_id`. Both are accepted: a stream that lost its opening line
-# should not cost the session.
+# `thread.started` is the first event `--json` emits, verified against codex-cli 0.147.0:
+# `{"type":"thread.started","thread_id":"019febbb-012d-7710-83c8-5a59d3c6d7ed"}` on stdout
+# line 1, stderr empty. The id also appears in the persisted rollout header as
+# `session_id`, and the third pattern reads the human banner (`session id: <uuid>`) that
+# `codex exec` prints WITHOUT `--json`. That last shape is not one this adapter can
+# produce — every call passes `--json` — but a build that ever fell back to plain output
+# would otherwise cost the session silently, and the pattern is anchored to the start of
+# a line so it cannot match an id quoted inside the evidence text.
 _THREAD_ID_PATTERNS = (
     r'"thread_id"\s*:\s*"([0-9a-fA-F-]{16,})"',
     r'"session_id"\s*:\s*"([0-9a-fA-F-]{16,})"',
+    r"(?im)^\s*session[ _-]?id\s*:\s*([0-9a-fA-F][0-9a-fA-F-]{15,})",
 )
 
 _RATE_LIMIT_SIGNS = (
@@ -275,6 +283,17 @@ class CodexAdapter:
                 meta={"error": type(exc).__name__, **_argv_meta(args), "cwd": cwd},
             )
 
+        # Live capture in `_drain` is the normal path — the id arrives on stdout line 1, long
+        # before the process ends. This is the net under it: a build that block-buffers its
+        # stream hands the whole thing over at once on exit, and a line-by-line scan that
+        # already finished would never have seen it.
+        if not captured["session_id"]:
+            recovered = self.extract_session_id(
+                f"{ensure_text(outcome['stdout'])}\n{ensure_text(outcome['stderr'])}"
+            )
+            if recovered:
+                _saw_session(recovered)
+
         meta = {
             "returncode": outcome["returncode"],
             **_argv_meta(args),
@@ -304,13 +323,23 @@ class CodexAdapter:
                     ),
                     meta=meta,
                 )
+            # What the retry will actually do depends on whether the id was captured, and
+            # saying "the retry resumes" unconditionally was advice that could be false at
+            # exactly the moment it mattered: a call killed before its first event has no
+            # session, and the reader would be told the work is being continued when it is
+            # being redone.
+            resumable = (
+                "The session was captured, so the retry resumes rather than starting over."
+                if captured["session_id"]
+                else "No session id was captured, so the retry starts a NEW thread and "
+                "repeats the work — narrow the task rather than raising the timeout alone."
+            )
             return make_error(
                 "timeout",
                 content or f"codex exceeded {self.timeout_seconds}s",
                 next_action=(
                     "Increase timeout_seconds (0 = no limit) or narrow the task, then "
-                    "retry. The session was captured, so the retry resumes rather than "
-                    "starting over."
+                    f"retry. {resumable}"
                 ),
                 meta=meta,
             )
@@ -368,6 +397,31 @@ class CodexAdapter:
                 ),
                 meta=meta,
                 raw_tail=ensure_text(outcome["stdout"])[-500:],
+            )
+
+        # A run that answered but never named its thread cannot be continued: the follow-up
+        # would open a fresh session holding none of the work. OpenCode fails the call in
+        # the same situation rather than returning an orphan, and the parity matters —
+        # `core/executor.py` reads `provider_session_id` to decide whether its one bounded
+        # continuation is even possible, and `main.py` refuses job recovery without it.
+        #
+        # Deliberately LAST, after timeout and returncode: those are different failures with
+        # their own next_action, and labelling a rate-limited call `session_capture_failed`
+        # would send the reader to fix the wrong thing. A resumed call cannot reach here —
+        # `captured` starts holding `resume_id`. The answer is carried on `orphan_content`
+        # so failing the call does not also destroy the text it produced.
+        if not captured["session_id"]:
+            return make_error(
+                "session_capture_failed",
+                "codex answered but never reported a thread id",
+                next_action=(
+                    "Rerun the task as a clean invocation. If it repeats, codex changed "
+                    "the shape of its session event — check the raw JSONL in "
+                    ".workflow/sessions/<session>/logs for the first line and widen "
+                    "_THREAD_ID_PATTERNS in adapters/codex_adapter.py to match it."
+                ),
+                meta=meta,
+                orphan_content=content[:4000],
             )
 
         return make_ok(content, meta)
@@ -472,9 +526,10 @@ class CodexAdapter:
                 "command_not_found",
                 f"provider is codex but provider_command is '{self.command}'",
                 next_action=(
-                    'Set "provider_command": "codex" in .workflow/second_agent.json. '
-                    "The default value is opencode's binary and does not follow the "
-                    "selected provider."
+                    'Set BOTH "provider": "codex" and "provider_command": "codex" in '
+                    ".workflow/second_agent.json — that file is the only place a provider "
+                    "is selected. `runtime.second_agent` in .workflow/config.json is a "
+                    "hint and does not choose one."
                 ),
                 meta={
                     "provider": self.adapter,
@@ -495,9 +550,16 @@ class CodexAdapter:
         """argv for one call. `-` puts the prompt on stdin, so argv stays short."""
         command = osutil.resolve_exe(self.command)
         if resume_id:
-            # `resume` takes neither -C nor --sandbox: both are inherited from the session
-            # being resumed. The sandbox is re-asserted through -c so a resumed call
-            # cannot end up looser than the one that opened the thread.
+            # `resume` accepts a NARROWER option set than `exec` itself, and the ones it
+            # rejects are rejected by the argument parser — before the model is reached, so
+            # the call dies with `unexpected argument` and exit 2 rather than anything the
+            # error classifier below can read. Verified against codex-cli 0.147.0: no -C,
+            # no --sandbox, and no --color. Only --json, -c, -o, -m and
+            # --skip-git-repo-check survive here.
+            #
+            # cwd and sandbox are inherited from the session being resumed; the sandbox is
+            # re-asserted through -c anyway, so a resumed call cannot end up looser than
+            # the one that opened the thread.
             args = [
                 command,
                 "exec",
@@ -505,8 +567,6 @@ class CodexAdapter:
                 resume_id,
                 "-",
                 "--json",
-                "--color",
-                "never",
                 "--skip-git-repo-check",
                 "-c",
                 f'sandbox_mode="{self.sandbox}"',
@@ -581,7 +641,11 @@ class CodexAdapter:
                     buf.append(line)
                     sizes[key] += len(line)
                     last_output["at"] = time.monotonic()
-                    if on_session and not seen_session["done"] and key == "stdout":
+                    # Both streams. `--json` puts the id on stdout and leaves stderr empty,
+                    # but scanning only stdout meant a build that banners to stderr lost the
+                    # session with nothing to show for it — and the cost of looking is one
+                    # regex per line on a stream that is normally empty.
+                    if on_session and not seen_session["done"]:
                         thread_id = CodexAdapter.extract_session_id(line)
                         if thread_id:
                             seen_session["done"] = True

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from adapters.base import SecondAgentAdapter
-from adapters.registry import provider_for, resolve_adapter
+from adapters.registry import hint_conflict, resolve_adapter, selected_provider
 from config.settings import (
     DEFAULT_MAX_TASK_CHARS,
     DEFAULT_TASK_TRUNCATION_HARD_RATIO,
@@ -293,24 +293,20 @@ class Executor:
         """The adapter THIS project selects, resolved late enough to know the project.
 
         Selection order matches `adapters/registry.py`: an injected adapter or a pinned
-        provider, then second_agent.json's `provider`, then .workflow/config.json's
-        `runtime.second_agent`, then the built-in default. A `provider` that was merely
-        defaulted into the config does not count as a choice — `provider_explicit` is what
-        separates "the file said codex" from "the file said nothing".
+        provider, then second_agent.json's `provider`, then the built-in default. A
+        `provider` that was merely defaulted into the config does not count as a choice —
+        `provider_explicit` is what separates "the file said codex" from "the file said
+        nothing".
+
+        `.workflow/config.json`'s `runtime.second_agent` is NOT consulted. It named the
+        adapter while `provider_command` kept coming from second_agent.json, so a project
+        that selected codex there built the codex adapter and handed it opencode's binary —
+        a combination `_command_guard` refuses on every call. The hint is reported by
+        `_config_provenance` instead.
         """
         if self._adapter_override:
             return self.adapter
-        from config.settings import resolve_provider_config_for
-
-        resolved = resolve_provider_config_for(project_root)
-        # PROJECT-local only. The tool-default config also names a provider, and counting
-        # that as a choice put it above .workflow/config.json — which then selected
-        # nothing, exactly the inert key v3.4.3 set out to fix.
-        chose_provider = resolved.get("provider_explicit") and str(
-            resolved.get("source", "")
-        ).startswith("project")
-        name = resolved["config"].get("provider") if chose_provider else None
-        name = name or provider_for(project_root)
+        name = selected_provider(project_root)
         if name == getattr(self.adapter, "adapter", None):
             return self.adapter
         self.adapter = resolve_adapter(name, project_root=project_root)
@@ -346,6 +342,16 @@ class Executor:
         }
         if resolved.get("error"):
             meta["config_error"] = resolved["error"]
+        # A config.json still naming a provider is a config the runtime is knowingly not
+        # honouring. Saying so is the whole difference between a deprecated key and a key
+        # that quietly does nothing.
+        conflict = hint_conflict(
+            project_root,
+            resolved.get("config"),
+            selected=getattr(self.adapter, "adapter", None),
+        )
+        if conflict:
+            meta.update(conflict)
         return meta
 
     @staticmethod

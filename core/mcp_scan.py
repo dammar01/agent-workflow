@@ -54,7 +54,7 @@ def _mcp_config_candidates(project_root: Path, provider: str | None = None) -> l
     project running a second_agent other than opencode is scanned instead of silently
     reported clean.
     """
-    from adapters.registry import provider_for
+    from adapters.registry import selected_provider
     from config.providers import PROVIDER_BUNDLES, provider_config_candidates
 
     try:
@@ -63,7 +63,9 @@ def _mcp_config_candidates(project_root: Path, provider: str | None = None) -> l
         home = Path(
             os.environ.get("USERPROFILE") or os.environ.get("HOME") or str(project_root)
         )
-    resolved = provider or provider_for(project_root)
+    # Same resolution the executor uses, or the scan reads one provider's config files
+    # while another provider is the one actually spawned.
+    resolved = provider or selected_provider(project_root)
     candidates = [project_root / WORKFLOW_DIRNAME / PROVIDER_CONFIG_NAME]
     # An unbundled provider is a config shape nothing here knows how to locate. Scanning
     # nothing is honest; guessing opencode's paths would report another provider clean.

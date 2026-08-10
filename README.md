@@ -1,4 +1,4 @@
-# agent-workflow v3.4.3
+# agent-workflow v3.4.4
 
 Runtime orkestrasi mandiri untuk alur kerja dua-agent. Tanpa dependency pihak ketiga.
 
@@ -70,7 +70,7 @@ git --version
 
 ---
 
-## Install (v3.4.3)
+## Install (v3.4.4)
 
 ### Anggota tim baru — urutan lengkap dari nol
 
@@ -454,7 +454,7 @@ Saat `init`, source-nya adalah `config/second_agent.json` bila file lokal itu ad
 
 `model: null` berarti pakai model default OpenCode.
 
-Kunci reliability (v3.4.3):
+Kunci reliability (v3.4.4):
 
 | Kunci | Default | Arti |
 | --- | --- | --- |
@@ -665,7 +665,7 @@ pernah tercatat, runtime gagal sebagai `session_capture_failed` dan clean run di
 Request berbeda pada session yang masih terkunci tetap ditolak sebagai
 `job_already_running`.
 
-### Liveness worker (v3.4.3)
+### Liveness worker (v3.4.4)
 
 PID yang hidup **tidak** berarti sedang bekerja. Worker karena itu melaporkan heartbeat sekaligus usia output stream, lalu job diklasifikasi tiga keadaan:
 
@@ -756,7 +756,7 @@ Disebut terbuka karena diam soal ini akan membuat runtime terlihat lebih menjami
 
 ## Referensi
 
-- Catatan rilis: [`prompt/v3.4.3/changelog.md`](prompt/v3.4.3/changelog.md)
+- Catatan rilis: [`prompt/v3.4.4/changelog.md`](prompt/v3.4.4/changelog.md)
 - Kontrak canonical main_agent: [`dist/config/claude/CLAUDE.md`](dist/config/claude/CLAUDE.md)
 - Kontrak canonical second_agent: [`dist/config/opencode/AGENTS.md`](dist/config/opencode/AGENTS.md)
 - Runtime entry point: [`main.py`](main.py)

@@ -1,13 +1,13 @@
 {
-  "version": "3.4.3",
+  "version": "3.4.4",
   "versions": {
-    "prompt_bundle": "3.4.3",
-    "runtime": "3.4.3"
+    "prompt_bundle": "3.4.4",
+    "runtime": "3.4.4"
   },
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "08a7f67d4f013e4577f37cefbb7f04825cab17e15bf121bf314d509271f464cc",
+      "sha256": "a4cd104d0700346c9a7352c0aa8142b887f8d06a311fd5e30502630fef4a775b",
       "bytes": 22766,
       "merge": "merge",
       "component": "prompt_bundle"
@@ -42,7 +42,7 @@
     },
     {
       "path": "claude/skills/doctor.md",
-      "sha256": "484a240c617e5258ceda9db8fea4e244854dfa5526e57b7808afcaf92078c572",
+      "sha256": "6966a6da009abdde8b52537cfb9f2b117be34db9428d91e167ba6a39c0c3e7fb",
       "bytes": 1672,
       "merge": "replace",
       "component": "prompt_bundle"
@@ -63,14 +63,14 @@
     },
     {
       "path": "claude/skills/help.md",
-      "sha256": "c5e3f73a5cfd17cb4b47901cbcbb6bfccadb16e8d4e992e0af4f9925762daf27",
+      "sha256": "89f9399592bd30d1cf447b08280dd3a71391b84536673a1c23c14dd740e0e858",
       "bytes": 1478,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/skills/init.md",
-      "sha256": "f84d5432c47804283bd9bea6d05d28aaa858c0611432d3142c7bc7a906fb9bd7",
+      "sha256": "a182974b3fb39cf4234a409d1d16738f8ecc0011a08fb750474019edfc7a1c08",
       "bytes": 2093,
       "merge": "replace",
       "component": "prompt_bundle"
@@ -315,7 +315,7 @@
     },
     {
       "path": "opencode/AGENTS.md",
-      "sha256": "6a6d91c2b3eee167be5f5a0484c0ddee77d0b3f829bc27ee0668b19394498309",
+      "sha256": "0a8e0c70f74d5bd90ef7fafed9cca00e7cb6331a5d72481b7faab9326be88d9b",
       "bytes": 17240,
       "merge": "merge",
       "component": "prompt_bundle"
@@ -357,7 +357,7 @@
     },
     {
       "path": "codex/AGENTS.md",
-      "sha256": "fce63f4e9ce6f0b48ce72624d6623771cb6253ef647efb03e9faf1d2d3d5cf09",
+      "sha256": "13da5daf619e76867d8bee4797cc61d1842f66c1b114a1a4aa2ee841427d2b99",
       "bytes": 14412,
       "merge": "merge",
       "component": "prompt_bundle"

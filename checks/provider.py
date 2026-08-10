@@ -38,9 +38,10 @@ def _test_provider_seam() -> None:
     from adapters.registry import (
         UnknownProviderError,
         available_providers,
-        provider_for,
+        hint_conflict,
         register,
         resolve_adapter,
+        selected_provider,
     )
     from core.provider_migration import migrate_provider_keys
     from core.workspace_paths import atomic_write_json
@@ -166,7 +167,7 @@ def _test_provider_seam() -> None:
         "a second migration must not alter an already-migrated config",
     )
     assert_true(
-        provider_for(temp_root) in available_providers(),
+        selected_provider(temp_root) in available_providers(),
         "a migrated workspace must still resolve to a registered provider",
     )
 
@@ -355,17 +356,42 @@ def _test_provider_seam() -> None:
         "a provider implementing run/probe/parsers must satisfy the contract without "
         "inheriting anything — the Protocol must not demand OpenCode's internal shape",
     )
+    # v3.4.3 made `runtime.second_agent` SELECT the provider. v3.4.4 takes that back, and
+    # the reason is the pair of keys, not the key: `provider_command` is only ever read
+    # from second_agent.json, so a config.json naming another provider built that adapter
+    # and handed it the first one's binary — a combination codex's `_command_guard` refuses
+    # on every call. One file owns the decision now, and the ignored hint is REPORTED so
+    # the key does not go back to being silently inert.
     atomic_write_json(
         workflow_dir / "config.json", {"runtime": {"second_agent": "test-provider"}}
     )
     assert_true(
-        provider_for(temp_root) == "test-provider",
-        "config.json `second_agent` must SELECT the provider; it was inert before v3.4.3",
+        selected_provider(temp_root) != "test-provider",
+        "config.json `second_agent` must NOT select the provider — second_agent.json does",
+    )
+    conflict = hint_conflict(temp_root, selected=selected_provider(temp_root))
+    assert_true(
+        conflict is not None
+        and conflict["provider_hint_ignored"] == "test-provider",
+        f"an ignored config.json hint must be reported, not swallowed: {conflict}",
+    )
+    atomic_write_json(
+        workflow_dir / "second_agent.json",
+        {**migrated, "provider": "test-provider", "provider_command": "test-provider"},
     )
     assert_true(
-        resolve_adapter(project_root=temp_root).adapter == "test-provider",
-        "resolution must follow the workspace config, not the built-in default",
+        selected_provider(temp_root) == "test-provider",
+        "second_agent.json `provider` must select the provider",
     )
+    assert_true(
+        resolve_adapter(selected_provider(temp_root)).adapter == "test-provider",
+        "resolution must follow the file that also carries provider_command",
+    )
+    assert_true(
+        hint_conflict(temp_root, selected=selected_provider(temp_root)) is None,
+        "a hint that AGREES with the selection is not a conflict and must stay quiet",
+    )
+    atomic_write_json(workflow_dir / "second_agent.json", migrated)
     assert_true(
         _ProbeProvider.extract_session_id("sid=abc123") == "abc123",
         "a provider's own session-id shape must be honoured, not OpenCode's ses_ prefix",
@@ -387,8 +413,14 @@ def _assert_codex_provider() -> None:
     """
     from adapters.base import SecondAgentAdapter
     from adapters.codex_adapter import CodexAdapter
-    from adapters.registry import available_providers, resolve_adapter
+    from adapters.registry import (
+        available_providers,
+        hint_conflict,
+        resolve_adapter,
+        selected_provider,
+    )
     from config.providers import bundle_for, provider_install_module
+    from core.mcp_scan import _mcp_config_candidates
 
     assert_true(
         "codex" in available_providers(),
@@ -426,6 +458,20 @@ def _assert_codex_provider() -> None:
         CodexAdapter.clean_output("plain text, no events") == "plain text, no events",
         "a non-JSONL stream must degrade to its text rather than to an empty answer",
     )
+    # The banner `codex exec` prints WITHOUT --json. Not a shape this adapter can produce,
+    # but the one the reader sees when they run codex by hand, and the difference between
+    # "capture is broken" and "you were looking at a different mode" is worth a pattern.
+    assert_true(
+        CodexAdapter.extract_session_id(
+            "session id: 019fe9cb-5a19-7303-b571-38d04f2d395a\n"
+        )
+        == "019fe9cb-5a19-7303-b571-38d04f2d395a",
+        "the plain-text session banner must be read too, not only the JSONL event",
+    )
+    assert_true(
+        CodexAdapter.extract_session_id("see the session id: field in the docs") is None,
+        "the plain-text pattern must not match prose that merely mentions a session id",
+    )
 
     adapter = CodexAdapter(command="codex")
     fresh = adapter._build_args(
@@ -447,9 +493,19 @@ def _assert_codex_provider() -> None:
         "resume" in resumed and "019fe9cb-5a19-7303-b571-38d04f2d395a" in resumed,
         f"a session must be continued via `exec resume <id>`: {resumed}",
     )
+    # Every flag `exec resume` rejects, asserted by name. These are PARSER refusals: codex
+    # answers `error: unexpected argument '--color' found` and exits before the model is
+    # reached, so one stray flag is a total outage of continuation rather than a degraded
+    # call. `--color never` shipped in v3.4.3 and made every resumed codex call fail; the
+    # test that existed then only checked -C and --sandbox, so the list is now explicit.
+    for rejected in ("-C", "--cd", "--sandbox", "-s", "--color"):
+        assert_true(
+            rejected not in resumed,
+            f"`exec resume` rejects {rejected} — passing it fails the call: {resumed}",
+        )
     assert_true(
-        "-C" not in resumed and "--sandbox" not in resumed,
-        f"`exec resume` accepts neither flag — passing them would fail the call: {resumed}",
+        "--json" in resumed and "--skip-git-repo-check" in resumed,
+        f"a resumed call must still stream JSONL events: {resumed}",
     )
     assert_true(
         'sandbox_mode="read-only"' in resumed,
@@ -467,8 +523,66 @@ def _assert_codex_provider() -> None:
         f"codex must refuse a non-codex provider_command: {refused}",
     )
     assert_true(
-        "provider_command" in refused["meta"]["next_action"],
-        "the refusal must name the key that fixes it",
+        "provider_command" in refused["meta"]["next_action"]
+        and '"provider"' in refused["meta"]["next_action"],
+        "the refusal must name BOTH keys that fix it — selecting a provider without its "
+        "command is what produced this state",
+    )
+
+    # Session capture, without spawning codex. `_popen_capture` is the only seam that
+    # touches a process, so overriding it exercises the whole of run() against a stream
+    # whose shape the test controls.
+    class _NoSessionCodex(CodexAdapter):
+        """A codex that answers but never names its thread."""
+
+        _stdout = (
+            '{"type":"item.completed","item":'
+            '{"type":"agent_message","text":"[EVIDENCE]"}}'
+        )
+
+        def _popen_capture(self, args, prompt, cwd, timeout, phase, on_session):
+            return {
+                "output_complete": True,
+                "returncode": 0,
+                "stdout": self._stdout,
+                "stderr": "",
+                "timed_out": False,
+                "duration_seconds": 0.1,
+                "idle_seconds": 0.0,
+                "pid": 0,
+                "kill": None,
+            }
+
+    class _LateEventCodex(_NoSessionCodex):
+        """The id arrives only when the buffered stream is handed over at exit."""
+
+        _stdout = started + "\n" + _NoSessionCodex._stdout
+
+    orphan = _NoSessionCodex(command="codex").run("task", {}, None, None)
+    assert_true(
+        not orphan["ok"] and orphan["meta"]["error_type"] == "session_capture_failed",
+        f"an answer with no thread id cannot be continued and must fail loudly: {orphan}",
+    )
+    assert_true(
+        "[EVIDENCE]" in orphan["meta"].get("orphan_content", ""),
+        "failing the call must not also destroy the text the call produced",
+    )
+    late = _LateEventCodex(command="codex").run("task", {}, None, None)
+    assert_true(
+        late["ok"]
+        and late["meta"]["provider_session_id"]
+        == "019fe9cb-5a19-7303-b571-38d04f2d395a",
+        f"an event seen only at exit must still yield the session, not fail: {late}",
+    )
+    carried = _NoSessionCodex(command="codex").run(
+        "task",
+        {"provider_session_id": "019fe9cb-5a19-7303-b571-38d04f2d395a"},
+        None,
+        None,
+    )
+    assert_true(
+        carried["ok"],
+        f"a resumed call already knows its thread id and must not fail: {carried}",
     )
 
     # The seam itself: defaults must follow the SELECTED provider. Before this, a config
@@ -540,9 +654,10 @@ def _assert_codex_provider() -> None:
     finally:
         shutil.rmtree(selected, ignore_errors=True)
 
-    # config.json alone must select too, and must outrank the TOOL-default file. The
-    # tool default also names a provider; counting that as a project choice put it above
-    # config.json and made the key inert again.
+    # config.json alone must NOT select. It names the adapter while `provider_command`
+    # keeps coming from second_agent.json, so honouring it built the codex adapter around
+    # opencode's binary — the exact pair `_command_guard` refuses. The key is reported
+    # instead of obeyed, which is what keeps it from going back to silently inert.
     via_config_json = Path(tempfile.mkdtemp(prefix="agent-workflow-cfg-"))
     try:
         (via_config_json / ".workflow").mkdir(parents=True, exist_ok=True)
@@ -550,9 +665,22 @@ def _assert_codex_provider() -> None:
             json.dumps({"runtime": {"second_agent": "codex"}}), encoding="utf-8"
         )
         assert_true(
-            Executor()._adapter_for(via_config_json).adapter == "codex",
-            "`runtime.second_agent` in .workflow/config.json must select the provider "
-            "the executor runs, not just the one install and probe look at",
+            Executor()._adapter_for(via_config_json).adapter != "codex",
+            "`runtime.second_agent` in .workflow/config.json must NOT select the "
+            "provider — second_agent.json carries the command that has to match it",
+        )
+        hint = hint_conflict(
+            via_config_json, selected=selected_provider(via_config_json)
+        )
+        assert_true(
+            hint is not None and hint["provider_hint_ignored"] == "codex",
+            f"the ignored hint must be reported on the call's meta: {hint}",
+        )
+        assert_true(
+            _mcp_config_candidates(via_config_json)
+            == _mcp_config_candidates(via_config_json, selected_provider(via_config_json)),
+            "the MCP scan must read the config of the provider that actually runs, not "
+            "the one the hint names",
         )
     finally:
         shutil.rmtree(via_config_json, ignore_errors=True)

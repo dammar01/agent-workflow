@@ -296,14 +296,20 @@ def probe_second_agent(work_dir: str | None = None, model: str | None = None) ->
     """
     project_root = detect_project_root(work_dir)
     config = load_provider_config_for(project_root)
-    from adapters.registry import resolve_adapter
+    from adapters.registry import resolve_adapter, selected_provider
 
     overrides = (
         {"command": config["provider_command"]}
         if config.get("provider_command")
         else {}
     )
+    # Named explicitly rather than left to be re-derived from `config`: the merged config
+    # always carries a `provider` key, defaulted when the file never chose one, so passing
+    # it here probed whichever provider the DEFAULT named while the executor ran the one
+    # the workspace selected. A watchdog that tests a different CLI than the one that hung
+    # is worse than no watchdog.
     adapter = resolve_adapter(
+        selected_provider(project_root),
         project_root=project_root,
         config=config,
         **overrides,
