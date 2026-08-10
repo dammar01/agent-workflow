@@ -359,8 +359,8 @@ def check_stalled_job(
             f"({probe.get('reason')}) — reaped"
         ),
         next_action=(
-            "Second agent is not answering at all. Check `opencode run` works manually "
-            "and that it is logged in, then rerun the command."
+            "Second agent is not answering at all. Check the provider CLI named by "
+            "provider_command runs manually and is logged in, then rerun the command."
         ),
         probe=probe,
     )

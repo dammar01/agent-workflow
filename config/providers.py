@@ -44,13 +44,68 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # order. Wider than the merge target on purpose: the scan reads whatever the
         # provider might load, the merge writes exactly one file.
         "config_candidates": ("opencode.json", "opencode.jsonc", "config.json"),
+        # What `provider_command` / `provider_agent` default to for THIS provider, and the
+        # env vars that override them. Declared per bundle because the defaults used to be
+        # two module constants in config/settings.py: selecting codex still handed you
+        # opencode's binary and opencode's `plan` persona, silently.
+        "default_command": "opencode",
+        "command_env": "OPENCODE_COMMAND",
+        # `plan` is opencode's own read-only primary; the workflow adds no second primary.
+        "default_agent": "plan",
+        "agent_env": "AI_PROXY_OPENCODE_AGENT",
         # Provider policy lives with the provider (see the module docstring). The module
         # answers `load_config(path)`, `merge_policy(current, incoming, warn)`, and
         # `install_project_config(project_root, tool_dir)`; how it enforces anything is
         # its own business.
         "install_module": "adapters.opencode_install",
     },
+    "codex": {
+        "home_dir": ".codex",
+        "instructions": ("AGENTS.md", "AGENTS.md"),
+        # No subagent roster. OpenCode's `wf-*` files are per-agent markdown it loads from
+        # a directory; codex's subagent configuration has not been verified, so nothing is
+        # shipped rather than a guessed roster that would never load.
+        "agents_dir": None,
+        # Declared, but deliberately NOT shipped in dist/config/codex/. Codex's config is
+        # TOML and every value in it is overridable per invocation (`-c key=value`, `-s`),
+        # so the adapter asserts the read-only boundary on every call instead of merging a
+        # file once — see adapters/codex_install.py. The keys stay because install.py and
+        # installer/check.py index them directly; both guard the FILE with .exists(), so an
+        # unshipped template is a supported "this provider has none".
+        "global_config": ("codex.template.toml", "config.toml"),
+        # Same: declared, not shipped. Codex has no verified project-root permission file,
+        # and install_project_config reports that gap rather than installing a boundary the
+        # provider would ignore.
+        "project_config": ("codex.project.json", "codex.project.json"),
+        "config_aliases": (),
+        # What codex actually reads. The MCP scanner parses JSON only, so a server declared
+        # in this TOML is skipped rather than classified — listed anyway so the limitation
+        # is visible here instead of looking like codex declares nothing.
+        "config_candidates": ("config.toml",),
+        "default_command": "codex",
+        "command_env": "CODEX_COMMAND",
+        # Codex selects no named persona; `exec` runs the model directly.
+        "default_agent": None,
+        "agent_env": None,
+        "install_module": "adapters.codex_install",
+    },
 }
+
+
+def provider_command_default(provider: str, getenv) -> str:
+    """The CLI name this provider is invoked through, env override applied."""
+    bundle = bundle_for(provider)
+    fallback = bundle.get("default_command") or provider
+    name = bundle.get("command_env")
+    return getenv(name, fallback) if name else fallback
+
+
+def provider_agent_default(provider: str, getenv) -> str | None:
+    """The provider-side persona delegated calls run as, or None where there is none."""
+    bundle = bundle_for(provider)
+    fallback = bundle.get("default_agent")
+    name = bundle.get("agent_env")
+    return getenv(name, fallback) if name else fallback
 
 
 def bundle_for(provider: str) -> dict:

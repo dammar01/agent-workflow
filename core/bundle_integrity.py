@@ -66,6 +66,42 @@ _MANAGED_MARKERS = {
 }
 
 
+def _is_agent_roster_path(rel) -> bool:
+    """True for a shipped subagent-roster file, for ANY provider.
+
+    A roster is installed globally, so a project-scoped lookup that misses must retry in
+    the user's home before calling the file absent. Derived from each bundle's
+    `agents_dir` rather than the literal `opencode/agents/`: with the literal, a second
+    provider's roster failed that retry and doctor reported it missing while it sat
+    installed exactly where it belongs.
+    """
+    text = str(rel)
+    for name, bundle in PROVIDER_BUNDLES.items():
+        agents_dir = bundle.get("agents_dir")
+        if agents_dir and text.startswith(f"{name}/{agents_dir}/"):
+            return True
+    return False
+
+
+def _installed_config_alias(installed: Path):
+    """The alternate spelling of a provider config that WINS when it exists, or None.
+
+    OpenCode reads `opencode.json` or `opencode.jsonc`; comparing against the canonical
+    name alone reports drift on a user who keeps the other one. The aliases come from the
+    bundles so this holds for every provider that declares any, and quietly does nothing
+    for the ones that do not.
+    """
+    for bundle in PROVIDER_BUNDLES.values():
+        entry = bundle.get("global_config")
+        if not entry or installed.name != entry[1]:
+            continue
+        for alias in bundle.get("config_aliases", ()):
+            candidate = installed.with_name(alias)
+            if candidate.is_file():
+                return candidate
+    return None
+
+
 def _installed_intent_mode() -> bool:
     """True when the last install chose command-only (auto-intent stanza stripped)."""
     try:
@@ -162,17 +198,17 @@ def _bundle_integrity(
             continue
         installed = _installed_path_for(rel, targets, project_root)
         if (
-            str(rel).startswith("opencode/agents/")
+            _is_agent_roster_path(rel)
             and (installed is None or not installed.is_file())
             and project_root is not None
         ):
             global_agent = _installed_path_for(rel, targets, None)
             if global_agent is not None and global_agent.is_file():
                 installed = global_agent
-        if installed is not None and installed.name == "opencode.json":
-            jsonc = installed.with_name("opencode.jsonc")
-            if jsonc.is_file():
-                installed = jsonc
+        if installed is not None:
+            alias = _installed_config_alias(installed)
+            if alias is not None:
+                installed = alias
         if installed is None or not installed.is_file():
             result["missing"].append(rel)
             result["drift"].append({"path": rel, "reason": "not_installed"})

@@ -2,7 +2,6 @@ from config.roles import VALID_ROLES
 from config.routing import COMMAND_ROUTES
 from config.settings import (
     DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,
-    DEFAULT_PROVIDER_AGENT,
     DEFAULT_POLL_INTERVAL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
     load_provider_config,
@@ -38,10 +37,14 @@ class Router:
             "command": normalized,
             "role": role,
             "model": model,
-            "provider_command": self.config.get("provider_command", "opencode"),
-            "provider_agent": cfg_route.get("agent")
-            or self.config.get("provider_agent")
-            or DEFAULT_PROVIDER_AGENT,
+            # No literal provider name as a fallback: `provider_command` is always present
+            # (default_provider_config fills it for the SELECTED provider), and a hardcoded
+            # one here would mean a config that somehow lost the key silently runs a
+            # different provider's binary.
+            "provider_command": self.config.get("provider_command"),
+            # `agent` may legitimately be None — codex has no persona to select — so the
+            # `or` chain must not fall through to opencode's `plan` for every provider.
+            "provider_agent": cfg_route.get("agent") or self.config.get("provider_agent"),
             "timeout_seconds": timeout,
             "bootstrap_timeout_seconds": self.config.get(
                 "bootstrap_timeout_seconds", DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS

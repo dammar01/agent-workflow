@@ -136,22 +136,21 @@ def _merge_provider_config(project_root: Path, tool_dir: str) -> list[str]:
         current = read_json_file(dest)
     except (OSError, ValueError):
         return []  # malformed user config: report nothing, never clobber it
-    added = [key for key in default_provider_config() if key not in current]
+    # Backfill against the defaults of the provider THIS file selects. Against the global
+    # ones, a codex workspace missing `provider_command` had opencode's binary written
+    # into it permanently — the backfill turning an absent key into a wrong value.
+    defaults = default_provider_config(current.get("provider"))
+    added = [key for key in defaults if key not in current]
     if not added:
         return []
-    defaults = default_provider_config()
     current.update({key: defaults[key] for key in added})
     atomic_write_json(dest, current)
     return added
 
 
-def provider_callable(command_name: str) -> tuple[bool, str]:
-    # Presence check ONLY — do not invoke. `opencode --help` can resolve to a native
-    # .exe shim that false-negatives ("not compatible with this Windows version"),
-    # while `opencode.cmd run` (what the workflow actually uses) works fine.
-    resolved = shutil.which(f"{command_name}.cmd") or shutil.which(command_name)
-    if resolved:
-        return True, resolved
-    return False, f"{command_name} not found in PATH"
+# Moved to utils/osutil.py: the check is provider-independent, and core/diagnostics.py
+# should not import one provider's module to test another provider's binary. Re-exported
+# so existing importers keep working.
+from utils.osutil import provider_callable  # noqa: E402,F401
 
 

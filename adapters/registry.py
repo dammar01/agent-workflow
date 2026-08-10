@@ -15,11 +15,13 @@ Selection order, first hit wins:
 
 from pathlib import Path
 
+from adapters.codex_adapter import CodexAdapter
 from adapters.opencode_adapter import OpenCodeAdapter
 from config.settings import DEFAULT_PROVIDER
 
 _ADAPTERS: dict[str, type] = {
     OpenCodeAdapter.adapter: OpenCodeAdapter,
+    CodexAdapter.adapter: CodexAdapter,
 }
 
 

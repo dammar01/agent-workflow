@@ -370,4 +370,205 @@ def _test_provider_seam() -> None:
         _ProbeProvider.extract_session_id("sid=abc123") == "abc123",
         "a provider's own session-id shape must be honoured, not OpenCode's ses_ prefix",
     )
+    _assert_codex_provider()
     shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def _assert_codex_provider() -> None:
+    """Codex: the second real provider, and the proof the seam holds for shipped code.
+
+    `_ProbeProvider` above shows a provider CAN be added without touching core/. Codex is
+    the same claim tested against a provider that actually runs: a different session-id
+    shape (a UUID in a JSON event, not a prefixed token), a different output format (JSONL
+    events, not log lines), and a resume subcommand instead of a session flag.
+
+    Everything here is argv- and parser-level. Nothing spawns codex — the CLI may not be
+    installed, and a test that needs it would be skipped exactly where it matters.
+    """
+    from adapters.base import SecondAgentAdapter
+    from adapters.codex_adapter import CodexAdapter
+    from adapters.registry import available_providers, resolve_adapter
+    from config.providers import bundle_for, provider_install_module
+
+    assert_true(
+        "codex" in available_providers(),
+        f"codex must be registered: {available_providers()}",
+    )
+    assert_true(
+        resolve_adapter("codex").adapter == "codex",
+        "an explicit provider name must resolve to that provider's adapter",
+    )
+    assert_true(
+        isinstance(CodexAdapter(), SecondAgentAdapter),
+        "CodexAdapter must satisfy the Protocol without inheriting from it",
+    )
+
+    started = '{"type":"thread.started","thread_id":"019fe9cb-5a19-7303-b571-38d04f2d395a"}'
+    assert_true(
+        CodexAdapter.extract_session_id(started)
+        == "019fe9cb-5a19-7303-b571-38d04f2d395a",
+        "the thread id must be read out of the first JSONL event",
+    )
+    stream = "\n".join(
+        [
+            started,
+            '{"type":"turn.started"}',
+            '{"type":"item.completed","item":{"type":"agent_message","text":"first"}}',
+            '{"type":"item.completed","item":{"type":"agent_message","text":"[EVIDENCE]\\nfinal"}}',
+            '{"type":"turn.completed","usage":{"output_tokens":5}}',
+        ]
+    )
+    assert_true(
+        CodexAdapter.clean_output(stream) == "[EVIDENCE]\nfinal",
+        "clean_output must return the LAST agent_message, not the first or the raw stream",
+    )
+    assert_true(
+        CodexAdapter.clean_output("plain text, no events") == "plain text, no events",
+        "a non-JSONL stream must degrade to its text rather than to an empty answer",
+    )
+
+    adapter = CodexAdapter(command="codex")
+    fresh = adapter._build_args(
+        resume_id=None, model=None, cwd="/tmp/project", last_message=None
+    )
+    assert_true(
+        "-" in fresh and "--sandbox" in fresh and "read-only" in fresh,
+        f"a fresh call must read the prompt from stdin under read-only: {fresh}",
+    )
+    assert_true("-C" in fresh, f"a fresh call must set the working root: {fresh}")
+
+    resumed = adapter._build_args(
+        resume_id="019fe9cb-5a19-7303-b571-38d04f2d395a",
+        model=None,
+        cwd="/tmp/project",
+        last_message=None,
+    )
+    assert_true(
+        "resume" in resumed and "019fe9cb-5a19-7303-b571-38d04f2d395a" in resumed,
+        f"a session must be continued via `exec resume <id>`: {resumed}",
+    )
+    assert_true(
+        "-C" not in resumed and "--sandbox" not in resumed,
+        f"`exec resume` accepts neither flag — passing them would fail the call: {resumed}",
+    )
+    assert_true(
+        'sandbox_mode="read-only"' in resumed,
+        f"a resumed call must re-assert the sandbox through -c: {resumed}",
+    )
+
+    # The seam that has not been fixed yet: config/settings.py defaults provider_command to
+    # opencode's binary for every provider. Pointed at the wrong CLI, this adapter must
+    # refuse rather than run it — a silent substitution would return evidence from a
+    # provider nobody selected.
+    misconfigured = CodexAdapter(command="opencode")
+    refused = misconfigured.run("anything", {}, None, None)
+    assert_true(
+        not refused["ok"] and refused["meta"]["error_type"] == "command_not_found",
+        f"codex must refuse a non-codex provider_command: {refused}",
+    )
+    assert_true(
+        "provider_command" in refused["meta"]["next_action"],
+        "the refusal must name the key that fixes it",
+    )
+
+    # The seam itself: defaults must follow the SELECTED provider. Before this, a config
+    # naming codex came back holding opencode's binary and opencode's `plan` persona, and
+    # the workspace backfill then wrote those wrong values into the file permanently.
+    from config.settings import default_provider_config
+
+    codex_defaults = default_provider_config("codex")
+    assert_true(
+        codex_defaults["provider_command"] == "codex"
+        and codex_defaults["provider_agent"] is None,
+        f"codex defaults must be codex's, not opencode's: {codex_defaults}",
+    )
+    opencode_defaults = default_provider_config("opencode")
+    assert_true(
+        opencode_defaults["provider_command"] == "opencode"
+        and opencode_defaults["provider_agent"] == "plan",
+        f"opencode defaults must be unchanged: {opencode_defaults}",
+    )
+    assert_true(
+        set(codex_defaults) == set(opencode_defaults),
+        "the key SET must stay provider-independent — validate_provider_config uses it "
+        "to decide which keys are known",
+    )
+    assert_true(
+        default_provider_config("provider-that-is-not-registered")["provider_command"]
+        == "provider-that-is-not-registered",
+        "an unregistered provider must not silently inherit another provider's binary",
+    )
+
+    # A project that selects codex must resolve to codex through the same path the
+    # executor uses, without any env var set.
+    selected = Path(tempfile.mkdtemp(prefix="agent-workflow-select-"))
+    try:
+        (selected / ".workflow").mkdir(parents=True, exist_ok=True)
+        (selected / ".workflow" / "second_agent.json").write_text(
+            json.dumps({"provider": "codex"}), encoding="utf-8"
+        )
+        from config.settings import (
+            load_provider_config_for,
+            resolve_provider_config_for,
+        )
+        from core.executor import Executor
+
+        effective = load_provider_config_for(selected)
+        assert_true(
+            effective["provider_command"] == "codex",
+            f"a file naming codex must not carry opencode's command: {effective['provider_command']}",
+        )
+        assert_true(
+            resolve_provider_config_for(selected)["provider_explicit"],
+            "a file that names a provider must be distinguishable from one that defaults",
+        )
+        assert_true(
+            Executor()._adapter_for(selected).adapter == "codex",
+            "the executor must resolve the provider the project selected, not the "
+            "import-time default",
+        )
+        assert_true(
+            Executor(adapter=OpenCodeAdapter())._adapter_for(selected).adapter
+            == "opencode",
+            "an injected adapter must still win outright — late resolution must not "
+            "override what a caller handed in",
+        )
+        assert_true(
+            Executor(provider="opencode")._adapter_for(selected).adapter == "opencode",
+            "an explicitly pinned provider must win over the project's own selection",
+        )
+    finally:
+        shutil.rmtree(selected, ignore_errors=True)
+
+    # config.json alone must select too, and must outrank the TOOL-default file. The
+    # tool default also names a provider; counting that as a project choice put it above
+    # config.json and made the key inert again.
+    via_config_json = Path(tempfile.mkdtemp(prefix="agent-workflow-cfg-"))
+    try:
+        (via_config_json / ".workflow").mkdir(parents=True, exist_ok=True)
+        (via_config_json / ".workflow" / "config.json").write_text(
+            json.dumps({"runtime": {"second_agent": "codex"}}), encoding="utf-8"
+        )
+        assert_true(
+            Executor()._adapter_for(via_config_json).adapter == "codex",
+            "`runtime.second_agent` in .workflow/config.json must select the provider "
+            "the executor runs, not just the one install and probe look at",
+        )
+    finally:
+        shutil.rmtree(via_config_json, ignore_errors=True)
+
+    bundle = bundle_for("codex")
+    module = provider_install_module("codex")
+    for function in ("load_config", "merge_policy", "install_project_config"):
+        assert_true(
+            callable(getattr(module, function, None)),
+            f"codex install module must answer {function}()",
+        )
+    assert_true(
+        module.install_project_config(Path("."), ".")["status"] == "not_applicable",
+        "codex ships no project boundary; that must be REPORTED, not silently skipped",
+    )
+    assert_true(
+        bundle["instructions"] == ("AGENTS.md", "AGENTS.md") and not bundle["agents_dir"],
+        f"codex ships instructions and no agent roster: {bundle}",
+    )

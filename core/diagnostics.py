@@ -6,7 +6,6 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from adapters.opencode_install import provider_callable
 from core.workspace_paths import (
     LOCK_TTL_SECONDS,
     atomic_write_json,
@@ -16,6 +15,7 @@ from core.workspace_paths import (
     workflow_paths,
 )
 from utils import osutil
+from utils.osutil import provider_callable
 
 # Split out of this module; re-exported because core/workflow_runtime.py re-exports
 # them FROM here, and callers still reach them through that chain.
@@ -204,12 +204,15 @@ def run_doctor(
         issues.append("python not callable")
         recommended_fixes.append("Ensure python is installed and available in PATH")
 
-    opencode_ok, opencode_output = provider_callable(provider_command)
-    checks["provider_callable"] = {"ok": opencode_ok, "output": opencode_output}
-    if not opencode_ok:
-        issues.append("opencode not callable")
+    provider_ok, provider_output = provider_callable(provider_command)
+    checks["provider_callable"] = {"ok": provider_ok, "output": provider_output}
+    if not provider_ok:
+        # Named, not hardcoded: reporting "opencode not callable" while the project runs
+        # codex sends the reader to install the wrong CLI.
+        issues.append(f"{provider_command} not callable")
         recommended_fixes.append(
-            "Ensure opencode CLI is installed and available in PATH"
+            f"Ensure the {provider_command} CLI is installed and available in PATH, or "
+            "fix provider_command in .workflow/second_agent.json"
         )
 
     checks["graphify_out_exists"] = (project_root / "graphify-out").exists()
@@ -337,7 +340,7 @@ def run_doctor(
             f"second_agent MCP risk: {', '.join(active_risky)} — write/exec-capable, exceeds read-only role"
         )
         recommended_fixes.append(
-            "Disable write/exec-capable MCP for opencode (second_agent = read-only evidence), or confirm intended"
+            f"Disable write/exec-capable MCP for {provider_command} (second_agent = read-only evidence), or confirm intended"
         )
     if active_unknown:
         issues.append(
@@ -366,7 +369,7 @@ def run_doctor(
             f"second_agent MCP unreachable: {', '.join(unreachable)} — declared but launch command not on PATH"
         )
         recommended_fixes.append(
-            "Install/fix the server command, or remove the dead MCP entry from opencode config"
+            f"Install/fix the server command, or remove the dead MCP entry from the {provider_command} config"
         )
 
     # Session continuation: is the current main session linked to an opencode session?
@@ -393,12 +396,12 @@ def run_doctor(
             )
         else:
             try:
-                opencode_id = read_json_file(session_file).get("provider_session_id")
+                linked_id = read_json_file(session_file).get("provider_session_id")
             except (ValueError, OSError):
-                opencode_id = None
-            if opencode_id:
+                linked_id = None
+            if linked_id:
                 checks["session_continuation"] = (
-                    f"linked: {session_id} -> {opencode_id}"
+                    f"linked: {session_id} -> {linked_id}"
                 )
             else:
                 checks["session_continuation"] = (
@@ -408,7 +411,7 @@ def run_doctor(
                     "session continuation broken: provider_session_id not captured for active session"
                 )
                 recommended_fixes.append(
-                    "Re-run a delegated command; if it keeps failing, opencode session capture is failing (check opencode `run` output for a ses_ id)"
+                    f"Re-run a delegated command; if it keeps failing, {provider_command} session capture is failing (check its output for a session id)"
                 )
 
     # Release integrity: the installed bundle must match dist/manifest.json exactly, the

@@ -356,6 +356,13 @@
       "component": "prompt_bundle"
     },
     {
+      "path": "codex/AGENTS.md",
+      "sha256": "fce63f4e9ce6f0b48ce72624d6623771cb6253ef647efb03e9faf1d2d3d5cf09",
+      "bytes": 14412,
+      "merge": "merge",
+      "component": "prompt_bundle"
+    },
+    {
       "path": "claude/settings.template.json",
       "sha256": "d9e3daabb332d4e50a84397ca6cb402e030796b018ea72dfff5206c6b15b41da",
       "bytes": 1724,
@@ -386,6 +393,9 @@
     "opencode/AGENTS.md": "{{HOME}}/.config/opencode/AGENTS.md",
     "opencode/agents": "{{HOME}}/.config/opencode/agents",
     "opencode/opencode.template.json": "{{HOME}}/.config/opencode/opencode.json",
-    "opencode/opencode.project.json": "{{PROJECT_ROOT}}/opencode.json"
+    "opencode/opencode.project.json": "{{PROJECT_ROOT}}/opencode.json",
+    "codex/AGENTS.md": "{{HOME}}/.codex/AGENTS.md",
+    "codex/codex.template.toml": "{{HOME}}/.codex/config.toml",
+    "codex/codex.project.json": "{{PROJECT_ROOT}}/codex.project.json"
   }
 }

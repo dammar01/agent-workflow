@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from adapters.base import SecondAgentAdapter
-from adapters.registry import resolve_adapter
+from adapters.registry import provider_for, resolve_adapter
 from config.settings import (
     DEFAULT_MAX_TASK_CHARS,
     DEFAULT_TASK_TRUNCATION_HARD_RATIO,
@@ -278,11 +278,43 @@ class Executor:
     ) -> None:
         self.router = router or Router()
         self._router_override = router is not None
-        # An injected adapter wins outright (tests, callers that already built one).
-        # Otherwise the provider is resolved from config rather than named here —
-        # that hard-coded name was the reason a second provider was unreachable.
+        # An injected adapter wins outright (tests, callers that already built one), and so
+        # does an explicitly named provider.
+        self._adapter_override = adapter is not None or provider is not None
+        # Built here so `self.adapter` exists before any call, but NOT final: this happens
+        # at import time with no project in hand, so it can only ever see the built-in
+        # default. `_adapter_for()` re-resolves once execute() knows the project root —
+        # without it, `.workflow/config.json` and second_agent.json selected a provider
+        # that the thing actually running the call never read.
         self.adapter = adapter or resolve_adapter(provider)
         self.session_manager = session_manager
+
+    def _adapter_for(self, project_root):
+        """The adapter THIS project selects, resolved late enough to know the project.
+
+        Selection order matches `adapters/registry.py`: an injected adapter or a pinned
+        provider, then second_agent.json's `provider`, then .workflow/config.json's
+        `runtime.second_agent`, then the built-in default. A `provider` that was merely
+        defaulted into the config does not count as a choice — `provider_explicit` is what
+        separates "the file said codex" from "the file said nothing".
+        """
+        if self._adapter_override:
+            return self.adapter
+        from config.settings import resolve_provider_config_for
+
+        resolved = resolve_provider_config_for(project_root)
+        # PROJECT-local only. The tool-default config also names a provider, and counting
+        # that as a choice put it above .workflow/config.json — which then selected
+        # nothing, exactly the inert key v3.4.3 set out to fix.
+        chose_provider = resolved.get("provider_explicit") and str(
+            resolved.get("source", "")
+        ).startswith("project")
+        name = resolved["config"].get("provider") if chose_provider else None
+        name = name or provider_for(project_root)
+        if name == getattr(self.adapter, "adapter", None):
+            return self.adapter
+        self.adapter = resolve_adapter(name, project_root=project_root)
+        return self.adapter
 
     def _router_for(self, project_root) -> Router:
         """Use an injected router as-is; otherwise route via project-local opencode config."""
@@ -615,11 +647,15 @@ class Executor:
         if not handoff.get("ok"):
             return handoff
 
-        self.adapter.command = route.get(
-            "provider_command", getattr(self.adapter, "command", "opencode")
+        # Late binding: until here the adapter could only be the import-time default.
+        self.adapter = self._adapter_for(project_root)
+        # `or` rather than a dict default: the route always carries both keys, and a null
+        # value means "this provider has none" — not "fall back to another provider's".
+        self.adapter.command = route.get("provider_command") or getattr(
+            self.adapter, "command", None
         )
-        self.adapter.agent = route.get(
-            "provider_agent", getattr(self.adapter, "agent", None)
+        self.adapter.agent = route.get("provider_agent") or getattr(
+            self.adapter, "agent", None
         )
         self.adapter.timeout_seconds = route.get(
             "timeout_seconds", getattr(self.adapter, "timeout_seconds", 0)

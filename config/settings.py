@@ -155,11 +155,35 @@ DEFAULT_JOB_POLL_TIMEOUT_SECONDS = _env_int("AI_PROXY_JOB_POLL_TIMEOUT_SECONDS",
 DEFAULT_MAX_GLOBAL_WORKERS = _env_int("AI_PROXY_MAX_GLOBAL_WORKERS", 6)
 
 
-def default_provider_config() -> dict:
+def _provider_defaults(provider: str) -> tuple[str, str | None]:
+    """(`provider_command`, `provider_agent`) for `provider`, env overrides applied.
+
+    Reads the provider's own bundle rather than two module constants. With constants, a
+    config file that said `"provider": "codex"` and nothing else came back holding
+    opencode's binary and opencode's `plan` persona — a provider selected in name only,
+    with no warning anywhere. An unregistered name (a typo, a provider from a newer build)
+    falls back to itself as the command: wrong, but wrong in the direction that fails
+    loudly at spawn instead of quietly running the wrong CLI.
+    """
+    from config.providers import provider_agent_default, provider_command_default
+
+    try:
+        return (
+            provider_command_default(provider, os.getenv),
+            provider_agent_default(provider, os.getenv),
+        )
+    except ValueError:
+        return provider, None
+
+
+def default_provider_config(provider: str | None = None) -> dict:
+    """Tool defaults for one provider. Key SET is provider-independent; values are not."""
+    name = provider or DEFAULT_PROVIDER
+    command, agent = _provider_defaults(name)
     return {
-        "provider": DEFAULT_PROVIDER,
-        "provider_command": OPENCODE_COMMAND,
-        "provider_agent": DEFAULT_PROVIDER_AGENT,
+        "provider": name,
+        "provider_command": command,
+        "provider_agent": agent,
         "default_model": None,
         "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
         "bootstrap_timeout_seconds": DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,
@@ -279,8 +303,8 @@ def validate_provider_config(loaded: dict) -> list[str]:
     return warnings
 
 
-def _load_provider_config_checked(path) -> tuple[dict, str | None, list[str]]:
-    """Read one provider config file. Returns (config, error, warnings).
+def _load_provider_config_checked(path) -> tuple[dict, str | None, list[str], bool]:
+    """Read one provider config file. Returns (config, error, warnings, provider_explicit).
 
     A missing file is not an error — only the caller knows whether absence is expected.
     A file that EXISTS but cannot be parsed is: returning defaults there is how a stray
@@ -290,28 +314,41 @@ def _load_provider_config_checked(path) -> tuple[dict, str | None, list[str]]:
     `error` means the file was unusable and tool defaults were substituted wholesale.
     `warnings` means individual knobs were ignored while the rest of the file applied —
     a distinct outcome that must not be reported as a broken file.
+
+    `provider_explicit` says whether the FILE named a provider, as opposed to inheriting
+    the built-in one. Callers need the difference to honour the documented selection
+    order: a defaulted `provider` must not outrank `.workflow/config.json`, and once
+    defaults are merged in there is no other way to tell the two apart.
     """
-    config = default_provider_config()
     try:
         with Path(path).open("r", encoding="utf-8") as file:
             loaded = json.load(file)
     except FileNotFoundError:
-        return config, None, []
+        return default_provider_config(), None, [], False
     except (OSError, json.JSONDecodeError) as exc:
-        return config, f"{type(exc).__name__}: {exc}", []
+        return default_provider_config(), f"{type(exc).__name__}: {exc}", [], False
 
     if not isinstance(loaded, dict):
-        return config, "provider config is not a JSON object", []
+        return (
+            default_provider_config(),
+            "provider config is not a JSON object",
+            [],
+            False,
+        )
 
+    # Defaults are built for the provider THIS file selects, so provider_command and
+    # provider_agent follow the choice instead of contradicting it.
+    explicit = loaded.get("provider")
+    config = default_provider_config(explicit if isinstance(explicit, str) else None)
     warnings = validate_provider_config(loaded)
     config.update({key: value for key, value in loaded.items() if value is not None})
     if not isinstance(config.get("routes"), dict):
         config["routes"] = COMMAND_ROUTES
-    return config, None, warnings
+    return config, None, warnings, bool(explicit)
 
 
 def load_provider_config(path: Path = PROVIDER_CONFIG_FILE) -> dict:
-    config, _, _ = _load_provider_config_checked(path)
+    config, _, _, _ = _load_provider_config_checked(path)
     return config
 
 
@@ -328,21 +365,24 @@ def resolve_provider_config_for(project_root) -> dict:
 
     path, source = resolve_provider_config(project_root)
     if path is None:
-        config, error, warnings = _load_provider_config_checked(PROVIDER_CONFIG_FILE)
+        config, error, warnings, explicit = _load_provider_config_checked(
+            PROVIDER_CONFIG_FILE
+        )
         return {
             "config": config,
             "source": source,
             "path": str(PROVIDER_CONFIG_FILE),
             "error": error,
             "warnings": warnings,
+            "provider_explicit": explicit,
         }
 
-    config, error, warnings = _load_provider_config_checked(path)
+    config, error, warnings, explicit = _load_provider_config_checked(path)
     if error is not None:
         # Keep the runtime alive on tool defaults — refusing to run would turn a typo
         # into an outage — but record that the substitution happened. `path` stays on
         # the file we tried, because that is the one the user has to fix.
-        config, _, _ = _load_provider_config_checked(PROVIDER_CONFIG_FILE)
+        config, _, _, explicit = _load_provider_config_checked(PROVIDER_CONFIG_FILE)
         source = "tool_default"
     return {
         "config": config,
@@ -350,6 +390,7 @@ def resolve_provider_config_for(project_root) -> dict:
         "path": str(path),
         "error": error,
         "warnings": warnings,
+        "provider_explicit": explicit,
     }
 
 

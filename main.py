@@ -165,10 +165,8 @@ def run(
         return {"ok": True, "content": "workflow workspace initialized", "meta": meta}
 
     if normalized_command == "doctor":
-        config = load_provider_config()
-        return run_doctor(
-            project_root, config.get("provider_command", "opencode"), session_id
-        )
+        config = load_provider_config_for(project_root)
+        return run_doctor(project_root, config.get("provider_command"), session_id)
 
     if normalized_command == "upgrade":
         resolver = resolve_agent_workflow_path(project_root)
@@ -241,7 +239,7 @@ def run(
         if require_provider_session and not session.get("provider_session_id"):
             return make_error(
                 "session_capture_failed",
-                "cannot recover interrupted job because its OpenCode session ID was not captured",
+                "cannot recover interrupted job because no provider session ID was captured",
                 next_action=(
                     "The session lock was released. Run the original task again as a clean invocation."
                 ),
@@ -300,10 +298,15 @@ def probe_second_agent(work_dir: str | None = None, model: str | None = None) ->
     config = load_provider_config_for(project_root)
     from adapters.registry import resolve_adapter
 
+    overrides = (
+        {"command": config["provider_command"]}
+        if config.get("provider_command")
+        else {}
+    )
     adapter = resolve_adapter(
         project_root=project_root,
         config=config,
-        command=config.get("provider_command", "opencode"),
+        **overrides,
     )
     return adapter.probe(
         model=model or config.get("default_model"),

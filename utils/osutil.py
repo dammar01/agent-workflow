@@ -23,6 +23,24 @@ def resolve_exe(name: str) -> str:
     return shutil.which(f"{name}.cmd") or shutil.which(name) or name
 
 
+def provider_callable(command_name: str) -> tuple[bool, str]:
+    """Is a provider CLI on PATH? Returns (ok, resolved path or reason).
+
+    Presence check ONLY — never invoked. `<cli> --help` can resolve to a native .exe shim
+    that false-negatives ("not compatible with this Windows version") while the `.cmd` the
+    workflow actually spawns works fine.
+
+    Lives here, not in a provider's install module. The check is `shutil.which` and nothing
+    else — there is nothing opencode-shaped about it — but importing it from
+    `adapters.opencode_install` meant core/ reached into one provider's module to test
+    every provider's binary.
+    """
+    resolved = shutil.which(f"{command_name}.cmd") or shutil.which(command_name)
+    if resolved:
+        return True, resolved
+    return False, f"{command_name} not found in PATH"
+
+
 def script_ext() -> str:
     return "ps1" if IS_WINDOWS else "sh"
 
