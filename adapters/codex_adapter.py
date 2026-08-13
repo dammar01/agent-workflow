@@ -17,14 +17,22 @@ not a rename of it:
    It accepts a NARROWER option set than `exec`: no `-C/--cd`, no `--sandbox`, and no
    `--color`. Those are parser-level refusals — the call dies with `unexpected argument`
    before codex runs, which is why passing one is a total outage of continuation rather
-   than a degraded call. cwd and sandbox are inherited from the session being resumed,
-   and the sandbox is re-asserted through `-c sandbox_mode=...` anyway, so a resumed call
-   cannot end up looser than the call that opened it.
+   than a degraded call. The process cwd is what actually roots a call — `_popen_capture`
+   spawns with `cwd=` set either way — so the missing `-C` costs a resumed call nothing.
+   Sandbox and the read boundary both re-assert through `-c`, which resume DOES accept, so
+   a resumed call cannot end up looser than the call that opened it.
 4. Policy is per-invocation, not a config file. Codex reads `~/.codex/config.toml`, but
    every value in it can be overridden with `-c key=value` on the command line, and the
    sandbox has its own `-s` flag. So this provider ships no global config to merge: the
    read-only boundary rides on every single call and there is no file for a user to drift
    out from under it. `config/providers.py` records that choice.
+
+   That boundary is two things, not one. `--sandbox read-only` stops WRITES. Reads are
+   stopped by `[permissions.<profile>.filesystem]`, passed on every call from
+   `core/secret_patterns.py` — the same secret list opencode denies, in codex's dialect.
+   Codex has no project-scoped config layer to install it into (a `.codex/config.toml` in
+   a project root is not loaded at all), so argv is not merely the tidier route here, it
+   is the only one.
 
 `--output-schema` is deliberately unused. It would force the final message into JSON, and
 the workflow's contract is the text blocks `[EVIDENCE]`/`[DIGEST]` — schema-forcing here
@@ -47,6 +55,7 @@ from config.settings import (
 )
 from core.contract import make_error as _contract_make_error
 from core.contract import make_ok as _contract_make_ok
+from core.secret_patterns import codex_permission_args
 from utils import osutil
 from utils.parser import ensure_text
 from utils.redact import redact, redact_value
@@ -547,8 +556,14 @@ class CodexAdapter:
         cwd: str | None,
         last_message: Path | None,
     ) -> list[str]:
-        """argv for one call. `-` puts the prompt on stdin, so argv stays short."""
+        """argv for one call. `-` puts the prompt on stdin, so argv stays short.
+
+        Both branches end up carrying the read boundary, because both branches are a way to
+        reach the same agent: a resumed thread that skipped it would be a hole that only
+        opens on the second call of a session, which is the hardest kind to notice.
+        """
         command = osutil.resolve_exe(self.command)
+        boundary = codex_permission_args()
         if resume_id:
             # `resume` accepts a NARROWER option set than `exec` itself, and the ones it
             # rejects are rejected by the argument parser — before the model is reached, so
@@ -557,9 +572,11 @@ class CodexAdapter:
             # no --sandbox, and no --color. Only --json, -c, -o, -m and
             # --skip-git-repo-check survive here.
             #
-            # cwd and sandbox are inherited from the session being resumed; the sandbox is
-            # re-asserted through -c anyway, so a resumed call cannot end up looser than
-            # the one that opened the thread.
+            # The call is rooted by the process cwd, which `_popen_capture` sets on both
+            # branches, so dropping -C here changes nothing about where codex looks. What
+            # -c CAN still carry is policy: the sandbox mode and the filesystem read denies
+            # both ride through it, so a resumed call cannot end up looser than the one
+            # that opened the thread.
             args = [
                 command,
                 "exec",
@@ -570,6 +587,7 @@ class CodexAdapter:
                 "--skip-git-repo-check",
                 "-c",
                 f'sandbox_mode="{self.sandbox}"',
+                *boundary,
             ]
         else:
             args = [
@@ -582,6 +600,7 @@ class CodexAdapter:
                 "--skip-git-repo-check",
                 "--sandbox",
                 self.sandbox,
+                *boundary,
             ]
             if cwd:
                 args.extend(["-C", cwd])

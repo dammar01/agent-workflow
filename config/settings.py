@@ -200,6 +200,58 @@ def default_provider_config(provider: str | None = None) -> dict:
     }
 
 
+def foreign_provider_values(config: dict) -> dict[str, str]:
+    """Values in a workspace config that belong to a provider OTHER than the selected one.
+
+    The key SET in `second_agent.json` is provider-independent, so switching `provider` is
+    accepted with no complaint while `provider_command`, `provider_agent` and the model
+    names keep pointing at the provider that was there before. The file then describes a
+    workspace that does not exist: codex selected, opencode's binary and opencode's `plan`
+    persona still written down.
+
+    Backfill cannot fix this — it only adds absent keys, and these are present. So the
+    values are reported rather than rewritten: a stale `provider_command` is a decision the
+    user may have made deliberately (a wrapper script, a pinned path), and silently
+    overwriting it would be a worse failure than naming it.
+
+    Returns `{key: why}` for whatever looks foreign; empty when the file is coherent.
+    """
+    from config.providers import bundled_providers, provider_command_default
+
+    selected = str(config.get("provider") or DEFAULT_PROVIDER)
+    others = [name for name in bundled_providers() if name != selected]
+    findings: dict[str, str] = {}
+
+    command = config.get("provider_command")
+    for name in others:
+        try:
+            if command and command == provider_command_default(name, lambda _k, d=None: d):
+                findings["provider_command"] = f"{command!r} is {name}'s binary, not {selected}'s"
+        except ValueError:
+            continue
+
+    # Model names are namespaced by provider in practice (`opencode/mimo-...`). A prefix
+    # naming another registered provider is the one case flat enough to call with certainty.
+    def _foreign_model(value) -> str | None:
+        if not isinstance(value, str) or "/" not in value:
+            return None
+        prefix = value.split("/", 1)[0]
+        return prefix if prefix in others else None
+
+    owner = _foreign_model(config.get("default_model"))
+    if owner:
+        findings["default_model"] = f"{config['default_model']!r} is namespaced to {owner}"
+    for command_name, route in (config.get("routes") or {}).items():
+        if not isinstance(route, dict):
+            continue
+        owner = _foreign_model(route.get("model"))
+        if owner:
+            findings[f"routes.{command_name}.model"] = (
+                f"{route['model']!r} is namespaced to {owner}"
+            )
+    return findings
+
+
 def _main_session_cache_path(project_root=None) -> Path:
     if project_root is None:
         return Path(CACHE_FILE)

@@ -378,8 +378,8 @@
     },
     {
       "path": "opencode/opencode.project.json",
-      "sha256": "a9289058900f9de5a800d48d7a97cf09c32be38ff3cd7fb29cfdbf5f1f5803e8",
-      "bytes": 1353,
+      "sha256": "1f3ba1da1e18667371c06ef5dd1a1f60c630eb98fdeb388ed1b756062b4bdf12",
+      "bytes": 1616,
       "merge": "merge",
       "component": "runtime"
     }

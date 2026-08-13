@@ -73,9 +73,15 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # installer/check.py index them directly; both guard the FILE with .exists(), so an
         # unshipped template is a supported "this provider has none".
         "global_config": ("codex.template.toml", "config.toml"),
-        # Same: declared, not shipped. Codex has no verified project-root permission file,
-        # and install_project_config reports that gap rather than installing a boundary the
-        # provider would ignore.
+        # A placeholder, and knowingly so. Codex loads NO project-root config layer — an
+        # unknown key planted in a project's `.codex/config.toml` passes `--strict-config`
+        # untouched, which is only possible if the file is never read. So there is no
+        # project boundary file to ship and never will be one; the read boundary is argv,
+        # asserted per call from core/secret_patterns.py.
+        #
+        # The names stay because `installer/check.py` indexes this key positionally for
+        # every bundle, and it guards the FILE with .exists() rather than the key. Dropping
+        # the tuple would turn "this provider has no project file" into a KeyError.
         "project_config": ("codex.project.json", "codex.project.json"),
         "config_aliases": (),
         # What codex actually reads. The MCP scanner parses JSON only, so a server declared

@@ -399,6 +399,43 @@ def installer_checks(report: Report) -> None:
                 project_init.returncode == 0 and (project / "opencode.json").exists(),
                 f"rc={project_init.returncode}",
             )
+            # The codex half of the same guarantee. It cannot be checked by looking for a
+            # file — codex loads no project config layer, so init writes none and the
+            # boundary rides on argv instead. What must hold is that switching a workspace
+            # to codex leaves it REPORTING an enforced boundary rather than a clean line,
+            # and that no stray project config appears to suggest otherwise.
+            codex_boundary = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import json,sys,pathlib;"
+                    "sys.path.insert(0, sys.argv[1]);"
+                    "from config.providers import provider_install_module;"
+                    "m = provider_install_module('codex');"
+                    "print(json.dumps(m.install_project_config(pathlib.Path(sys.argv[2]), sys.argv[1])))",
+                    str(REPO_ROOT),
+                    str(project),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+            )
+            try:
+                codex_report = json.loads(codex_boundary.stdout.strip() or "{}")
+            except json.JSONDecodeError:
+                codex_report = {}
+            report.check(
+                "codex reports a per-call boundary and writes no project file",
+                codex_boundary.returncode == 0
+                and codex_report.get("status") == "enforced_per_call"
+                and codex_report.get("permissions_enforced", 0) > 0
+                and codex_report.get("path") is None
+                and not (project / "codex.project.json").exists()
+                and not (project / ".codex" / "config.toml").exists(),
+                f"rc={codex_boundary.returncode} report={codex_report}",
+            )
             project_install = subprocess.run(
                 [sys.executable, str(REPO_ROOT / "install.py"), "--apply"],
                 capture_output=True,

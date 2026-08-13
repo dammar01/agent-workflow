@@ -157,20 +157,35 @@ def integrity_checks(report: Report) -> None:
             == COMPONENT_VERSIONS["runtime"],
             str(config.get("runtime", {}).get("runtime_version")),
         )
-        # init on a workspace stamped by an older build must REPORT the drift, not silently
-        # hand back a stale workspace — and must still not rewrite the config itself.
+        # init on a workspace stamped by an older build must CLOSE the drift, not merely
+        # report it. Reporting was the old contract: init handed back a stale workspace and
+        # said so in a return field nobody read, so every fix reached only the users who
+        # remembered to run upgrade as a separate step. init now runs that upgrade itself
+        # (core/workflow_runtime.py:1021-1032), which is why the assertion below is the
+        # inverse of the one it replaces — the config IS rewritten, on purpose.
         stale_config = json.loads(cfg_path.read_text(encoding="utf-8"))
         stale_config["version"] = "0.0.0"
         cfg_path.write_text(json.dumps(stale_config, indent=2), encoding="utf-8")
         stale_init = ensure_workflow_workspace(project, str(REPO_ROOT / "main.py"))
         after_init = json.loads(cfg_path.read_text(encoding="utf-8"))
         report.check(
-            "init: reports version drift without rewriting config",
-            stale_init.get("upgrade_needed") is True
-            and stale_init.get("versions", {}).get("installed_config_version") == "0.0.0"
-            and after_init.get("version") == "0.0.0",
+            "init: closes version drift by upgrading in place",
+            isinstance(stale_init.get("auto_upgrade"), dict)
+            and stale_init.get("upgrade_needed") is False
+            and after_init.get("version") == config.get("version"),
+            f"auto_upgrade={type(stale_init.get('auto_upgrade')).__name__} "
             f"upgrade_needed={stale_init.get('upgrade_needed')} "
             f"config={after_init.get('version')}",
+        )
+        # `auto_upgrade` carries a STRING when the upgrade could not run (a live job, an
+        # unreadable config) — init still succeeds at scaffolding and hands back the command
+        # to run. Asserting the dict above without naming this would leave the skip path
+        # reading like a pass to whoever changes this next.
+        report.check(
+            "init: a blocked auto-upgrade is reported, not swallowed",
+            not isinstance(stale_init.get("auto_upgrade"), str)
+            or "--command upgrade" in stale_init["auto_upgrade"],
+            str(stale_init.get("auto_upgrade")),
         )
         cfg_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
 

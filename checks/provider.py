@@ -16,6 +16,12 @@ from adapters.opencode_adapter import OpenCodeAdapter
 from core.executor import Executor
 from core.job_manager import JobManager
 from core.prompt_builder import build_prompt
+from core.secret_patterns import (
+    CODEX_PERMISSION_PROFILE,
+    SECRET_READ_ALLOWLIST,
+    SECRET_READ_PATTERNS,
+    codex_secret_globs,
+)
 from core.workflow_runtime import ensure_workflow_workspace
 
 from checks.support import (
@@ -692,10 +698,84 @@ def _assert_codex_provider() -> None:
             callable(getattr(module, function, None)),
             f"codex install module must answer {function}()",
         )
+    boundary = module.install_project_config(Path("."), ".")
     assert_true(
-        module.install_project_config(Path("."), ".")["status"] == "not_applicable",
-        "codex ships no project boundary; that must be REPORTED, not silently skipped",
+        boundary["status"] == "enforced_per_call" and boundary["path"] is None,
+        "codex installs no boundary FILE — it must report the per-call enforcement it does "
+        f"do, and no path for a file that was never written: {boundary}",
     )
+    globs = codex_secret_globs()
+    assert_true(
+        boundary["permissions_enforced"] == len(globs),
+        "every canonical secret pattern must reach codex; a boundary that quietly covers "
+        f"fewer is the failure this count exists to catch: {boundary}",
+    )
+    # The count above can no longer be `len(SECRET_READ_PATTERNS)`: a suffix pattern ships as
+    # two globs so the dotfile spelling is covered even if codex's `*` will not cross a
+    # leading dot. Assert the expansion itself, or a regression that dropped the second
+    # spelling would still satisfy an equality check written against the glob list.
+    for canonical, dotted in (
+        ("**/*.env", "**/.env"),
+        ("**/*.env.*", "**/.env.*"),
+        ("**/*.npmrc", "**/.npmrc"),
+        ("**/*.git-credentials", "**/.git-credentials"),
+        ("**/*credentials.json", "**/.credentials.json"),
+    ):
+        assert_true(
+            canonical in globs and dotted in globs,
+            f"codex needs both spellings of the same secret: {canonical} and {dotted} "
+            f"— missing from {globs}",
+        )
+    assert_true(
+        "**/.ssh/**" in globs and "**/.kube/**" in globs and "**/.docker/**" in globs,
+        f"directory secrets must translate to a dot-anchored recursive deny: {globs}",
+    )
+
+    # The secret list lives in core/secret_patterns.py, but opencode's copy of it ships as
+    # a static JSON artifact. Nothing at runtime reconciles the two, so a pattern added in
+    # one place and not the other would halve the boundary in silence — for whichever
+    # provider the author happened not to be thinking about.
+    project_json = (
+        Path(__file__).resolve().parents[1]
+        / "dist"
+        / "config"
+        / "opencode"
+        / "opencode.project.json"
+    )
+    shipped = json.loads(project_json.read_text(encoding="utf-8"))["permission"]["read"]
+    denied = {pattern for pattern, verdict in shipped.items() if verdict == "deny"}
+    allowed = {pattern for pattern, verdict in shipped.items() if verdict == "allow"}
+    assert_true(
+        denied == set(SECRET_READ_PATTERNS),
+        "core/secret_patterns.py and opencode.project.json must deny the same set; "
+        f"only in code: {sorted(set(SECRET_READ_PATTERNS) - denied)}, "
+        f"only in JSON: {sorted(denied - set(SECRET_READ_PATTERNS))}",
+    )
+    assert_true(
+        allowed == set(SECRET_READ_ALLOWLIST),
+        f"the read allowlist must agree too: {sorted(allowed)} vs {sorted(SECRET_READ_ALLOWLIST)}",
+    )
+
+    # The boundary is only real if it is on the argv of BOTH call shapes. A resumed thread
+    # that dropped it would leave a hole that opens on the second call of a session.
+    from adapters.codex_adapter import CodexAdapter
+
+    adapter = CodexAdapter()
+    for resume_id in (None, "01999999-0000-7000-8000-000000000000"):
+        argv = adapter._build_args(
+            resume_id=resume_id, model=None, cwd=".", last_message=None
+        )
+        joined = " ".join(argv)
+        assert_true(
+            f"default_permissions=\"{CODEX_PERMISSION_PROFILE}\"" in argv
+            and f"permissions.{CODEX_PERMISSION_PROFILE}.filesystem=" in joined,
+            "codex argv must carry the read boundary on "
+            f"{'resume' if resume_id else 'fresh'} calls: {joined}",
+        )
+        assert_true(
+            '"**/*.env"="none"' in joined,
+            f"the .env deny must survive into argv verbatim: {joined}",
+        )
     assert_true(
         bundle["instructions"] == ("AGENTS.md", "AGENTS.md") and not bundle["agents_dir"],
         f"codex ships instructions and no agent roster: {bundle}",
