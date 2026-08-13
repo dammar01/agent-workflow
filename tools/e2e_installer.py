@@ -399,11 +399,13 @@ def installer_checks(report: Report) -> None:
                 project_init.returncode == 0 and (project / "opencode.json").exists(),
                 f"rc={project_init.returncode}",
             )
-            # The codex half of the same guarantee. It cannot be checked by looking for a
-            # file — codex loads no project config layer, so init writes none and the
-            # boundary rides on argv instead. What must hold is that switching a workspace
-            # to codex leaves it REPORTING an enforced boundary rather than a clean line,
-            # and that no stray project config appears to suggest otherwise.
+            # The codex half does NOT get the same guarantee, and this is where that is
+            # nailed down. Codex loads no project config layer, so init writes no file; the
+            # `-c` permission flags that were supposed to replace it turned out to stop
+            # nothing (probed on codex-cli 0.147.0 — deny `**`, still read the file, exit 0).
+            # What must hold is that switching a workspace to codex leaves it SAYING the
+            # boundary is not enforceable, rather than printing a count that reads like
+            # protection, and that no stray project config appears to suggest otherwise.
             codex_boundary = subprocess.run(
                 [
                     sys.executable,
@@ -427,10 +429,11 @@ def installer_checks(report: Report) -> None:
             except json.JSONDecodeError:
                 codex_report = {}
             report.check(
-                "codex reports a per-call boundary and writes no project file",
+                "codex reports an unenforceable boundary and writes no project file",
                 codex_boundary.returncode == 0
-                and codex_report.get("status") == "enforced_per_call"
-                and codex_report.get("permissions_enforced", 0) > 0
+                and codex_report.get("status") == "not_enforceable"
+                and codex_report.get("permissions_enforced") == 0
+                and codex_report.get("permissions_declared", 0) > 0
                 and codex_report.get("path") is None
                 and not (project / "codex.project.json").exists()
                 and not (project / ".codex" / "config.toml").exists(),

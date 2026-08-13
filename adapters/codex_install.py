@@ -14,11 +14,19 @@ rather than a stub:
   would notice; an argv flag cannot. There is therefore no global config to merge, and
   the bundle ships no template for one.
 * Codex has no project-root config LAYER at all, so there is no project file to install
-  either. Its permission model is real (`[permissions.<profile>.filesystem]`) but reachable
-  only through the user's `config.toml` or a `-c` override, so the read boundary follows the
-  same route as the sandbox: asserted on every call. `install_project_config` reports that
-  as `enforced_per_call` and counts the patterns, rather than reporting a path that does not
-  exist or a gap that is no longer there.
+  either. `[permissions.<profile>.filesystem]` parses and is reachable through a `-c`
+  override, so the read boundary was written to follow the same route as the sandbox:
+  asserted on every call.
+
+  It does not work. Probed against codex-cli 0.147.0 in `exec` mode: denying `**` and
+  `**/*` for `:workspace_roots` and then asking for a file returns that file's contents,
+  exit 0. Codex reads by running a shell command, `--sandbox read-only` governs writes
+  rather than reads (its own `--help` says the sandbox policy applies "when executing
+  model-generated shell commands"), and nothing routes a shell read through the permission
+  map. So `install_project_config` reports `not_enforceable` with a zero count. The flags
+  are still sent — they cost four argv elements and would start working the day codex gates
+  shell reads — but a count of patterns SENT was being read as a count of patterns
+  ENFORCED, and a security report that overstates is worse than one that is absent.
 """
 
 from pathlib import Path
@@ -60,7 +68,7 @@ def merge_policy(current: dict, incoming: dict, warn) -> tuple[dict, int, int]:
 
 
 def install_project_config(project_root: Path, tool_dir: str) -> dict:
-    """No file is installed, and the boundary still holds — reported as `enforced_per_call`.
+    """No file is installed, and no read boundary holds — reported as `not_enforceable`.
 
     OpenCode's `<project_root>/opencode.json` denies reading `.env` and friends, and that
     denial is what makes its second agent safe to point at a repository holding secrets.
@@ -68,34 +76,45 @@ def install_project_config(project_root: Path, tool_dir: str) -> dict:
     not part of any config layer codex loads, verified by planting an unknown key in one and
     watching `--strict-config` accept the run without complaint.
 
-    What codex does honour is `[permissions.<profile>.filesystem]`, and every key of it can
-    be set per invocation with `-c`. So the boundary is asserted on the argv of each call by
-    `adapters/codex_adapter.py`, out of the same secret list opencode denies — see
-    `core/secret_patterns.py`. That is strictly harder to drift out from under than a file,
-    since there is no file for anyone to edit; the cost is that it protects THIS workflow's
-    calls and not a codex the user runs by hand.
+    `[permissions.<profile>.filesystem]` looked like the way back to the same guarantee. It
+    parses — `--strict-config` accepts the override, and dropping `default_permissions`
+    produces a specific complaint about it — so this once reported `enforced_per_call` and
+    counted the patterns. Probing 0.147.0 showed the count described nothing: with `**` and
+    `**/*` denied for `:workspace_roots`, `codex exec` still returned the contents of a file
+    in that root at exit 0. Codex reads by spawning a shell, and `--sandbox read-only` bounds
+    what a shell may WRITE.
 
-    `permissions_enforced` counts the patterns riding on each call, so a boundary that
-    silently shrinks to nothing shows up as a zero in doctor rather than as a clean line.
+    So the two numbers below describe different things on purpose. `permissions_declared` is
+    what rides on the argv; `permissions_enforced` is what any of it is known to stop, and it
+    is 0 until a codex release gates shell reads. Collapsing the two is what made a workflow
+    that reads `.env` freely look, in doctor output, like one that cannot.
+
     `path` stays None: nothing was written, and claiming a path would invite someone to go
     looking for it.
     """
     denies = codex_filesystem_permissions()
     warnings = [
-        "codex has no project-root config layer, so its read boundary is asserted as "
-        f"`-c permissions.{CODEX_PERMISSION_PROFILE}.filesystem` on every workflow "
-        "call instead of installed as a file; a codex run started by hand outside this "
-        "workflow carries none of it",
-        "the boundary overrides `default_permissions` for the duration of a workflow "
-        "call, so a permission profile configured in ~/.codex/config.toml is not the "
-        "one in effect while the second agent runs",
+        "codex does NOT enforce a read boundary: verified against codex-cli 0.147.0 in "
+        "`exec` mode, denying `**` for `:workspace_roots` still returns file contents at "
+        "exit 0, because codex reads via shell and `--sandbox read-only` bounds writes "
+        "rather than reads. Treat a codex second_agent as able to read every file in the "
+        "project, `.env` included, and point it at a repository only if that is acceptable",
+        f"the `-c permissions.{CODEX_PERMISSION_PROFILE}.filesystem` flags are still sent on "
+        "every call so the boundary starts working the day codex gates shell reads, but "
+        "nothing today depends on them holding",
+        "those flags override `default_permissions` for the duration of a workflow call, so "
+        "a permission profile configured in ~/.codex/config.toml is not the one in effect "
+        "while the second agent runs",
+        "opencode is the provider whose read boundary is enforced; switch to it for a "
+        "project whose secrets must stay unreadable by the second agent",
     ]
     warnings.extend(_workspace_config_warnings(project_root))
     return {
         "path": None,
-        "status": "enforced_per_call",
+        "status": "not_enforceable",
         "keys_added": 0,
-        "permissions_enforced": len(denies),
+        "permissions_enforced": 0,
+        "permissions_declared": len(denies),
         "warnings": warnings,
     }
 

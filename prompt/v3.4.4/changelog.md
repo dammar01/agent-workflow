@@ -14,7 +14,9 @@ dijalankan, bukan sekadar dibaca.
   melanjutkan pekerjaan adalah subcommand `codex exec resume <id>`, bukan sebuah flag.
 - Sandbox `read-only` dipasang di setiap invocation lewat `--sandbox` dan `-c
   sandbox_mode=…`, bukan ditulis sekali ke sebuah file config. Nilai di file bisa diedit
-  belakangan tanpa ada yang tahu; argumen argv tidak bisa.
+  belakangan tanpa ada yang tahu; argumen argv tidak bisa. Sandbox itu membatasi **tulis**
+  saja — boundary bacanya tidak ada, lihat "Yang belum ditutup" di bawah sebelum menunjuk
+  codex ke project berisi rahasia.
 - `config/providers.py` menyatakan sekali apa yang dikirim tiap provider. Sebelumnya
   jawaban itu dieja empat kali — `tools/gen_manifest.py`, `tools/extract_config.py`,
   `install.py`, dan manifest itu sendiri — masing-masing dengan string `"opencode"`
@@ -90,10 +92,19 @@ opencode — kombinasi yang ditolak `_command_guard` pada setiap panggilan.
 
 ## Yang belum ditutup
 
-- Codex tidak mengirim file batas di root project. Sandbox-nya menghalangi tulis, tetapi
-  membaca file rahasia tidak dilarang sebagaimana `opencode.json` melarangnya.
-  `adapters/codex_install.py` melaporkannya sebagai `not_applicable` dengan alasannya,
-  bukan melewatkannya diam-diam.
+- Codex tidak menegakkan boundary baca sama sekali. Tidak ada file batas di root project
+  karena codex tak punya layer config di sana, dan `-c permissions.workflow.filesystem`
+  yang dikirim sebagai penggantinya ternyata tidak menghentikan apa pun: diuji terhadap
+  codex-cli 0.147.0 mode `exec`, men-deny `**` dan `**/*` untuk `:workspace_roots` lalu
+  meminta sebuah file di root itu tetap mengembalikan isinya, exit 0. Codex membaca dengan
+  menjalankan shell, dan `--sandbox read-only` membatasi tulis, bukan baca.
+
+  `adapters/codex_install.py` melaporkannya sebagai `status: not_enforceable` dengan
+  `permissions_enforced: 0` dan `permissions_declared` terpisah — dua angka yang sengaja
+  tidak boleh sama lagi, sebab menyamakannya adalah yang dulu membuat workspace yang
+  membaca `.env` bebas mencetak angka sehat di doctor. Flag `-c` tetap dikirim supaya
+  boundary langsung hidup begitu codex menggerbangi baca-lewat-shell, tetapi tak ada yang
+  hari ini bergantung padanya.
 - `core/bundle_integrity.py` memeriksa `merge == "merge"` sebelum memeriksa blok managed,
   sehingga deteksi edit lokal pada `AGENTS.md` terpasang tidak pernah berjalan untuk
   provider mana pun. Diketahui, sengaja belum diubah di rilis ini: memperbaikinya akan

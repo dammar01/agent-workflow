@@ -18,13 +18,15 @@ $AGENT_PATH         : SET (<path>, exists) | NOT SET
 .workflow/config.json : v3.4.4 (main_py_path set) | old | MISSING
 graphify-out/       : EXISTS | MISSING
 bundle (~/.claude)  : READY | DRIFTED | not_checked — `python "<dir($AGENT_PATH)>/install.py" --check` (skills/CLAUDE.md/AGENTS.md vs shipped dist bundle; DRIFTED → `install.py --apply`)
-second_agent MCP    : SAFE | RISK (<server>) | REVIEW (<server>) | NONE — scan opencode config mcp (context7=safe read-only; write/exec/fs/db/browser=risk)
+second_agent MCP    : SAFE | RISK (<server>) | REVIEW (<server>) | NONE — scan config mcp milik provider AKTIF, bukan selalu opencode (context7=safe read-only; write/exec/fs/db/browser=risk)
+read boundary       : ENFORCED (opencode) | NOT_ENFORCEABLE (codex) — codex tak menegakkan boundary baca; second_agent-nya bisa membaca tiap file project, `.env` termasuk
 
 ## Output
 [DOCTOR REPORT]
 source: runtime (local) | claude (fallback)
 checks: <semua item STEP 2 + status>
 mcp_second_agent: <verdict + daftar server + classification> — RISK/REVIEW = second_agent lampaui read-only, WAJIB tampil + alasan
+read_boundary: <ENFORCED|NOT_ENFORCEABLE + provider> — NOT_ENFORCEABLE WAJIB tampil, jangan diringkas hilang
 status: READY | NEEDS_UPGRADE | NOT_READY
 actions: <fix per item MISSING/NOT SET + disable/confirm MCP risky> (kosong → "tidak ada — semua OK")
 NOT_READY + workspace missing → "Jalankan /.init". NEEDS_UPGRADE → jalankan `/.upgrade`.

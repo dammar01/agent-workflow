@@ -700,15 +700,30 @@ def _assert_codex_provider() -> None:
         )
     boundary = module.install_project_config(Path("."), ".")
     assert_true(
-        boundary["status"] == "enforced_per_call" and boundary["path"] is None,
-        "codex installs no boundary FILE — it must report the per-call enforcement it does "
-        f"do, and no path for a file that was never written: {boundary}",
+        boundary["status"] == "not_enforceable" and boundary["path"] is None,
+        "codex installs no boundary FILE and enforces no read boundary either — it must say "
+        f"so, and claim no path for a file that was never written: {boundary}",
     )
     globs = codex_secret_globs()
+    # These two numbers must never be equal again. `permissions_enforced` was `len(denies)`
+    # while codex enforced none of them, which is how a workspace that reads `.env` freely
+    # came to print a healthy-looking count in doctor. Probed on codex-cli 0.147.0: denying
+    # `**` for `:workspace_roots` still returns file contents at exit 0. Declared is what
+    # rides on argv; enforced is what is known to stop something.
     assert_true(
-        boundary["permissions_enforced"] == len(globs),
-        "every canonical secret pattern must reach codex; a boundary that quietly covers "
-        f"fewer is the failure this count exists to catch: {boundary}",
+        boundary["permissions_declared"] == len(globs),
+        "every canonical secret pattern must still reach codex's argv; a declaration that "
+        f"quietly shrinks is the failure this count exists to catch: {boundary}",
+    )
+    assert_true(
+        boundary["permissions_enforced"] == 0,
+        "codex enforces no read boundary in exec mode — reporting a nonzero count would "
+        f"restate the overstatement this field was corrected to end: {boundary}",
+    )
+    assert_true(
+        any("does NOT enforce" in warning for warning in boundary["warnings"]),
+        "the non-enforcement must be stated in the warnings a user actually reads, not only "
+        f"encoded in a status string: {boundary['warnings']}",
     )
     # The count above can no longer be `len(SECRET_READ_PATTERNS)`: a suffix pattern ships as
     # two globs so the dotfile spelling is covered even if codex's `*` will not cross a

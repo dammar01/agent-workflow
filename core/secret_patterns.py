@@ -16,6 +16,13 @@ So the patterns live here in one canonical form, and each provider gets a transl
   is simply not loaded), so its boundary cannot be installed once; it rides on the argv of
   each call. See `codex_filesystem_permissions()`.
 
+  READ THIS BEFORE TRUSTING THE CODEX HALF: as of codex-cli 0.147.0 those permissions stop
+  nothing. Denying `**` and `**/*` for `:workspace_roots` and then asking `codex exec` for a
+  file returns that file at exit 0 — codex reads by spawning a shell, and `--sandbox
+  read-only` bounds writes rather than reads. The flags stay because they are four argv
+  elements and become real the day codex gates shell reads, but the enforced boundary today
+  is opencode's alone. `adapters/codex_install.py` reports this as `not_enforceable`.
+
 Verified against codex-cli 0.147.0: `[permissions.<profile>.filesystem]` is a real config
 section, an access value of `"none"` is accepted, `"read-write"` is not (the enum rejects
 it), and a `[permissions]` block requires `default_permissions` to name the active profile.
@@ -178,7 +185,11 @@ def _toml_inline_table(mapping: dict[str, str]) -> str:
 
 
 def codex_permission_args() -> list[str]:
-    """The `-c` pairs that assert the read boundary on a single codex call.
+    """The `-c` pairs that DECLARE the read boundary on a single codex call.
+
+    Declare, not enforce — see the module docstring. Codex accepts and ignores them for the
+    shell reads it actually performs. They ship anyway: the cost is four argv elements, and
+    the alternative is having nothing in place when codex closes the gap.
 
     Two overrides, not one: naming a profile in `[permissions]` without setting
     `default_permissions` makes codex refuse to start with `config defines [permissions]

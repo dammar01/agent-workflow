@@ -19,20 +19,31 @@ not a rename of it:
    before codex runs, which is why passing one is a total outage of continuation rather
    than a degraded call. The process cwd is what actually roots a call — `_popen_capture`
    spawns with `cwd=` set either way — so the missing `-C` costs a resumed call nothing.
-   Sandbox and the read boundary both re-assert through `-c`, which resume DOES accept, so
-   a resumed call cannot end up looser than the call that opened it.
+   Sandbox and the declared read boundary both re-assert through `-c`, which resume DOES
+   accept, so a resumed call cannot end up looser than the call that opened it.
 4. Policy is per-invocation, not a config file. Codex reads `~/.codex/config.toml`, but
    every value in it can be overridden with `-c key=value` on the command line, and the
    sandbox has its own `-s` flag. So this provider ships no global config to merge: the
    read-only boundary rides on every single call and there is no file for a user to drift
    out from under it. `config/providers.py` records that choice.
 
-   That boundary is two things, not one. `--sandbox read-only` stops WRITES. Reads are
-   stopped by `[permissions.<profile>.filesystem]`, passed on every call from
-   `core/secret_patterns.py` — the same secret list opencode denies, in codex's dialect.
-   Codex has no project-scoped config layer to install it into (a `.codex/config.toml` in
-   a project root is not loaded at all), so argv is not merely the tidier route here, it
-   is the only one.
+   That boundary covers writes and NOT reads, which is the opposite of what this paragraph
+   used to say. `--sandbox read-only` stops writes; codex's own `--help` scopes it to
+   "model-generated shell commands". Reads were supposed to be stopped by
+   `[permissions.<profile>.filesystem]`, passed on every call from `core/secret_patterns.py`
+   — the same secret list opencode denies, in codex's dialect. It parses, and it stops
+   nothing: probed against codex-cli 0.147.0, denying `**` and `**/*` for `:workspace_roots`
+   and then asking `codex exec` for a file in that root returns the file at exit 0. Codex
+   reads by spawning a shell, and no shell read is routed through the permission map.
+
+   The flags still ship. They cost four argv elements, they are already correct for the day
+   codex gates shell reads, and codex has no project-scoped config layer to install them
+   into anyway (a `.codex/config.toml` in a project root is not loaded at all), so argv is
+   not merely the tidier route here, it is the only one. What must not happen again is
+   anyone reading their presence as protection: `adapters/codex_install.py` reports
+   `not_enforceable` with `permissions_enforced: 0`, and `dist/config/codex/AGENTS.md` tells
+   the agent that avoiding secret files is its own obligation. A codex second_agent can read
+   every file in the project it is pointed at.
 
 `--output-schema` is deliberately unused. It would force the final message into JSON, and
 the workflow's contract is the text blocks `[EVIDENCE]`/`[DIGEST]` — schema-forcing here
@@ -558,9 +569,10 @@ class CodexAdapter:
     ) -> list[str]:
         """argv for one call. `-` puts the prompt on stdin, so argv stays short.
 
-        Both branches end up carrying the read boundary, because both branches are a way to
-        reach the same agent: a resumed thread that skipped it would be a hole that only
-        opens on the second call of a session, which is the hardest kind to notice.
+        Both branches carry the declared read boundary — declared, not enforced; see the
+        module docstring. Kept symmetric anyway: the flags are what turn into a real boundary
+        if codex ever gates shell reads, and a resumed thread that skipped them would then be
+        a hole opening only on the second call of a session, the hardest kind to notice.
         """
         command = osutil.resolve_exe(self.command)
         boundary = codex_permission_args()

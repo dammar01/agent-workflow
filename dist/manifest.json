@@ -42,8 +42,8 @@
     },
     {
       "path": "claude/skills/doctor.md",
-      "sha256": "6966a6da009abdde8b52537cfb9f2b117be34db9428d91e167ba6a39c0c3e7fb",
-      "bytes": 1672,
+      "sha256": "53a9e815e84f80c3d41f9039197bbdb538b420f2f7c0494104cdb2f17c21128b",
+      "bytes": 1991,
       "merge": "replace",
       "component": "prompt_bundle"
     },

@@ -454,6 +454,22 @@ Saat `init`, source-nya adalah `config/second_agent.json` bila file lokal itu ad
 
 `model: null` berarti pakai model default OpenCode.
 
+#### Memilih provider — dan konsekuensi keamanannya
+
+`provider` menerima `opencode` atau `codex`. Keduanya bukan pilihan setara:
+
+| | `opencode` | `codex` |
+| --- | --- | --- |
+| Boundary baca file rahasia | **ditegakkan** lewat `<project_root>/opencode.json` | **tidak ada** |
+| Sandbox tulis | ya | ya (`--sandbox read-only`) |
+| Config boundary project-root | file, di-refresh tiap `init`/`upgrade` | tak ada layer-nya |
+
+Codex mengirim daftar deny yang sama sebagai flag `-c permissions.workflow.filesystem` di tiap panggilan, tetapi flag itu tidak menghentikan apa pun. Diuji terhadap codex-cli 0.147.0 mode `exec`: men-deny `**` dan `**/*` untuk `:workspace_roots` lalu meminta sebuah file di root itu tetap mengembalikan isinya, exit 0. Codex membaca dengan menjalankan shell, dan `--sandbox read-only` membatasi **tulis**, bukan baca.
+
+Artinya second_agent codex bisa membaca tiap file di project yang kamu tunjuk, `.env` termasuk. `init` melaporkan ini sebagai `status: not_enforceable` dengan `permissions_enforced: 0`, dan `dist/config/codex/AGENTS.md` menyatakan ke agent-nya bahwa menghindari file rahasia adalah kewajibannya sendiri — instruksi, bukan penegakan.
+
+Pakai `codex` bila project-nya memang tak menyimpan rahasia, atau bila kamu menerima risikonya. Untuk project yang rahasianya harus tetap tak terbaca second_agent, pakai `opencode`.
+
 Kunci reliability (v3.4.4):
 
 | Kunci | Default | Arti |
