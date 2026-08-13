@@ -90,6 +90,18 @@ opencode — kombinasi yang ditolak `_command_guard` pada setiap panggilan.
   ter-merge selalu membawa kunci `provider`, terisi default ketika filenya tidak pernah
   memilih, sehingga watchdog menguji CLI yang berbeda dari yang menggantung.
 
+## Koreksi catatan rilis
+
+- Catatan v3.4.0 menyebut `policies.subagent_fanout_enabled` berdefault `false`. Sejak
+  `acba54a` (2026-07-24, masih di siklus v3.4.0) defaultnya `true`, dan itulah yang berlaku
+  di seluruh rilis sesudahnya — `core/workflow_runtime.py:subagent_fanout_enabled`. README
+  sudah benar sejak v3.4.2; hanya catatan rilisnya yang tertinggal.
+- Config yang tidak terbaca atau tidak punya blok `policies` kini jatuh ke `true`, bukan
+  `false`. Perilaku fail-closed yang lama membuat satu koma salah di `config.json`
+  menurunkan setiap panggilan menjadi pembacaan serial tanpa satu pun baris di output yang
+  menyebutkannya. Konsekuensinya: JSON rusak tidak mematikan fan-out — untuk mematikannya
+  tulis `false` secara eksplisit.
+
 ## Yang belum ditutup
 
 - Codex tidak menegakkan boundary baca sama sekali. Tidak ada file batas di root project

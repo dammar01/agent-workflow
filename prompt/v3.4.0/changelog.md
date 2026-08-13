@@ -156,7 +156,7 @@ Jawaban jujur `subagents: none (no spawn tool)` diperlakukan sebagai hasil sah, 
 Key baru di `opencode.json`: `bootstrap_timeout_seconds`, `stall_threshold_seconds`, `probe_timeout_seconds`, `job_max_runtime_seconds`. Semua punya default; config lama tetap jalan.
 
 `policies.graph_leads_enabled` (default `true`) mematikan injeksi leads bila tak diinginkan.
-`policies.subagent_fanout_enabled` (default `false`) menyalakan fan-out sub-agent.
+`policies.subagent_fanout_enabled` menyalakan fan-out sub-agent. Baris ini semula menyebut default `false`; default itu dibalik menjadi `true` pada `acba54a` (2026-07-24), masih di dalam siklus rilis ini, dan catatan ini tidak pernah ikut disunting. Lihat "Koreksi catatan rilis" di v3.4.4.
 
 ## Belum tuntas
 
