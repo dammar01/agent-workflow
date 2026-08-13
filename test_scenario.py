@@ -32,7 +32,12 @@ from checks.support import (
     extract_session_id,
 )
 
-from checks.facts import _test_evidence_reuse, _test_facts_concurrency
+from checks.facts import (
+    _test_anchor_relocation,
+    _test_evidence_anchor_relocation,
+    _test_evidence_reuse,
+    _test_facts_concurrency,
+)
 from checks.redaction import _test_redaction_boundary
 from checks.verify_gaps import _test_quick_verify_gaps
 from checks.jobs import _test_submit_admission
@@ -941,6 +946,8 @@ confidence: high — all requested checks ran
         main.JOB_MANAGER.fail_job(taskless["job_id"], "cleanup")
 
         _test_facts_concurrency()
+        _test_anchor_relocation()
+        _test_evidence_anchor_relocation()
         _test_evidence_reuse()
         _test_redaction_boundary()
         _test_quick_verify_gaps()

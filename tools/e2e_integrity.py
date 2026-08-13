@@ -23,6 +23,7 @@ def integrity_checks(report: Report) -> None:
     from core import fact_store
     from core.workflow_runtime import (
         ensure_workflow_workspace,
+        needs_upgrade,
         upgrade_workflow_workspace,
         validate_config,
         workflow_paths,
@@ -196,9 +197,38 @@ def integrity_checks(report: Report) -> None:
             r1["regenerated_scripts"] == [],
             f"{len(r1['regenerated_scripts'])} script(s)",
         )
+        # upgrade is what people run on a workspace that has been lived in, so it must
+        # rebuild the directories only init used to create. A workspace that lost reports/
+        # stayed broken through every upgrade and recovered only by re-running init.
+        shutil.rmtree(project / ".workflow" / "reports", ignore_errors=True)
+        restored = upgrade_workflow_workspace(project, str(REPO_ROOT / "main.py"))
+        report.check(
+            "upgrade: rebuilds scaffolding directories init used to own",
+            (project / ".workflow" / "reports").is_dir()
+            and any("reports" in d for d in restored.get("restored_dirs", [])),
+            f"restored_dirs={restored.get('restored_dirs')}",
+        )
+        report.check(
+            "upgrade: reports nothing restored when nothing was missing",
+            upgrade_workflow_workspace(project, str(REPO_ROOT / "main.py")).get(
+                "restored_dirs"
+            )
+            == [],
+            "second pass must be a no-op",
+        )
+
         # simulate an older build -> version alone must NOT trigger a rewrite any more
         config["runtime"]["runtime_version"] = "0.0.0"
         cfg_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        # ...but it MUST register as drift. runtime_version was reported and then ignored by
+        # needs_upgrade, so a runtime-only bump would ship to workspaces never told they
+        # were stale — invisible today only because every component version derives from
+        # TOOL_VERSION and they always move together.
+        report.check(
+            "needs_upgrade: a runtime-only bump counts as drift",
+            needs_upgrade(project) is True,
+            f"needs_upgrade={needs_upgrade(project)}",
+        )
         r2 = upgrade_workflow_workspace(project, str(REPO_ROOT / "main.py"))
         report.check(
             "upgrade: a version bump alone rewrites nothing",

@@ -280,10 +280,20 @@ def _extract_category(text: str) -> str | None:
     return m.group(1).lower() if m else None
 
 
-def _anchor_hash(project_root: Path, file: str | None, line: int | None) -> str | None:
-    """Hash the referenced line's content. None if file/line is missing or out of range
-    (used as the light ingest-time verify AND the read-time staleness check)."""
-    if not file or not line:
+def _line_hash(text: str) -> str:
+    """The anchor value for one line of source. Whitespace is stripped first, so
+    re-indenting a block does not invalidate every fact anchored inside it."""
+    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:16]
+
+
+def _read_lines(project_root: Path, file: str | None) -> list[str] | None:
+    """Lines of a project-relative file, or None if it cannot be read as one.
+
+    The containment check is the reason this is not just `read_text`: `file` arrives from a
+    stored fact, and a fact claiming `../../etc/passwd` must not turn into a read outside
+    the project root.
+    """
+    if not file:
         return None
     try:
         root = Path(project_root).resolve()
@@ -295,12 +305,73 @@ def _anchor_hash(project_root: Path, file: str | None, line: int | None) -> str 
     if not path.is_file():
         return None
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        return path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return None
-    if line < 1 or line > len(lines):
+
+
+def _anchor_hash(project_root: Path, file: str | None, line: int | None) -> str | None:
+    """Hash the referenced line's content. None if file/line is missing or out of range
+    (used as the light ingest-time verify AND the read-time staleness check)."""
+    if not line:
         return None
-    return hashlib.sha256(lines[line - 1].strip().encode("utf-8")).hexdigest()[:16]
+    lines = _read_lines(project_root, file)
+    if lines is None or line < 1 or line > len(lines):
+        return None
+    return _line_hash(lines[line - 1])
+
+
+def _hash_index(
+    project_root: Path, file: str | None, cache: dict | None = None
+) -> dict[str, list[int]]:
+    """Every line hash in a file mapped to the line numbers carrying it.
+
+    Built once per file per call via `cache`: without it, a store where many facts point at
+    the same edited file re-reads and re-hashes that file once per fact.
+    """
+    if cache is not None and file in cache:
+        return cache[file]
+    lines = _read_lines(project_root, file)
+    index: dict[str, list[int]] = {}
+    for number, text in enumerate(lines or [], 1):
+        index.setdefault(_line_hash(text), []).append(number)
+    if cache is not None:
+        cache[file] = index
+    return index
+
+
+def current_anchor_line(
+    project_root: Path,
+    file: str | None,
+    line: int | None,
+    anchor_hash: str | None,
+    cache: dict | None = None,
+) -> int | None:
+    """Where this fact's anchor text lives NOW, or None if the fact can no longer be placed.
+
+    Staleness used to be decided by one question — does line N still hash to the recorded
+    value? — which conflates two very different events. A line whose CONTENT changed is a
+    fact that may well have stopped being true. A line that merely MOVED, because something
+    was inserted above it, is the same source text at a new index: the fact is intact and
+    only the lookup is wrong. The first question was answering both, so inserting a block at
+    the top of a file silently invalidated every fact anchored below it.
+
+    So: try the recorded line first, and if that fails, look for the recorded hash elsewhere
+    in the file. A UNIQUE match is a relocation — same text, new position, nothing about the
+    claim weakened. Anything else is still a drop.
+
+    The uniqueness rule is what keeps this honest. Anchor text like a lone `)`, or a bare
+    docstring delimiter, hashes identically on dozens of lines, and picking the first would
+    hand back a fact pointing at unrelated code with full confidence. An anchor that cannot
+    single out a line never identified anything in the first place; it is dropped exactly as
+    before.
+    """
+    if not anchor_hash:
+        return None
+    if line and _anchor_hash(project_root, file, line) == anchor_hash:
+        return line
+    matches = _hash_index(project_root, file, cache).get(anchor_hash) or []
+    return matches[0] if len(matches) == 1 else None
 
 
 def _load_facts(project_root: Path) -> list[dict]:
@@ -547,10 +618,18 @@ def load_relevant(
         return []
     task_words = set(re.findall(r"[a-z0-9_]{3,}", (task or "").lower()))
     scored: list[tuple[int, dict]] = []
+    index_cache: dict = {}
     for f in facts:
-        current = _anchor_hash(project_root, f.get("file"), f.get("line"))
-        if current is None or current != f.get("anchor_hash"):
-            continue  # stale/invalid → drop, do not inject
+        placed = current_anchor_line(
+            project_root, f.get("file"), f.get("line"), f.get("anchor_hash"), index_cache
+        )
+        if placed is None:
+            continue  # stale/invalid/unplaceable → drop, do not inject
+        if placed != f.get("line"):
+            # Serve the line the anchor text sits on today. Copied rather than mutated: the
+            # dicts come from _load_facts and writing through them here would edit the store
+            # from a read path. Persisting the move is `prune`'s job, which holds the lock.
+            f = {**f, "line": placed}
         blob = f"{f.get('claim', '')} {f.get('file') or ''}".lower()
         overlap = len(task_words & set(re.findall(r"[a-z0-9_]{3,}", blob)))
         if overlap < MIN_RELEVANCE_OVERLAP:
@@ -561,20 +640,39 @@ def load_relevant(
 
 
 def prune(project_root: Path) -> dict:
-    """Drop stale/invalid facts (anchored line changed or vanished) and collapse duplicates."""
+    """Drop unplaceable facts, RELOCATE the ones that only moved, and collapse duplicates.
+
+    This is the only path that deletes, so it is also the only sensible place to write a
+    relocation back. `load_relevant` recomputes the move on every read and throws it away —
+    correct for a read path, but it means a shifted fact pays the file scan forever. Here the
+    lock is already held and the file is already being rewritten, so the new line number
+    persists and later reads hit the fast path again.
+    """
     with _FactLock(project_root):
         facts = _load_facts(project_root)
-        fresh = [
-            f
-            for f in facts
-            if _anchor_hash(project_root, f.get("file"), f.get("line")) == f.get("anchor_hash")
-            and f.get("anchor_hash") is not None
-        ]
+        index_cache: dict = {}
+        fresh: list[dict] = []
+        relocated = 0
+        for f in facts:
+            placed = current_anchor_line(
+                project_root,
+                f.get("file"),
+                f.get("line"),
+                f.get("anchor_hash"),
+                index_cache,
+            )
+            if placed is None:
+                continue
+            if placed != f.get("line"):
+                f = {**f, "line": placed}
+                relocated += 1
+            fresh.append(f)
         deduped = _dedupe(fresh)
-        if len(deduped) != len(facts):
+        if len(deduped) != len(facts) or relocated:
             _save_facts(project_root, deduped)
         return {
             "kept": len(deduped),
             "removed": len(facts) - len(fresh),
+            "relocated": relocated,
             "duplicates_collapsed": len(fresh) - len(deduped),
         }

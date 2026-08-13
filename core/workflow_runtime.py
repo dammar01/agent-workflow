@@ -257,9 +257,15 @@ def needs_upgrade(project_root: Path) -> bool:
     if not (project_root / WORKFLOW_DIRNAME).exists():
         return False  # not initialized at all — that is `init`, not `upgrade`
     versions = workspace_versions(project_root)
+    # All three are compared, not two. The runtime version was reported by
+    # `workspace_versions` and then ignored here, which is harmless only for as long as
+    # COMPONENT_VERSIONS["runtime"] keeps deriving from TOOL_VERSION — the moment the
+    # runtime is versioned on its own, a runtime-only bump would ship to workspaces that
+    # never learned they were stale. Comparing it now costs nothing and closes that.
     return (
         versions["installed_tool_version"] != versions["current_tool_version"]
         or versions["installed_config_version"] != versions["current_config_version"]
+        or versions["installed_runtime_version"] != versions["current_runtime_version"]
     )
 
 
@@ -347,6 +353,19 @@ def upgrade_workflow_workspace(
     before = workspace_versions(project_root)
     tool = _tool_paths(agent_workflow_path)
 
+    # Directories init scaffolds, re-made here because upgrade is what people run on a
+    # workspace that has been lived in. `reports/` and `sessions/` were created by init and
+    # by nothing else, so a workspace that lost one — cleaned by hand, restored from a
+    # partial backup, checked out without empty dirs — stayed broken through every upgrade
+    # and only recovered by running init again. mkdir with exist_ok is free when they exist.
+    restored_dirs = [
+        str(directory)
+        for directory in (paths["reports_dir"], paths["workflow_dir"] / "sessions")
+        if not directory.exists()
+    ]
+    paths["reports_dir"].mkdir(parents=True, exist_ok=True)
+    (paths["workflow_dir"] / "sessions").mkdir(parents=True, exist_ok=True)
+
     # Ahead of every read below: v3.4.3 renamed the provider keys with no read-side
     # alias, so a v3.4.2 workspace must be translated before anything interprets it.
     # Idempotent, so a workspace already on the new names passes straight through.
@@ -420,6 +439,7 @@ def upgrade_workflow_workspace(
         "diverged_from_defaults": diverged_defaults(config),
         "regenerated_scripts": scripts,
         "gitignore_updated": gitignore_updated,
+        "restored_dirs": restored_dirs,
         "preserved": [str(paths["workflow_dir"] / "sessions")],
         "tool": tool,
     }
