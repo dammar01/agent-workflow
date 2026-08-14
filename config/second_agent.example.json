@@ -1,6 +1,7 @@
 {
   "provider": "opencode",
   "default_model": null,
+  "effort": null,
   "timeout_seconds": 1800,
   "bootstrap_timeout_seconds": 180,
   "stall_threshold_seconds": 360,

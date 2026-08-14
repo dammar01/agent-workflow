@@ -185,6 +185,10 @@ def default_provider_config(provider: str | None = None) -> dict:
         "provider_command": command,
         "provider_agent": agent,
         "default_model": None,
+        # Reasoning effort, provider-neutral here and translated to argv by the adapter.
+        # None means "say nothing", which is what every workspace predating this key
+        # already does — the provider's own default then stands, unchanged.
+        "effort": None,
         "timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
         "bootstrap_timeout_seconds": DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,
         "stall_threshold_seconds": DEFAULT_STALL_THRESHOLD_SECONDS,
@@ -352,7 +356,47 @@ def validate_provider_config(loaded: dict) -> list[str]:
             )
         elif isinstance(default, (int, float)) and value < 0:
             warnings.append(f"{key}: {value} is negative (the runtime ignores it)")
+    warnings.extend(_effort_warnings(loaded))
     return warnings
+
+
+def _effort_warnings(loaded: dict) -> list[str]:
+    """`effort` checked against the MODEL, which is the only thing that constrains it.
+
+    The type loop above cannot reach this: the default is None, so it carries no type to
+    compare against and every value slips through. And the check is not type-shaped
+    anyway — `"max"` is a perfectly good string that codex's gpt-5.5 rejects outright.
+
+    Silence when the model is absent or off the shortlist. The shortlist is a picker's
+    menu, and a user pinning a model it never listed is a supported thing to do; warning
+    there would train people to ignore the warning that matters.
+    """
+    from config.providers import model_efforts, model_is_listed
+
+    effort = loaded.get("effort")
+    if effort is None:
+        return []
+    if not isinstance(effort, str) or not effort.strip():
+        return [f"effort: {type(effort).__name__}, expected a non-empty string"]
+
+    provider = str(loaded.get("provider") or DEFAULT_PROVIDER)
+    model = loaded.get("default_model")
+    name = model if isinstance(model, str) else None
+    try:
+        on_menu = model_is_listed(provider, name)
+        allowed = model_efforts(provider, name)
+    except ValueError:  # unregistered provider — already reported elsewhere
+        return []
+    if not on_menu:
+        return []
+    if not allowed:
+        return [f"effort: {model} takes no reasoning effort (the runtime sends none)"]
+    if effort not in allowed:
+        return [
+            f"effort: {effort!r} is not accepted by {model} "
+            f"(it takes {', '.join(allowed)})"
+        ]
+    return []
 
 
 def _load_provider_config_checked(path) -> tuple[dict, str | None, list[str], bool]:

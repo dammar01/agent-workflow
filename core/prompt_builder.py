@@ -201,10 +201,11 @@ def build_prompt(
                 *header,
                 *_changed_files_block(project_root),
                 *sidecar_block,
-                "[CONSTRAINTS — full severity defs + routing table in AGENTS.md 'Verify Routing'; anchors only here]",
+                "[CONSTRAINTS — severity definitions in AGENTS.md 'Verify Routing'; the routing table itself is inline below]",
                 "- report only: no file writes, no user questions (main_agent's domain)",
                 "- verify ONLY the changed files above and their consumers (blast radius); no scope expansion",
-                "- tag EVERY finding severity/origin/scope_relation and route per the Verify Routing table in AGENTS.md; `unknown` blocks until evidence moves it off it",
+                "- tag EVERY finding on its FIRST line: `severity: <critical|high|medium|low> | origin: <introduced|regression|pre_existing|unknown> | scope_relation: <in_scope|out_of_scope>` — a finding whose opening line lacks all three is rejected",
+                "- ROUTE BY TAGS, never by severity alone: introduced|regression + critical|high => blocking_findings; unknown + critical|high => blocking_findings (fail closed, until evidence moves it off `unknown`); pre_existing + critical|high => escalations; introduced|regression + out_of_scope + medium|low => escalations; everything else => notes",
                 "- EVIDENCE = file:line OR non-code ref (db:/mcp:/runtime:/cmd:); no ref + no concrete failing scenario => NOT critical/high",
                 "- `checks_run` = what you actually ran/read; an unrun check is never a pass",
                 "",
@@ -302,9 +303,11 @@ def _exploration_format() -> list[str]:
 def _verification_format() -> list[str]:
     return [
         "[VERIFICATION]",
-        "verdict: DONE | NEEDS FIX",
+        "verdict: DONE | NEEDS FIX | INCOMPLETE",
         "  (NEEDS FIX only when blocking_findings is non-empty —"
-        " escalations and notes never change this)",
+        " escalations and notes never change this."
+        " INCOMPLETE when you could not finish the verification at all;"
+        " gaps you CAN name belong in not_verified with the verdict still DONE)",
         "",
         "blocking_findings:   # routed here by the table above, not by severity alone",
         "- severity: <critical|high> | origin: <introduced|regression|unknown>"

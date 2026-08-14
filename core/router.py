@@ -18,6 +18,33 @@ class Router:
     def __init__(self, config: dict | None = None) -> None:
         self.config = config or load_provider_config()
 
+    def _effort_for(self, model: str | None) -> str | None:
+        """The configured effort, dropped when the model on this route takes none.
+
+        Global only, on purpose: a per-route effort is expressible in the same shape as
+        the per-route model, but nothing has shown that explore wants a cheaper setting
+        than analyze badly enough to pay for a second place where effort can be wrong.
+
+        The drop is the point. `provider_select` refuses this combination at write time,
+        but a hand-edited second_agent.json never passes through it, and the symptom
+        would be a delegated call dying on an argument the model does not take — minutes
+        in, with the flag nowhere in the error. A model whose shortlist entry declares an
+        empty effort set is saying it takes none; an unlisted model declares nothing and
+        keeps whatever the user pinned.
+        """
+        effort = self.config.get("effort")
+        if not effort:
+            return None
+        from config.providers import model_efforts, model_is_listed
+
+        provider = str(self.config.get("provider") or "")
+        try:
+            if model_is_listed(provider, model) and not model_efforts(provider, model):
+                return None
+        except ValueError:  # unregistered provider: nothing here can say it is wrong
+            return effort
+        return effort
+
     def route(self, command: str, model_override: str | None = None) -> dict:
         normalized = command.strip().lower()
         base = COMMAND_ROUTES.get(normalized)
@@ -28,6 +55,7 @@ class Router:
             raise ValueError(f"unsupported role for command {command}: {role}")
         cfg_route = self.config.get("routes", {}).get(normalized, {})
         model = model_override or cfg_route.get("model") or base.get("model") or self.config.get("default_model")
+        effort = self._effort_for(model)
         # A per-route timeout wins over the global one, but only when it is set —
         # `null` in opencode.json means "inherit", never "no limit".
         timeout = cfg_route.get("timeout_seconds")
@@ -45,6 +73,7 @@ class Router:
             # `agent` may legitimately be None — codex has no persona to select — so the
             # `or` chain must not fall through to opencode's `plan` for every provider.
             "provider_agent": cfg_route.get("agent") or self.config.get("provider_agent"),
+            "effort": effort,
             "timeout_seconds": timeout,
             "bootstrap_timeout_seconds": self.config.get(
                 "bootstrap_timeout_seconds", DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS

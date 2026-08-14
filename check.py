@@ -9,7 +9,7 @@ from config.settings import (
     DEFAULT_MAX_PROBES,
     DEFAULT_PROBE_RECHECK_SECONDS,
 )
-from core.contract import validate_verification_contract
+from core.contract import validate_verification_contract, verify_exit_status
 from core.job_manager import JobManager
 
 JOB_MANAGER = JobManager()
@@ -219,10 +219,13 @@ def _exit_code_for_result(job_id: str) -> int:
     output = job.get("output")
     if not isinstance(output, dict) or not output.get("ok"):
         return 2
-    verdict = (output.get("meta") or {}).get("verdict")
+    meta = output.get("meta") or {}
+    verdict = meta.get("verdict")
+    assessment = meta.get("verify_contract")
     if verdict is None:
-        verdict = validate_verification_contract(output.get("content") or "")["verdict"]
-    return 0 if verdict == "pass" else 2
+        assessment = validate_verification_contract(output.get("content") or "")
+        verdict = assessment["verdict"]
+    return verify_exit_status(verdict, assessment)
 
 
 def main() -> int:

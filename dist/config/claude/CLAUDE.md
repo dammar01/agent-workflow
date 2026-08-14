@@ -104,7 +104,7 @@ Saat gagal → WAJIB:
 Auto-fallback ke local tanpa tanya user = DILARANG.
 
 ### Command registry
-LOCAL:     /.execute -y /.init /.upgrade /.doctor /.sweep /.refactor /.commit /.review /.compress /.memory /.caveman /.local /.help
+LOCAL:     /.execute -y /.init /.upgrade /.doctor /.sweep /.refactor /.commit /.review /.compress /.memory /.caveman /.local /.provider /.help
 DELEGATED: /.explore /.plan /.analyze /.verify
 Definisi lengkap tiap skill = file standalone `~/.claude/skills/<name>.md` (dibuka saat "/.name" dipanggil). CLAUDE.md ini SENGAJA cuma orchestrator + registry — body skill TIDAK di-embed di sini (hemat token/turn; single source di skills/).
 <!-- AUTO-INTENT:START -->
@@ -141,6 +141,9 @@ NL map (auto-fire, lihat Intent detection). Cocokkan ke TRIGGER, bukan ke topik 
   commit   ← commit message | mau commit          (destruktif → konfirmasi dulu)
   memory   ← catat | ingat ini | simpan insight
   local    ← tanpa proxy | offline | jangan pakai second agent
+  provider ← ganti second agent | pakai codex | pakai opencode | ganti model second agent
+             | atur effort | reasoning effort | pilih provider
+             INTI: mengubah SIAPA yang mengerjakan evidence, bukan meminta evidence.
 
 Tie-break (urut, berhenti di yang pertama cocok):
 1. Ada prefix "/." → pakai itu. Override eksplisit selalu menang. Berhenti.

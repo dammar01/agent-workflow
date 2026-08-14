@@ -194,6 +194,7 @@ class CodexAdapter:
         self.poll_interval = DEFAULT_POLL_INTERVAL_SECONDS
         self.bootstrap_timeout_seconds = None
         self.agent = None
+        self.effort: str | None = None
         self.sandbox = sandbox
         self.last_call_meta: dict = {}
         self.on_session_created = None
@@ -620,6 +621,12 @@ class CodexAdapter:
             args.extend(["-o", str(last_message)])
         if model:
             args.extend(["-m", model])
+        # `-c` is declared global across subcommands, so this rides both branches —
+        # including `resume`, whose narrower option set still accepts -c. A thread
+        # resumed without it would silently drop back to the config-file effort.
+        from config.providers import effort_args
+
+        args.extend(effort_args("codex", self.effort))
         return args
 
     def _popen_capture(

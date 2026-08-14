@@ -210,6 +210,10 @@ def run(
     if normalized_command == "inspect":
         return _inspect(project_root, session_id)
 
+    if normalized_command == "provider":
+        from core import provider_select
+        return provider_select.run(project_root, task)
+
     if normalized_command == "sweep":
         output = run_sweep(project_root, session_id)
         output["session_id"] = session_id
@@ -392,6 +396,7 @@ if __name__ == "__main__":
             "sweep",
             "clean",
             "inspect",
+            "provider",
             "submit",
             "await",
             "status",

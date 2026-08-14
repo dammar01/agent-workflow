@@ -195,11 +195,19 @@ class OpenCodeAdapter:
         self.bootstrap_timeout_seconds = DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS
         # `plan` is the read-only fallback when project config omits a custom agent.
         self.agent = DEFAULT_PROVIDER_AGENT
+        # Late-bound from the route, like command/agent. None = send no --variant.
+        self.effort: str | None = None
         self.last_call_meta: dict = {}
         self.on_session_created = None
 
     def _agent_args(self) -> list[str]:
         return ["--agent", self.agent or DEFAULT_PROVIDER_AGENT]
+
+    def _effort_args(self) -> list[str]:
+        """`--variant <effort>`, or nothing. Spelling lives in the provider bundle."""
+        from config.providers import effort_args
+
+        return effort_args("opencode", self.effort)
 
     @staticmethod
     def extract_session_id(text: str) -> str | None:
@@ -383,6 +391,10 @@ class OpenCodeAdapter:
         args.extend(self._agent_args())
         if model:
             args.extend(["-m", model])
+        # Bootstrap carries it too: the session opened here is the one every later call
+        # resumes, and a session opened at one effort then resumed at another is a
+        # difference nobody would think to look for.
+        args.extend(self._effort_args())
         args.extend(["--print-logs", "--log-level", "INFO"])
 
         env = os.environ.copy()
@@ -455,6 +467,7 @@ class OpenCodeAdapter:
         args.extend(self._agent_args())
         if model:
             args.extend(["-m", model])
+        args.extend(self._effort_args())
         args.extend(["-s", session_id])
         return self._run_args(args, work_dir)
 
@@ -466,6 +479,7 @@ class OpenCodeAdapter:
         args = [command, "run", safe_prompt, *self._agent_args()]
         if model:
             args.extend(["-m", model])
+        args.extend(self._effort_args())
         # `-s <ses_id>` is appended once the session exists; a real id is ~30 chars.
         # Include a stand-in so the pre-bootstrap measurement matches the final argv.
         args.extend(["-s", "ses_" + "0" * 26])

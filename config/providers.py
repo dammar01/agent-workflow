@@ -17,6 +17,10 @@ to describe what it does.
 Adding a provider means: a `dist/config/<name>/` folder, an entry here, an install module
 answering `load_config`/`merge_policy`/`install_project_config`, and an adapter registered
 in `adapters/registry.py`. No build-tool edits, no installer edits.
+
+`models` and `effort_arg` are the same idea applied to selection rather than packaging:
+what the provider will accept, declared once, so the picker and the adapter cannot
+disagree about it.
 """
 
 import importlib
@@ -53,6 +57,31 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # `plan` is opencode's own read-only primary; the workflow adds no second primary.
         "default_agent": "plan",
         "agent_env": "AI_PROXY_OPENCODE_AGENT",
+        # How this provider spells reasoning effort on the command line. Rendered with
+        # `{value}`; an empty/absent template means the provider takes none.
+        "effort_arg": ("--variant", "{value}"),
+        # A SHORTLIST, not a catalog. `opencode models` returns 137 entries and the
+        # picker that consumes this renders four options, so a full mirror would be
+        # unusable and stale at once. Refresh by hand from `opencode models`.
+        #
+        # `efforts` is per MODEL, not per provider: opencode's `--variant` values are
+        # decided by whoever built the model, not by opencode. Offering Anthropic's
+        # `max` on a Google model would build a command line the upstream rejects.
+        #
+        # Values copied from `reasoning_options[].values` in the models.dev catalog
+        # opencode caches at ~/.cache/opencode/models.json — the same table the CLI
+        # itself reads, so this is the provider's own answer rather than a reading of
+        # its docs. 44 of its 89 models declare no effort knob at all; `()` is how one
+        # of those is spelled here, and it is a statement, not a gap.
+        "models": (
+            {
+                "id": "opencode/deepseek-v4-flash-free",
+                "efforts": ("low", "high", "max"),
+            },
+            # `reasoning: true` but `reasoning_options: []` — it reasons, and exposes no
+            # dial for how much. Passing --variant here is an error, not a no-op.
+            {"id": "opencode/mimo-v2.5-free", "efforts": ()},
+        ),
         # Provider policy lives with the provider (see the module docstring). The module
         # answers `load_config(path)`, `merge_policy(current, incoming, warn)`, and
         # `install_project_config(project_root, tool_dir)`; how it enforces anything is
@@ -93,6 +122,35 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # Codex selects no named persona; `exec` runs the model directly.
         "default_agent": None,
         "agent_env": None,
+        # codex has no effort FLAG; every config key is overridable per invocation and
+        # `-c` is declared global across subcommands, so the same knob rides argv.
+        "effort_arg": ("-c", 'model_reasoning_effort="{value}"'),
+        # Copied from the codex CLI's own `models_cache.json`: `slug` plus the `effort`
+        # of each entry in `supported_reasoning_levels`. codex ships no `models`
+        # subcommand, so unlike opencode there is no live list to fall back on.
+        #
+        # Only the models that cache marks `visibility: list` are here. It also carries
+        # `gpt-5.6-sol-wm` and `codex-auto-review` as `visibility: hide` — internal
+        # routes, offered to nobody, and putting them in a picker would invite selecting
+        # one. Same model name can differ per provider: opencode's own `gpt-5.6-luna`
+        # entry adds `none`, which codex's does not accept.
+        "models": (
+            {
+                "id": "gpt-5.6-sol",
+                "efforts": ("low", "medium", "high", "xhigh", "max", "ultra"),
+            },
+            {
+                "id": "gpt-5.6-terra",
+                "efforts": ("low", "medium", "high", "xhigh", "max", "ultra"),
+            },
+            {
+                "id": "gpt-5.6-luna",
+                "efforts": ("low", "medium", "high", "xhigh", "max"),
+            },
+            {"id": "gpt-5.5", "efforts": ("low", "medium", "high", "xhigh")},
+            {"id": "gpt-5.4", "efforts": ("low", "medium", "high", "xhigh")},
+            {"id": "gpt-5.4-mini", "efforts": ("low", "medium", "high", "xhigh")},
+        ),
         "install_module": "adapters.codex_install",
     },
 }
@@ -112,6 +170,53 @@ def provider_agent_default(provider: str, getenv) -> str | None:
     fallback = bundle.get("default_agent")
     name = bundle.get("agent_env")
     return getenv(name, fallback) if name else fallback
+
+
+def provider_models(provider: str) -> tuple[dict, ...]:
+    """The shortlist of models offered for `provider`, each with its own `efforts`."""
+    return tuple(bundle_for(provider).get("models") or ())
+
+
+def model_is_listed(provider: str, model: str | None) -> bool:
+    """Is `model` on this provider's shortlist at all?
+
+    The companion to `model_efforts`, and the reason both exist: an empty effort tuple
+    means two opposite things depending on this answer. Listed with no efforts is a
+    statement — this model takes none, so sending one is an error. Not listed is an
+    absence of information, and the shortlist is a picker's menu rather than the set of
+    models that exist, so a pin the menu never mentioned must still work.
+    """
+    if not model:
+        return False
+    return any(entry.get("id") == model for entry in provider_models(provider))
+
+
+def model_efforts(provider: str, model: str | None) -> tuple[str, ...]:
+    """Reasoning-effort values `model` accepts.
+
+    () from an unlisted model means "unknown"; () from a listed one means "none". Ask
+    `model_is_listed` to tell them apart — every caller that turns this into a refusal
+    has to, because refusing on "unknown" would refuse working configurations.
+    """
+    if not model:
+        return ()
+    for entry in provider_models(provider):
+        if entry.get("id") == model:
+            return tuple(entry.get("efforts") or ())
+    return ()
+
+
+def effort_args(provider: str, effort: str | None) -> list[str]:
+    """argv fragment carrying `effort` for `provider`; empty when unset or unsupported."""
+    if not effort:
+        return []
+    try:
+        template = bundle_for(provider).get("effort_arg")
+    except ValueError:
+        return []
+    if not template:
+        return []
+    return [part.format(value=effort) for part in template]
 
 
 def bundle_for(provider: str) -> dict:

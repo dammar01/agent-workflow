@@ -406,6 +406,238 @@ def _test_provider_seam() -> None:
     shutil.rmtree(temp_root, ignore_errors=True)
 
 
+def _test_provider_selection() -> None:
+    """The `provider` command: the catalog it reports and the write it refuses.
+
+    The picker that drives this runs in the main agent, so the only thing standing
+    between a mistyped answer and a workspace that cannot run is the validation here.
+    Asserted on the FILE, not just the return value: a refusal that still wrote is the
+    failure mode worth catching, and it looks identical from the outside.
+    """
+    from config.providers import effort_args, model_efforts, provider_models
+    from config.settings import validate_provider_config
+    from core import provider_select
+    from core.result_shaping import _verify_exit_code
+    from core.workspace_paths import atomic_write_json, read_json_file
+
+    temp_root = Path(tempfile.mkdtemp(prefix="agent-workflow-provider-"))
+    workflow_dir = temp_root / ".workflow"
+    workflow_dir.mkdir(parents=True, exist_ok=True)
+    config_file = workflow_dir / "second_agent.json"
+
+    catalog = provider_select.run(temp_root, "")
+    listed = {entry["name"]: entry for entry in catalog["meta"]["providers"]}
+    assert_true(
+        {"opencode", "codex"} <= set(listed),
+        f"both shipped providers must be offered: {sorted(listed)}",
+    )
+    assert_true(
+        all(entry["models"] for entry in listed.values()),
+        "every provider must offer at least one model, or the picker has nothing to show",
+    )
+    assert_true(
+        all(
+            isinstance(model.get("efforts"), list)
+            for entry in listed.values()
+            for model in entry["models"]
+        ),
+        "every shortlisted model must state its efforts — an empty list is a valid "
+        "answer (this model takes none), a missing key is not",
+    )
+
+    applied = provider_select.run(temp_root, "codex|gpt-5.6-luna|high")
+    assert_true(applied["ok"], f"a valid selection must apply: {applied}")
+    written = read_json_file(config_file)
+    assert_true(
+        written.get("provider") == "codex"
+        and written.get("provider_command") == "codex"
+        and written.get("provider_agent") is None
+        and written.get("default_model") == "gpt-5.6-luna"
+        and written.get("effort") == "high",
+        # Five keys together or not at all: `provider` alone leaves opencode's binary and
+        # persona on disk under a codex selection, which is the exact state
+        # foreign_provider_values exists to report.
+        f"an apply must write all five selection keys: {written}",
+    )
+    assert_true(
+        not applied["meta"]["foreign_values"],
+        f"a fresh apply must leave nothing foreign behind: {applied['meta']}",
+    )
+
+    refused = provider_select.run(temp_root, "codex|gpt-5.5|ultra")
+    assert_true(
+        not refused["ok"]
+        and refused["meta"]["error_type"] == "invalid_provider_selection",
+        f"an effort the model does not accept must be refused: {refused}",
+    )
+    assert_true(
+        read_json_file(config_file) == written,
+        "a refused selection must leave the file byte-identical — a half-applied "
+        "selection is worse than no change at all",
+    )
+    assert_true(
+        _verify_exit_code("provider", refused) == 2,
+        "a refusal must exit nonzero, or a caller checking only the status reads it as "
+        "an applied selection",
+    )
+
+    unknown = provider_select.run(temp_root, "gemini|x|high")
+    assert_true(
+        not unknown["ok"] and read_json_file(config_file) == written,
+        f"an unknown provider must be refused without writing: {unknown}",
+    )
+
+    # A model outside the shortlist is a supported pin, not an error: the shortlist is a
+    # menu (opencode alone lists 137 models), so refusing here would refuse a working
+    # config. It warns instead, because the effort can no longer be checked.
+    # A deliberately absent id, not a real one: the shortlist is hand-tuned, and a test
+    # naming a model someone might later add would start passing for the wrong reason.
+    off_menu = provider_select.run(temp_root, "opencode|opencode/not-shipped-here|high")
+    assert_true(
+        off_menu["ok"] and off_menu["meta"]["warnings"],
+        f"an off-shortlist model must apply WITH a warning: {off_menu}",
+    )
+
+    cleared = provider_select.run(temp_root, "opencode")
+    assert_true(
+        cleared["ok"]
+        and read_json_file(config_file).get("effort") is None
+        and read_json_file(config_file).get("default_model") is None,
+        "omitting model and effort must clear them, not keep the previous provider's",
+    )
+
+    # config.json is a hint that selects nothing, but doctor prints it. Left stale it is a
+    # second answer to "which provider is this workspace on".
+    atomic_write_json(workflow_dir / "config.json", {"runtime": {"second_agent": "x"}})
+    synced = provider_select.run(temp_root, "codex|gpt-5.6-sol|max")
+    assert_true(
+        synced["meta"]["config_hint"]["updated"]
+        and read_json_file(workflow_dir / "config.json")["runtime"]["second_agent"]
+        == "codex",
+        f"an apply must bring the config.json hint along: {synced['meta']}",
+    )
+
+    # A workspace written before this key existed must keep loading unchanged.
+    assert_true(
+        not validate_provider_config(
+            {"provider": "codex", "default_model": "gpt-5.5", "timeout_seconds": 1800}
+        ),
+        "a config with no effort key must produce no warnings",
+    )
+    assert_true(
+        any(
+            "not accepted" in warning
+            for warning in validate_provider_config(
+                {"provider": "codex", "default_model": "gpt-5.5", "effort": "ultra"}
+            )
+        ),
+        "validation must catch an effort the pinned model rejects",
+    )
+    assert_true(
+        not validate_provider_config(
+            {
+                "provider": "codex",
+                "default_model": "some-unlisted-model",
+                "effort": "ultra",
+            }
+        ),
+        "an unlisted model constrains nothing, so its effort must not be second-guessed",
+    )
+
+    # A model that takes NO effort. Empty means "none" only for a model the shortlist
+    # actually lists; for anything else it means "unknown", and the two must not be
+    # collapsed — one has to refuse, the other has to allow.
+    from config import providers as providers_module
+    from core.router import Router
+
+    original = providers_module.PROVIDER_BUNDLES["codex"]["models"]
+    providers_module.PROVIDER_BUNDLES["codex"]["models"] = (
+        {"id": "no-effort-model", "efforts": ()},
+    )
+    try:
+        assert_true(
+            not model_efforts("codex", "no-effort-model")
+            and providers_module.model_is_listed("codex", "no-effort-model"),
+            "a listed model with no efforts must still read as listed",
+        )
+        refused_none = provider_select.run(temp_root, "codex|no-effort-model|high")
+        assert_true(
+            not refused_none["ok"] and "takes no reasoning effort" in refused_none["content"],
+            f"an effort on a model that takes none must be refused: {refused_none}",
+        )
+        accepted = provider_select.run(temp_root, "codex|no-effort-model")
+        assert_true(
+            accepted["ok"] and read_json_file(config_file)["effort"] is None,
+            f"the same model with no effort must apply cleanly: {accepted}",
+        )
+        # The refusal above only guards writes through this command. A hand-edited file
+        # never passes through it, so the route drops the flag as well.
+        routed = Router(
+            {
+                "provider": "codex",
+                "provider_command": "codex",
+                "default_model": "no-effort-model",
+                "effort": "high",
+                "routes": {},
+            }
+        ).route("analyze")
+        assert_true(
+            routed["effort"] is None,
+            f"a hand-written effort must be dropped for a model that takes none: {routed}",
+        )
+        kept = Router(
+            {
+                "provider": "codex",
+                "provider_command": "codex",
+                "default_model": "some-unlisted-model",
+                "effort": "high",
+                "routes": {},
+            }
+        ).route("analyze")
+        assert_true(
+            kept["effort"] == "high",
+            f"an unlisted model declares nothing, so its effort must survive: {kept}",
+        )
+    finally:
+        providers_module.PROVIDER_BUNDLES["codex"]["models"] = original
+
+    assert_true(
+        effort_args("opencode", "high") == ["--variant", "high"]
+        and effort_args("codex", "high") == ["-c", 'model_reasoning_effort="high"']
+        and effort_args("opencode", None) == [],
+        "each provider must spell effort its own way, and say nothing when unset",
+    )
+    assert_true(
+        model_efforts("codex", "gpt-5.5") == ("low", "medium", "high", "xhigh")
+        and model_efforts("codex", "not-a-model") == (),
+        "efforts must come from the model entry, not from the provider",
+    )
+    assert_true(
+        all(
+            isinstance(entry.get("id"), str) for entry in provider_models("opencode")
+        ),
+        "every shortlist entry must carry an id the picker can send back",
+    )
+
+    # A workspace initialized before `effort` existed gets the key on the next install
+    # pass, at its default of None — the backfill is what carries new keys into projects
+    # that were set up once and left alone.
+    from adapters.opencode_install import _merge_provider_config
+
+    atomic_write_json(config_file, {"provider": "codex", "timeout_seconds": 1800})
+    added = _merge_provider_config(temp_root, "")
+    assert_true(
+        "effort" in added and read_json_file(config_file)["effort"] is None,
+        f"backfill must add `effort` to a pre-existing workspace, unset: {added}",
+    )
+    assert_true(
+        read_json_file(config_file)["timeout_seconds"] == 1800,
+        "backfill must not touch a value the user already tuned",
+    )
+
+    shutil.rmtree(temp_root, ignore_errors=True)
+
+
 def _assert_codex_provider() -> None:
     """Codex: the second real provider, and the proof the seam holds for shipped code.
 

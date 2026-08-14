@@ -191,6 +191,22 @@ _VERIFY_SHAPE_KINDS = {
     "empty_section",
     "checks_missing",
     "invalid_confidence",
+    "invalid_finding_tags",
+    "verdict_mismatch",
+}
+
+# `finding_misrouted` is deliberately NOT here. The router already moves a blocking-class
+# finding into the verdict on its own, so nothing is lost by leaving it where the agent
+# put it — and a re-prompt would only offer it the chance to retract a true finding.
+_VERIFY_WANT_BY_KIND = {
+    "invalid_finding_tags": (
+        "the same findings again, each opening line carrying severity, origin and "
+        "scope_relation — no new findings, no removals"
+    ),
+    "verdict_mismatch": (
+        "the verdict line alone, made consistent with the blocking_findings you already "
+        "reported — change the verdict, not the findings"
+    ),
 }
 
 
@@ -222,14 +238,24 @@ def _contract_gap(command: str, role: str, result) -> dict | None:
         ]
         if not shape:
             return None
-        return {
-            "reason": "verification contract fields absent",
-            "missing": [warning.get("detail") for warning in shape],
-            "wants": (
+        kinds = {warning.get("kind") for warning in shape}
+        # A block that arrived whole but tagged wrong needs a correction, not a rewrite:
+        # asking for the whole thing again invites the agent to redo the reading too.
+        narrow = [_VERIFY_WANT_BY_KIND[kind] for kind in sorted(kinds) if kind in _VERIFY_WANT_BY_KIND]
+        if narrow and len(narrow) == len(kinds):
+            wants = " and ".join(narrow)
+            reason = "verification contract emitted but malformed"
+        else:
+            wants = (
                 "the full [VERIFICATION] block — verdict, blocking_findings, "
                 "escalations, notes, checks_run, not_verified, confidence — "
                 "followed by [DIGEST]"
-            ),
+            )
+            reason = "verification contract fields absent"
+        return {
+            "reason": reason,
+            "missing": [warning.get("detail") for warning in shape],
+            "wants": wants,
         }
 
     if role in ("exploration", "reasoning"):
@@ -663,6 +689,10 @@ class Executor:
         self.adapter.agent = route.get("provider_agent") or getattr(
             self.adapter, "agent", None
         )
+        # Plain assignment, no `or` chain: None here means "send no effort flag", and
+        # inheriting the adapter's import-time value would make a config that cleared
+        # `effort` keep sending the one it just removed.
+        self.adapter.effort = route.get("effort")
         self.adapter.timeout_seconds = route.get(
             "timeout_seconds", getattr(self.adapter, "timeout_seconds", 0)
         )
@@ -831,6 +861,37 @@ class Executor:
 
         if not result.get("ok"):
             return result
+
+        # Verify sits in the `verification` role alongside init/doctor/submit, which have no
+        # second_agent reply to judge — hence the command check rather than a role check.
+        # Without this, a menu or a refusal returned for /.verify skipped the guard entirely
+        # and arrived as ok:true with an `incomplete` verdict, which reads as work done badly
+        # rather than as a proxy that never answered.
+        verify_meta = result.get("meta") or {}
+        if (
+            normalized_command == "verify"
+            and verify_meta.get("mode") != "quick"
+            and "quick_verify" not in verify_meta
+            and "[verification]" not in (result.get("content") or "").lower()
+        ):
+            attempted = continuation_meta.get("continuation_attempts")
+            detail = (
+                "second_agent returned no [VERIFICATION] block (menu/refusal/question), "
+                "not a verification"
+            )
+            if attempted:
+                detail += "; a continuation in the same session was requested and still returned none"
+            elif continuation_meta.get("continuation_skipped"):
+                detail += (
+                    f"; no continuation was possible ({continuation_meta['continuation_skipped']})"
+                )
+            return make_error(
+                "invalid_evidence",
+                detail,
+                next_action="STOP. Warn user [PROXY GAGAL]. Do NOT auto-fallback. Ask user: retry or /.local? (yes/no).",
+                meta=verify_meta,
+                raw_preview=(result.get("content") or "")[:240],
+            )
 
         if route["role"] in ("exploration", "reasoning"):
             body = (result.get("content") or "").lower()

@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "a4cd104d0700346c9a7352c0aa8142b887f8d06a311fd5e30502630fef4a775b",
-      "bytes": 22766,
+      "sha256": "dc5b14da9b7e1790dadbaa209c61be6ebccbb9fc730bc78846afddd68072914f",
+      "bytes": 23017,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -93,6 +93,13 @@
       "path": "claude/skills/plan.md",
       "sha256": "956011209829f70bfd35e64ac0ab45b3b6c130874c1e4232e7f0c4bdbe0225e6",
       "bytes": 6213,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "claude/skills/provider.md",
+      "sha256": "a4e8703bbcaea55a0ec3c2e7311501c9d727e70ea4bcb60ce4f56517c734fa73",
+      "bytes": 3207,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -212,6 +219,13 @@
       "path": "claude/commands/.plan.md",
       "sha256": "781a8dc2868c7c8af675b19e2935c53ffe5dda6db91f9b2865d8752b03c35e45",
       "bytes": 162,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "claude/commands/.provider.md",
+      "sha256": "637eb6f04ea18f196ba2c45cb31078aaba6c477ab79110f051c596488ab0d686",
+      "bytes": 170,
       "merge": "replace",
       "component": "prompt_bundle"
     },

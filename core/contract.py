@@ -27,6 +27,10 @@ ERROR_TYPES = {
     "job_expired",  # ran past the hard runtime ceiling (OOM backstop)
     "task_truncated",  # the instruction lost too much to trust the answer to it
     "fact_ingest_failed",
+    # A provider/model/effort combination the runtime refused to write. Its own type
+    # rather than `unknown`: every case carries an exact remedy (the known providers,
+    # the values that model accepts) and `unknown` would bury that under generic advice.
+    "invalid_provider_selection",
     "workflow_init_error",
     "workflow_upgrade_error",
     "job_submit_error",
@@ -468,7 +472,7 @@ def contract_warnings(command: str, content: str) -> list[dict]:
 
 
 _VERIFY_VERDICT = re.compile(
-    r"^\s*verdict\s*:\s*(DONE|NEEDS\s+FIX)\b", re.IGNORECASE | re.MULTILINE
+    r"^\s*verdict\s*:\s*(DONE|NEEDS\s+FIX|INCOMPLETE)\b", re.IGNORECASE | re.MULTILINE
 )
 _VERIFY_SECTION_NAMES = (
     "blocking_findings",
@@ -683,6 +687,32 @@ def validate_verification_contract(content: str) -> dict:
         "not_verified": len(gaps),
         "warnings": warnings,
     }
+
+
+# The only warning an agent earns by being honest: `not_verified` is a field the prompt
+# asks it to fill, and filling it fires `verification_gap`. The verdict still refuses to
+# call that a pass — nothing here relaxes what `pass` means — but the exit status stops
+# reading a declared gap as a failed run.
+_GAP_ONLY_KINDS = frozenset({"verification_gap"})
+
+
+def verify_exit_status(verdict: str | None, assessment: dict | None = None) -> int:
+    """0 for a clean run, or one whose only blemish is a gap the agent declared itself.
+
+    `verdict` wins outright when a caller already has one (quick verify writes its own,
+    and it never carries an assessment). The relaxation needs the warning list, so a
+    caller without one gets today's behaviour: anything short of `pass` is nonzero.
+    """
+    if verdict == "pass":
+        return 0
+    if verdict != "incomplete" or not isinstance(assessment, dict):
+        return 2
+    if assessment.get("declared_verdict") != "DONE":
+        return 2
+    warnings = assessment.get("warnings") or []
+    if not warnings:
+        return 2
+    return 0 if all(item.get("kind") in _GAP_ONLY_KINDS for item in warnings) else 2
 
 
 _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}

@@ -48,10 +48,11 @@ from checks.workspace import (
 )
 from checks.continuation import _test_contract_continuation
 from checks.messages import _test_no_code_in_messages
-from checks.provider import _test_provider_seam
+from checks.provider import _test_provider_seam, _test_provider_selection
 
 def run_tests() -> None:
     _test_provider_seam()
+    _test_provider_selection()
     _test_no_code_in_messages()
     fake_opencode = FakeOpenCodeAdapter()
     temp_root = Path(tempfile.mkdtemp(prefix="agent-workflow-test-"))
@@ -512,6 +513,53 @@ confidence: high — all requested checks ran
             )
             == 0,
             "result must derive verify exit status from the stored output",
+        )
+        # An agent that names what it could not reach earns `verification_gap`, which keeps
+        # the verdict off `pass` — that part is deliberate. What must NOT follow is the CLI
+        # calling an honest, complete report a failed run.
+        gap_verify = valid_verify.replace(
+            "not_verified:\n- none",
+            "not_verified:\n- hooks/*.sh never executed (no shell in the read boundary)",
+        )
+        gap_assessment = validate_verification_contract(gap_verify)
+        assert_true(
+            gap_assessment["verdict"] == "incomplete"
+            and {item.get("kind") for item in gap_assessment["warnings"]}
+            == {"verification_gap"},
+            f"a declared gap must stay incomplete, and be the only warning: {gap_assessment}",
+        )
+        assert_true(
+            main._verify_exit_code(
+                "await",
+                {
+                    "ok": True,
+                    "meta": {
+                        "verdict": gap_assessment["verdict"],
+                        "verify_contract": gap_assessment,
+                    },
+                },
+                "verify",
+            )
+            == 0,
+            "an incomplete whose only warning is a declared gap must not exit nonzero",
+        )
+        broken_assessment = validate_verification_contract(
+            valid_verify.replace("confidence: high — all requested checks ran", "")
+        )
+        assert_true(
+            main._verify_exit_code(
+                "await",
+                {
+                    "ok": True,
+                    "meta": {
+                        "verdict": broken_assessment["verdict"],
+                        "verify_contract": broken_assessment,
+                    },
+                },
+                "verify",
+            )
+            == 2,
+            f"an incomplete from a damaged contract must still exit nonzero: {broken_assessment}",
         )
 
         # Secret access is denied on the TOOL CALL, not by scanning the task text. The

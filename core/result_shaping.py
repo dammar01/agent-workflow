@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from config.settings import SLIM_CONTENT_ENV
-from core.contract import validate_verification_contract
+from core.contract import validate_verification_contract, verify_exit_status
 from utils.redact import redact_value
 
 
@@ -134,6 +134,12 @@ def _verify_exit_code(
 ) -> int:
     """Return nonzero when a completed verification is not a clean pass."""
     effective_command = job_command if command in {"await", "result"} else command
+    # `provider` refuses by writing nothing, and a caller that only checks the exit
+    # status would read that refusal as a successful apply. Its own branch rather than a
+    # general "ok:false -> 2" rule: every other command here has a settled exit contract
+    # that a blanket change would rewrite.
+    if effective_command == "provider":
+        return 0 if isinstance(result, dict) and result.get("ok") else 2
     if effective_command != "verify":
         return 0
     verification = result
@@ -145,9 +151,10 @@ def _verify_exit_code(
         return 2
     if command == "verify" and verification.get("status") in {"pending", "running"}:
         return 0
-    verdict = (verification.get("meta") or {}).get("verdict")
+    meta = verification.get("meta") or {}
+    verdict = meta.get("verdict")
+    assessment = meta.get("verify_contract")
     if verdict is None:
-        verdict = validate_verification_contract(verification.get("content") or "")[
-            "verdict"
-        ]
-    return 0 if verdict == "pass" else 2
+        assessment = validate_verification_contract(verification.get("content") or "")
+        verdict = assessment["verdict"]
+    return verify_exit_status(verdict, assessment)

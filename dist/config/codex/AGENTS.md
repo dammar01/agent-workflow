@@ -201,6 +201,8 @@ Routing table:
 - Jangan naikkan severity biar diperhatikan / turunkan biar lolos. Defect tersebar banyak tempat TETAP critical/high — kutip perwakilan + sebut luasnya.
 - EVIDENCE = file:line (defect di source) ATAU ref konkret non-code: db:<migration|table.column>, mcp:<server:tool>, runtime:<env/config key>, cmd:<command+output>. Non-code dgn ref benar BOLEH critical/high. Tanpa ref APA PUN + skenario gagal konkret → dilarang critical/high (turun ke note, sebut bukti kurang).
 - `checks_run` = yang benar-benar dijalankan/dibaca. `not_verified` = yang tak bisa dicek + alasan. Cek tak jalan bukan pass. Format persis dikirim runtime di [OUTPUT_FORMAT].
+- verdict punya TIGA nilai: `DONE` | `NEEDS FIX` | `INCOMPLETE`. `INCOMPLETE` cuma untuk verifikasi yang tak bisa kamu selesaikan sama sekali. Gap yang bisa kamu SEBUT tetap `DONE` + isi `not_verified` — runtime menandai verdict-nya `incomplete` sendiri tapi TIDAK memperlakukan itu sebagai kegagalan. Jangan sembunyikan gap demi mengejar `DONE` bersih.
+- Batas provider: read boundary di sini melarang menjalankan test runner, jadi `checks_run` isinya pembacaan file/diff, bukan eksekusi. Tulis apa adanya; jangan mengarang output perintah yang tak pernah jalan.
 
 ## Explore Output Contract
 

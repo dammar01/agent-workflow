@@ -13,7 +13,7 @@ import tempfile
 from pathlib import Path
 
 from core.contract import validate_verification_contract
-from core.executor import Executor
+from core.executor import _VERIFY_SHAPE_KINDS, Executor
 from core.workflow_runtime import ensure_workflow_workspace
 
 from checks.support import assert_true
@@ -178,12 +178,9 @@ def _test_contract_continuation() -> None:
             verified.get("ok") and verify_meta.get("continuation_recovered") is True,
             f"a verify reply missing its contract must be continued too: {verify_meta}",
         )
-        shape_kinds = {
-            "missing_fields",
-            "empty_section",
-            "checks_missing",
-            "invalid_confidence",
-        }
+        # Imported rather than restated: two copies of this set drifted apart once already,
+        # and the copy here is the one that decides whether the assertion means anything.
+        shape_kinds = _VERIFY_SHAPE_KINDS
         assessment = validate_verification_contract(verified.get("content") or "")
         assert_true(
             not [
