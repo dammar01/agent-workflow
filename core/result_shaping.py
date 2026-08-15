@@ -39,10 +39,48 @@ def _finalize_verify_result(command: str, result: dict) -> dict:
     assessment = validate_verification_contract(result.get("content") or "")
     meta["verdict"] = assessment["verdict"]
     meta["verify_contract"] = assessment
-    warnings = assessment.get("warnings") or []
-    if warnings:
-        meta.setdefault("contract_warnings", []).extend(warnings)
+    _merge_contract_warnings(meta, assessment.get("warnings") or [])
     return result
+
+
+def _warning_key(warning: dict) -> tuple:
+    return (
+        str(warning.get("kind") or ""),
+        str(warning.get("detail") or ""),
+        str(warning.get("sample") or ""),
+    )
+
+
+def _merge_contract_warnings(meta: dict, warnings: list) -> None:
+    """Add warnings this assessment found, without re-adding ones already there.
+
+    This function runs TWICE on the same payload by design: the worker finalises the
+    result it produces (main.py), and `await` finalises the stored output again when it
+    hands it back (job_lifecycle). Both are legitimate — `await` cannot assume the record
+    it read was ever finalised — but the old `extend` meant every warning appeared once
+    per pass. A verify with one real gap reported it twice, which reads as two problems.
+
+    Merging on identity rather than replacing wholesale keeps warnings this function did
+    not produce. `contract_warnings` also carries entries from the executor (evidence
+    contract misses, task truncation), and a replace would silently drop them.
+
+    Two genuinely distinct warnings never collide here: kind alone repeats, but the
+    detail names the section and `sample` quotes the finding, so `empty_section` for two
+    different sections and `finding_misrouted` for two different findings each keep their
+    own row.
+    """
+    if not warnings:
+        return
+    existing = meta.setdefault("contract_warnings", [])
+    seen = {_warning_key(item) for item in existing if isinstance(item, dict)}
+    for warning in warnings:
+        if not isinstance(warning, dict):
+            continue
+        key = _warning_key(warning)
+        if key in seen:
+            continue
+        seen.add(key)
+        existing.append(warning)
 
 
 

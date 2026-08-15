@@ -21,6 +21,9 @@ from core.contract import (
     readable_claims,
     validate_verification_contract,
 )
+from core.contracts import TaskSpec, usage_from_result
+from core.governance import budget_limit, budget_state
+from core import telemetry
 from core import fact_store
 from core import evidence_store
 from core import graph_index
@@ -47,12 +50,15 @@ from core.workflow_runtime import (
     update_state_from_agent_output,
     verify_mode,
     workflow_paths,
+    write_audit_record,
     write_call_meta,
     write_evidence_sidecars,
     write_prompt_handoff,
     write_redaction_audit,
     write_response_snapshot,
+    write_usage_record,
 )
+from core.workspace_paths import now_iso
 
 
 def _scope_incomplete(content: str) -> bool:
@@ -345,6 +351,11 @@ class Executor:
         # that the thing actually running the call never read.
         self.adapter = adapter or resolve_adapter(provider)
         self.session_manager = session_manager
+        # The call meta of the run in flight, so the usage record can be assembled on the
+        # return path without threading it back through every early return. Reset at the
+        # top of execute(): a reuse hit builds no call meta, and inheriting the previous
+        # call's numbers would attribute a real provider spend to a free answer.
+        self._last_call_meta: dict | None = None
 
     def _adapter_for(self, project_root):
         """The adapter THIS project selects, resolved late enough to know the project.
@@ -475,7 +486,101 @@ class Executor:
         self._audit_redactions(
             project_root, session_id, command, metadata_redactions
         )
+        self._record_usage(result, project_root, command, task, session_id)
         return result
+
+    def _budget_state(self, project_root: Path, session_id: str) -> dict:
+        """This session's spend against its ceiling, read from recorded history.
+
+        Fail-open: an unreadable usage stream must not become a refusal. The ceiling
+        exists to stop runaway spend, and a governance control whose broken state is
+        "nothing runs" gets removed rather than fixed.
+
+        Bounded by what has been RECORDED. Calls in flight are not in the stream yet, so
+        concurrent work can cross the line by up to the amount running at the time. Stated
+        rather than papered over: a hard per-call reservation would need a lock across
+        every worker, which is a real cost for a bound nobody has needed yet.
+        """
+        try:
+            from config.settings import load_provider_config_for
+
+            limit = budget_limit(load_provider_config_for(project_root))
+            if limit is None:
+                return {"limit": None, "exceeded": False}
+            return budget_state(telemetry.load_usage(project_root), session_id, limit)
+        except Exception:
+            return {"limit": None, "exceeded": False}
+
+    def _record_usage(
+        self,
+        result: dict,
+        project_root: Path,
+        command: str,
+        task: str,
+        session_id: str,
+    ) -> None:
+        """Append this call to the usage stream, from the one place every call passes.
+
+        Deliberately here rather than beside write_call_meta: the reuse path returns
+        without ever building a call meta, and a reuse hit is the single most interesting
+        row in the stream — it is a delegated call that cost nothing. Recording only the
+        calls that reached a provider would systematically overstate cost per task by
+        omitting exactly the cheap ones.
+
+        Reads the sanitised result, so nothing redacted out of the response can reappear
+        in telemetry.
+        """
+        try:
+            measured = result
+            if command == "verify" and result.get("ok"):
+                meta = result.get("meta") or {}
+                if meta.get("verdict") is None and meta.get("mode") != "quick":
+                    # The verdict is derived one layer up, in job_lifecycle, so at this
+                    # point every verify would record accepted=None — the metric would be
+                    # structurally empty rather than conservative. Derived here from the
+                    # same validator on the same content, read-only. Deliberately NOT via
+                    # `_finalize_verify_result`: that one owns `meta.verdict`, and job_lifecycle
+                    # is where it is supposed to be set. Measuring here must not pre-empt that
+                    # decision, so the shallow copy keeps this reading out of the result the
+                    # caller receives.
+                    assessment = validate_verification_contract(result.get("content") or "")
+                    measured = dict(result)
+                    measured["meta"] = {**meta, "verdict": assessment["verdict"]}
+            record = usage_from_result(
+                measured,
+                spec=TaskSpec.build(
+                    command, task, session_id, project_root, model=None
+                ),
+                call_meta=self._last_call_meta,
+                recorded_at=now_iso(),
+            )
+            payload = record.to_dict()
+            write_usage_record(project_root, payload)
+            # The audit row is a strict subset, written separately rather than derived
+            # from the usage stream at read time: telemetry may legitimately be pruned or
+            # resampled, and an audit trail that disappears with it is not a trail.
+            write_audit_record(
+                project_root,
+                {
+                    "at": payload["recorded_at"],
+                    "session_id": payload["session_id"],
+                    "correlation_id": payload["correlation_id"],
+                    "prompt_id": payload["prompt_id"],
+                    "command": payload["command"],
+                    "provider": payload["provider"],
+                    "model": payload["model"],
+                    "ok": payload["ok"],
+                    "error_type": payload["error_type"],
+                    "verdict": payload["verdict"],
+                    "redactions": payload["redactions"],
+                    "project_root": str(project_root),
+                },
+            )
+        except Exception:
+            # Instrumentation, not the call. Broad on purpose: this runs on the return
+            # path of every delegated command, and there is no failure here worth
+            # converting a delivered answer into an error.
+            pass
 
     def _maybe_reuse(
         self,
@@ -540,6 +645,7 @@ class Executor:
         _resolved_route: dict | None = None,
     ) -> dict:
         normalized_command = command.strip().lower()
+        self._last_call_meta = None
         provider_session_id = session["session_id"]
         session_id = str(workflow_session_id or provider_session_id)
         effective_session_manager = (
@@ -566,14 +672,39 @@ class Executor:
                     normalized_command, model_override=model
                 )
             except ValueError as exc:
+                # Two different refusals arrive as the same exception, and they need
+                # opposite advice: an unsupported command is a typo, a disallowed provider
+                # is a policy decision someone made on purpose. One next_action covering
+                # both sent every allowlist denial off to check its spelling.
+                denied = "allowlist" in str(exc)
                 return make_error(
                     "routing_error",
                     str(exc),
-                    next_action="Use a supported command (explore/plan/analyze/verify/sweep).",
+                    next_action=(
+                        "Select an allowed provider (/.provider), or widen "
+                        "provider_allowlist in .workflow/second_agent.json."
+                        if denied
+                        else "Use a supported command (explore/plan/analyze/verify/sweep)."
+                    ),
                     meta={"command": normalized_command},
                 )
         else:
             route = dict(_resolved_route)
+
+        budget = self._budget_state(project_root, session_id)
+        if budget.get("exceeded"):
+            return make_error(
+                "budget_exceeded",
+                (
+                    f"session {session_id} has spent {budget['spent']} of its "
+                    f"{budget['limit']} token budget (estimated, chars//4)"
+                ),
+                next_action=(
+                    "Raise session_token_budget in .workflow/second_agent.json, or start a "
+                    "fresh session. Retrying this one will be refused again."
+                ),
+                meta={"command": normalized_command, "budget": budget},
+            )
 
         lock_path = workflow_paths(project_root, session_id)["lock"]
         if _runtime_lock is None:
@@ -662,6 +793,7 @@ class Executor:
             has_facts=bool(known_facts),
             has_leads=bool(graph_leads and graph_leads.get("files")),
             subagent_fanout=fanout,
+            declared_tools=route.get("declared_tools"),
             meta_sink=prompt_meta,
         )
 
@@ -869,6 +1001,8 @@ class Executor:
             _attach_redactions(
                 call_meta, [*meta_redactions, *persisted_meta_redactions]
             )
+            call_meta["prompt_id"] = handoff.get("meta", {}).get("prompt_id")
+            self._last_call_meta = call_meta
             write_call_meta(
                 project_root,
                 handoff.get("meta", {}).get("prompt_id"),

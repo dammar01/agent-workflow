@@ -22,6 +22,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from tests.checks.continuation import _test_contract_continuation  # noqa: E402
+from tests.checks.contracts import _test_workflow_contracts  # noqa: E402
+from tests.checks.deps import _test_runtime_is_stdlib_only  # noqa: E402
+from tests.checks.governance import _test_governance_controls  # noqa: E402
+from tests.checks.graph_verification import _test_graph_verification  # noqa: E402
+from tests.checks.telemetry import _test_telemetry_metrics  # noqa: E402
 from tests.checks.facts import (  # noqa: E402
     _test_anchor_relocation,
     _test_evidence_anchor_relocation,
@@ -65,6 +70,11 @@ SUITES: dict[str, tuple] = {
     "session-isolation": (_test_project_session_isolation, "one project's session cannot read another's"),
     "init-upgrade": (_test_init_upgrade_and_session_guard, "init/upgrade and the session guard"),
     "continuation": (_test_contract_continuation, "bounded continuation keeps the first reply's evidence"),
+    "contracts": (_test_workflow_contracts, "workflow contracts round-trip and the usage stream derives honestly"),
+    "deps": (_test_runtime_is_stdlib_only, "shipped code imports nothing outside the stdlib"),
+    "telemetry": (_test_telemetry_metrics, "P1 metrics count tasks, not calls, and report their denominators"),
+    "governance": (_test_governance_controls, "provider allowlist, budget ceiling, tool policy, local-first streams"),
+    "graph-verification": (_test_graph_verification, "per-node graph provenance, drift vs move, subgraph slicing"),
 }
 
 
@@ -81,6 +91,16 @@ def main() -> int:
         "--keep-going",
         action="store_true",
         help="run every selected suite even after one fails, then report all failures",
+    )
+    parser.add_argument(
+        "--record",
+        metavar="PROJECT_ROOT",
+        default=None,
+        help=(
+            "append the outcome to PROJECT_ROOT/.workflow/quality.jsonl so "
+            "`--command report` can show a test pass rate. Off by default: a local run "
+            "while debugging is not a data point about the repo's health."
+        ),
     )
     args = parser.parse_args()
 
@@ -111,6 +131,9 @@ def main() -> int:
         else:
             print(f"  PASS  {name}  ({time.monotonic() - started:.1f}s)")
 
+    if args.record:
+        _record_outcome(args.record, selected, failures)
+
     if failures:
         print(f"\n{len(failures)} of {len(selected)} suite(s) failed:")
         for name, exc in failures:
@@ -118,6 +141,32 @@ def main() -> int:
         return 1
     print(f"\ntests: success ({len(selected)} suite(s))")
     return 0
+
+
+def _record_outcome(project_root: str, selected: list, failures: list) -> None:
+    """Append this run to the quality stream. Never fails the run it is recording.
+
+    Records which suites ran, not just pass/fail. A green `--only contracts` and a green
+    full run are both "ok", and a pass rate that cannot tell them apart would let a narrow
+    run stand in for a broad one.
+    """
+    try:
+        from datetime import datetime, timezone
+
+        from core.runtime_io import write_quality_record
+
+        write_quality_record(
+            Path(project_root),
+            {
+                "kind": "tests",
+                "at": datetime.now(timezone.utc).isoformat(),
+                "ok": not failures,
+                "suites": list(selected),
+                "failed": [name for name, _ in failures],
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 — recording must never mask the result
+        print(f"  (quality record not written: {type(exc).__name__}: {exc})")
 
 
 if __name__ == "__main__":

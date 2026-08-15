@@ -358,6 +358,121 @@ def _as_lead(node: dict, project_root, degrees: dict[str, float]) -> dict:
     }
 
 
+MAX_SUBGRAPH_HOPS = 2
+MAX_SUBGRAPH_NODES = 120
+
+
+def subgraph(
+    project_root,
+    hint: str = "",
+    hops: int = MAX_SUBGRAPH_HOPS,
+    limit: int = MAX_LEADS,
+    graph: dict | None = None,
+) -> dict | None:
+    """The slice of the graph reachable from this task's best files, and nothing else.
+
+    Every other reader here walks the whole graph for every call. That is correct for
+    ranking — you cannot know which file scores highest without scoring all of them — but
+    it is the wrong shape for the question "what is NEAR this work", where the answer is a
+    neighbourhood and the rest of the graph is noise the caller has to re-filter.
+
+    Expansion is confidence-ordered, not breadth-first-uniform. Following an AMBIGUOUS edge
+    as eagerly as an EXTRACTED one is how a two-hop neighbourhood fills with files that were
+    never really related — the exact failure the module docstring warns about, reintroduced
+    one layer up. Edges are walked strongest first and the node budget runs out on the weak
+    ones.
+
+    Returns None when no graph exists, so callers can tell "no graph" from "graph, nothing
+    near this task".
+    """
+    graph = graph if graph is not None else load_graph(project_root)
+    if not graph:
+        return None
+
+    seeds_files = {row["file"] for row in top_files(project_root, hint, limit, graph=graph)}
+    if not seeds_files:
+        return None
+
+    by_id: dict[str, dict] = {}
+    seed_ids: list[str] = []
+    for node in _nodes(graph):
+        node_id = str(node.get("id") or "")
+        if not node_id:
+            continue
+        by_id[node_id] = node
+        if _relative_source(node.get("source_file"), project_root) in seeds_files:
+            seed_ids.append(node_id)
+    if not seed_ids:
+        return None
+
+    adjacency: dict[str, list[tuple[float, str]]] = {}
+    for edge in _links(graph):
+        src, tgt = _edge_endpoints(edge)
+        if not src or not tgt:
+            continue
+        weight = _edge_weight(edge)
+        adjacency.setdefault(src, []).append((weight, tgt))
+        adjacency.setdefault(tgt, []).append((weight, src))
+
+    selected: dict[str, int] = {node_id: 0 for node_id in seed_ids}
+    frontier = list(seed_ids)
+    for depth in range(1, max(0, hops) + 1):
+        if len(selected) >= MAX_SUBGRAPH_NODES:
+            break
+        candidates: list[tuple[float, str]] = []
+        for node_id in frontier:
+            candidates.extend(adjacency.get(node_id, []))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        next_frontier: list[str] = []
+        for weight, neighbour in candidates:
+            if neighbour in selected or neighbour not in by_id:
+                continue
+            if len(selected) >= MAX_SUBGRAPH_NODES:
+                break
+            selected[neighbour] = depth
+            next_frontier.append(neighbour)
+        if not next_frontier:
+            break
+        frontier = next_frontier
+
+    files: dict[str, dict] = {}
+    for node_id, depth in selected.items():
+        node = by_id[node_id]
+        rel = _relative_source(node.get("source_file"), project_root)
+        if not rel:
+            continue
+        row = files.get(rel)
+        if row is None or depth < row["hops"]:
+            files[rel] = {"file": rel, "hops": depth, "community": node.get("community")}
+
+    return {
+        "seed_files": sorted(seeds_files),
+        "hops": hops,
+        "nodes": len(selected),
+        "files": sorted(files.values(), key=lambda row: (row["hops"], row["file"])),
+        # Whether the walk stopped because it ran out of graph or ran out of budget. A
+        # truncated neighbourhood presented as a complete one is the same lie as a silently
+        # capped search result.
+        "truncated": len(selected) >= MAX_SUBGRAPH_NODES,
+        "node_budget": MAX_SUBGRAPH_NODES,
+    }
+
+
+def _edge_confidence_mix(graph: dict) -> dict[str, int]:
+    """How many edges carry each confidence tag.
+
+    graphify has always tagged edges EXTRACTED/INFERRED/AMBIGUOUS and this module has
+    always used those tags to weight ranking — but only internally, so a shortlist built
+    mostly from inferred edges looked exactly like one built from read-from-source facts.
+    Surfacing the mix is what lets a reader discount the former.
+    """
+    mix: dict[str, int] = {}
+    for edge in _links(graph):
+        tag = str(edge.get("confidence") or "unknown").strip().lower() or "unknown"
+        mix[tag] = mix.get(tag, 0) + 1
+    return mix
+
+
 def leads(project_root, hint: str = "", limit: int = MAX_LEADS) -> dict | None:
     """Shortlist for one delegated call, or None when no graph exists.
 
@@ -390,4 +505,7 @@ def leads(project_root, hint: str = "", limit: int = MAX_LEADS) -> dict | None:
         "stale": is_stale(project_root),
         "node_count": len(_nodes(graph)),
         "edge_count": len(_links(graph)),
+        # The evidence quality behind the ranking, not just its output. Already used to
+        # weight every score in this file; it was simply never said out loud.
+        "edge_confidence": _edge_confidence_mix(graph),
     }

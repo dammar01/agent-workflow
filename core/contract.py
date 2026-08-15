@@ -42,6 +42,11 @@ ERROR_TYPES = {
     "worker_capacity",
     "sweep_git_error",
     "runtime_lock",
+    # The session hit its configured token ceiling. Its own type rather than `unknown`
+    # because the remedy is exact and unlike every other refusal here: nothing is broken,
+    # nothing will fix itself by waiting or retrying, and the only next steps are raising
+    # the ceiling or starting a fresh session.
+    "budget_exceeded",
     "unknown",
 }
 

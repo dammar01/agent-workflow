@@ -56,6 +56,11 @@ from tests.checks.workspace import (
     _test_workspace_release_guards,
 )
 from tests.checks.continuation import _test_contract_continuation
+from tests.checks.contracts import _test_workflow_contracts
+from tests.checks.deps import _test_runtime_is_stdlib_only
+from tests.checks.governance import _test_governance_controls
+from tests.checks.graph_verification import _test_graph_verification
+from tests.checks.telemetry import _test_telemetry_metrics
 from tests.checks.messages import _test_no_code_in_messages
 from tests.checks.provider import (
     _test_agy_provider,
@@ -1020,6 +1025,11 @@ confidence: high — all requested checks ran
         _test_project_session_isolation()
         _test_init_upgrade_and_session_guard()
         _test_contract_continuation()
+        _test_workflow_contracts()
+        _test_runtime_is_stdlib_only()
+        _test_telemetry_metrics()
+        _test_governance_controls()
+        _test_graph_verification()
 
         print("tests/scenario: success")
     finally:

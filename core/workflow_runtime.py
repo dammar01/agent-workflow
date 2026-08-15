@@ -35,11 +35,14 @@ from core.diagnostics import (  # noqa: E402,F401
     run_sweep,
 )
 from core.runtime_io import (  # noqa: E402,F401
+    write_audit_record,
     write_call_meta,
+    write_quality_record,
     write_evidence_sidecars,
     write_prompt_handoff,
     write_redaction_audit,
     write_response_snapshot,
+    write_usage_record,
 )
 from core.runtime_lock import (  # noqa: E402,F401
     _process_identity,

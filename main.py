@@ -397,6 +397,8 @@ if __name__ == "__main__":
             "clean",
             "inspect",
             "provider",
+            "report",
+            "graph-meta",
             "submit",
             "await",
             "status",
@@ -498,6 +500,29 @@ if __name__ == "__main__":
             args.poll_timeout,
             allow_reuse,
         )
+    elif args.command == "report":
+        from core import telemetry
+        from core.contract import make_ok
+
+        root = detect_project_root(work_dir)
+        result = make_ok("", meta={"command": "report", "project_root": str(root)})
+        result["report"] = telemetry.report(root)
+    elif args.command == "graph-meta":
+        from core import graph_meta
+        from core.contract import make_error, make_ok
+
+        root = detect_project_root(work_dir)
+        built = graph_meta.build(root)
+        if not built.get("ok"):
+            result = make_error(
+                "workflow_init_error",
+                str(built.get("reason") or "graph sidecar could not be built"),
+                next_action="Run `graphify update` so graphify-out/graph.json exists, then retry.",
+                meta={"command": "graph-meta", "project_root": str(root)},
+            )
+        else:
+            result = make_ok("", meta={"command": "graph-meta", "project_root": str(root)})
+            result["graph_meta"] = {"built": built, "verified": graph_meta.verify(root)}
     elif args.command == "status":
         result = get_status(args.job_id)
     elif args.command == "result":

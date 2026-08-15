@@ -133,6 +133,7 @@ def build_prompt(
     has_facts: bool = False,
     has_leads: bool = False,
     subagent_fanout: bool = False,
+    declared_tools: list | None = None,
     meta_sink: dict | None = None,
 ) -> str:
     if role not in VALID_ROLES:
@@ -149,6 +150,15 @@ def build_prompt(
         f"role: {role}",
         f"session_id: {session_id}",
         f"project_root: {project_root}",
+        # What this command is permitted to need. A declaration the agent can read and a
+        # line the audit trail can quote — NOT the enforcement boundary, which is the
+        # provider's own permission config. Written here so the narrower per-command
+        # policy is visible to the thing being asked to honour it.
+        *(
+            [f"permitted_tools: {', '.join(declared_tools)}"]
+            if declared_tools
+            else []
+        ),
         "",
     ]
 

@@ -7,6 +7,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
+from core.contracts import AUDIT_STREAM_NAME, QUALITY_STREAM_NAME, USAGE_STREAM_NAME
 from core.runtime_lock import (
     _runtime_lock_payload,
     acquire_runtime_lock,
@@ -211,6 +212,65 @@ def write_redaction_audit(
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(line + "\n")
+
+
+def _append_stream(project_root: Path, name: str, record: dict) -> None:
+    """Append one JSON row to a project-local stream. Never raises.
+
+    Fail-open for the same reason everywhere it is used: these streams observe the call,
+    they must not be able to fail it. A dropped row costs one point on a chart; an
+    exception escaping here costs the answer the user was waiting for.
+    """
+    try:
+        paths = workflow_paths(project_root, None)
+        path = Path(paths["workflow_dir"]) / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(record, ensure_ascii=False)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except (OSError, TypeError, ValueError):
+        pass
+
+
+def write_audit_record(project_root: Path, record: dict) -> None:
+    """Append one delegated call to the project's audit trail.
+
+    Distinct from the usage stream despite overlapping fields, because the two answer to
+    different readers and must be able to diverge. Usage is measurement: it may be
+    resampled, filtered, or recomputed under a new definition. Audit is a record of what
+    was done and by which provider — the thing you read after an incident, where a row
+    quietly reinterpreted later is worse than no row at all.
+
+    Scope is honest and narrow: this covers DELEGATED calls, the only actions this runtime
+    performs. Edits made by the main agent never pass through this process and are not
+    audited here; claiming otherwise would make the trail look complete when it is not.
+    """
+    _append_stream(project_root, AUDIT_STREAM_NAME, record)
+
+
+def write_quality_record(project_root: Path, record: dict) -> None:
+    """Append one check-run outcome (tests, security sweep) to the quality stream.
+
+    Kept out of the usage stream on purpose: usage rows are delegated calls the runtime
+    made, quality rows are checks someone ran against the repo. Merging them would let a
+    green test run inflate the count of delegated work.
+    """
+    _append_stream(project_root, QUALITY_STREAM_NAME, record)
+
+
+def write_usage_record(project_root: Path, record: dict) -> None:
+    """Append one delegated call to the project's usage stream.
+
+    Append-only JSONL beside redactions.jsonl, for the same reason: a metric is only
+    worth reading if the history behind it was never rewritten. The per-run archive under
+    logs/ already holds richer detail, but it is pruned to the newest ARCHIVE_KEEP runs —
+    so it can answer "what happened on that call" and can never answer "what did the last
+    hundred calls cost".
+
+    Fail-open like write_call_meta, and for the same reason: this measures the call, it
+    must not be able to fail it.
+    """
+    _append_stream(project_root, USAGE_STREAM_NAME, record)
 
 
 def write_call_meta(

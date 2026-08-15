@@ -1,4 +1,5 @@
 from config.roles import VALID_ROLES
+from core.governance import check_provider, tools_for
 from config.routing import COMMAND_ROUTES
 from config.settings import (
     DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,
@@ -53,6 +54,12 @@ class Router:
         role = base.get("role")
         if role not in VALID_ROLES:
             raise ValueError(f"unsupported role for command {command}: {role}")
+        # Refused here rather than at spawn: this is the last point where the answer is
+        # still "no call was made". Past it a disallowed provider has already been given
+        # the prompt, and refusing afterwards governs nothing.
+        denial = check_provider(self.config.get("provider"), self.config)
+        if denial:
+            raise ValueError(denial)
         cfg_route = self.config.get("routes", {}).get(normalized, {})
         model = model_override or cfg_route.get("model") or base.get("model") or self.config.get("default_model")
         effort = self._effort_for(model)
@@ -74,6 +81,10 @@ class Router:
             # `or` chain must not fall through to opencode's `plan` for every provider.
             "provider_agent": cfg_route.get("agent") or self.config.get("provider_agent"),
             "effort": effort,
+            # Declared, not enforced here. The hard boundary is the provider's own
+            # permission config; this says what THIS command legitimately needs, so the
+            # prompt can state it and the audit trail can record it.
+            "declared_tools": tools_for(normalized, self.config),
             "timeout_seconds": timeout,
             "bootstrap_timeout_seconds": self.config.get(
                 "bootstrap_timeout_seconds", DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS

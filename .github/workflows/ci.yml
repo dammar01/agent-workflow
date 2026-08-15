@@ -36,7 +36,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           # The runtime is pure stdlib with no dependency file to pin against, so the
-          # Python version is the only thing to hold steady.
+          # Python version is the only thing to hold steady. That claim is not left as
+          # folklore: the `deps` suite fails the build if shipped code ever imports
+          # something outside the stdlib, which is the point at which a lockfile WOULD
+          # be needed. A constraints file listing nothing would document the claim
+          # without testing it.
           python-version: '3.13'
 
       - name: Version stamp is in sync
@@ -45,10 +49,18 @@ jobs:
       - name: Manifest matches dist/
         run: python tools/gen_manifest.py --check
 
+      - name: Runtime is stdlib-only
+        # Its own step rather than only inside the suite: this is the gate that decides
+        # whether the absence of a lockfile is still correct, and a reader scanning the
+        # job list should be able to see it hold.
+        run: python tests/run.py --only deps
+
       - name: Unit and integration suites
         # --keep-going so one failure does not hide the rest; the scenario suite is still
         # internally sequential, so it stops at its own first assertion either way.
-        run: python tests/run.py --keep-going
+        # --record writes the outcome to the workspace quality stream, so `--command
+        # report` can show a test pass rate over time rather than only the latest run.
+        run: python tests/run.py --keep-going --record .
 
       - name: End-to-end (local + integrity + installer)
         # Without --full: no provider CLI is invoked and no quota is spent. The delegated
