@@ -14,9 +14,9 @@ looks for accessor syntax that has no business inside a sentence, not for style.
 import ast
 from pathlib import Path
 
-from checks.support import assert_true
+from tests.checks.support import assert_true
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Directories whose strings reach a user or an agent.
 SCANNED = ("core", "adapters", "installer", "utils")

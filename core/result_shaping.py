@@ -141,6 +141,13 @@ def _verify_exit_code(
     if effective_command == "provider":
         return 0 if isinstance(result, dict) and result.get("ok") else 2
     if effective_command != "verify":
+        # A failed run must not exit 0. Everything scripting this runtime — the runner,
+        # hooks, CI, a benchmark harness — reads the exit status first, and a clean status
+        # on a failed explore reads as "ran, found nothing" rather than "never ran". 1
+        # rather than 2: it matches check.py's failed=1, and keeps 2 meaning what it
+        # already meant for verify, a completed run whose verdict was not a pass.
+        if isinstance(result, dict) and result.get("ok") is False:
+            return 1
         return 0
     verification = result
     if command == "result" and isinstance(result, dict):

@@ -18,7 +18,7 @@ from core.job_manager import JobManager
 from core.prompt_builder import build_prompt
 from core.workflow_runtime import ensure_workflow_workspace
 
-from checks.support import (
+from tests.checks.support import (
     FakeJobProcess,
     FakeOpenCodeAdapter,
     RecordingOpenCodeAdapter,
@@ -423,7 +423,7 @@ def _test_init_upgrade_and_session_guard() -> None:
     root = Path(tempfile.mkdtemp(prefix="init-upgrade-"))
     try:
         agent_path = os.getenv("AGENT_PATH") or str(
-            Path(__file__).resolve().parent.parent / "main.py"
+            Path(__file__).resolve().parents[2] / "main.py"
         )
         fresh = ensure_workflow_workspace(root, agent_path)
         assert_true(

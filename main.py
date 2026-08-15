@@ -2,7 +2,7 @@ import secrets
 import sys
 
 # Looks unused to a linter and is NOT: core/job_lifecycle.py reaches it as
-# `_main().subprocess`, and test_scenario.py patches `main.subprocess.Popen` to
+# `_main().subprocess`, and tests/scenario.py patches `main.subprocess.Popen` to
 # intercept worker spawn. Deleting it breaks both, silently and at runtime only.
 import subprocess  # noqa: F401
 from pathlib import Path

@@ -24,7 +24,7 @@ from core.secret_patterns import (
 )
 from core.workflow_runtime import ensure_workflow_workspace
 
-from checks.support import (
+from tests.checks.support import (
     FakeJobProcess,
     FakeOpenCodeAdapter,
     RecordingOpenCodeAdapter,
@@ -294,7 +294,7 @@ def _test_provider_seam() -> None:
             "from config.settings import DEFAULT_TIMEOUT_SECONDS, DEFAULT_MAX_PROBES;"
             "print(DEFAULT_TIMEOUT_SECONDS, DEFAULT_MAX_PROBES)",
         ],
-        cwd=str(Path(__file__).resolve().parent.parent),
+        cwd=str(Path(__file__).resolve().parents[2]),
         env=env,
         capture_output=True,
         text=True,
@@ -1218,7 +1218,7 @@ def _assert_codex_provider() -> None:
     # one place and not the other would halve the boundary in silence — for whichever
     # provider the author happened not to be thinking about.
     project_json = (
-        Path(__file__).resolve().parents[1]
+        Path(__file__).resolve().parents[2]
         / "dist"
         / "config"
         / "opencode"

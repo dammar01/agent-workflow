@@ -1,19 +1,28 @@
 """Unit and integration checks for agent-workflow.
 
-    python test_scenario.py
+    python tests/run.py               # everything
+    python tests/run.py --list        # what can be run on its own
+    python tests/scenario.py          # this suite only, same as before
 
-The individual checks live in checks/; this module owns the shared fixture setup
+The individual checks live in tests/checks/; this module owns the shared fixture setup
 and the ordering, which is stateful — later checks read workspaces earlier ones
-built.
+built. That statefulness is why this suite has no per-section entry point: the standalone
+checks it calls at the end DO have one, through tests/run.py.
 """
 
 import json
 import os
 import shutil
+import sys
 import tempfile
 import threading
 import time
 from pathlib import Path
+
+# Run from anywhere: `python tests/scenario.py` puts tests/ on sys.path, not the repo
+# root, so every `import main` below would miss without this.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 import check
 import main
@@ -23,7 +32,7 @@ from core.job_manager import JobManager
 from core.prompt_builder import build_prompt
 from core.workflow_runtime import ensure_workflow_workspace
 
-from checks.support import (
+from tests.checks.support import (
     FakeJobProcess,
     FakeOpenCodeAdapter,
     RecordingOpenCodeAdapter,
@@ -32,23 +41,23 @@ from checks.support import (
     extract_session_id,
 )
 
-from checks.facts import (
+from tests.checks.facts import (
     _test_anchor_relocation,
     _test_evidence_anchor_relocation,
     _test_evidence_reuse,
     _test_facts_concurrency,
 )
-from checks.redaction import _test_redaction_boundary
-from checks.verify_gaps import _test_quick_verify_gaps
-from checks.jobs import _test_submit_admission
-from checks.workspace import (
+from tests.checks.redaction import _test_redaction_boundary
+from tests.checks.verify_gaps import _test_quick_verify_gaps
+from tests.checks.jobs import _test_submit_admission
+from tests.checks.workspace import (
     _test_init_upgrade_and_session_guard,
     _test_project_session_isolation,
     _test_workspace_release_guards,
 )
-from checks.continuation import _test_contract_continuation
-from checks.messages import _test_no_code_in_messages
-from checks.provider import _test_provider_seam, _test_provider_selection
+from tests.checks.continuation import _test_contract_continuation
+from tests.checks.messages import _test_no_code_in_messages
+from tests.checks.provider import _test_provider_seam, _test_provider_selection
 
 def run_tests() -> None:
     _test_provider_seam()
@@ -85,7 +94,7 @@ def run_tests() -> None:
             "evidence prompt must anchor the full protocol (graphify-first) to AGENTS.md",
         )
         claude_contract = (
-            Path(__file__).resolve().parent
+            REPO_ROOT
             / "dist"
             / "config"
             / "claude"
@@ -438,7 +447,7 @@ escalations:
 notes:
 - none
 checks_run:
-- python -B test_scenario.py: pass
+- python -B tests/run.py: pass
 not_verified:
 - none
 confidence: high — all requested checks ran
@@ -448,7 +457,7 @@ confidence: high — all requested checks ran
             "well-formed complete verification must pass",
         )
         incomplete_verify = valid_verify.replace(
-            "- python -B test_scenario.py: pass", "- none"
+            "- python -B tests/run.py: pass", "- none"
         )
         assert_true(
             validate_verification_contract(incomplete_verify)["verdict"] == "incomplete",
@@ -571,7 +580,7 @@ confidence: high — all requested checks ran
         )
         project_policy = json.loads(
             (
-                Path(__file__).resolve().parent
+                REPO_ROOT
                 / "dist"
                 / "config"
                 / "opencode"
@@ -808,7 +817,7 @@ confidence: high — all requested checks ran
                 graph_index.is_stale(graph_root) is True,
                 "disk cache must invalidate when a source changes",
             )
-        repo_root = Path(__file__).resolve().parent
+        repo_root = REPO_ROOT
         repo_leads = graph_index.leads(repo_root, "session manager")
         # Guarded on the graph EXISTING, not on leads being truthy: keying the guard on
         # the result itself would let a leads() that silently returns None skip its own
@@ -962,7 +971,7 @@ confidence: high — all requested checks ran
         import json as _json
 
         example = (
-            Path(__file__).resolve().parent / "config" / "second_agent.example.json"
+            REPO_ROOT / "config" / "second_agent.example.json"
         )
         shipped = _json.loads(example.read_text(encoding="utf-8"))
         models = [shipped.get("default_model")] + [
@@ -1005,7 +1014,7 @@ confidence: high — all requested checks ran
         _test_init_upgrade_and_session_guard()
         _test_contract_continuation()
 
-        print("test_scenario: success")
+        print("tests/scenario: success")
     finally:
         main.subprocess.Popen = original_popen
 

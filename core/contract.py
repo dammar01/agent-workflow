@@ -16,6 +16,11 @@ ERROR_TYPES = {
     "command_not_found",
     "routing_error",
     "worker_died",
+    # The worker process lived but its own body raised. Distinct from worker_died: nothing
+    # needs reaping and no recovery claim applies, the job is simply failed and the stack
+    # that ended it is in the worker log. Left as a plain dict it carried no error_type at
+    # all, so callers branching on the type read a crash as an unrecognised shape.
+    "worker_crashed",
     "worker_stalled",  # PID alive, no progress — probe before judging
     "rate_limited",  # provider refused on quota: waiting fixes it, retrying does not
     "prompt_too_long",  # the shell rejected the command line before opencode ran

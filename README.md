@@ -730,11 +730,11 @@ Baris log OpenCode dan banner model dibuang dari `content`; isi jawaban asisten 
 ## Test
 
 ```bash
-python3 test_scenario.py
+python3 tests/run.py
 ```
 
 ```powershell
-python test_scenario.py
+python tests/run.py
 ```
 
 Suite default tidak memanggil OpenCode sungguhan; alur agent memakai adapter palsu,

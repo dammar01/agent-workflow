@@ -2,7 +2,7 @@
 
     python tools/sim_flows.py      # no opencode, no quota, seconds
 
-Complements the two existing suites rather than repeating them. `test_scenario.py`
+Complements the two existing suites rather than repeating them. `tests/run.py`
 asserts units and `tools/e2e.py` asserts the CLI and installer contracts; this walks one
 delegated call from `init` to `clean` against a throwaway git project with a faked
 OpenCode adapter, and reports what each STAGE returned — digest, artifacts, locks,
@@ -92,7 +92,7 @@ escalations:
 notes:
 - none
 checks_run:
-- python -B test_scenario.py: pass
+- python -B tests/run.py: pass
 not_verified:
 - none
 confidence: high - all requested checks ran
@@ -108,7 +108,7 @@ escalations:
 notes:
 - none
 checks_run:
-- python -B test_scenario.py: fail
+- python -B tests/run.py: fail
 not_verified:
 - none
 confidence: high - all requested checks ran

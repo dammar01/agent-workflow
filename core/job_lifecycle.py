@@ -388,6 +388,14 @@ def await_job(
     job_id = submitted["job_id"]
     started_at = time.monotonic()
     interval = poll_interval if poll_interval > 0 else DEFAULT_JOB_POLL_INTERVAL_SECONDS
+    # poll_timeout=0 is the default and means "wait as long as this job may legitimately
+    # run" — it was never meant to mean "wait forever". Every terminal status here comes
+    # from the job record, so a record that stops advancing (deleted mid-flight, a status
+    # that never reaches terminal, a clock the reaper reads differently) left this loop
+    # with no exit at all, holding the session lock while it spun. The job's own hard
+    # ceiling is the honest backstop: past it the reaper would fail the job anyway.
+    # Both set to 0 stays unbounded — that is an explicit opt-out, not an oversight.
+    deadline = poll_timeout if poll_timeout > 0 else _await_backstop_seconds()
     recheck_base = _probe_recheck_seconds(work_dir)
     max_probes = _max_probes(work_dir)
     last_probe_at: float | None = None
@@ -468,20 +476,45 @@ def await_job(
                     return resumed
                 submitted = resumed
 
-        if poll_timeout > 0 and (time.monotonic() - started_at) >= poll_timeout:
+        if deadline > 0 and (time.monotonic() - started_at) >= deadline:
             return {
                 "ok": False,
-                "content": f"await timeout after {poll_timeout}s",
+                "content": (
+                    f"await timeout after {deadline}s"
+                    if poll_timeout > 0
+                    else (
+                        f"await backstop after {deadline}s — no caller deadline was set "
+                        "and the job never reached a terminal state"
+                    )
+                ),
                 "meta": {
                     "job_id": job_id,
                     "status": result.get("status"),
                     "submitted_at": submitted.get("submitted_at"),
                     "worker_pid": submitted.get("meta", {}).get("pid"),
+                    "deadline_source": (
+                        "poll_timeout" if poll_timeout > 0 else "job_max_runtime"
+                    ),
                 },
             }
 
         time.sleep(interval)
 
+
+
+def _await_backstop_seconds() -> int:
+    """The job's own hard ceiling, plus one grace interval for the reaper to act.
+
+    Read off the live JOB_MANAGER rather than the setting, so a harness that lowered the
+    ceiling gets a backstop that matches the job it actually submitted.
+    """
+    try:
+        ceiling = int(getattr(_main().JOB_MANAGER, "max_runtime_seconds", 0) or 0)
+    except Exception:
+        ceiling = 0
+    if ceiling <= 0:
+        return 0
+    return ceiling + int(DEFAULT_JOB_POLL_INTERVAL_SECONDS * 5)
 
 
 def run_worker(job_id: str) -> dict:
@@ -536,13 +569,18 @@ def run_worker(job_id: str) -> dict:
         return output
     except Exception as exc:
         _main().JOB_MANAGER.fail_job(job_id, str(exc))
-        return {
-            "ok": False,
-            "job_id": job_id,
-            "status": "failed",
-            "content": str(exc),
-            "meta": {},
-        }
+        # Through make_error like every other failure: a plain dict here carried no
+        # error_type and no next_action, so a caller branching on error_type saw None and
+        # treated a crashed worker as an unknown shape rather than a known failure.
+        failure = make_error(
+            "worker_crashed",
+            str(exc),
+            next_action="inspect the worker log for this job_id, then resubmit",
+        )
+        failure["job_id"] = job_id
+        failure["status"] = "failed"
+        failure.setdefault("meta", {})["job_id"] = job_id
+        return failure
 
 
 def _spawn_worker(job_id: str, work_dir: str | None = None) -> dict:

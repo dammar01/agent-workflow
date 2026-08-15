@@ -9,7 +9,7 @@ So the patterns live here in one canonical form, and each provider gets a transl
 
 * opencode consumes them as its own glob dialect (`*.env`, `*.ssh/*`) written into a
   project-scoped `opencode.json`. That file is still shipped as a static artifact — this
-  module does not rewrite it — and `checks/provider.py` asserts the two agree, so a change
+  module does not rewrite it — and `tests/checks/provider.py` asserts the two agree, so a change
   here that never reaches the JSON fails a check instead of silently halving the boundary.
 * codex consumes them as TOML filesystem permissions passed with `-c` on every invocation.
   Codex has no project-scoped config file at all (a `.codex/config.toml` in a project root

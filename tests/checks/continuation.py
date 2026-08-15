@@ -16,7 +16,7 @@ from core.contract import validate_verification_contract
 from core.executor import _VERIFY_SHAPE_KINDS, Executor
 from core.workflow_runtime import ensure_workflow_workspace
 
-from checks.support import assert_true
+from tests.checks.support import assert_true
 
 _STALLED = (
     "## Work State\n"
@@ -48,6 +48,35 @@ _EVIDENCE = (
     "confidence: high\n"
 )
 
+# The costlier stall: the read finished, the anchors are on the page, and the reply dies
+# partway through its own digest. Observed in the field on three of four delegated calls —
+# and the recovery discarded the whole body, keeping a digest that described evidence no
+# longer present anywhere. The digest header below is deliberately cut mid-block.
+_TRUNCATED_BODY = (
+    "[EVIDENCE]\n"
+    "confidence: high\n"
+    "grounded:\n"
+    "- token estimate is chars//4 [core/executor.py:808]\n"
+    "- job timestamps persisted [core/job_manager.py:191]\n"
+    "assumptions: none\n"
+    "scope_covered:\n"
+    "- core/executor.py\n"
+    "uncertainties: none\n"
+    "[DIGEST]\n"
+    "summary: telemetry mapped, cost fie"
+)
+
+_DIGEST_ONLY = (
+    "[DIGEST]\n"
+    "summary: telemetry mapped, cost fields absent.\n"
+    "key_findings:\n"
+    "- token counts are estimates\n"
+    "evidence_basis: grounded\n"
+    "risk_level: low\n"
+    "recommended_next_action: none\n"
+    "confidence: high\n"
+)
+
 _VERIFICATION = (
     "[VERIFICATION]\n"
     "verdict: DONE\n"
@@ -55,7 +84,7 @@ _VERIFICATION = (
     "escalations: none\n"
     "notes: none\n"
     "checks_run:\n"
-    "- ran python test_scenario.py -> success\n"
+    "- ran python tests/run.py -> success\n"
     "not_verified: none\n"
     "confidence: high\n"
     "[DIGEST]\n"
@@ -133,6 +162,58 @@ def _test_contract_continuation() -> None:
             and stalled.calls[1]["session"].get("provider_session_id")
             == "ses_scripted",
             f"the follow-up must resume the SAME session and forbid a restart: {stalled.calls[-1]['prompt'][:120]!r}",
+        )
+
+        # A first reply that already carries the evidence must KEEP it. The follow-up only
+        # ever supplies the missing block, so replacing the reply with it destroys the read
+        # the run paid for and leaves an artifact with a digest and no anchors behind it.
+        truncated = _ScriptedAdapter([_TRUNCATED_BODY, _DIGEST_ONLY])
+        salvaged = Executor(adapter=truncated).execute(
+            "explore", "map the telemetry", _session(), str(root)
+        )
+        salvaged_content = salvaged.get("content") or ""
+        salvaged_meta = salvaged.get("meta") or {}
+        assert_true(
+            salvaged.get("ok") and salvaged_meta.get("continuation_recovered") is True,
+            f"a truncated-digest reply must recover, not fail: {salvaged_meta}",
+        )
+        assert_true(
+            "core/executor.py:808" in salvaged_content
+            and "core/job_manager.py:191" in salvaged_content,
+            "the continuation must not discard anchors the first reply already delivered",
+        )
+        assert_true(
+            "cost fields absent" in salvaged_content
+            and salvaged_meta.get("continuation_merged") is True,
+            f"the recovered digest must be joined onto the body, not replace it: {salvaged_meta}",
+        )
+        assert_true(
+            salvaged_content.count("[DIGEST]") == 1,
+            "the truncated digest header must be dropped so the complete block is the one read",
+        )
+
+        # A reply that quoted the output template before stalling carries TWO [DIGEST]
+        # markers. The contract reads the first one, so trimming only the trailing marker
+        # left the quoted header in front and the join still read as damaged — the merge
+        # was silently rejected and the body lost anyway. Observed live before the cut was
+        # moved to the first marker.
+        quoted = _TRUNCATED_BODY.replace(
+            "assumptions: none",
+            "assumptions: none\nformat note: the [DIGEST] block wants summary/key_findings",
+        )
+        twice = _ScriptedAdapter([quoted, _DIGEST_ONLY])
+        rescued = Executor(adapter=twice).execute(
+            "explore", "map the telemetry", _session(), str(root)
+        )
+        rescued_content = rescued.get("content") or ""
+        assert_true(
+            (rescued.get("meta") or {}).get("continuation_merged") is True
+            and "core/executor.py:808" in rescued_content,
+            f"a quoted [DIGEST] in the stalled reply must not block the merge: {rescued.get('meta')}",
+        )
+        assert_true(
+            rescued_content.count("[DIGEST]") == 1,
+            "every [DIGEST] marker from the stalled reply must be cut, not just the last",
         )
 
         # Bounded: an agent that cannot produce the contract twice is a real failure, and

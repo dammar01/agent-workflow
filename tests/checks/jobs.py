@@ -16,7 +16,7 @@ from core.job_manager import JobManager
 from core.prompt_builder import build_prompt
 from core.workflow_runtime import ensure_workflow_workspace
 
-from checks.support import (
+from tests.checks.support import (
     FakeJobProcess,
     FakeOpenCodeAdapter,
     RecordingOpenCodeAdapter,

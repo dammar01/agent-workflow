@@ -280,6 +280,37 @@ def _contract_gap(command: str, role: str, result) -> dict | None:
     return None
 
 
+def _merge_continuation(first: str | None, retry: str | None) -> str:
+    """Keep the work from the first reply and the contract block from the second.
+
+    The continuation prompt asks for the missing block ONLY, so the follow-up comes back
+    carrying a digest and little else. Swapping it in wholesale threw away the evidence the
+    run had already paid for: artifacts landed holding a digest and zero anchors while the
+    body that earned them was discarded, and the reader was left summarising a summary.
+    """
+    first = (first or "").strip()
+    retry = (retry or "").strip()
+    if not first:
+        return retry
+    if not retry:
+        return first
+    # An agent that ignored "do NOT redo it" and re-sent the whole answer supersedes the
+    # first reply outright; concatenating there would duplicate every section.
+    head = "\n".join(first.splitlines()[:3]).strip()
+    if head and head in retry:
+        return retry
+    # A digest cut mid-block still opens with [DIGEST], and the contract check reads the
+    # FIRST marker it finds. Cut at the first one, not the last: a reply that quoted the
+    # template before stalling carries two markers, and trimming only the trailing one
+    # leaves the quoted header in front where it shadows the complete block behind it.
+    # Everything past that point is digest anyway — the evidence body is what precedes it.
+    if "[DIGEST]" in first and "[DIGEST]" in retry:
+        first = first.split("[DIGEST]", 1)[0].rstrip()
+    if not first:
+        return retry
+    return f"{first}\n\n{retry}"
+
+
 def _continuation_prompt(command: str, gap: dict) -> str:
     """Ask for the missing part only — the work itself already happened."""
     missing = "; ".join(str(item) for item in gap.get("missing") or []) or "unknown"
@@ -388,7 +419,12 @@ class Executor:
             return
         try:
             write_redaction_audit(project_root, session_id, command, redactions)
-        except Exception:
+        except OSError:
+            # The redaction itself already happened; this only records that it did, so a
+            # full disk or a locked file must not fail the call. Narrowed from a bare
+            # Exception on purpose: anything that is NOT an I/O failure here is a bug in
+            # the audit writer, and swallowing it hid that the trail had stopped being
+            # written at all.
             pass
 
     def _finalize_runtime_result(
@@ -762,14 +798,28 @@ class Executor:
                         work_dir,
                     )
                     retry, _ = _sanitize_result(retry)
-                    if retry.get("ok") and not _contract_gap(
-                        normalized_command, route.get("role"), retry
-                    ):
-                        continuation_meta["continuation_recovered"] = True
-                        continuation_meta["continuation_first_reply_chars"] = len(
-                            result.get("content") or ""
-                        )
-                        result = retry
+                    if retry.get("ok"):
+                        merged = {
+                            **retry,
+                            "content": _merge_continuation(
+                                result.get("content"), retry.get("content")
+                            ),
+                        }
+                        # Prefer the merge: it carries both halves. Fall back to the
+                        # follow-up alone only if the join itself reads as damaged, so a
+                        # malformed first reply can never block a recovery that worked.
+                        for candidate, joined in ((merged, True), (retry, False)):
+                            if _contract_gap(
+                                normalized_command, route.get("role"), candidate
+                            ):
+                                continue
+                            continuation_meta["continuation_recovered"] = True
+                            continuation_meta["continuation_first_reply_chars"] = len(
+                                result.get("content") or ""
+                            )
+                            continuation_meta["continuation_merged"] = joined
+                            result = candidate
+                            break
                 else:
                     continuation_meta["continuation_skipped"] = (
                         "no provider_session_id captured — a follow-up would start an "

@@ -616,7 +616,11 @@ class JobManager:
                         "worker died and the session lock was released by clean",
                         reaped=True,
                     )
-                except Exception:
+                except OSError:
+                    # A job file that cannot be written stays as it is; clean still
+                    # releases the lock, which is what the caller asked for. Narrowed
+                    # from a bare Exception: a non-I/O failure here means fail_job itself
+                    # is broken, and clean silently continuing hid that.
                     pass
             if not path.exists():
                 released.append(

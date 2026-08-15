@@ -98,8 +98,8 @@
     },
     {
       "path": "claude/skills/provider.md",
-      "sha256": "a4e8703bbcaea55a0ec3c2e7311501c9d727e70ea4bcb60ce4f56517c734fa73",
-      "bytes": 3207,
+      "sha256": "1858884f985680ebc090e97de98f505a2f262c3a28b6358ce9d198c75ecfdf8e",
+      "bytes": 4829,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -329,8 +329,8 @@
     },
     {
       "path": "opencode/AGENTS.md",
-      "sha256": "0a8e0c70f74d5bd90ef7fafed9cca00e7cb6331a5d72481b7faab9326be88d9b",
-      "bytes": 17240,
+      "sha256": "a5ff5461973d9ddce85a3064f9c2982776969f79d46f5c4ad2026b1595c1e502",
+      "bytes": 17798,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -371,8 +371,15 @@
     },
     {
       "path": "codex/AGENTS.md",
-      "sha256": "13da5daf619e76867d8bee4797cc61d1842f66c1b114a1a4aa2ee841427d2b99",
-      "bytes": 14412,
+      "sha256": "ab68065a2fdc1cec2b53f66db91cb5bfae8cc101a2aa7db9047cfe218d19b9af",
+      "bytes": 14978,
+      "merge": "merge",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "agy/AGENTS.md",
+      "sha256": "020b61817509ef70c2b81d551a6799849ae687ad62fb2ff553f9bb1d2f84e576",
+      "bytes": 16971,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -410,6 +417,9 @@
     "opencode/opencode.project.json": "{{PROJECT_ROOT}}/opencode.json",
     "codex/AGENTS.md": "{{HOME}}/.codex/AGENTS.md",
     "codex/codex.template.toml": "{{HOME}}/.codex/config.toml",
-    "codex/codex.project.json": "{{PROJECT_ROOT}}/codex.project.json"
+    "codex/codex.project.json": "{{PROJECT_ROOT}}/codex.project.json",
+    "agy/AGENTS.md": "{{HOME}}/.agy/AGENTS.md",
+    "agy/agy.template.json": "{{HOME}}/.agy/agy.json",
+    "agy/agy.project.json": "{{PROJECT_ROOT}}/agy.project.json"
   }
 }

@@ -3,7 +3,7 @@
 The picker that drives this lives in the main agent (`AskUserQuestion` has no subagent
 form), so the model would otherwise be the thing editing `second_agent.json` by hand.
 It is not: the model passes one string and every decision about whether that string is
-writable happens here, in code that `checks/provider.py` can run.
+writable happens here, in code that `tests/checks/provider.py` can run.
 
 Two modes, told apart by whether a payload was given:
 

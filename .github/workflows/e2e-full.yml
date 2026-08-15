@@ -1,0 +1,38 @@
+name: e2e-full
+
+# The delegated path — a real second agent, a real call, real quota. Manual only: it costs
+# money on every run and needs a provider CLI plus credentials, neither of which belongs in
+# an automatic trigger. `ci.yml` covers everything that can be checked for free.
+on:
+  workflow_dispatch:
+    inputs:
+      session:
+        description: 'Session id for the delegated run'
+        required: false
+        default: 'e2e-dispatch'
+      runner:
+        description: 'Runner label. GitHub-hosted runners have no provider CLI installed — use a self-hosted runner that does.'
+        required: false
+        default: 'self-hosted'
+
+permissions:
+  contents: read
+
+jobs:
+  delegated:
+    # Deliberately not ubuntu-latest. A hosted runner has no opencode/codex/agy binary, so
+    # `--full` would fail at the adapter with a command-not-found rather than telling you
+    # anything about the runtime. Point this at a machine where the provider is installed
+    # and authenticated, which in practice means the same machine a developer uses.
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report the provider that will answer
+        # Fail early and legibly when the runner has no provider configured, rather than
+        # halfway through a paid call.
+        run: python main.py --command doctor --work-dir . --pretty
+
+      - name: End-to-end including delegated calls
+        run: python tools/e2e.py --full --session "${{ inputs.session }}"

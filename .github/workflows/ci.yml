@@ -1,0 +1,57 @@
+name: ci
+
+# Every gate here already existed as a command someone had to remember to run. Two of them
+# were failing on the default branch when this workflow was first added — a stamp target
+# that had never been created and a stale manifest — which is the whole argument for the
+# file.
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both, deliberately. The runtime ships a PowerShell runner and generates a POSIX
+        # one, the workspace checks shell out to whichever the platform has, and path
+        # handling differs where it matters most (locks, session dirs). A single-OS run
+        # would pass while half the product stayed untested.
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # The runtime is pure stdlib with no dependency file to pin against, so the
+          # Python version is the only thing to hold steady.
+          python-version: '3.13'
+
+      - name: Version stamp is in sync
+        run: python tools/stamp_version.py --check
+
+      - name: Manifest matches dist/
+        run: python tools/gen_manifest.py --check
+
+      - name: Unit and integration suites
+        # --keep-going so one failure does not hide the rest; the scenario suite is still
+        # internally sequential, so it stops at its own first assertion either way.
+        run: python tests/run.py --keep-going
+
+      - name: End-to-end (local + integrity + installer)
+        # Without --full: no provider CLI is invoked and no quota is spent. The delegated
+        # checks stay opt-in because they cost real money and need credentials this
+        # workflow deliberately does not hold.
+        run: python tools/e2e.py
