@@ -1,5 +1,5 @@
 # Skill: provider
-description: Pilih second_agent (provider → model → effort) lewat pertanyaan interaktif, lalu terapkan.
+description: Pilih second_agent (provider → model → effort → model per route) lewat pertanyaan interaktif, lalu terapkan.
 
 ## Trigger
 /.provider
@@ -13,11 +13,12 @@ LOCAL. Nol second_agent, nol job, nol lock. Runtime yang menulis config — kamu
     mac/linux: "<work_dir>/.workflow/run.sh" provider "" "<MAIN_SESSION_ID>"
 
 Balasannya `meta.providers[]` (`name`, `installed`, `detail`, `models[] {id, efforts}`) plus
-`meta.current` (provider/model/effort yang aktif) dan `meta.source`.
+`meta.current` (provider/model/effort yang aktif, dan `routes` = model tiap route sekarang),
+`meta.selectable_routes` (route yang boleh dipilih) dan `meta.source`.
 
 `.workflow/run.*` MISSING → /.init dulu. Jangan panggil `python main.py` langsung.
 
-## STEP 2 — Tanya, tiga langkah berurutan
+## STEP 2 — Tanya, empat langkah berurutan
 Renderer = AskUserQuestion, satu pertanyaan per call, jawaban sebelumnya memotong opsi berikutnya.
 
 1. **Provider** — opsi dari `providers[]`. `installed:false` → tetap tampilkan, tulis di `description`
@@ -27,29 +28,53 @@ Renderer = AskUserQuestion, satu pertanyaan per call, jawaban sebelumnya memoton
 3. **Effort** — opsi dari `efforts` MILIK MODEL yang barusan dipilih, bukan milik provider.
    Nilai berbeda per model, jadi memakai daftar provider akan menawarkan yang upstream tolak.
    - `efforts` KOSONG (`[]`) → model itu tak menerima effort sama sekali. LEWATI pertanyaan
-     ketiga, langsung apply tanpa field effort. Memaksakan nilai akan ditolak runtime.
+     ketiga, langsung ke pertanyaan keempat tanpa field effort. Memaksakan nilai akan ditolak runtime.
    - Model dari "Other" → `efforts` tak diketahui; tanyakan effort sebagai pertanyaan terbuka
      dan sebutkan bahwa nilainya tak bisa divalidasi.
+4. **Route** — "Semua route pakai model yang sama?" Dua opsi: ya (semua ikut model di atas)
+   dan tidak (pilih satu per satu). Sebutkan di `description` model yang berlaku sekarang per
+   route dari `meta.current.routes` bila ada yang berbeda dari `default_model` — itu justru
+   keadaan yang membuat pertanyaan ini ada.
+   - **ya** → langsung STEP 3 dengan field routes `same`.
+   - **tidak** → STEP 2b.
+
+## STEP 2b — Model per route (hanya bila user jawab "tidak")
+Satu call AskUserQuestion berisi satu pertanyaan untuk TIAP route di `meta.selectable_routes`
+(explore, plan, analyze, verify — empat, pas di batas tool). Opsi tiap pertanyaan = `models[]`
+provider terpilih, model dari STEP 2 ditandai sebagai default di `description`.
+
+Effort TIDAK ditanya per route: runtime memakai satu effort global, dan model yang tak menerima
+effort sudah dijatuhkan sendiri oleh Router.
 
 Batas keras tool: MAX 4 pertanyaan per call, 2-4 opsi per pertanyaan, `header` MAX 12 karakter.
 Jangan bikin opsi "lainnya" sendiri — "Other" sudah otomatis.
 
 ## STEP 3 — Terapkan
-    & "<work_dir>\.workflow\run.ps1" provider "<provider>|<model>|<effort>" "<MAIN_SESSION_ID>"
+    & "<work_dir>\.workflow\run.ps1" provider "<provider>|<model>|<effort>|<routes>" "<MAIN_SESSION_ID>"
 
 Pemisah `|` — bukan `/`, karena id model opencode mengandung `/`.
 Model atau effort dikosongkan → field itu di-clear, provider kembali ke default-nya sendiri.
 
-Runtime menulis lima field sekaligus (`provider`, `provider_command`, `provider_agent`,
-`default_model`, `effort`) dan menyinkronkan hint `runtime.second_agent` di config.json.
+Field `<routes>`:
+- `same` (atau dikosongkan) → semua route memakai `<model>`.
+- `explore=A,plan=B,analyze=C,verify=D` → per route. Pemisah pasangan `,`, penetapan `=`.
+  Route yang tak disebut ikut `<model>`. Nilai kosong (`explore=`) → route itu di-clear.
+- Nama route di luar explore/plan/analyze/verify → ditolak, nol yang ditulis.
+
+Runtime menulis lima field plus `routes` sekaligus (`provider`, `provider_command`,
+`provider_agent`, `default_model`, `effort`, `routes`) dan menyinkronkan hint
+`runtime.second_agent` di config.json. Route ditulis key-wise: `timeout_seconds` dan `agent`
+per-route yang sudah ada di file TIDAK hilang.
 `ok:false` → NOL yang ditulis; relay `content` + `meta.next_action` apa adanya, jangan coba
 memperbaiki sendiri, jangan menulis file.
 
 ## Output
 [PROVIDER]
 selected: <provider> / <model | provider default> / effort <effort | provider default>
+routes: <isi meta.written.routes — tiap route + modelnya; sebut "semua ikut default" bila
+  meta.routes_uniform true>
 installed: <daftar provider terpasang>
-written: <lima field dari meta.written>
+written: <enam field dari meta.written>
 config_hint: <updated true|false + alasan>
 foreign_values: <isi meta.foreign_values, atau "kosong">  — TIDAK kosong = config menyebut provider
   lain di `provider_command`/`provider_agent`/model; tampilkan penuh, jangan diringkas hilang.

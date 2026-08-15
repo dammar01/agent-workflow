@@ -22,6 +22,7 @@ matches it, and a config.json naming something else is reported through
 
 from pathlib import Path
 
+from adapters.agy_adapter import AgyAdapter
 from adapters.codex_adapter import CodexAdapter
 from adapters.opencode_adapter import OpenCodeAdapter
 from config.settings import DEFAULT_PROVIDER
@@ -29,6 +30,9 @@ from config.settings import DEFAULT_PROVIDER
 _ADAPTERS: dict[str, type] = {
     OpenCodeAdapter.adapter: OpenCodeAdapter,
     CodexAdapter.adapter: CodexAdapter,
+    # agy enforces no read-only boundary — see the note in config/providers.py and the
+    # module docstring of adapters/agy_adapter.py before selecting it for a project.
+    AgyAdapter.adapter: AgyAdapter,
 }
 
 

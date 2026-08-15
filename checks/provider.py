@@ -638,6 +638,241 @@ def _test_provider_selection() -> None:
     shutil.rmtree(temp_root, ignore_errors=True)
 
 
+def _test_agy_provider() -> None:
+    """agy: parsing, argv, and the guard that stands in for a boundary it does not have.
+
+    Offline on purpose. Every assertion runs against transcripts captured from the real
+    binary rather than the binary itself, so the suite stays deterministic and costs no
+    tokens — the one thing a live call would prove that these do not is that agy still
+    speaks this dialect, and that is what `probe` is for.
+    """
+    from adapters.agy_adapter import AgyAdapter
+    from adapters.registry import adapter_class, available_providers
+    from config.providers import PROVIDER_BUNDLES, effort_args
+    from core import agy_guard
+    from core import provider_select
+    from core.workspace_paths import read_json_file
+
+    assert_true(
+        "agy" in available_providers(),
+        f"agy must be registered as a provider: {available_providers()}",
+    )
+    adapter = adapter_class("agy")()
+    assert_true(
+        adapter.adapter == "agy" and adapter.agent is None,
+        "agy selects no persona — `agy agents` lists none, so there is none to default to",
+    )
+    assert_true(
+        adapter.bootstrap_timeout_seconds is None,
+        "agy needs no bootstrap call: the id is in the first line of the stream",
+    )
+
+    # --- session id -------------------------------------------------------------
+    # Line 1 of a real `--output-format stream-json` run, trimmed.
+    init_line = (
+        '{"event":"init","conversation_id":"91e90a3a-9883-4595-80e1-b5560e0ed474",'
+        '"init":{"cwd":"C:\\\\tmp","permission_mode":"always-proceed"}}'
+    )
+    assert_true(
+        AgyAdapter.extract_session_id(init_line)
+        == "91e90a3a-9883-4595-80e1-b5560e0ed474",
+        "the conversation id must come off the init event",
+    )
+    assert_true(
+        AgyAdapter.extract_session_id(
+            "I0814 16:35:08.340741 35188 server.go:1007] "
+            "Created conversation 91e90a3a-9883-4595-80e1-b5560e0ed474"
+        )
+        == "91e90a3a-9883-4595-80e1-b5560e0ed474",
+        "the --log-file spelling must still parse: it is the fallback if the stream moves",
+    )
+    assert_true(
+        AgyAdapter.extract_session_id("no identifier anywhere in this line") is None,
+        "a line with no id must yield None rather than a partial match",
+    )
+
+    # --- clean_output -----------------------------------------------------------
+    transcript = "\n".join(
+        [
+            init_line,
+            '{"event":"step_update","step_update":{"step_index":3,"state":"ACTIVE",'
+            '"step_type":"agent_response","text_delta":"pong."}}',
+            '{"event":"step_update","step_update":{"step_index":3,"state":"DONE",'
+            '"step_type":"agent_response","text_delta":"\\n"}}',
+            '{"event":"result","result":{"status":"SUCCESS","response":"pong.\\n"}}',
+        ]
+    )
+    assert_true(
+        AgyAdapter.clean_output(transcript) == "pong.",
+        f"the result event is the answer: {AgyAdapter.clean_output(transcript)!r}",
+    )
+    without_result = "\n".join(
+        line for line in transcript.splitlines() if '"event":"result"' not in line
+    )
+    assert_true(
+        AgyAdapter.clean_output(without_result) == "pong.",
+        # A run killed mid-answer never emits `result`; the deltas carried the same text
+        # on the way past, and dropping them would throw away a recoverable answer.
+        "the agent_response deltas must cover a run that never reached its result event",
+    )
+    assert_true(
+        AgyAdapter.clean_output("plain banner text") == "plain banner text",
+        "non-JSON output must survive: a build that banners in plain text still answered",
+    )
+    assert_true(
+        AgyAdapter.clean_output(
+            '{"event":"step_update","step_update":{"step_type":"tool","state":"ERROR"}}'
+        )
+        == "",
+        # Structured output naming no answer. Returning the raw JSONL would hand the
+        # runtime a wall of events to read as though it were evidence.
+        "a stream with no answer in it must produce empty content, not the events",
+    )
+
+    # --- argv -------------------------------------------------------------------
+    fresh = AgyAdapter(timeout_seconds=1800)._build_args("TASK", None, "claude-sonnet-4-6", 1800)
+    assert_true(
+        "--conversation" not in fresh and fresh[:3] == ["agy", "-p", "TASK"],
+        f"a fresh call passes the prompt on argv and resumes nothing: {fresh}",
+    )
+    assert_true(
+        "--dangerously-skip-permissions" in fresh and "--disable-slash-commands" in fresh,
+        # The first is the only way agy enables any tool at all (see the adapter
+        # docstring); the second stops agy expanding the `/.`-shaped text in our prompts.
+        f"both boundary-and-parsing flags must ride every call: {fresh}",
+    )
+    assert_true(
+        fresh[fresh.index("--print-timeout") + 1] == "1800s",
+        # agy's own print budget defaults to five minutes. Unset, it kills the call long
+        # before the runtime's timeout and the runtime then blames the wrong thing.
+        f"--print-timeout must follow the runtime budget: {fresh}",
+    )
+    resumed = AgyAdapter(timeout_seconds=900)._build_args("TASK", "abc-123", None, 900)
+    assert_true(
+        resumed[resumed.index("--conversation") + 1] == "abc-123"
+        and "--model" not in resumed,
+        f"a resumed call adds --conversation and nothing else: {resumed}",
+    )
+    with_effort = AgyAdapter(timeout_seconds=60)
+    with_effort.effort = "high"
+    assert_true(
+        with_effort._build_args("T", None, None, 60)[-2:] == ["--effort", "high"],
+        "effort must render through the bundle, not a literal in the adapter",
+    )
+
+    # --- workspace guard --------------------------------------------------------
+    guard_root = Path(tempfile.mkdtemp(prefix="agent-workflow-agy-guard-"))
+    try:
+        init = subprocess.run(
+            ["git", "init", "-q", str(guard_root)], capture_output=True, text=True
+        )
+        assert_true(init.returncode == 0, f"guard fixture git init failed: {init.stderr}")
+
+        before = agy_guard.snapshot(guard_root)
+        assert_true(
+            before["available"],
+            f"a git repository must be snapshottable: {before['reason']}",
+        )
+        (guard_root / "written-by-agy.txt").write_text("BREACH", encoding="utf-8")
+        verdict = agy_guard.verdict(before, agy_guard.snapshot(guard_root))
+        assert_true(
+            verdict["checked"] and verdict["mutated"],
+            f"a file written during a call must be detected: {verdict}",
+        )
+        assert_true(
+            any("written-by-agy.txt" in entry for entry in verdict.get("appeared", ())),
+            f"the detection must name the file, not just report a change: {verdict}",
+        )
+
+        (guard_root / "written-by-agy.txt").unlink()
+        clean = agy_guard.verdict(before, agy_guard.snapshot(guard_root))
+        assert_true(
+            clean["checked"] and not clean["mutated"],
+            f"an unchanged tree must read as clean, not as unknown: {clean}",
+        )
+    finally:
+        shutil.rmtree(guard_root, ignore_errors=True)
+
+    # Outside git the guard cannot see anything, and saying so is the point: `mutated:
+    # False` from a guard that never ran would read as proof that nothing was written.
+    outside = Path(tempfile.mkdtemp(prefix="agent-workflow-agy-nogit-"))
+    try:
+        unavailable = agy_guard.snapshot(outside)
+        blind = agy_guard.verdict(unavailable, unavailable)
+        assert_true(
+            not blind["checked"] and not blind["mutated"] and blind["reason"],
+            f"a guard that could not run must say so with a reason: {blind}",
+        )
+    finally:
+        shutil.rmtree(outside, ignore_errors=True)
+
+    # --- bundle + selection -----------------------------------------------------
+    assert_true(
+        effort_args("agy", "high") == ["--effort", "high"]
+        and effort_args("agy", None) == [],
+        "agy spells effort with --effort, and says nothing when unset",
+    )
+    # An install module that reports the absence of a boundary, rather than no module at
+    # all. `core/workflow_runtime.py` and `installer/settings.py` both dispatch through
+    # `provider_install_module`, which RAISES on a bundle that declares none — so a
+    # provider without one crashes the install path instead of being skipped by it.
+    from config.providers import provider_install_module
+
+    assert_true(
+        PROVIDER_BUNDLES["agy"]["install_module"] == "adapters.agy_install",
+        "agy must declare an install module, or the boundary install path raises on it",
+    )
+    boundary = provider_install_module("agy").install_project_config(
+        Path(tempfile.gettempdir()), ""
+    )
+    assert_true(
+        boundary["status"] == "not_enforceable"
+        and boundary["permissions_enforced"] == 0
+        and boundary["permissions_declared"] == 0
+        and boundary["path"] is None,
+        # Zero DECLARED as well is what separates agy from codex: codex still sends
+        # permission flags that would start working the day it gates shell reads; agy has
+        # no such flag to send, and claiming a path would send someone looking for a
+        # boundary file that does not exist.
+        f"agy must report no boundary rather than a zero-strength one: {boundary}",
+    )
+    assert_true(
+        any("enforces NO boundary" in warning for warning in boundary["warnings"]),
+        f"the missing boundary must be stated where install output is read: {boundary}",
+    )
+
+    select_root = Path(tempfile.mkdtemp(prefix="agent-workflow-agy-select-"))
+    try:
+        (select_root / ".workflow").mkdir(parents=True, exist_ok=True)
+        applied = provider_select.run(select_root, "agy|claude-sonnet-4-6")
+        assert_true(applied["ok"], f"agy must be selectable through the picker: {applied}")
+        written = read_json_file(select_root / ".workflow" / "second_agent.json")
+        assert_true(
+            written.get("provider") == "agy"
+            and written.get("provider_command") == "agy"
+            and written.get("provider_agent") is None,
+            f"selecting agy must write agy's own command and persona: {written}",
+        )
+        assert_true(
+            all(
+                (written.get("routes") or {}).get(name, {}).get("model")
+                == "claude-sonnet-4-6"
+                for name in ("explore", "plan", "analyze", "verify")
+            ),
+            f"the model must reach every route, not just default_model: {written}",
+        )
+        # Every agy model declares an empty effort set — a statement that nothing has been
+        # verified, and the picker must hold the line rather than build a command line the
+        # provider may refuse.
+        refused = provider_select.run(select_root, "agy|claude-sonnet-4-6|high")
+        assert_true(
+            not refused["ok"] and "takes no reasoning effort" in refused["content"],
+            f"an unverified effort must be refused for agy: {refused}",
+        )
+    finally:
+        shutil.rmtree(select_root, ignore_errors=True)
+
+
 def _assert_codex_provider() -> None:
     """Codex: the second real provider, and the proof the seam holds for shipped code.
 

@@ -153,6 +153,66 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         ),
         "install_module": "adapters.codex_install",
     },
+    "agy": {
+        # agy keeps nothing under the user's home but `bin/` — no config directory, no
+        # policy file, nothing to merge. The keys below are declared anyway because
+        # `install.py` and `installer/check.py` index every bundle positionally and guard
+        # the FILE with .exists(); dropping them turns "this provider ships none" into a
+        # KeyError. The paths point at files that are deliberately absent.
+        "home_dir": ".agy",
+        "instructions": ("AGENTS.md", "AGENTS.md"),
+        # No subagent roster: `agy agents` on a stock install prints an empty list, so
+        # there is no persona to ship and none to select.
+        "agents_dir": None,
+        "global_config": ("agy.template.json", "agy.json"),
+        # A placeholder, knowingly. agy has no project-root config layer to install a
+        # boundary into — see the read-boundary note below.
+        "project_config": ("agy.project.json", "agy.project.json"),
+        "config_aliases": (),
+        "config_candidates": (),
+        "default_command": "agy",
+        "command_env": "AGY_COMMAND",
+        # `--agent` exists and lists nothing; selecting a persona that does not exist
+        # would fail the call for no gain.
+        "default_agent": None,
+        "agent_env": None,
+        # `--effort low|medium|high`, straight from `agy --help`.
+        "effort_arg": ("--effort", "{value}"),
+        # THE READ-ONLY BOUNDARY DOES NOT EXIST FOR THIS PROVIDER, and the flag names
+        # actively suggest otherwise. Probed against the installed binary: `--sandbox` and
+        # `--mode plan` both leave 56 tools enabled and `permission_mode: always-proceed`,
+        # `write_to_file` and `run_command` among them. Removing
+        # `--dangerously-skip-permissions` gives `request-review`, which refuses every
+        # tool — writes AND reads — leaving a second_agent that cannot gather evidence.
+        # So the adapter takes the permissive side and pairs it with `core/agy_guard.py`,
+        # which diffs the working tree around each call. That DETECTS a write; it does not
+        # stop one. `adapters/agy_install.py` reports `not_enforceable` with both counts at
+        # zero and says all of this where a user installing a workspace will read it.
+        #
+        # The full list from `agy models` — eleven entries, short enough to mirror whole
+        # rather than shortlist. Refresh by hand from that subcommand.
+        #
+        # `efforts` is empty for every one of them, and that is a statement about what has
+        # been VERIFIED, not a claim that agy refuses the flag. `--effort` is global and
+        # takes low|medium|high; whether a model whose name already ends in `-high` also
+        # honours it has not been tested, and declaring efforts that turn out to be
+        # rejected would build a command line the provider refuses. Empty means the picker
+        # offers none until someone tests one.
+        "models": (
+            {"id": "gemini-3.6-flash-high", "efforts": ()},
+            {"id": "gemini-3.6-flash-medium", "efforts": ()},
+            {"id": "gemini-3.6-flash-low", "efforts": ()},
+            {"id": "gemini-3.5-flash-high", "efforts": ()},
+            {"id": "gemini-3.5-flash-medium", "efforts": ()},
+            {"id": "gemini-3.5-flash-low", "efforts": ()},
+            {"id": "gemini-3.1-pro-high", "efforts": ()},
+            {"id": "gemini-3.1-pro-low", "efforts": ()},
+            {"id": "claude-sonnet-4-6", "efforts": ()},
+            {"id": "claude-opus-4-6-thinking", "efforts": ()},
+            {"id": "gpt-oss-120b-medium", "efforts": ()},
+        ),
+        "install_module": "adapters.agy_install",
+    },
 }
 
 

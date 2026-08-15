@@ -357,6 +357,43 @@ def validate_provider_config(loaded: dict) -> list[str]:
         elif isinstance(default, (int, float)) and value < 0:
             warnings.append(f"{key}: {value} is negative (the runtime ignores it)")
     warnings.extend(_effort_warnings(loaded))
+    warnings.extend(_route_warnings(loaded))
+    return warnings
+
+
+def _route_warnings(loaded: dict) -> list[str]:
+    """Entry-level shape for `routes`, which the type loop above cannot see into.
+
+    `routes` passes that loop as soon as it is a dict, so everything inside it — a route
+    whose value is a bare string, a model set to `42` — is accepted in full silence and
+    then ignored one by one at read time by `Router.route`.
+
+    Nothing here checks the model NAME against the provider: the shortlist is a menu, and
+    pinning something off it is supported (`_effort_warnings` says the same). Only the
+    shape is wrong-or-right, and a wrong shape is always a mistake.
+    """
+    routes = loaded.get("routes")
+    # Not a dict is already reported by the type loop; saying it twice reads as two
+    # separate problems.
+    if not isinstance(routes, dict):
+        return []
+
+    warnings: list[str] = []
+    for name, entry in routes.items():
+        if not isinstance(entry, dict):
+            warnings.append(
+                f"routes.{name}: {type(entry).__name__}, expected an object "
+                "(the runtime ignores it)"
+            )
+            continue
+        model = entry.get("model")
+        if model is None:
+            continue
+        if not isinstance(model, str) or not model.strip():
+            warnings.append(
+                f"routes.{name}.model: {type(model).__name__}, "
+                "expected a non-empty string"
+            )
     return warnings
 
 
