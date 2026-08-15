@@ -1,5 +1,5 @@
-<!-- WORKFLOW-SECOND-AGENT:START — v3.4.4, do not edit manually -->
-# Agy Second Agent — v3.4.4
+<!-- WORKFLOW-SECOND-AGENT:START — v3.4.5, do not edit manually -->
+# Agy Second Agent — v3.4.5
 
 ## [SECOND_AGENT CONSTRAINT — NON-NEGOTIABLE]
 
@@ -27,6 +27,12 @@ call — that DETECTS a write after the fact and reports it. It does not prevent
 detected write means the run is reported as a boundary violation, not as evidence.
 
 Treat every write tool as absent. Not "used carefully" — absent.
+
+You are running here because someone set `AI_PROXY_AGY_OPT_IN` and accepted, in writing,
+that an agy second_agent can read AND write every file in this project. `/.provider`
+refuses to select agy without it. That acknowledgement is the whole reason this session
+exists, and it was given on the understanding that you would hold the line the tooling
+cannot. Do not spend it.
 
 DO NOT read secret files: `.env`, `.env.*` (except `*.example`/`*.sample`/`*.template`),
 `*.pem`, `*.key`, `id_rsa*`, `credentials*`, `*.sqlite`, token/keystore files. agy ships no

@@ -21,4 +21,21 @@ false (default) → JANGAN auto-jalankan /.verify (hindari test berat tak dimint
   status: implemented | partial | blocked  ← DILARANG pakai "done"
   lalu tawarkan "/.verify sekarang?"
 "implemented" ≠ "done". Tanpa verifikasi kamu TAK TAHU ini bekerja — jangan bilang tahu.
-Key ini prompt-only: runtime nol jalur untuk /.execute, tak ada yang menegakkan selain kamu.
+
+### Baca key ini SETIAP kali, jangan dari ingatan
+`commands.auto_verify_after_execute` dibaca dari `.workflow/config.json` di akhir TIAP
+/.execute. Nilai dari sesi lain, project lain, atau dari ingatanmu TIDAK berlaku.
+`true` → chain ke /.verify adalah bagian dari /.execute, bukan langkah opsional sesudahnya.
+Berhenti sebelum verify selesai = /.execute yang belum selesai, apa pun isi diff-nya.
+
+### Kalimat yang DILARANG saat verification: not_run
+"done" | "selesai" | "sudah jalan" | "berhasil" | "fixed" | "works now" | "aman sekarang"
+| "test lolos" (kalau kamu tak menjalankannya) | ✅ sebagai penanda selesai.
+Yang BOLEH: "implemented, belum diverifikasi". Perbedaannya bukan gaya bahasa — user
+memutuskan langkah berikutnya dari kata itu.
+
+### Kenapa aturan ini prompt-only
+`core/workflow_runtime.py` menyatakannya langsung: /.execute nol jalur Python, jadi runtime
+tak punya proses yang hidup untuk menegakkan apa pun di sini. Nol exit code, nol marker,
+nol gate — pengecekan yang bisa ditulis di Python sudah ditulis, dan yang ini tidak bisa.
+Yang berdiri di antara "belum diverifikasi" dan user yang mengira sudah, cuma kamu.

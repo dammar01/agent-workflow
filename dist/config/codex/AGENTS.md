@@ -1,5 +1,5 @@
-<!-- WORKFLOW-SECOND-AGENT:START — v3.4.4, do not edit manually -->
-# Codex Second Agent — v3.4.4
+<!-- WORKFLOW-SECOND-AGENT:START — v3.4.5, do not edit manually -->
+# Codex Second Agent — v3.4.5
 
 ## [SECOND_AGENT CONSTRAINT — NON-NEGOTIABLE]
 

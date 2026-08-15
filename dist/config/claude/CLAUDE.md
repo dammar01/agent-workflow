@@ -1,9 +1,9 @@
-# Claude Code — Personal Global Config (v3.4.4)
+# Claude Code — Personal Global Config (v3.4.5)
 # Skills: ~/.claude/skills/   Memory: ~/.claude/memory/
 
-<!-- WORKFLOW-MAIN-AGENT:START — v3.4.4, do not edit manually -->
+<!-- WORKFLOW-MAIN-AGENT:START — v3.4.5, do not edit manually -->
 
-## Workflow Main Agent — v3.4.4
+## Workflow Main Agent — v3.4.5
 
 role: orchestrator + user interface + direct executor. Kamu BUKAN second_agent.
 second_agent: OpenCode (read-only evidence), dipanggil via .workflow/run script.
@@ -178,6 +178,7 @@ Relay-tag: teruskan tag grounded/assumption dari proxy apa adanya; JANGAN re-sum
 
 ### Execution rules
 /.execute -y: ada plan aktif (LAST_PLAN_RESULT) → edit HANYA execution scope → verify SESUAI `commands.auto_verify_after_execute`: `true` → auto /.verify, jangan declare done sebelum verify selesai; `false` (default) → status `implemented`, `verification: not_run`, DILARANG bilang "done", tawarkan "/.verify sekarang?". Jangan commit kecuali user minta.
+Key itu dibaca ulang dari `.workflow/config.json` tiap /.execute — bukan dari ingatan, bukan dari sesi lain. `true` → chain ke /.verify BAGIAN DARI /.execute, bukan langkah opsional sesudahnya; berhenti sebelum verify selesai = /.execute belum selesai. Saat `verification: not_run`, kata "done"/"selesai"/"berhasil"/"sudah jalan"/"test lolos" DILARANG — yang boleh cuma "implemented, belum diverifikasi". Aturan ini prompt-only dan runtime nol jalur untuk menegakkannya (/.execute tak punya entry point Python): yang berdiri di antara belum-diverifikasi dan user yang mengira sudah, cuma kamu.
 /.init: bootstrap dari $AGENT_PATH (main.py di repo agent-workflow, BUKAN di project/pip/npm). `python "$env:AGENT_PATH" --command init --work-dir <root>`. $AGENT_PATH kosong → minta set dulu (lihat skill init). Regenerate scripts+config+second_agent.json. Cek $AGENT_PATH SEBELUM simpul "package missing".
 
 ### Session cache (valid dalam MAIN_SESSION_ID + project root sama)

@@ -24,6 +24,7 @@ disagree about it.
 """
 
 import importlib
+import os
 from pathlib import Path
 
 PROVIDER_BUNDLES: dict[str, dict] = {
@@ -178,6 +179,10 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         "agent_env": None,
         # `--effort low|medium|high`, straight from `agy --help`.
         "effort_arg": ("--effort", "{value}"),
+        # Selecting this provider takes an acknowledgement the other two do not, for the
+        # reason spelled out directly below. `provider_requires_opt_in` reads this key and
+        # `core/provider_select.py` refuses the write without it.
+        "requires_opt_in": True,
         # THE READ-ONLY BOUNDARY DOES NOT EXIST FOR THIS PROVIDER, and the flag names
         # actively suggest otherwise. Probed against the installed binary: `--sandbox` and
         # `--mode plan` both leave 56 tools enabled and `permission_mode: always-proceed`,
@@ -230,6 +235,41 @@ def provider_agent_default(provider: str, getenv) -> str | None:
     fallback = bundle.get("default_agent")
     name = bundle.get("agent_env")
     return getenv(name, fallback) if name else fallback
+
+
+def provider_opt_in_env(provider: str) -> str:
+    """The environment variable that acknowledges `provider`'s missing boundary.
+
+    Derived rather than declared so a fourth provider in the same position inherits the
+    convention instead of needing a name invented for it.
+    """
+    return f"AI_PROXY_{provider.upper()}_OPT_IN"
+
+
+def provider_requires_opt_in(provider: str) -> bool:
+    """Does selecting `provider` need an explicit acknowledgement first?
+
+    True for a provider that enforces no read-only boundary. The default is False, so a
+    bundle says nothing here unless it has something to admit: the flag marks the
+    exception, and a provider that keeps its side of the contract never mentions it.
+    """
+    try:
+        bundle = bundle_for(provider)
+    except Exception:
+        return False
+    return bool(bundle.get("requires_opt_in"))
+
+
+def opt_in_granted(provider: str, getenv=os.getenv) -> bool:
+    """Has the acknowledgement been given for `provider` in this environment?
+
+    Any non-empty value counts. The variable existing at all is the deliberate act; making
+    the user also guess which spelling of yes is accepted would add a second way to fail
+    while adding no second decision.
+    """
+    if not provider_requires_opt_in(provider):
+        return True
+    return bool((getenv(provider_opt_in_env(provider)) or "").strip())
 
 
 def provider_models(provider: str) -> tuple[dict, ...]:

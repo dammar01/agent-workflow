@@ -31,10 +31,12 @@ from tests.checks.facts import (  # noqa: E402
 from tests.checks.jobs import _test_submit_admission  # noqa: E402
 from tests.checks.messages import _test_no_code_in_messages  # noqa: E402
 from tests.checks.provider import (  # noqa: E402
+    _test_agy_provider,
     _test_provider_seam,
     _test_provider_selection,
 )
 from tests.checks.redaction import _test_redaction_boundary  # noqa: E402
+from tests.checks.registry import _test_every_check_is_registered  # noqa: E402
 from tests.checks.verify_gaps import _test_quick_verify_gaps  # noqa: E402
 from tests.checks.workspace import (  # noqa: E402
     _test_init_upgrade_and_session_guard,
@@ -47,8 +49,10 @@ from tests.scenario import run_tests  # noqa: E402
 # at the end of its own sequence, so a default run does not repeat them here.
 SUITES: dict[str, tuple] = {
     "scenario": (run_tests, "stateful sequence + every standalone check (the full run)"),
+    "registry": (_test_every_check_is_registered, "every check here is reachable from both entry points"),
     "provider-seam": (_test_provider_seam, "adapter registry and provider resolution"),
     "provider-selection": (_test_provider_selection, "interactive provider/model/effort write"),
+    "agy": (_test_agy_provider, "agy parsing, argv, and its read-boundary guard"),
     "messages": (_test_no_code_in_messages, "AST scan: no code leaks into user-facing text"),
     "facts-concurrency": (_test_facts_concurrency, "fact store under concurrent writers"),
     "anchor-relocation": (_test_anchor_relocation, "facts survive a line moving"),

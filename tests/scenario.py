@@ -57,11 +57,18 @@ from tests.checks.workspace import (
 )
 from tests.checks.continuation import _test_contract_continuation
 from tests.checks.messages import _test_no_code_in_messages
-from tests.checks.provider import _test_provider_seam, _test_provider_selection
+from tests.checks.provider import (
+    _test_agy_provider,
+    _test_provider_seam,
+    _test_provider_selection,
+)
+from tests.checks.registry import _test_every_check_is_registered
 
 def run_tests() -> None:
+    _test_every_check_is_registered()
     _test_provider_seam()
     _test_provider_selection()
+    _test_agy_provider()
     _test_no_code_in_messages()
     fake_opencode = FakeOpenCodeAdapter()
     temp_root = Path(tempfile.mkdtemp(prefix="agent-workflow-test-"))

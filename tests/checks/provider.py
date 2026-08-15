@@ -648,7 +648,11 @@ def _test_agy_provider() -> None:
     """
     from adapters.agy_adapter import AgyAdapter
     from adapters.registry import adapter_class, available_providers
-    from config.providers import PROVIDER_BUNDLES, effort_args
+    from config.providers import (
+        PROVIDER_BUNDLES,
+        effort_args,
+        provider_opt_in_env,
+    )
     from core import agy_guard
     from core import provider_select
     from core.workspace_paths import read_json_file
@@ -842,11 +846,50 @@ def _test_agy_provider() -> None:
     )
 
     select_root = Path(tempfile.mkdtemp(prefix="agent-workflow-agy-select-"))
+    opt_in_env = provider_opt_in_env("agy")
+    previous_opt_in = os.environ.get(opt_in_env)
     try:
         (select_root / ".workflow").mkdir(parents=True, exist_ok=True)
+        config_path = select_root / ".workflow" / "second_agent.json"
+
+        # Without the acknowledgement, agy is a provider the picker names and refuses to
+        # write. Asserted on the FILE as well as the verdict: a refusal that still wrote
+        # would leave a workspace pointed at an unbounded second_agent while reporting
+        # that it had declined to do exactly that.
+        os.environ.pop(opt_in_env, None)
+        blocked = provider_select.run(select_root, "agy|claude-sonnet-4-6")
+        assert_true(
+            not blocked["ok"]
+            and blocked["meta"]["error_type"] == "invalid_provider_selection"
+            and "read-only boundary" in blocked["content"],
+            f"agy must be refused without an explicit opt-in: {blocked}",
+        )
+        assert_true(
+            not config_path.exists(),
+            "a refused agy selection must write nothing at all",
+        )
+        assert_true(
+            opt_in_env in (blocked["meta"].get("next_action") or ""),
+            f"the refusal must name the variable that lifts it: {blocked['meta']}",
+        )
+
+        catalog = provider_select.run(select_root, "")
+        entries = {entry["name"]: entry for entry in catalog["meta"]["providers"]}
+        assert_true(
+            entries["agy"]["requires_opt_in"]
+            and not entries["agy"]["opt_in_granted"]
+            and not entries["opencode"]["requires_opt_in"],
+            # The picker offering agy as though it were interchangeable, only for the
+            # write to fail a second later, is the menu lying about itself.
+            f"the catalog must mark agy as gated and the others as not: {entries['agy']}",
+        )
+
+        os.environ[opt_in_env] = "1"
         applied = provider_select.run(select_root, "agy|claude-sonnet-4-6")
-        assert_true(applied["ok"], f"agy must be selectable through the picker: {applied}")
-        written = read_json_file(select_root / ".workflow" / "second_agent.json")
+        assert_true(
+            applied["ok"], f"agy must be selectable once acknowledged: {applied}"
+        )
+        written = read_json_file(config_path)
         assert_true(
             written.get("provider") == "agy"
             and written.get("provider_command") == "agy"
@@ -870,6 +913,10 @@ def _test_agy_provider() -> None:
             f"an unverified effort must be refused for agy: {refused}",
         )
     finally:
+        if previous_opt_in is None:
+            os.environ.pop(opt_in_env, None)
+        else:
+            os.environ[opt_in_env] = previous_opt_in
         shutil.rmtree(select_root, ignore_errors=True)
 
 

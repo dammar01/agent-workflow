@@ -41,9 +41,12 @@ from config.providers import (
     bundled_providers,
     model_efforts,
     model_is_listed,
+    opt_in_granted,
     provider_agent_default,
     provider_command_default,
     provider_models,
+    provider_opt_in_env,
+    provider_requires_opt_in,
 )
 from config.routing import COMMAND_ROUTES
 from config.settings import (
@@ -100,6 +103,12 @@ def _catalog(project_root: Path) -> dict:
                 # showing: a provider that is "not installed" because PATH points at a
                 # different binary is a different problem from one never installed.
                 "detail": detail,
+                # Two fields rather than one because the picker has two things to say: that
+                # this provider needs an acknowledgement at all, and whether the current
+                # environment has already given it. Offering it as a choice and refusing
+                # the write a second later would be the picker lying about its own menu.
+                "requires_opt_in": provider_requires_opt_in(name),
+                "opt_in_granted": opt_in_granted(name),
                 "models": [
                     {"id": entry["id"], "efforts": list(entry.get("efforts") or ())}
                     for entry in provider_models(name)
@@ -230,6 +239,22 @@ def _apply(project_root: Path, payload: str) -> dict:
         return _refuse(
             f"unknown provider {provider!r}",
             next_action=f"Known providers: {', '.join(known)}",
+        )
+
+    # A provider that enforces no read-only boundary is selectable, but not by accident.
+    # The refusal sits here, before the write, because this is the only place a workspace
+    # acquires one: `selected_provider` merely reads the file back, and refusing there
+    # would take `doctor` down at the moment its job is to say which provider is
+    # configured. A `second_agent.json` that already names one keeps working — this
+    # guards the door, not the room, and the release notes say so.
+    if not opt_in_granted(provider):
+        env_name = provider_opt_in_env(provider)
+        return _refuse(
+            f"{provider} enforces no read-only boundary and needs an explicit opt-in",
+            next_action=(
+                f"Set {env_name}=1 to acknowledge that an {provider} second_agent can "
+                f"read AND write every file in this project, then select it again."
+            ),
         )
 
     warnings: list[str] = []
