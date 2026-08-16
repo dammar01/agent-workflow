@@ -115,50 +115,15 @@ def _argv_meta(args: list[str]) -> dict:
     }
 
 
-def _attach_redactions(meta: dict, hits: list[dict]) -> None:
-    if not hits:
-        return
-    counts: dict[str, int] = {}
-    for hit in [*(meta.get("redactions") or []), *hits]:
-        if not isinstance(hit, dict) or not hit.get("kind"):
-            continue
-        kind = str(hit["kind"])
-        counts[kind] = counts.get(kind, 0) + int(hit.get("count") or 0)
-    meta["redactions"] = [
-        {"kind": kind, "count": count} for kind, count in counts.items()
-    ]
-    meta["redaction_count"] = sum(counts.values())
-
-
-def _sanitize_meta(meta: dict | None, extra_hits: list[dict] | None = None) -> dict:
-    clean, hits = redact_value(meta or {})
-    if not isinstance(clean, dict):
-        clean = {}
-    _attach_redactions(clean, [*(extra_hits or []), *hits])
-    return clean
-
-
-def make_error(
-    error_type: str,
-    message: str,
-    next_action: str,
-    meta: dict | None = None,
-    **fields,
-) -> dict:
-    clean_message, message_hits = redact(str(message or ""))
-    clean_next, next_hits = redact(str(next_action or ""))
-    clean_fields, field_hits = redact_value(fields)
-    safe_meta = _sanitize_meta(meta, [*message_hits, *next_hits, *field_hits])
-    return _contract_make_error(
-        error_type, clean_message, clean_next, meta=safe_meta, **clean_fields
-    )
-
-
-def make_ok(content: str, meta: dict | None = None, digest: dict | None = None) -> dict:
-    clean_content, content_hits = redact(content or "")
-    clean_digest, digest_hits = redact_value(digest)
-    safe_meta = _sanitize_meta(meta, [*content_hits, *digest_hits])
-    return _contract_make_ok(clean_content, safe_meta, clean_digest)
+# Re-exported so call sites inside this module keep addressing `make_error` / `make_ok`
+# unqualified. The accounting they carry is shared: see adapters/redaction.py for why it
+# cannot live in each adapter.
+from adapters.redaction import (  # noqa: E402
+    attach_redactions as _attach_redactions,
+    make_error,
+    make_ok,
+    sanitize_meta as _sanitize_meta,
+)
 
 
 def _too_long_for_cmd(args: list[str]) -> int | None:

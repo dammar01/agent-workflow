@@ -21,6 +21,22 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+from tests.checks.adapters import (  # noqa: E402
+    _test_adapter_error_normalization,
+    _test_adapter_redaction_is_shared,
+)
+from tests.checks.audit import (  # noqa: E402
+    _test_audit_is_not_telemetry,
+    _test_audit_report,
+    _test_audit_survives_a_torn_row,
+)
+from tests.checks.prompt import (  # noqa: E402
+    _test_permitted_tools_line,
+    _test_prompt_contract_blocks,
+    _test_task_cap_is_visible_in_and_out_of_band,
+    _test_unknown_role_is_refused,
+    _test_verify_branch_carries_routing_contract,
+)
 from tests.checks.continuation import _test_contract_continuation  # noqa: E402
 from tests.checks.contracts import _test_workflow_contracts  # noqa: E402
 from tests.checks.deps import _test_runtime_is_stdlib_only  # noqa: E402
@@ -75,6 +91,16 @@ SUITES: dict[str, tuple] = {
     "telemetry": (_test_telemetry_metrics, "P1 metrics count tasks, not calls, and report their denominators"),
     "governance": (_test_governance_controls, "provider allowlist, budget ceiling, tool policy, local-first streams"),
     "graph-verification": (_test_graph_verification, "per-node graph provenance, drift vs move, subgraph slicing"),
+    "adapters": (_test_adapter_error_normalization, "every adapter normalises errors and counts redactions alike"),
+    "adapters-shared": (_test_adapter_redaction_is_shared, "no adapter carries a private copy of the redaction helpers"),
+    "prompt-blocks": (_test_prompt_contract_blocks, "every role/command branch asks for a shape the runtime parses"),
+    "prompt-verify": (_test_verify_branch_carries_routing_contract, "verify prompt carries the severity routing triple"),
+    "prompt-tools": (_test_permitted_tools_line, "declared tool policy reaches the prompt, absence stays absent"),
+    "prompt-cap": (_test_task_cap_is_visible_in_and_out_of_band, "task truncation is reported in band and out"),
+    "prompt-role": (_test_unknown_role_is_refused, "an unknown role is refused instead of building an unparseable prompt"),
+    "audit": (_test_audit_report, "the governance trail reads back and keeps a null provider visible"),
+    "audit-torn": (_test_audit_survives_a_torn_row, "a partial final line does not hide the readable trail"),
+    "audit-separate": (_test_audit_is_not_telemetry, "audit and usage stay separate readers over separate files"),
 }
 
 

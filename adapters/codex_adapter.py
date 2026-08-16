@@ -151,30 +151,13 @@ def _argv_meta(args: list[str]) -> dict:
     }
 
 
-def _sanitize_meta(meta: dict | None) -> dict:
-    clean, _ = redact_value(meta or {})
-    return clean if isinstance(clean, dict) else {}
-
-
-def make_error(
-    error_type: str,
-    message: str,
-    next_action: str,
-    meta: dict | None = None,
-    **fields,
-) -> dict:
-    clean_message, _ = redact(str(message or ""))
-    clean_next, _ = redact(str(next_action or ""))
-    clean_fields, _ = redact_value(fields)
-    return _contract_make_error(
-        error_type, clean_message, clean_next, meta=_sanitize_meta(meta), **clean_fields
-    )
-
-
-def make_ok(content: str, meta: dict | None = None, digest: dict | None = None) -> dict:
-    clean_content, _ = redact(content or "")
-    clean_digest, _ = redact_value(digest)
-    return _contract_make_ok(clean_content, _sanitize_meta(meta), clean_digest)
+# Shared with every other adapter. The local copy this replaces dropped the redaction
+# hits, so a codex call that scrubbed a secret still recorded `redactions: 0`.
+from adapters.redaction import (  # noqa: E402
+    make_error,
+    make_ok,
+    sanitize_meta as _sanitize_meta,
+)
 
 
 class CodexAdapter:

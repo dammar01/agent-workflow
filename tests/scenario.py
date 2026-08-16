@@ -68,6 +68,22 @@ from tests.checks.provider import (
     _test_provider_selection,
 )
 from tests.checks.registry import _test_every_check_is_registered
+from tests.checks.adapters import (
+    _test_adapter_error_normalization,
+    _test_adapter_redaction_is_shared,
+)
+from tests.checks.audit import (
+    _test_audit_is_not_telemetry,
+    _test_audit_report,
+    _test_audit_survives_a_torn_row,
+)
+from tests.checks.prompt import (
+    _test_permitted_tools_line,
+    _test_prompt_contract_blocks,
+    _test_task_cap_is_visible_in_and_out_of_band,
+    _test_unknown_role_is_refused,
+    _test_verify_branch_carries_routing_contract,
+)
 
 def run_tests() -> None:
     _test_every_check_is_registered()
@@ -75,6 +91,16 @@ def run_tests() -> None:
     _test_provider_selection()
     _test_agy_provider()
     _test_no_code_in_messages()
+    _test_adapter_error_normalization()
+    _test_adapter_redaction_is_shared()
+    _test_prompt_contract_blocks()
+    _test_verify_branch_carries_routing_contract()
+    _test_permitted_tools_line()
+    _test_task_cap_is_visible_in_and_out_of_band()
+    _test_unknown_role_is_refused()
+    _test_audit_report()
+    _test_audit_survives_a_torn_row()
+    _test_audit_is_not_telemetry()
     fake_opencode = FakeOpenCodeAdapter()
     temp_root = Path(tempfile.mkdtemp(prefix="agent-workflow-test-"))
     original_popen = main.subprocess.Popen

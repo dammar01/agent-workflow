@@ -398,6 +398,7 @@ if __name__ == "__main__":
             "inspect",
             "provider",
             "report",
+            "audit",
             "graph-meta",
             "submit",
             "await",
@@ -507,6 +508,13 @@ if __name__ == "__main__":
         root = detect_project_root(work_dir)
         result = make_ok("", meta={"command": "report", "project_root": str(root)})
         result["report"] = telemetry.report(root)
+    elif args.command == "audit":
+        from core import audit
+        from core.contract import make_ok
+
+        root = detect_project_root(work_dir)
+        result = make_ok("", meta={"command": "audit", "project_root": str(root)})
+        result["audit"] = audit.report(root)
     elif args.command == "graph-meta":
         from core import graph_meta
         from core.contract import make_error, make_ok
