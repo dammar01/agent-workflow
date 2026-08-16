@@ -712,7 +712,7 @@ def default_config(project_root: Path, agent_workflow_path: str | None) -> dict:
             "tool_version": tool["tool_version"],
             "runtime_version": tool["runtime_version"],
             # Live selector as of v3.4.3, not a label: adapters.registry resolves the
-            # adapter from this value. Was inert metadata in every earlier version.
+            # adapter from this value.
             "second_agent": DEFAULT_PROVIDER,
             "main_agent": "agnostic",
             "provider_config": ".workflow/second_agent.json",

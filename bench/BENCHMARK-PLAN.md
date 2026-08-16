@@ -2,7 +2,7 @@
 
 **Status:** rencana disetujui, belum dieksekusi
 **Dibuat:** 2026-08-15
-**Versi SUT:** agent-workflow v3.4.4 (`config/settings.py:20`)
+**Versi SUT:** agent-workflow v3.4.5 (`config/settings.py:20`)
 **Dokumen ini self-contained.** Sesi baru cukup membaca file ini — tidak perlu riwayat percakapan sebelumnya.
 
 ---

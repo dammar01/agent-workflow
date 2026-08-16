@@ -48,6 +48,11 @@ TARGETS: dict[str, tuple[str, ...]] = {
         "[COMMAND GUIDE — v",
     ),
     "dist/config/claude/skills/init.md": ("generated: run/inspect/check",),
+    # Not shipped, but it names the version of the system under test — and a benchmark
+    # whose SUT version is wrong measures something nobody can identify afterwards. It
+    # drifted to v3.4.4 unnoticed for exactly the reason this file exists: `--check` only
+    # looks where TARGETS points, so a version mention outside it reports clean forever.
+    "bench/BENCHMARK-PLAN.md": ("**Versi SUT:**",),
 }
 
 # Each provider's instruction file carries the same banner. Derived rather than listed so
