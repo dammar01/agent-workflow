@@ -57,6 +57,12 @@ from tests.checks.workspace import (
 )
 from tests.checks.continuation import _test_contract_continuation
 from tests.checks.contracts import _test_workflow_contracts
+from tests.checks.installer import (
+    _test_installer_drift_check,
+    _test_installer_rollback_receipt,
+    _test_installer_settings_merge,
+    _test_installer_text_merging,
+)
 from tests.checks.deps import _test_runtime_is_stdlib_only
 from tests.checks.governance import _test_governance_controls
 from tests.checks.graph_verification import _test_graph_verification
@@ -1052,6 +1058,10 @@ confidence: high — all requested checks ran
         _test_init_upgrade_and_session_guard()
         _test_contract_continuation()
         _test_workflow_contracts()
+        _test_installer_text_merging()
+        _test_installer_settings_merge()
+        _test_installer_rollback_receipt()
+        _test_installer_drift_check()
         _test_runtime_is_stdlib_only()
         _test_telemetry_metrics()
         _test_governance_controls()

@@ -98,6 +98,82 @@ def _correlation_scoping() -> None:
     )
 
 
+def _correlation_chain() -> None:
+    """A plan and the verify that follows it must land in the usage stream as ONE task.
+
+    This is the aggregation the P1 metrics group by: before the chain hop, plan and
+    verify derived ids from their own task texts, so the same piece of work produced
+    three subjects and "right on the first try" was true of none of them.
+    """
+    assert_true(
+        TaskSpec.build("verify", "t", "sid", "/repo", correlation_id="chain-1").correlation_id
+        == "chain-1",
+        "an explicit correlation id must win over derivation — the chain depends on it",
+    )
+    assert_true(
+        TaskSpec.build("verify", "t", "sid", "/repo", correlation_id=None).correlation_id
+        == correlation_id_for("/repo", "sid", "t"),
+        "no explicit id must fall back to deriving exactly as before",
+    )
+
+    root = Path(tempfile.mkdtemp(prefix="aw-chain-"))
+    try:
+        ensure_workflow_workspace(root, str(Path("main.py").resolve()))
+        executor = Executor()
+        executor._last_call_meta = None
+        executor._finalize_runtime_result(
+            {"ok": True, "content": "plan body", "meta": {}},
+            root, "plan", "build feature X", "sid-1", {"session_reset": False}, False,
+        )
+        executor._finalize_runtime_result(
+            {"ok": True, "content": _VERIFICATION, "meta": {}},
+            root, "verify", "check the feature X work", "sid-1",
+            {"session_reset": False}, False,
+        )
+        rows = [
+            json.loads(line)
+            for line in (root / ".workflow" / "usage.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line
+        ]
+        plan_row = next(row for row in rows if row["command"] == "plan")
+        verify_row = next(row for row in rows if row["command"] == "verify")
+        assert_true(
+            plan_row["correlation_id"] == verify_row["correlation_id"],
+            "a verify following a plan must adopt the plan's correlation id — "
+            "different task texts were exactly what broke the aggregation",
+        )
+        assert_true(
+            plan_row["correlation_id"]
+            == correlation_id_for(root, "sid-1", "build feature X"),
+            "the chain's identity must be the PLAN's derived id, so history and "
+            "derivation still agree on what the task is",
+        )
+
+        # Another session has no chain: verify there still derives its own id.
+        executor._finalize_runtime_result(
+            {"ok": True, "content": _VERIFICATION, "meta": {}},
+            root, "verify", "unrelated check", "sid-2",
+            {"session_reset": False}, False,
+        )
+        rows = [
+            json.loads(line)
+            for line in (root / ".workflow" / "usage.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+            if line
+        ]
+        lone = next(row for row in rows if row["session_id"] == "sid-2")
+        assert_true(
+            lone["correlation_id"] == correlation_id_for(root, "sid-2", "unrelated check"),
+            "a chainless verify must fall back to derivation, never inherit another "
+            "session's chain",
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _usage_derivation() -> None:
     verify_pass = usage_from_result(
         {"ok": True, "content": "x" * 400, "meta": {"verdict": "pass"}},
@@ -309,6 +385,7 @@ def _finalize_is_idempotent() -> None:
 def _test_workflow_contracts() -> None:
     _round_trips()
     _correlation_scoping()
+    _correlation_chain()
     _usage_derivation()
     _stream_append()
     _verify_verdict_is_recorded()

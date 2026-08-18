@@ -21,7 +21,7 @@ from core.contract import (
     readable_claims,
     validate_verification_contract,
 )
-from core.contracts import TaskSpec, usage_from_result
+from core.contracts import TaskSpec, correlation_id_for, usage_from_result
 from core.governance import budget_limit, budget_state
 from core import telemetry
 from core import fact_store
@@ -34,6 +34,7 @@ from core import quick_verify
 from core.workflow_runtime import (
     CONFIG_VERSION,
     acquire_runtime_lock,
+    active_chain_correlation,
     auto_verify_after_execute,
     bind_session,
     detect_project_root,
@@ -44,6 +45,7 @@ from core.workflow_runtime import (
     runtime_lock_owned,
     set_fanout_capability,
     subagent_fanout_enabled,
+    stamp_task_chain,
     run_sweep,
     update_command_cache,
     update_plan_scope,
@@ -546,10 +548,26 @@ class Executor:
                     assessment = validate_verification_contract(result.get("content") or "")
                     measured = dict(result)
                     measured["meta"] = {**meta, "verdict": assessment["verdict"]}
+            # The chain hop that makes plan/execute/verify one measurable task: a plan
+            # records its derived id as the session's active chain, and the commands
+            # that act on that plan adopt it instead of deriving their own. Everything
+            # else (explore, analyze) stays per-task derived. Inside this try on
+            # purpose — chain state is instrumentation, never a reason a call fails.
+            correlation = None
+            if command == "plan":
+                correlation = correlation_id_for(project_root, session_id, task)
+                stamp_task_chain(project_root, session_id, correlation)
+            elif command in ("execute", "verify"):
+                correlation = active_chain_correlation(project_root, session_id)
             record = usage_from_result(
                 measured,
                 spec=TaskSpec.build(
-                    command, task, session_id, project_root, model=None
+                    command,
+                    task,
+                    session_id,
+                    project_root,
+                    model=None,
+                    correlation_id=correlation,
                 ),
                 call_meta=self._last_call_meta,
                 recorded_at=now_iso(),

@@ -68,6 +68,14 @@ def correlation_id_for(project_root, session_id: str, task: str) -> str:
 
     Deliberately NOT global: the same task text in a different session is different work
     (a fresh attempt after a session reset should not count as rework of the old one).
+
+    Derivation alone could not tie a chain together, though: plan, execute, and verify
+    carry different task TEXTS for the same piece of work, so deriving from each produced
+    three ids where the metrics needed one. So a plan additionally records its derived id
+    as the session's active chain (state.json `chain`), and the execute/verify that follow
+    prefer that recorded id over their own derivation. One hop, through state the runtime
+    already owns, and fail-open: with no recorded chain they fall back to deriving exactly
+    as before.
     """
     material = "\x00".join(
         (str(project_root), str(session_id or ""), " ".join((task or "").split()).lower())
@@ -105,14 +113,19 @@ class TaskSpec:
         session_id: str,
         project_root,
         model: str | None = None,
+        correlation_id: str | None = None,
     ) -> "TaskSpec":
+        # An explicit id wins: a verify that follows a plan is the SAME piece of work,
+        # and only the caller (reading the session's chain) can know that. Absent one,
+        # derive as always — the fallback that keeps a chainless call measurable.
         return cls(
             command=(command or "").strip().lower(),
             task=task or "",
             session_id=str(session_id or ""),
             project_root=str(project_root or ""),
             model=model,
-            correlation_id=correlation_id_for(project_root, session_id, task),
+            correlation_id=correlation_id
+            or correlation_id_for(project_root, session_id, task),
         )
 
 

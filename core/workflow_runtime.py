@@ -1271,6 +1271,39 @@ def update_state_from_agent_output(
     return state
 
 
+def stamp_task_chain(
+    project_root: Path, session_id: str, correlation_id: str
+) -> dict:
+    """Record a plan's correlation id as this session's active task chain.
+
+    The execute and verify that follow a plan are the same piece of work, but their task
+    texts differ, so deriving a correlation id from each produced three ids per chain —
+    rework and first-pass correctness had no subject. The plan's own derived id is the
+    chain's identity; recording it here is the single hop that lets later commands adopt
+    it. A new plan overwrites the chain: the latest plan is what execute/verify follow.
+    """
+    loaded = load_workspace_state(project_root, session_id)
+    state = loaded["state"]
+    state["chain"] = {"correlation_id": str(correlation_id), "started_at": now_iso()}
+    atomic_write_json(loaded["paths"]["state"], state)
+    return state
+
+
+def active_chain_correlation(project_root: Path, session_id: str) -> str | None:
+    """The correlation id of the chain the last plan opened, or None outside a chain.
+
+    Fail-open by contract: this feeds telemetry, and an unreadable state file must make
+    the caller fall back to deriving an id, never fail the call it is measuring.
+    """
+    try:
+        loaded = load_workspace_state(project_root, session_id)
+    except (OSError, ValueError):
+        return None
+    chain = loaded["state"].get("chain")
+    value = chain.get("correlation_id") if isinstance(chain, dict) else None
+    return str(value) if value else None
+
+
 def update_plan_scope(project_root: Path, content: str, session_id: str) -> dict:
     loaded = load_workspace_state(project_root, session_id)
     scope = loaded["scope"]

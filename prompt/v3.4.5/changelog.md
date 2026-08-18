@@ -237,6 +237,11 @@ dilewati jadi terlihat.
   keputusan yang belum diambil: mengunci id ke sesuatu yang stabil lintas command, atau
   mengalirkan id eksplisit lewat job record dan argv — yang justru ditolak sadar saat
   merancangnya, karena tiap hop adalah tempat id bisa hilang.
+  **Ditutup pasca-rilis di `dev` (2026-08-18).** Keputusannya: id eksplisit, tapi lewat
+  SATU hop yang sudah dimiliki runtime alih-alih job record dan argv — plan mencatat id
+  turunannya sebagai `chain` di state.json sesinya, dan execute/verify yang mengikutinya
+  mengadopsi id itu; tanpa chain, derivasi lama tetap berlaku (fail-open). Dibuktikan
+  `_correlation_chain` di tests/checks/contracts.py.
 - **Edit main_agent tidak terukur sama sekali.** `/.execute` tak punya jalur Python, jadi
   perubahan berkas yang dikerjakan main_agent tak pernah melewati proses ini dan tak masuk
   usage maupun audit. `accepted` hanya lahir dari verify. Jejak audit karena itu mencatat
@@ -270,3 +275,7 @@ dilewati jadi terlihat.
   melatih panggilan delegated sungguhan dari ujung ke ujung dilewati karena menghabiskan
   kuota berbayar. Rilis ini belum pernah dijalankan terhadap provider hidup. Dicatat di
   sini alih-alih dibiarkan tersirat, sesuai langkah 5 `RELEASE.md`.
+  **Ditutup pasca-rilis di `dev` (2026-08-18).** Dijalankan terhadap provider hidup:
+  98 passed, 0 failed, 0 skipped — termasuk blok [DELEGATED] berbayar (explore + sweep).
+  Catatan jujur: dijalankan pada working tree `dev` yang sudah memuat perbaikan
+  correlation_id dan unit test installer, bukan pada tag 3.4.5 persis.

@@ -49,6 +49,12 @@ from tests.checks.facts import (  # noqa: E402
     _test_evidence_reuse,
     _test_facts_concurrency,
 )
+from tests.checks.installer import (  # noqa: E402
+    _test_installer_drift_check,
+    _test_installer_rollback_receipt,
+    _test_installer_settings_merge,
+    _test_installer_text_merging,
+)
 from tests.checks.jobs import _test_submit_admission  # noqa: E402
 from tests.checks.messages import _test_no_code_in_messages  # noqa: E402
 from tests.checks.provider import (  # noqa: E402
@@ -98,6 +104,10 @@ SUITES: dict[str, tuple] = {
     "prompt-tools": (_test_permitted_tools_line, "declared tool policy reaches the prompt, absence stays absent"),
     "prompt-cap": (_test_task_cap_is_visible_in_and_out_of_band, "task truncation is reported in band and out"),
     "prompt-role": (_test_unknown_role_is_refused, "an unknown role is refused instead of building an unparseable prompt"),
+    "installer-text": (_test_installer_text_merging, "lenient decode, intent stanzas, managed-block splice"),
+    "installer-settings": (_test_installer_settings_merge, "hook refresh keeps user hooks; POSIX rewrite ships bash"),
+    "installer-rollback": (_test_installer_rollback_receipt, "receipted rollback restores, deletes, and refuses drift"),
+    "installer-check": (_test_installer_drift_check, "settings drift detection: missing, current, unparseable"),
     "audit": (_test_audit_report, "the governance trail reads back and keeps a null provider visible"),
     "audit-torn": (_test_audit_survives_a_torn_row, "a partial final line does not hide the readable trail"),
     "audit-separate": (_test_audit_is_not_telemetry, "audit and usage stay separate readers over separate files"),
