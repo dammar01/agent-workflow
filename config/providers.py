@@ -82,6 +82,18 @@ PROVIDER_BUNDLES: dict[str, dict] = {
             # `reasoning: true` but `reasoning_options: []` — it reasons, and exposes no
             # dial for how much. Passing --variant here is an error, not a no-op.
             {"id": "opencode/mimo-v2.5-free", "efforts": ()},
+            {
+                "id": "openrouter/deepseek/deepseek-v4-pro-0813",
+                "efforts": ("low", "high", "max"),
+            },
+            {
+                "id": "openrouter/google/gemini-3.7-flash",
+                "efforts": ("low", "medium", "high"),
+            },
+            {
+                "id": "openrouter/~deepseek/deepseek-v4-flash-latest",
+                "efforts": ("low", "high", "max"),
+            },
         ),
         # Provider policy lives with the provider (see the module docstring). The module
         # answers `load_config(path)`, `merge_policy(current, incoming, warn)`, and
