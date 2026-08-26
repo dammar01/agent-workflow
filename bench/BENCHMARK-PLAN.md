@@ -162,14 +162,23 @@ Ditaruh di `bench/`, di luar path yang diukur:
 bench/
   BENCHMARK-PLAN.md   # dokumen ini
   STATE.md            # progres eksekusi, diperbarui tiap fase selesai
-  corpus.json         # daftar task hasil generate dari git log
-  driver.py           # jalankan satu unit (task x arm x repeat)
-  oracle.py           # verdict mesin
-  collect.py          # panen tokenburn + call.meta.json -> ledger.jsonl
+  policy.py           # batas run: waktu, retry, budget, karantina (§7b)
+  corpus.py           # generator kandidat task dari git log
+  corpus.json         # daftar task, prompt dan oracle_tests diisi tangan
+  driver.py           # satu unit: prepare/delegate/judge/finish/teardown
+  oracle.py           # verdict mesin, dibekukan sebelum unit pertama
+  test_oracle.py      # pengunci pemetaan verdict + policy, di luar tests/run.py
+  collect.py          # unit records + tokenburn + call.meta.json -> ledger.jsonl
   aggregate.py        # ledger -> tabel per arm
   ledger.jsonl        # satu baris per unit
+  units/              # satu record per unit, sumber ledger
+  raw/                # ekspor tokenburn mentah per batch
   worktrees/          # git worktree per unit, dibuang setelah selesai
+  .gitignore          # units/, raw/, worktrees/ tidak dilacak
 ```
+
+`units/`, `raw/`, dan `worktrees/` adalah scratch dan tidak dilacak git. `corpus.json` dan
+`ledger.jsonl` dilacak: yang pertama definisi studi, yang kedua datanya.
 
 `bench/` wajib di luar scope task apa pun, supaya agen yang diuji tidak menyentuh instrumennya sendiri.
 
@@ -220,11 +229,20 @@ git worktree add bench/worktrees/<task>_<arm>_<rep> <base_sha>
 
 - **Arm A** — sesi Claude, subagent dimatikan, `.workflow` tidak dipasang di worktree.
 - **Arm B** — sesi Claude, subagent native diizinkan, `.workflow` tidak dipasang.
-- **Arm C** — sesi Claude + `.workflow` terpasang, worker opencode. Panggil `main.py` langsung, lewati `run.ps1` (runner POSIX digenerate dinamis dan tidak di-ship; panggilan langsung menyeragamkan lintas OS):
+- **Arm C** — sesi Claude + `.workflow` terpasang, worker opencode. `bench/driver.py prepare`
+  memasang `.workflow` di worktree; tanpa itu panggilan terdelegasi pertama mati di
+  `.workflow/config.json` dalam dua detik dan unitnya bukan arm C sama sekali. Panggil
+  `main.py` langsung, lewati `run.ps1` (runner POSIX digenerate dinamis dan tidak di-ship;
+  panggilan langsung menyeragamkan lintas OS):
 
 ```bash
-python main.py --command explore --prompt "<task>" --session <unit_session_id> --work-dir <worktree> --pretty
+python main.py --command await --job-command explore --prompt "<task>"   --session <unit_session_id> --work-dir <worktree> --poll-timeout <sisa detik unit>
 ```
+
+`await`, bukan `--command explore`. explore/plan/analyze/verify ada di `BACKGROUND_COMMANDS`
+(`main.py:51`): memanggilnya langsung mengirim job lalu kembali seketika dengan
+`{ok, status, job_id}` — nol `evidence_ref`, nol isi, dan `ok` yang menggambarkan
+pengiriman alih-alih pekerjaan. `driver.py delegate` membungkus ini.
 
 Isolasi: `session_id` unik per unit. Paralel maksimum 6; naikkan `AI_PROXY_MAX_GLOBAL_WORKERS` bila mau lebih.
 
@@ -251,7 +269,15 @@ tokenburn scan --last 1d --json > bench/raw/scan_<batch>.json
 tokenburn db export --since <batch_start_ms> > bench/raw/export_<batch>.csv
 ```
 
-Sisi worker arm C dari `.workflow/sessions/<sid>/logs/<prompt_id>/call.meta.json` dan `storage/jobs/job_<id>.json`.
+Sisi worker arm C dari `.workflow/sessions/<sid>/logs/<prompt_id>/call.meta.json` saja.
+`storage/jobs/job_<id>.json` **tidak** dipanen: isinya catatan siklus hidup — `worker_pid`,
+`worker_identity`, `status`, `error` — dan nol di antaranya ada di skema §7. Yang dulu
+diharapkan darinya (alasan kegagalan) kini datang langsung di balasan `await` yang
+`driver.py delegate` tunggu.
+
+Nama direktori sesi bukan `session_id` apa adanya: runtime melewatkannya ke
+`safe_path_component` (`core/workspace_paths.py:99`), jadi `bench_T01_C_1` menjadi
+`bench_T01_C_1--<hash12>`. `collect.py` menerapkan fungsi yang sama alih-alih menebak.
 
 ### Fase 5 — Agregasi dan analisis
 
@@ -275,8 +301,14 @@ delegated_calls, evidence_reused_hits,
 first_pass_accepted, rework_cycles,
 oracle_stage_failed, verdict,
 main_agent_rewrote, files_touched,
-scan_findings
+scan_findings,
+unit_seconds, timed_out, quarantined_suites, over_unit_budget
 ```
+
+Empat field terakhir ditambahkan 2026-08-20 bersama `bench/policy.py`. Masing-masing
+menjawab pertanyaan yang tak bisa dijawab dari daftar asli: berapa lama unit berjalan sama
+sekali, apakah ia lewat cap waktu, apakah ia dinilai dengan gerbang yang dikurangi, dan
+apakah biayanya lewat plafon per unit.
 
 Catatan turunan:
 
@@ -285,6 +317,31 @@ Catatan turunan:
 - `evidence_reused_hits` dari `evidence_ref.reused` — proxy langsung token premium yang dihindari.
 - `main_agent_rewrote` distempel harness per fase, **tidak** ditebak dari isi diff. Ini yang menjawab "persen task yang akhirnya diulang Claude utama".
 - `rework_cycles` punya dua sumber: stempel harness dan `promptHash` berulang di CSV tokenburn. Silang-cek keduanya.
+- `quarantined_suites` kosong berarti unit dinilai dengan gerbang penuh. Tak kosong berarti
+  stage 2 melewati suite yang disebut, dan baris itu tidak sebanding dengan baris bergerbang
+  penuh — laporkan per baris, jangan diringkas jadi catatan kaki.
+
+## 7b. Batas run
+
+Terkumpul di `bench/policy.py`, satu tempat supaya mengubahnya jadi edit yang terlihat.
+
+| Batas | Nilai | Ditegakkan |
+|-------|-------|-----------|
+| Waktu per unit | 1800 s | live, `driver.py` |
+| Timeout per stage oracle | 900 s | live, `oracle.py` |
+| `rework_cycles` maksimum | 3 | live, `driver.py finish` menolak di atasnya |
+| Panggilan terdelegasi per unit | 12 | live, `driver.py delegate` |
+| Budget per unit | $5,00 | **pasca-fakta**, dilaporkan `collect.py` |
+| Budget per run | $400,00 | **pasca-fakta**, dilaporkan `collect.py` |
+| Suite dikarantina | kosong | dibaca `oracle.py` saat stage 2 |
+
+Budget tidak bisa ditegakkan live: biaya datang dari tokenburn setelah run selesai, jadi
+tak ada yang bisa memotong di tengah jalan. Menyebutnya penegakan akan menjadi klaim palsu
+tentang apa yang harness bisa lihat.
+
+Nilai budget dan cap waktu adalah keputusan operator, bukan turunan dari pengukuran — nol
+unit pernah dipanen waktu angka-angka itu ditulis. Tinjau ulang setelah batch pertama, dan
+sebutkan di laporan bila direvisi.
 
 ---
 

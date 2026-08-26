@@ -197,12 +197,31 @@ def default_provider_config(provider: str | None = None) -> dict:
         "probe_timeout_seconds": DEFAULT_PROBE_TIMEOUT_SECONDS,
         "probe_recheck_seconds": DEFAULT_PROBE_RECHECK_SECONDS,
         "max_probes": DEFAULT_MAX_PROBES,
-        "job_max_runtime_seconds": DEFAULT_JOB_MAX_RUNTIME_SECONDS,
         "job_poll_interval_seconds": DEFAULT_JOB_POLL_INTERVAL_SECONDS,
-        "job_poll_timeout_seconds": DEFAULT_JOB_POLL_TIMEOUT_SECONDS,
-        "agent_workflow_path": None,
+        # `job_max_runtime_seconds`, `job_poll_timeout_seconds` and `agent_workflow_path`
+        # were written here and read nowhere — see RETIRED_PROVIDER_KEYS below.
         "routes": COMMAND_ROUTES,
     }
+
+
+# Keys this file used to write into `second_agent.json` and no reader ever consumed. They
+# were not typos and not deprecated features: the runtime always took those three values
+# from somewhere else, so editing them in the workspace changed nothing while reading as
+# configuration. README said so in prose; the file kept offering the knob anyway.
+#
+#   job_max_runtime_seconds  -> DEFAULT_JOB_MAX_RUNTIME_SECONDS (env AI_PROXY_*), core/job_manager.py
+#   job_poll_timeout_seconds -> the CLI's --poll-timeout, main.py
+#   agent_workflow_path      -> .workflow/config.json `runtime.agent_workflow_path`, or AGENT_PATH
+#
+# They stay named here so `validate_provider_config` can tell a retired key from a typo.
+# Upgrade is additive — it adds keys missing from the defaults and never deletes — so every
+# workspace written before this change still carries them, and calling those files
+# malformed would be blaming the user for a default this tool shipped.
+RETIRED_PROVIDER_KEYS: dict[str, str] = {
+    "job_max_runtime_seconds": "the hard ceiling comes from AI_PROXY_JOB_MAX_RUNTIME_SECONDS or its default",
+    "job_poll_timeout_seconds": "polling timeout comes from the CLI flag --poll-timeout",
+    "agent_workflow_path": "the tool path comes from .workflow/config.json runtime.agent_workflow_path or AGENT_PATH",
+}
 
 
 def foreign_provider_values(config: dict) -> dict[str, str]:
@@ -338,6 +357,14 @@ def validate_provider_config(loaded: dict) -> list[str]:
     warnings: list[str] = []
     known = default_provider_config()
     for key, value in loaded.items():
+        if key in RETIRED_PROVIDER_KEYS:
+            # Distinguished from a typo deliberately. Both are ignored by the runtime, but
+            # only one is the user's mistake — and "unknown key (typo?)" against a key this
+            # tool wrote itself sends them looking for a spelling error that is not there.
+            warnings.append(
+                f"{key}: retired — never read; {RETIRED_PROVIDER_KEYS[key]}. Safe to delete."
+            )
+            continue
         if key not in known:
             warnings.append(f"{key}: unknown key (typo? the runtime ignores it)")
             continue

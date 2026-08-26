@@ -48,11 +48,12 @@ TARGETS: dict[str, tuple[str, ...]] = {
         "[COMMAND GUIDE — v",
     ),
     "dist/config/claude/skills/init.md": ("generated: run/inspect/check",),
-    # Not shipped, but it names the version of the system under test — and a benchmark
-    # whose SUT version is wrong measures something nobody can identify afterwards. It
-    # drifted to v3.4.4 unnoticed for exactly the reason this file exists: `--check` only
-    # looks where TARGETS points, so a version mention outside it reports clean forever.
-    "bench/BENCHMARK-PLAN.md": ("**Versi SUT:**",),
+    # `bench/BENCHMARK-PLAN.md` used to be stamped here, and stamping it was wrong. The
+    # benchmark's system under test is FROZEN at a tag (README.md, "System under test
+    # dibekukan"; the decision is recorded again in bench/STATE.md), so its `**Versi SUT:**`
+    # line must NOT follow TOOL_VERSION — a SUT that shifts mid-measurement makes the
+    # numbers attributable to no version at all. Auto-stamping it would have broken that
+    # silently on the next bump. bench/ is outside SCAN_PATHS for the same reason.
 }
 
 # Each provider's instruction file carries the same banner. Derived rather than listed so
@@ -64,6 +65,32 @@ for _name, _bundle in PROVIDER_BUNDLES.items():
         "WORKFLOW-SECOND-AGENT:START",
         "Second Agent —",
     )
+
+# Where `--check` looks for version mentions NOBODY registered. TARGETS answers "what do I
+# rewrite"; this answers "what did someone forget to tell me about" — the failure mode the
+# allowlist alone cannot see, because a line outside it reports clean forever.
+#
+# Writing stays TARGETS-only on purpose. A scan that also rewrote would, the first time an
+# exemption was forgotten, edit a sentence about the past into a sentence about the present
+# — and the files most exposed to that are precisely the migration notes and changelog
+# entries someone reads to find out what changed. A noisy check is the cheaper failure.
+SCAN_PATHS: tuple[str, ...] = ("README.md", "dist/config")
+
+# Lines inside SCAN_PATHS allowed to carry a semver that is NOT TOOL_VERSION, keyed the
+# same way TARGETS is: path -> substrings. Two legitimate kinds live here.
+#   - history: a sentence about a past release must keep saying what it said.
+#   - somebody else's version: a third-party tool's release is not ours to stamp.
+EXEMPT: dict[str, tuple[str, ...]] = {
+    "README.md": (
+        # The v3.4.2 -> v3.4.3 provider-key migration, described in the past tense.
+        "memigrasi kunci v",
+        "sejak v3.4.3 provider second_agent",
+        # codex-cli's version, not ours.
+        "codex-cli",
+        # The benchmark's frozen SUT, stated in prose. Same freeze as the TARGETS note.
+        "System under test dibekukan",
+    ),
+}
 
 _SEMVER = re.compile(r"\d+\.\d+\.\d+")
 
@@ -80,6 +107,52 @@ def _restamp(text: str, anchors: tuple[str, ...]) -> tuple[str, int]:
             lines[index] = stamped
             changed += 1
     return "".join(lines), changed
+
+
+def _scanned_files() -> list[Path]:
+    """Every file under SCAN_PATHS, files and directories alike.
+
+    Not restricted to `*.md`: a version can be written into a hook or a settings template
+    as easily as into prose, and "only markdown was checked" is the kind of boundary that
+    reads as coverage without being it. `dist/manifest.json` sits outside SCAN_PATHS
+    because `tools/gen_manifest.py --check` already owns it — two gates over one file
+    disagree eventually, and that one hashes the whole bundle rather than guessing.
+    """
+    found: list[Path] = []
+    for relative in SCAN_PATHS:
+        path = REPO_ROOT / relative
+        if path.is_file():
+            found.append(path)
+        elif path.is_dir():
+            found += sorted(p for p in path.rglob("*") if p.is_file())
+    return found
+
+
+def _unreviewed(path: Path) -> list[str]:
+    """Lines carrying a semver that is neither TOOL_VERSION, a TARGETS line, nor EXEMPT.
+
+    A registered line is skipped rather than reported: after a bump it holds the previous
+    version by definition, and it is already reported as `stale` with a fix that works.
+    What is left is a version mention no list knows about — the drift class the allowlist
+    is structurally blind to.
+    """
+    relative = path.relative_to(REPO_ROOT).as_posix()
+    anchors = TARGETS.get(relative, ()) + EXEMPT.get(relative, ())
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        # Not text, or unreadable. A binary file carries no version mention to review, and
+        # failing the gate on one would report a problem the maintainer cannot act on.
+        return []
+    hits: list[str] = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        found = [v for v in _SEMVER.findall(line) if v != TOOL_VERSION]
+        if not found:
+            continue
+        if any(anchor in line for anchor in anchors):
+            continue
+        hits.append(f"{relative}:{number}: {line.strip()[:100]}")
+    return hits
 
 
 def main() -> int:
@@ -105,13 +178,37 @@ def main() -> int:
         for relative in missing:
             print(f"  - {relative}")
         return 1
+
+    unreviewed: list[str] = []
+    for path in _scanned_files():
+        unreviewed += _unreviewed(path)
+
+    if stale:
+        verb = "stale" if check_only else "restamped"
+        print(f"[stamp_version] {verb} at v{TOOL_VERSION}:")
+        for entry in stale:
+            print(f"  - {entry}")
+
+    if unreviewed:
+        # Reported apart from `stale` because the fix is different in kind: `stale` is
+        # mechanical and the tool does it, while these need a human to decide whether the
+        # line should follow the version or stay where it is. Guessing is what the two
+        # lists exist to prevent.
+        print(f"[stamp_version] unreviewed version mention(s) — not in TARGETS or EXEMPT:")
+        for entry in unreviewed:
+            print(f"  - {entry}")
+        print(
+            "Fix: add the line's anchor to TARGETS (it should follow TOOL_VERSION) "
+            "or to EXEMPT (it is history, or someone else's version)."
+        )
+        return 1
+
     if not stale:
-        print(f"[stamp_version] OK — every target already says v{TOOL_VERSION}")
+        print(
+            f"[stamp_version] OK — every target says v{TOOL_VERSION} and no unreviewed "
+            "version mention remains"
+        )
         return 0
-    verb = "stale" if check_only else "restamped"
-    print(f"[stamp_version] {verb} at v{TOOL_VERSION}:")
-    for entry in stale:
-        print(f"  - {entry}")
     if check_only:
         print("Fix: python tools/stamp_version.py")
         return 1

@@ -74,6 +74,7 @@ from tests.checks.provider import (
     _test_provider_selection,
 )
 from tests.checks.registry import _test_every_check_is_registered
+from tests.checks.bundle_sync import _test_bundle_registry_bijection
 from tests.checks.adapters import (
     _test_adapter_error_normalization,
     _test_adapter_redaction_is_shared,
@@ -93,6 +94,7 @@ from tests.checks.prompt import (
 
 def run_tests() -> None:
     _test_every_check_is_registered()
+    _test_bundle_registry_bijection()
     _test_provider_seam()
     _test_provider_selection()
     _test_agy_provider()

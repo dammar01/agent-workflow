@@ -37,6 +37,7 @@ from tests.checks.prompt import (  # noqa: E402
     _test_unknown_role_is_refused,
     _test_verify_branch_carries_routing_contract,
 )
+from tests.checks.bundle_sync import _test_bundle_registry_bijection  # noqa: E402
 from tests.checks.continuation import _test_contract_continuation  # noqa: E402
 from tests.checks.contracts import _test_workflow_contracts  # noqa: E402
 from tests.checks.deps import _test_runtime_is_stdlib_only  # noqa: E402
@@ -77,6 +78,7 @@ from tests.scenario import run_tests  # noqa: E402
 SUITES: dict[str, tuple] = {
     "scenario": (run_tests, "stateful sequence + every standalone check (the full run)"),
     "registry": (_test_every_check_is_registered, "every check here is reachable from both entry points"),
+    "bundle-sync": (_test_bundle_registry_bijection, "skills/ and intent-map.json agree with CLAUDE.md"),
     "provider-seam": (_test_provider_seam, "adapter registry and provider resolution"),
     "provider-selection": (_test_provider_selection, "interactive provider/model/effort write"),
     "agy": (_test_agy_provider, "agy parsing, argv, and its read-boundary guard"),

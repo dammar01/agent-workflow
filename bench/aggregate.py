@@ -81,6 +81,12 @@ def per_arm(rows: list[dict]) -> dict:
                 round(sum(durations) / len(durations), 1) if durations else None
             ),
             "seconds_measured_on": len(durations),
+            # Counted separately from the rejected pile. The accepted filter above is
+            # already exclusive, so a security violation drops out of the numerator on its
+            # own — but dropping out silently is how it would stop being reported at all.
+            "security_violations": sum(
+                1 for row in units if row.get("verdict") == "security_violation"
+            ),
             "main_agent_rewrote": sum(1 for row in units if row.get("main_agent_rewrote")),
             "evidence_reused_hits": sum(int(row.get("evidence_reused_hits") or 0) for row in units),
         }

@@ -1,0 +1,9 @@
+# Run scratch, not source.
+#
+# `corpus.json` is deliberately NOT here: it is the study's definition, hand-filled and
+# locked, and a benchmark whose task list is untracked cannot be re-run by anyone else.
+# `ledger.jsonl` is not here either — it is the data the report stands on, committed once
+# a run is reported.
+worktrees/
+units/
+raw/
