@@ -1,0 +1,46 @@
+# Mirror of .github/workflows/e2e-full.yml.
+#
+# The delegated path — a real second agent, a real call, real quota. Manual only: it costs
+# money on every run and needs a provider CLI plus credentials, neither of which belongs in
+# an automatic trigger. ci.gitlab-ci.yml covers everything that can be checked for free.
+#
+# GitHub used a separate `workflow_dispatch` workflow with typed inputs. GitLab has no
+# second entry point, so the equivalent is a manual job that never starts on its own, with
+# its inputs declared as pipeline variables — they show up as prefilled fields on
+# Build > Pipelines > Run pipeline.
+
+variables:
+  E2E_SESSION:
+    value: "e2e-dispatch"
+    description: "Session id for the delegated run."
+  # Deliberately not a shared Linux runner. A hosted runner has no opencode/codex/agy
+  # binary, so `--full` would fail at the adapter with a command-not-found rather than
+  # telling you anything about the runtime. Point this at a machine where the provider is
+  # installed and authenticated, which in practice means the same machine a developer uses.
+  E2E_RUNNER_TAG:
+    value: ""
+    description: "Tag of a runner that has the provider CLI installed and authenticated. Empty (default) skips the delegated job — an unmatched tag would hang the pipeline instead of failing it."
+
+e2e:delegated:
+  stage: delegated
+  tags:
+    - ${E2E_RUNNER_TAG}
+  timeout: 60 minutes
+  # Never blocking: the pipeline is green without it, and it only runs when someone presses
+  # the button and accepts the cost.
+  allow_failure: false
+  interruptible: false
+  rules:
+    # Same guard as the Windows job, for the same reason: no provider runner named means no
+    # job, rather than a job queued against a tag nothing answers to.
+    - if: $E2E_RUNNER_TAG == null || $E2E_RUNNER_TAG == ""
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+    - when: never
+  script:
+    # Report the provider that will answer. Fail early and legibly when the runner has no
+    # provider configured, rather than halfway through a paid call.
+    - python main.py --command doctor --work-dir . --pretty
+    # End-to-end including delegated calls.
+    - python tools/e2e/e2e.py --full --session "$E2E_SESSION"
