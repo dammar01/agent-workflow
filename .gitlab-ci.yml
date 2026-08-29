@@ -1,0 +1,39 @@
+# GitLab mirror of .github/workflows/. Same gates, same reasoning; only the runner
+# vocabulary changes. GitLab has one pipeline definition instead of one file per
+# workflow, so the two workflows live in .gitlab/ci/ and are pulled in here — the
+# split is kept so a change to either side is easy to diff against the GitHub file
+# it mirrors.
+include:
+  - local: .gitlab/ci/ci.gitlab-ci.yml
+  - local: .gitlab/ci/e2e-full.gitlab-ci.yml
+
+stages:
+  - check
+  - delegated
+
+# `on: push (main, dev) / pull_request / workflow_dispatch` has no single GitLab
+# equivalent — it is expressed as pipeline sources. Merge request pipelines plus
+# branch pipelines for the two long-lived branches, plus the manual web trigger
+# that stands in for workflow_dispatch.
+workflow:
+  auto_cancel:
+    # The `concurrency: cancel-in-progress` block. Superseded pipelines on the same
+    # ref are cancelled rather than left to finish against stale commits.
+    on_new_commit: interruptible
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_PIPELINE_SOURCE == "web"
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+    - if: $CI_COMMIT_BRANCH == "main" && $CI_OPEN_MERGE_REQUESTS == null
+    - if: $CI_COMMIT_BRANCH == "dev" && $CI_OPEN_MERGE_REQUESTS == null
+
+variables:
+  # The runtime is pure stdlib with no dependency file to pin against, so the Python
+  # version is the only thing to hold steady. That claim is not left as folklore: the
+  # `deps` suite fails the build if shipped code ever imports something outside the
+  # stdlib, which is the point at which a lockfile WOULD be needed. A constraints file
+  # listing nothing would document the claim without testing it.
+  PYTHON_VERSION: "3.13"
+  # GitLab has no `runs-on: windows-latest`; a job picks its runner by tag. Default is
+  # the GitLab.com SaaS Windows fleet — override the variable for a self-hosted one.
+  WINDOWS_RUNNER_TAG: "saas-windows-medium-amd64"

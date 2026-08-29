@@ -1,0 +1,58 @@
+# Mirror of .github/workflows/ci.yml.
+#
+# Every gate here already existed as a command someone had to remember to run. Two of them
+# were failing on the default branch when this workflow was first added — a stamp target
+# that had never been created and a stale manifest — which is the whole argument for the
+# file.
+#
+# Both operating systems, deliberately. The runtime ships a PowerShell runner and generates
+# a POSIX one, the workspace checks shell out to whichever the platform has, and path
+# handling differs where it matters most (locks, session dirs). A single-OS run would pass
+# while half the product stayed untested. GitHub expressed that as a matrix over
+# `runs-on`; GitLab picks runners by tag and image, which do not vary together in a
+# matrix cleanly, so the two platforms are two jobs sharing one script block.
+
+.checks:
+  stage: check
+  timeout: 20 minutes
+  interruptible: true
+  script:
+    # Version stamp is in sync
+    - python tools/maintain/stamp_version.py --check
+    # Manifest matches dist/
+    - python tools/maintain/gen_manifest.py --check
+    # Runtime is stdlib-only. Its own step rather than only inside the suite: this is the
+    # gate that decides whether the absence of a lockfile is still correct, and a reader
+    # scanning the log should be able to see it hold.
+    - python tests/run.py --only deps
+    # Unit and integration suites. --keep-going so one failure does not hide the rest; the
+    # scenario suite is still internally sequential, so it stops at its own first assertion
+    # either way. --record writes the outcome to the workspace quality stream, so
+    # `--command report` can show a test pass rate over time rather than only the latest run.
+    - python tests/run.py --keep-going --record .
+    # End-to-end (local + integrity + installer). Without --full: no provider CLI is invoked
+    # and no quota is spent. The delegated checks stay opt-in because they cost real money
+    # and need credentials this pipeline deliberately does not hold.
+    - python tools/e2e/e2e.py
+
+checks:linux:
+  extends: .checks
+  image: python:${PYTHON_VERSION}
+  before_script:
+    - python --version
+
+checks:windows:
+  extends: .checks
+  tags:
+    - ${WINDOWS_RUNNER_TAG}
+  # Windows runners are shell executors, not container ones, so the Python version cannot
+  # be selected by image. Install it if the runner does not already carry it — the SaaS
+  # Windows image ships Chocolatey, a self-hosted runner with Python preinstalled skips
+  # straight past this.
+  before_script:
+    - |
+      if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+        choco install python --version=$env:PYTHON_VERSION -y --no-progress
+        $env:PATH = "C:\Python313;C:\Python313\Scripts;$env:PATH"
+      }
+    - python --version
