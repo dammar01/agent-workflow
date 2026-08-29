@@ -8,12 +8,25 @@
 # Both operating systems, deliberately. The runtime ships a PowerShell runner and generates
 # a POSIX one, the workspace checks shell out to whichever the platform has, and path
 # handling differs where it matters most (locks, session dirs). A single-OS run would pass
-# while half the product stayed untested. GitHub expressed that as a matrix over
-# `runs-on`; GitLab picks runners by tag and image, which do not vary together in a matrix
-# cleanly, so the two platforms are two jobs sharing one script block — and the Windows one
-# only exists when a Windows runner has been named (see WINDOWS_RUNNER_TAG in the root
-# .gitlab-ci.yml). That is the honest trade: on a project with no Windows runner the
-# alternative is not "Windows coverage", it is a pipeline that hangs.
+# while half the product stayed untested. GitHub expresses that as a matrix over `runs-on`;
+# GitLab picks runners by tag, so here it is two jobs sharing one script block.
+#
+# NO `image:` ON ANY JOB — both run on shell executors, on purpose.
+#
+# The Linux job used to say `image: python:${PYTHON_VERSION}`, which is how a docker
+# executor pins a toolchain (GitLab has no `actions/setup-python`). On a self-hosted runner
+# with restricted egress that turned every pipeline into a Docker Hub dependency, and it
+# failed exactly there:
+#
+#   ERROR: Job failed: failed to pull image "python:3.13" ...
+#   Head "https://registry-1.docker.io/v2/library/python/manifests/3.13":
+#   net/http: TLS handshake timeout
+#
+# A retry or a pull_policy fallback would have made that failure rarer, not absent — the
+# pipeline would still reach out to a registry it cannot reliably talk to, and would still
+# be one network hiccup from red. Dropping the image removes the network call instead of
+# retrying it. What that costs is stated plainly in `before_script`: the Python version is
+# now the runner's property, so the job asserts it rather than providing it.
 
 .checks:
   stage: check
@@ -38,33 +51,88 @@
     # and need credentials this pipeline deliberately does not hold.
     - python tools/e2e/e2e.py
 
+# The POSIX half of the preflight. Two things it must settle before the shared script runs,
+# both of which a container used to settle for free:
+#   1. `python` may not exist even where `python3` does — most distributions ship only the
+#      versioned name. A shim on PATH keeps ONE script block serving both platforms; the
+#      alternative is a `$PYTHON_BIN` variable that PowerShell and sh disagree about how to
+#      expand.
+#   2. The version is asserted, not installed. A mismatch stops here with a sentence naming
+#      both numbers, instead of surfacing later as whatever a wrong interpreter happens to
+#      break first.
+.posix-python-preflight: &posix_python_preflight
+  - |
+    set -e
+    if ! command -v python3 >/dev/null 2>&1; then
+      echo "[ci] no python3 on this runner. Install Python $PYTHON_VERSION on the machine"
+      echo "[ci] backing this job, or point LINUX_RUNNER_TAG at a runner that has it."
+      exit 1
+    fi
+    if ! command -v python >/dev/null 2>&1; then
+      # Outside the checkout on purpose: a shim written into $CI_PROJECT_DIR would leave an
+      # untracked directory in the working tree the rest of the job then inspects.
+      shim_dir=$(mktemp -d)
+      ln -sf "$(command -v python3)" "$shim_dir/python"
+      export PATH="$shim_dir:$PATH"
+    fi
+    found=$(python -c 'import sys; print("%d.%d" % sys.version_info[:2])')
+    if [ "$found" != "$PYTHON_VERSION" ]; then
+      echo "[ci] runner has Python $found, this pipeline expects $PYTHON_VERSION."
+      echo "[ci] Install $PYTHON_VERSION on the runner, or set the PYTHON_VERSION variable"
+      echo "[ci] to $found if that is the version you mean to test against."
+      exit 1
+    fi
+    python --version
+
 checks:linux:
   extends: .checks
-  # No tags: shared runners are untagged, so this job runs anywhere, including GitLab.com's
-  # free fleet.
-  image: python:${PYTHON_VERSION}
-  before_script:
-    - python --version
+  # Untagged: any runner willing to take untagged jobs picks this up. A guard that skipped
+  # the job when no tag is set would leave a project with no Linux coverage and a green
+  # pipeline, which is worse than a job that has to wait for a runner.
+  rules:
+    - if: $LINUX_RUNNER_TAG == null || $LINUX_RUNNER_TAG == ""
+      when: on_success
+    - when: never
+  before_script: *posix_python_preflight
+
+checks:linux:tagged:
+  extends: .checks
+  # The same job, addressed to a specific runner. Exactly one of this pair is ever created.
+  tags:
+    - ${LINUX_RUNNER_TAG}
+  rules:
+    - if: $LINUX_RUNNER_TAG == null || $LINUX_RUNNER_TAG == ""
+      when: never
+    - when: on_success
+  before_script: *posix_python_preflight
 
 checks:windows:
   extends: .checks
   tags:
     - ${WINDOWS_RUNNER_TAG}
   rules:
-    # Without this guard the job is created with an empty tag list and waits for a runner
-    # that does not exist. Named tag: the job runs. No tag: the job is never created, and
-    # the pipeline result reflects Linux only rather than sitting stuck.
+    # An unmatched tag does not fail a job on GitLab — it leaves it queued forever with "no
+    # runners that match all of the job's tags". Named tag: the job runs. No tag: the job is
+    # never created, and the pipeline result reflects Linux only rather than sitting stuck.
+    # Unlike the Linux pair there is no untagged fallback: an untagged job would be picked
+    # up by a Linux runner and would fail on the first PowerShell line.
     - if: $WINDOWS_RUNNER_TAG == null || $WINDOWS_RUNNER_TAG == ""
       when: never
     - when: on_success
-  # Windows runners are shell executors, not container ones, so the Python version cannot
-  # be selected by image. Install it if the runner does not already carry it — a SaaS
-  # Windows image ships Chocolatey, a self-hosted runner with Python preinstalled skips
-  # straight past this.
   before_script:
     - |
       if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-        choco install python --version=$env:PYTHON_VERSION -y --no-progress
-        $env:PATH = "C:\Python313;C:\Python313\Scripts;$env:PATH"
+        Write-Host "[ci] no python on this runner. Install Python $env:PYTHON_VERSION on the"
+        Write-Host "[ci] machine backing WINDOWS_RUNNER_TAG."
+        exit 1
       }
-    - python --version
+      # No quote characters inside the -c argument: PowerShell strips inner double quotes
+      # when handing an argument to a native executable, and Python then receives
+      # `print(%d.%d % ...)` and dies on a SyntaxError. chr(46) is the dot.
+      $found = (python -c 'import sys; print(sys.version_info[0], sys.version_info[1], sep=chr(46))')
+      if ($found -ne $env:PYTHON_VERSION) {
+        Write-Host "[ci] runner has Python $found, this pipeline expects $env:PYTHON_VERSION."
+        Write-Host "[ci] Install it on the runner, or set the PYTHON_VERSION variable to $found."
+        exit 1
+      }
+      python --version

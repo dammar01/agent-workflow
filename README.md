@@ -381,21 +381,40 @@ second agent, costs real quota, and needs a provider CLI plus credentials that n
 pipeline holds. On GitHub it is a separate `workflow_dispatch` workflow; on GitLab it is a
 manual job whose inputs are pipeline variables.
 
-Runner tags on GitLab are opt-in, and deliberately so. An unmatched tag does not fail a
-job — it leaves it queued forever with *"no runners that match all of the job's tags"*, so
-both the Windows job and the delegated job are skipped until you name a runner you actually
-have:
+No GitLab job declares an `image`. They run on shell executors, which means the pipeline
+never contacts a container registry — a deliberate reversal. The Linux job originally used
+`image: python:3.13`, the way a docker executor pins a toolchain since GitLab has no
+`actions/setup-python`, and on a self-hosted runner with restricted egress that made every
+pipeline depend on Docker Hub. It failed there with a TLS handshake timeout pulling the
+image. A retry would have made that rarer, not absent; removing the image removes the
+network call.
+
+What it costs is stated rather than hidden: nothing provisions the interpreter any more, so
+each job **asserts** the version instead. A runner carrying a different Python stops the job
+immediately with a message naming both numbers, rather than failing later as whatever a
+wrong interpreter happens to break first. Set `PYTHON_VERSION` to what your runners have, or
+install the named version on them.
+
+Runner tags are variables, and an unmatched tag does not fail a job on GitLab — it leaves it
+queued forever with *"no runners that match all of the job's tags"*. So the tags are opt-in:
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `WINDOWS_RUNNER_TAG` | *(empty)* | Empty skips the Windows job. Set it to the tag of a Windows runner to gain the second platform. |
+| `PYTHON_VERSION` | `3.13` | Asserted, not installed. A job whose runner disagrees fails with both numbers named. |
+| `LINUX_RUNNER_TAG` | *(empty)* | Empty runs the Linux job **untagged**, so any available runner takes it. Set it to address a specific machine. |
+| `WINDOWS_RUNNER_TAG` | *(empty)* | Empty **skips** the Windows job. Set it to the tag of a Windows runner to gain the second platform. |
 | `E2E_RUNNER_TAG` | *(empty)* | Empty skips the delegated job. Set it to a runner where the provider CLI is installed and authenticated. |
+
+The Linux job falls back to untagged where the Windows one skips, and the asymmetry is the
+point: a skipped Linux job would leave a project with no coverage and a green pipeline,
+while an untagged Windows job would be picked up by a Linux runner and die on its first
+PowerShell line.
 
 Both operating systems are tested on purpose: the runtime ships a PowerShell runner and
 generates a POSIX one, and path handling differs where it matters most — locks and session
 directories. A single-OS run would pass while half the product stayed untested. GitHub
-expresses that as a matrix; GitLab picks runners by tag and image, which do not vary
-together in a matrix cleanly, so there it is two jobs sharing one script block.
+expresses that as a matrix over `runs-on`; GitLab picks runners by tag, so there it is
+separate jobs sharing one script block.
 
 What CI does not do, on either host, is bump, tag, or publish. See
 [RELEASE.md](RELEASE.md) for the steps that stay human.

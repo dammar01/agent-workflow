@@ -33,7 +33,20 @@ variables:
   # `deps` suite fails the build if shipped code ever imports something outside the
   # stdlib, which is the point at which a lockfile WOULD be needed. A constraints file
   # listing nothing would document the claim without testing it.
+  #
+  # Both jobs run on shell executors, so nothing here PROVISIONS this version — the
+  # runner's machine already has whatever it has. The version is therefore ASSERTED
+  # instead: each job checks the interpreter it found and fails legibly if it disagrees,
+  # which is the difference between a pin and a wish. Set this to what your runners
+  # actually carry, or install the named version on them.
   PYTHON_VERSION: "3.13"
+  # Linux runner tag. Empty (the default) runs the job untagged, so any runner willing to
+  # take untagged jobs picks it up — that keeps a fresh project from producing a pipeline
+  # with no jobs at all, which is the failure mode that looks green.
+  LINUX_RUNNER_TAG:
+    value: ""
+    description: "Tag of a Linux shell runner. Empty runs the Linux job untagged (any available runner)."
+
   # GitLab has no `runs-on: windows-latest`; a job picks its runner by tag, and an
   # unmatched tag does not fail — it leaves the job pending forever with "no runners
   # that match all of the job's tags". GitLab.com's SaaS Windows fleet is not enabled

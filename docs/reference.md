@@ -801,26 +801,37 @@ manual yang inputnya berupa pipeline variable.
 
 Bukan terjemahan satu-satu — tiga hal tak punya padanan langsung:
 
-- **Matrix OS jadi dua job.** GitHub memilih runner lewat `runs-on`, jadi `os: [ubuntu-latest,
-  windows-latest]` cukup. GitLab memilih runner lewat `tags` dan Python lewat `image`, dan
-  keduanya tak bervariasi bersama dalam satu matrix dengan rapi; jadi `checks:linux` dan
-  `checks:windows` dua job yang berbagi satu blok `script` lewat `extends`.
-- **Tag runner opt-in, default kosong.** Tag yang tak ada runnernya **tidak** menggagalkan
-  job — ia menggantungkannya selamanya dengan *"no runners that match all of the job's
-  tags"*. Karena itu `WINDOWS_RUNNER_TAG` dan `E2E_RUNNER_TAG` default `""`, dan `rules`
-  tiap job membuang dirinya sendiri saat variabelnya kosong. Isi variabelnya dengan tag
-  runner yang benar-benar kamu punya (Settings > CI/CD > Variables, atau form Run pipeline)
-  dan jobnya muncul. Konsekuensinya jujur: di project tanpa runner Windows, alternatifnya
-  bukan "cakupan Windows", melainkan pipeline yang menggantung.
+- **Matrix OS jadi job terpisah.** GitHub memilih runner lewat `runs-on`, jadi
+  `os: [ubuntu-latest, windows-latest]` cukup. GitLab memilih runner lewat `tags`, jadi
+  `checks:linux` dan `checks:windows` adalah job berbeda yang berbagi satu blok `script`
+  lewat `extends`.
+- **Nol `image:` di job mana pun — semua shell executor.** Versi pertama memakai
+  `image: python:${PYTHON_VERSION}`, cara sebuah docker executor memaku toolchain karena
+  GitLab tak punya padanan `actions/setup-python`. Di runner self-hosted dengan egress
+  terbatas, itu membuat tiap pipeline bergantung pada Docker Hub, dan ia gagal persis di
+  situ: `TLS handshake timeout` saat menarik `python:3.13` dari `registry-1.docker.io`.
+  `retry` atau `pull_policy` cadangan cuma membuat kegagalan itu lebih jarang, bukan
+  hilang — pipeline tetap menelepon registry yang memang tak terjangkau. Membuang `image`
+  menghapus panggilan jaringannya.
+- **Konsekuensinya: versi Python di-ASSERT, bukan disediakan.** Nol yang memasang
+  interpreter sekarang, jadi `before_script` tiap job memeriksa yang ditemukannya dan
+  berhenti dengan kalimat yang menyebut kedua angka bila beda. Itu beda antara paku dan
+  harapan. `PYTHON_VERSION` diisi versi yang runner-mu benar-benar bawa, atau versi itu
+  yang dipasang di runner. Job POSIX juga memasang shim `python` ke `python3` bila hanya
+  nama berversi yang ada, supaya satu blok `script` tetap melayani dua platform tanpa
+  variabel `$PYTHON_BIN` yang PowerShell dan `sh` beda cara meng-expand-nya.
+- **Tag runner adalah variabel, dan asimetri fallback-nya disengaja.** Tag yang tak ada
+  runnernya **tidak** menggagalkan job — ia menggantungkannya selamanya dengan *"no runners
+  that match all of the job's tags"*. `LINUX_RUNNER_TAG` kosong menjalankan job Linux
+  **tanpa tag**, jadi runner mana pun yang mau menerima job tanpa tag mengambilnya; job
+  Linux yang di-skip akan meninggalkan project tanpa cakupan sama sekali dengan pipeline
+  hijau. `WINDOWS_RUNNER_TAG` dan `E2E_RUNNER_TAG` kosong justru **membuang** jobnya, karena
+  job Windows tanpa tag akan diambil runner Linux lalu mati di baris PowerShell pertama.
 - **`on:` jadi `workflow:rules`.** Tak ada satu padanan untuk `push` + `pull_request` +
   `workflow_dispatch`; ketiganya dinyatakan sebagai pipeline source
   (`merge_request_event`, `web`, `schedule`) plus branch `main`/`dev`.
   `concurrency: cancel-in-progress` menjadi `workflow.auto_cancel.on_new_commit:
   interruptible` plus `interruptible: true` di job.
-
-Python di runner Windows GitLab tidak dipilih lewat image — runner Windows itu shell
-executor. `before_script`-nya memasang Python lewat Chocolatey hanya bila `python` belum
-ada, jadi runner self-hosted yang sudah membawanya lewat begitu saja.
 
 Yang **tidak** dilakukan CI, di host mana pun: bump, tag, publish. Langkah yang tetap milik
 manusia ada di `RELEASE.md`.
