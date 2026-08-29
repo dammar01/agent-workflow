@@ -34,6 +34,14 @@ variables:
   # stdlib, which is the point at which a lockfile WOULD be needed. A constraints file
   # listing nothing would document the claim without testing it.
   PYTHON_VERSION: "3.13"
-  # GitLab has no `runs-on: windows-latest`; a job picks its runner by tag. Default is
-  # the GitLab.com SaaS Windows fleet — override the variable for a self-hosted one.
-  WINDOWS_RUNNER_TAG: "saas-windows-medium-amd64"
+  # GitLab has no `runs-on: windows-latest`; a job picks its runner by tag, and an
+  # unmatched tag does not fail — it leaves the job pending forever with "no runners
+  # that match all of the job's tags". GitLab.com's SaaS Windows fleet is not enabled
+  # on every project, so the Windows job is OFF by default and the tag has to be named
+  # deliberately. Set this to the tag of a Windows runner you actually have (project or
+  # group CI/CD variable, or on the Run pipeline form) and the job appears:
+  #   saas-windows-medium-amd64   GitLab.com SaaS Windows, where the project has it
+  #   windows                     a typical self-hosted Windows shell runner
+  WINDOWS_RUNNER_TAG:
+    value: ""
+    description: "Tag of a Windows runner. Empty (default) skips the Windows job entirely — an unmatched tag would hang the pipeline instead of failing it."

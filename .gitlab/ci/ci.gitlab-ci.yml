@@ -9,8 +9,11 @@
 # a POSIX one, the workspace checks shell out to whichever the platform has, and path
 # handling differs where it matters most (locks, session dirs). A single-OS run would pass
 # while half the product stayed untested. GitHub expressed that as a matrix over
-# `runs-on`; GitLab picks runners by tag and image, which do not vary together in a
-# matrix cleanly, so the two platforms are two jobs sharing one script block.
+# `runs-on`; GitLab picks runners by tag and image, which do not vary together in a matrix
+# cleanly, so the two platforms are two jobs sharing one script block — and the Windows one
+# only exists when a Windows runner has been named (see WINDOWS_RUNNER_TAG in the root
+# .gitlab-ci.yml). That is the honest trade: on a project with no Windows runner the
+# alternative is not "Windows coverage", it is a pipeline that hangs.
 
 .checks:
   stage: check
@@ -37,6 +40,8 @@
 
 checks:linux:
   extends: .checks
+  # No tags: shared runners are untagged, so this job runs anywhere, including GitLab.com's
+  # free fleet.
   image: python:${PYTHON_VERSION}
   before_script:
     - python --version
@@ -45,8 +50,15 @@ checks:windows:
   extends: .checks
   tags:
     - ${WINDOWS_RUNNER_TAG}
+  rules:
+    # Without this guard the job is created with an empty tag list and waits for a runner
+    # that does not exist. Named tag: the job runs. No tag: the job is never created, and
+    # the pipeline result reflects Linux only rather than sitting stuck.
+    - if: $WINDOWS_RUNNER_TAG == null || $WINDOWS_RUNNER_TAG == ""
+      when: never
+    - when: on_success
   # Windows runners are shell executors, not container ones, so the Python version cannot
-  # be selected by image. Install it if the runner does not already carry it — the SaaS
+  # be selected by image. Install it if the runner does not already carry it — a SaaS
   # Windows image ships Chocolatey, a self-hosted runner with Python preinstalled skips
   # straight past this.
   before_script:

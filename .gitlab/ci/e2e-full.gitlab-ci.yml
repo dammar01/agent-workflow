@@ -18,19 +18,23 @@ variables:
   # telling you anything about the runtime. Point this at a machine where the provider is
   # installed and authenticated, which in practice means the same machine a developer uses.
   E2E_RUNNER_TAG:
-    value: "self-hosted"
-    description: "Runner tag. Shared runners have no provider CLI installed — use a self-hosted runner that does."
+    value: ""
+    description: "Tag of a runner that has the provider CLI installed and authenticated. Empty (default) skips the delegated job — an unmatched tag would hang the pipeline instead of failing it."
 
 e2e:delegated:
   stage: delegated
   tags:
     - ${E2E_RUNNER_TAG}
   timeout: 60 minutes
-  # Never blocking: the pipeline is green without it, and it only runs when someone
-  # presses the button and accepts the cost.
+  # Never blocking: the pipeline is green without it, and it only runs when someone presses
+  # the button and accepts the cost.
   allow_failure: false
   interruptible: false
   rules:
+    # Same guard as the Windows job, for the same reason: no provider runner named means no
+    # job, rather than a job queued against a tag nothing answers to.
+    - if: $E2E_RUNNER_TAG == null || $E2E_RUNNER_TAG == ""
+      when: never
     - if: $CI_PIPELINE_SOURCE == "web"
       when: manual
     - when: never
