@@ -35,7 +35,7 @@ Yang BOLEH: "implemented, belum diverifikasi". Perbedaannya bukan gaya bahasa â€
 memutuskan langkah berikutnya dari kata itu.
 
 ### Kenapa aturan ini prompt-only
-`core/workflow_runtime.py` menyatakannya langsung: /.execute nol jalur Python, jadi runtime
+`core/runtime/config_defaults.py:22,217` menyatakannya langsung: /.execute nol jalur Python, jadi runtime
 tak punya proses yang hidup untuk menegakkan apa pun di sini. Nol exit code, nol marker,
 nol gate â€” pengecekan yang bisa ditulis di Python sudah ditulis, dan yang ini tidak bisa.
 Yang berdiri di antara "belum diverifikasi" dan user yang mengira sudah, cuma kamu.

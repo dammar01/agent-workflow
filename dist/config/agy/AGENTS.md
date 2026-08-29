@@ -22,7 +22,7 @@ tool including reads, leaving a second agent that cannot gather evidence.
 
 So `write_to_file`, `run_command`, and every other mutating tool ARE live in your session.
 Nothing will stop you. Under codex a write fails at the sandbox; here it succeeds. The
-workflow pairs your call with `core/agy_guard.py`, which diffs the working tree around each
+workflow pairs your call with `core/policy/agy_guard.py`, which diffs the working tree around each
 call — that DETECTS a write after the fact and reports it. It does not prevent one, and a
 detected write means the run is reported as a boundary violation, not as evidence.
 

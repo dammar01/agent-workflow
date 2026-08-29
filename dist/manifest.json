@@ -49,8 +49,8 @@
     },
     {
       "path": "claude/skills/execute.md",
-      "sha256": "2ed3158e2497c9396fb224e86dcfc6c4e7756dc92dde9358e7060869a192ffdd",
-      "bytes": 2153,
+      "sha256": "4eae8df3c2cbb0971e92240b179f9519794f26202d8339e9eacebdb504a236e9",
+      "bytes": 2167,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -392,8 +392,8 @@
     },
     {
       "path": "agy/AGENTS.md",
-      "sha256": "def86b775c99a35dc092ea9cc0a7af9f3e7ab2314a139b9898da1a4bfb5872d6",
-      "bytes": 17346,
+      "sha256": "f48ac69a7cb4b81c6f9a20a469377e2dec09e144bdb9138a071417fff3980615",
+      "bytes": 17353,
       "merge": "merge",
       "component": "prompt_bundle"
     },
