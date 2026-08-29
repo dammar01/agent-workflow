@@ -30,6 +30,9 @@ from config.settings import TOOL_VERSION  # noqa: E402
 # only when it contains one of them, so adding a new mention means adding it here too —
 # deliberate: silent stamping of an unrelated version is how the drift started.
 TARGETS: dict[str, tuple[str, ...]] = {
+    # The README carries the version only in its shields.io badge; the prose deliberately
+    # does not, so a release bump touches one line here instead of five.
+    "README.md": ("img.shields.io/badge/version-",),
     "docs/reference.md": (
         "# agent-workflow v",
         "## Install (v",

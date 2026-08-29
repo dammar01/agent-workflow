@@ -1,198 +1,248 @@
+<div align="center">
+
 # agent-workflow
 
-Bikin Claude Code berhenti membakar context (dan tagihan) untuk membaca kode.
+**Stop burning premium context on reading code.**
 
-Baca kode dan pencarian di codebase didelegasikan ke agent lain yang jauh lebih murah. Claude Code hanya menerima ringkasannya, lalu berpikir dan menulis kode.
+A two-agent orchestration runtime that delegates codebase reading and search to a
+cheaper agent, so Claude Code spends its context window on reasoning instead of raw
+file contents.
 
-[Dokumentasi teknis lengkap →](docs/reference.md)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](#requirements)
+[![Version](https://img.shields.io/badge/version-3.4.5-informational.svg)](CHANGELOG.md)
 
----
-
-## Daftar isi
-
-1. [Apa ini](#1-apa-ini)
-2. [Kenapa dipakai](#2-kenapa-dipakai)
-3. [Untuk siapa](#3-untuk-siapa)
-4. [Efektif untuk apa](#4-efektif-untuk-apa)
-5. [Instalasi](#5-instalasi)
-6. [Lisensi](#6-lisensi)
+</div>
 
 ---
 
-## 1. Apa ini
+## Table of Contents
 
-`agent-workflow` adalah runtime yang duduk **di antara dua AI agent** dan mengatur pembagian kerja di antara keduanya.
+- [Overview](#overview)
+- [Why use it](#why-use-it)
+- [Who it is for](#who-it-is-for)
+- [What it is effective for](#what-it-is-effective-for)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Commands](#commands)
+- [Security considerations](#security-considerations)
+- [Documentation](#documentation)
+- [License](#license)
 
-| Peran | Siapa | Tugasnya |
-|---|---|---|
-| **main_agent** | Claude Code (atau Codex, Cursor) | Berpikir, mengambil keputusan, **satu-satunya yang boleh menulis file** |
-| **second_agent** | OpenCode / Codex / Agy — model murah | Membaca dan mencari di codebase, **read-only**, tidak pernah menulis |
+---
 
-Idenya sederhana: dari semua pekerjaan yang Claude Code lakukan, sebagian besar bukan "berpikir". Itu **membaca file, grep, menelusuri siapa memanggil siapa** — pekerjaan mekanis yang tidak butuh model mahal. Pekerjaan itulah yang dipindahkan.
+## Overview
 
-### Alurnya
+`agent-workflow` sits between two AI agents and enforces a strict division of labour
+between them.
+
+| Role | Who | Responsibility |
+| --- | --- | --- |
+| **main_agent** | Claude Code, Codex, Cursor | Reasoning, decisions, and the **only** party allowed to write files |
+| **second_agent** | OpenCode, Codex, or Agy — a cheaper model | Reading and searching the codebase, strictly **read-only** |
+
+The premise is that most of what a coding agent does is not reasoning. It is reading
+files, grepping, and tracing call sites — mechanical work that does not require a
+frontier model. That work is what gets delegated.
+
+### How it works
 
 ```text
-Kamu bertanya ke Claude Code
-        ↓
-Claude Code memanggil satu script:  .workflow/run.ps1 explore "cari entry point auth"
-        ↓
-Runtime merakit prompt terstruktur, menjalankan agent murah
-        ↓
-Agent murah membaca 40 file, menelusuri import, mengumpulkan bukti
-        ↓
-Runtime memvalidasi bentuk jawabannya, menyimpan bukti ke disk
-        ↓
-Claude Code menerima RINGKASAN + anchor file:line — bukan isi 40 file itu
-        ↓
-Claude Code berpikir dan menulis kode
+You ask Claude Code a question
+        │
+        ▼
+Claude Code invokes a single script:
+  .workflow/run.ps1 explore "find the auth entry point" "<SESSION_ID>"
+        │
+        ▼
+The runtime builds a structured prompt and launches the cheaper agent
+        │
+        ▼
+The cheaper agent reads 40 files, traces imports, and collects evidence
+        │
+        ▼
+The runtime validates the response shape and persists the evidence to disk
+        │
+        ▼
+Claude Code receives a DIGEST plus file:line anchors — not the 40 files
+        │
+        ▼
+Claude Code reasons and writes the code
 ```
 
-Yang dikembalikan selalu berbentuk sama, jadi Claude Code tidak perlu menebak:
+Every delegated call returns the same envelope, so the calling agent never has to guess:
 
 ```json
 { "ok": true, "content": "...", "meta": {}, "digest": {} }
 ```
 
-Tanpa dependency pihak ketiga. Seluruh runtime memakai standard library Python.
+The runtime ships with **zero third-party dependencies** and runs entirely on the Python
+standard library.
 
 ---
 
-## 2. Kenapa dipakai
+## Why use it
 
-### Alasan 1 — menekan biaya
+### 1. Lower cost
 
-Membaca kode adalah pekerjaan bervolume tinggi bernilai rendah. Menelusuri satu modul bisa berarti membaca puluhan file. Dilakukan Claude Code, tiap file itu masuk sebagai input token dengan tarif premium.
+Reading code is high-volume, low-value work. Tracing a single module can mean opening
+dozens of files, and every one of them enters a premium model as input tokens.
 
-Dipindahkan ke agent murah, biaya pekerjaan yang sama turun drastis — dan sebagian provider punya model gratis. Claude Code tetap mengerjakan bagian yang memang butuh dia: analisis sebab-akibat, keputusan desain, menulis kode.
+Delegated to a cheaper agent, the same work costs a fraction — and several supported
+providers offer free model tiers. The premium model keeps the work that actually
+requires it: causal analysis, design decisions, and writing code.
 
-### Alasan 2 — dan ini yang sering lebih penting: menjaga context
+### 2. Preserved context — often the bigger win
 
-Claude Code punya jendela context terbatas. Semakin penuh jendela itu dalam satu sesi, semakin turun performanya:
+A coding agent's context window is finite, and quality degrades as it fills:
 
-- detail dari awal percakapan mulai terlewat;
-- instruksi awal tergeser oleh isi file yang menumpuk;
-- sesi berakhir lebih cepat karena context habis, dan kamu harus memulai dari nol.
+- details from earlier in the conversation start getting missed;
+- initial instructions get crowded out by accumulated file contents;
+- the session ends sooner, forcing you to start over and re-explain.
 
-Membaca 40 file secara langsung bisa menghabiskan puluhan ribu token — dan **isi file itu tinggal di context sampai sesi berakhir**, padahal yang kamu butuhkan cuma tiga baris darinya.
+Reading forty files directly can consume tens of thousands of tokens, and **those file
+contents stay in the window for the rest of the session** even when only three lines
+mattered.
 
-Dengan pola ini, yang masuk ke context Claude Code cuma digest dan anchor `file:line`. Bukti lengkapnya disimpan ke disk di `.workflow/`, dan dibuka hanya kalau memang dibutuhkan.
+With this runtime, only the digest and its `file:line` anchors enter the window. The full
+evidence is persisted to `.workflow/` on disk and opened only when it is actually needed.
 
-> **Efeknya:** satu sesi Claude Code bertahan jauh lebih lama, dan kualitasnya tidak merosot di tengah jalan.
+> **Result:** a single session lasts substantially longer, and its quality does not
+> degrade partway through.
 
-### Alasan 3 — jawaban yang bisa diaudit
+### 3. Auditable answers
 
-Tiap klaim dari agent murah wajib membawa anchor `file:line`. Runtime memeriksa bentuk jawabannya; jawaban yang berhenti sebelum kontrak selesai diminta ulang **satu kali**, lalu ditandai gagal. Tidak ada retry tanpa akhir.
+Every claim returned by the delegated agent must carry a `file:line` anchor. The runtime
+validates the response shape; a reply that stops before the contract is complete is asked
+once for the missing block, then marked as failed. There is no unbounded retry loop.
 
-Bukti disimpan sebagai artifact permanen, jadi pertanyaan yang sama di sesi berikutnya bisa dilayani dari disk tanpa memanggil provider lagi.
-
----
-
-## 3. Untuk siapa
-
-Cocok kalau kamu:
-
-- **memakai Claude Code sebagai code agent utama** setiap hari, bukan sesekali;
-- **bekerja di codebase besar** — ratusan sampai ribuan file, di mana "cari di mana fungsi ini dipakai" berarti menyapu banyak direktori;
-- sering **kehabisan context di tengah sesi** dan terpaksa mengulang penjelasan;
-- ingin biaya per sesi turun tanpa menurunkan kualitas keputusan.
-
-Kurang cocok kalau:
-
-- codebase-mu kecil (di bawah ~50 file) — Claude Code bisa memuat semuanya sendiri, lapisan ini cuma menambah rumit;
-- kamu tidak mau memasang CLI agent kedua di mesinmu;
-- kamu butuh jawaban instan — tiap panggilan terdelegasi butuh puluhan detik sampai beberapa menit, karena agent murah benar-benar membaca kode.
+Evidence is stored as an immutable artifact, so an equivalent question in a later session
+can be served from disk without invoking the provider again.
 
 ---
 
-## 4. Efektif untuk apa
+## Who it is for
 
-Paling terasa pada pekerjaan yang **luas** — banyak file, banyak titik sentuh:
+This project is a good fit if you:
 
-| Pekerjaan | Contoh pertanyaan | Command |
-|---|---|---|
-| **Memetakan kode asing** | "Di mana logic autentikasi?" "Alur request dari route sampai DB gimana?" | `explore` |
-| **Mencari sebab** | "Kenapa endpoint ini lambat?" "Aman gak kalau kolom ini dihapus?" | `analyze` |
-| **Menyusun rencana** | "Mau tambah fitur X, langkahnya apa saja?" | `plan` |
-| **Blast radius** | "Perubahan di working tree ini menyentuh apa saja?" | `sweep` |
-| **Membuktikan hasil** | "Yang tadi dikerjakan sudah benar belum?" | `verify` |
+- **use Claude Code as your primary coding agent** on a daily basis;
+- **work in a large codebase** — hundreds to thousands of files, where "find every caller
+  of this function" means sweeping many directories;
+- **regularly exhaust your context window** mid-session and have to re-establish state;
+- want lower cost per session without lowering the quality of decisions.
 
-Kurang efektif untuk perubahan satu file yang sudah kamu tahu letaknya. Kalau kamu sudah tahu file dan barisnya, minta Claude Code langsung mengeditnya — jangan lewat lapisan ini.
+It is a poor fit if:
 
-> **Menulis kode tidak pernah didelegasikan.** Agent murah hanya membaca. Semua perubahan file tetap dikerjakan Claude Code, di bawah pengawasanmu. Ini disengaja, bukan keterbatasan.
+- your codebase is small (under roughly 50 files) — the agent can hold it directly, and
+  this layer only adds indirection;
+- you are unwilling to install a second agent CLI on your machine;
+- you need instant answers — each delegated call takes tens of seconds to a few minutes,
+  because the delegated agent genuinely reads the code.
 
 ---
 
-## 5. Instalasi
+## What it is effective for
 
-### 5.1 Syarat
+The benefit scales with the **breadth** of the task — many files, many touch points.
 
-| Kebutuhan | Wajib? | Catatan |
-|---|---|---|
-| **Python 3.10+** | Wajib | Nol dependency — cukup Python-nya saja |
-| **CLI agent kedua** | Wajib | Pilih satu: `opencode` (disarankan), `codex`, atau `agy` — harus ada di `PATH` |
-| **git** | Disarankan | Dipakai `sweep`, mode verify `syntax`, dan penjaga workspace |
-| **Claude Code** | Disarankan | Ini main_agent yang dituju. Agent lain juga bisa |
+| Task | Example question | Command |
+| --- | --- | --- |
+| **Mapping unfamiliar code** | "Where is the authentication logic?" "How does a request flow from route to database?" | `explore` |
+| **Root-cause analysis** | "Why is this endpoint slow?" "Is it safe to drop this column?" | `analyze` |
+| **Change planning** | "I want to add feature X — what are the steps?" | `plan` |
+| **Blast radius** | "What does the current working tree touch?" | `sweep` |
+| **Proving results** | "Is the change that was just made correct?" | `verify` |
 
-Cek dulu sebelum lanjut:
+It is less useful for a single-file change whose location you already know. If you know
+the file and the line, ask your agent to edit it directly rather than routing through
+this layer.
+
+> **Writing code is never delegated.** The second agent only reads. All file
+> modifications remain with the main agent, under your review. This is a deliberate
+> design constraint, not a limitation.
+
+---
+
+## Requirements
+
+| Requirement | Required | Notes |
+| --- | --- | --- |
+| **Python 3.10+** | Yes | No dependencies to install — the interpreter is sufficient |
+| **A second-agent CLI** | Yes | One of `opencode` (recommended), `codex`, or `agy`, available on `PATH` |
+| **git** | Recommended | Used by `sweep`, `syntax` verify mode, and the workspace guard |
+| **Claude Code** | Recommended | The intended main agent; others work as well |
+
+Verify before continuing:
 
 ```bash
-python --version      # harus 3.10 atau lebih baru
-opencode --version    # atau: codex --version / agy --version
+python --version      # must be 3.10 or newer
+opencode --version    # or: codex --version / agy --version
 git --version
 ```
 
-> **Pilih `opencode` kalau ragu.** Dari tiga provider, hanya OpenCode yang punya penegakan izin sungguhan — agent murahnya dilarang menulis file, dilarang membaca `.env` dan file kunci, dan perintah shell-nya dibatasi ke git read-only. Pada `codex` dan `agy`, batas itu tidak ditegakkan mesin. Rinciannya di [dokumentasi provider](docs/reference.md#memilih-provider--dan-konsekuensi-keamanannya).
+> **Choose `opencode` if you are unsure.** Of the three providers, only OpenCode has
+> mechanically enforced permissions: the delegated agent is denied write and edit tools,
+> denied reads of `.env` and key material, and restricted to read-only git commands. On
+> `codex` and `agy` those boundaries are not machine-enforced. See
+> [Security considerations](#security-considerations).
 
-### 5.2 Langkah instalasi
+---
 
-Empat langkah. Langkah 1–3 sekali per mesin, langkah 4 sekali per project.
+## Installation
 
-#### Langkah 1 — ambil tool-nya
+Four steps. Steps 1–3 run once per machine; step 4 runs once per project.
+
+### Step 1 — Clone the tool
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/dammar01/agent-workflow.git
 cd agent-workflow
 ```
 
-Simpan folder ini di tempat permanen. Runtime akan menyimpan path absolutnya; memindahkannya nanti berarti menjalankan `upgrade` ulang.
+Keep this directory somewhere permanent. The runtime records its absolute path; moving it
+later requires re-running `upgrade`.
 
-#### Langkah 2 — pasang config agent global
+### Step 2 — Install the global agent configuration
 
-Lihat dulu apa yang akan diubah, tanpa menulis apa pun:
+Preview every change without writing anything:
 
 ```bash
 python install.py
 ```
 
-Kalau sudah cocok, baru terapkan:
+Apply once you are satisfied:
 
 ```bash
 python install.py --apply
 ```
 
-Ini memasang config Claude Code (skill, hook) dan **blok izin untuk agent murah** — larangan tulis/edit dan allowlist perintah shell. Langkah ini yang membuat batas keamanan aktif; melewatkannya berarti agent murah berjalan tanpa larangan tulis.
+This installs the Claude Code configuration (skills and hooks) and the **permission block
+for the delegated agent** — the write/edit denials and the shell command allowlist. This
+step is what activates the security boundary; skipping it leaves the delegated agent
+running without write restrictions.
 
-#### Langkah 3 — beritahu letak `main.py`
+### Step 3 — Register the location of `main.py`
 
-Runtime perlu tahu di mana tool-nya untuk init pertama.
+The runtime needs to know where the tool lives for the first initialisation.
 
-**Windows (permanen, jalankan sekali):**
+**Windows (persistent, run once):**
 
 ```powershell
 [Environment]::SetEnvironmentVariable("AGENT_PATH", "C:/path/to/agent-workflow/main.py", "User")
 ```
 
-Tutup terminal, buka lagi supaya aktif.
+Close and reopen the terminal for the variable to take effect.
 
-**macOS / Linux (permanen):**
+**macOS / Linux (persistent):**
 
 ```bash
-echo 'export AGENT_PATH="$HOME/path/to/agent-workflow/main.py"' >> ~/.bashrc   # atau ~/.zshrc
+echo 'export AGENT_PATH="$HOME/path/to/agent-workflow/main.py"' >> ~/.bashrc   # or ~/.zshrc
 source ~/.bashrc
 ```
 
-Cek:
+Verify:
 
 ```bash
 python "$AGENT_PATH" --help
@@ -202,114 +252,168 @@ python "$AGENT_PATH" --help
 python $env:AGENT_PATH --help
 ```
 
-#### Langkah 4 — aktifkan di project kamu
+### Step 4 — Enable it in your project
 
-Jalankan sekali untuk tiap project yang mau dipakai:
+Run once for each project you want to use it in:
 
 ```bash
-python "$AGENT_PATH" --command init --work-dir /path/to/project-kamu --pretty
+python "$AGENT_PATH" --command init --work-dir /path/to/your-project --pretty
 ```
 
 ```powershell
-python $env:AGENT_PATH --command init --work-dir "C:/path/to/project-kamu" --pretty
+python $env:AGENT_PATH --command init --work-dir "C:/path/to/your-project" --pretty
 ```
 
-Yang dibuat di project kamu:
+This creates, inside your project:
 
-- `.workflow/config.json` — pengaturan, plus path absolut ke tool
-- `.workflow/second_agent.json` — pilihan provider dan model, boleh kamu ubah
-- `.workflow/run.*`, `inspect.*`, `check.*` — script pintu masuk (`.ps1` di Windows, `.sh` di POSIX)
-- `opencode.json` — daftar file rahasia yang dilarang dibaca
-- `.workflow/` otomatis masuk `.gitignore`
+| Path | Purpose |
+| --- | --- |
+| `.workflow/config.json` | Settings, plus absolute paths back to the tool |
+| `.workflow/second_agent.json` | Provider and model selection; safe to edit |
+| `.workflow/run.*`, `inspect.*`, `check.*` | Entry-point scripts (`.ps1` on Windows, `.sh` on POSIX) |
+| `opencode.json` | Deny-list of secret files the delegated agent may not read |
 
-> **`.workflow/` jangan di-commit.** Script di dalamnya memanggang path absolut mesin tempat `init` dijalankan. Tiap anggota tim menjalankan langkah 4 sendiri.
+`.workflow/` is added to the project's `.gitignore` automatically.
 
-### 5.3 Pastikan sudah benar
+> **Do not commit `.workflow/`.** The generated scripts bake in absolute paths from the
+> machine where `init` ran. Each team member runs step 4 themselves.
+
+### Verifying the installation
 
 ```bash
 python install.py --check
 ```
 
 ```bash
-cd /path/to/project-kamu
+cd /path/to/your-project
 .workflow/run.sh doctor          # Windows: .workflow\run.ps1 doctor
 ```
 
-`doctor` harus melaporkan **`READY`** dengan nol issue. Kalau `NOT_READY`, baca `recommended_fixes` — itu berarti ada pintu masuk yang benar-benar rusak, bukan sekadar catatan gaya.
+`doctor` must report **`READY`** with zero issues. A `NOT_READY` status means an entry
+point is genuinely broken rather than merely untidy — read `recommended_fixes` before
+proceeding.
 
-### 5.4 Pemakaian pertama
+---
 
-Claude Code memanggilnya sendiri lewat bahasa natural:
+## Usage
+
+In normal use, the main agent invokes the runtime for you from natural language:
 
 ```text
-kamu:  di mana logic autentikasi di project ini?
+you:  where is the authentication logic in this project?
 
-Claude Code:  [INTENT] explore — pertanyaan lokasi
-              (menjalankan .workflow/run.ps1 explore "...")
-              ...
+Claude Code:  [INTENT] explore — location question
+              (runs .workflow/run.ps1 explore "...")
 ```
 
-Mau memanggil manual? Bisa:
+To invoke it directly:
 
 ```bash
-.workflow/run.sh explore "cari entry point autentikasi" "<SESSION_ID>"
+.workflow/run.sh explore "find the authentication entry point" "<SESSION_ID>"
 ```
 
 ```powershell
-& ".workflow\run.ps1" explore "cari entry point autentikasi" "<SESSION_ID>"
+& ".workflow\run.ps1" explore "find the authentication entry point" "<SESSION_ID>"
 ```
 
-Argumen ketiga adalah session id, dan **wajib diisi** — tanpa itu dua sesi bisa saling menimpa state.
+The third argument is the session id and is **required**. Without it, concurrent sessions
+fall back to a shared identifier and can overwrite each other's state.
 
-### 5.5 Command yang tersedia
+### Troubleshooting
 
-| Command | Jalan di mana | Untuk apa |
-|---|---|---|
-| `init` | lokal | Aktifkan di satu project |
-| `upgrade` | lokal | Segarkan workspace setelah tool diperbarui |
-| `doctor` | lokal | Cek kesiapan, tulis laporan |
-| `sweep` | lokal | Pindai perubahan di working tree |
-| `clean` | lokal | Bersihkan job, fakta usang, sesi lama |
-| `explore` | terdelegasi | Peta kode, entry point, pemilik |
-| `analyze` | terdelegasi | Analisis sebab, nol perubahan kode |
-| `plan` | terdelegasi | Rencana langkah berbasis bukti |
-| `verify` | terdelegasi | Buktikan hasil kerja |
-
-Daftar lengkap termasuk job asinkron: [docs/reference.md](docs/reference.md#command).
-
-### 5.6 Kalau ada masalah
-
-| Gejala | Kemungkinan sebab | Tindakan |
-|---|---|---|
-| `doctor` bilang `NOT_READY` | script atau config melenceng | `.workflow/run.sh upgrade` |
-| `run script drift` | tool diperbarui, script belum | `upgrade` dari mesin itu |
-| Provider tidak ditemukan | CLI agent tak ada di `PATH` | Pasang, lalu `provider --version` |
-| Command gagal setelah repo dipindah | path absolut sudah basi | `upgrade` dari lokasi baru |
+| Symptom | Likely cause | Action |
+| --- | --- | --- |
+| `doctor` reports `NOT_READY` | Scripts or config have drifted | `.workflow/run.sh upgrade` |
+| `run_script_drift` | Tool was updated, scripts were not | Run `upgrade` from that machine |
+| Provider not found | The agent CLI is not on `PATH` | Install it, then re-check `--version` |
+| Commands fail after moving the repository | Baked absolute paths are stale | Run `upgrade` from the new location |
 
 ---
 
-## 6. Lisensi
+## Commands
 
-Apache License 2.0 — open source. Teks lengkap ada di [LICENSE](LICENSE).
+| Command | Type | Purpose |
+| --- | --- | --- |
+| `init` | local | Enable the runtime in a project |
+| `upgrade` | local | Refresh a workspace after the tool is updated |
+| `doctor` | local | Readiness check; writes a report |
+| `sweep` | local | Scan the working tree for changes |
+| `clean` | local | Prune jobs, stale facts, and old sessions |
+| `explore` | delegated | Code map, entry points, ownership |
+| `analyze` | delegated | Causal analysis; no code changes |
+| `plan` | delegated | Evidence-backed implementation steps |
+| `verify` | delegated | Prove that completed work is correct |
 
-Artinya, singkatnya:
-
-- **boleh** dipakai, diubah, dan didistribusikan, termasuk untuk keperluan komersial;
-- **boleh** dipakai di produk tertutup — kode turunanmu tidak wajib ikut open source;
-- **wajib** menyertakan notice hak cipta dan salinan lisensi ini;
-- **wajib** menandai file yang kamu ubah;
-- **dapat hibah paten eksplisit** dari kontributor, dan hibah itu berakhir bila kamu menuntut paten atas karya ini;
-- **tanpa garansi** — dipakai atas risiko sendiri.
-
-Ringkasan ini bukan nasihat hukum; yang mengikat adalah teks di [LICENSE](LICENSE).
+Asynchronous job commands (`submit`, `await`, `status`, `result`) are documented in the
+[full reference](docs/reference.md#command).
 
 ---
 
-## Bacaan lanjutan
+## Security considerations
 
-| Dokumen | Isi |
-|---|---|
-| [docs/reference.md](docs/reference.md) | Referensi teknis lengkap: schema config, job asinkron, fact store, evidence reuse, mode verify, sesi, test |
-| [CHANGELOG.md](CHANGELOG.md) | Riwayat perubahan tiap versi |
-| [RELEASE.md](RELEASE.md) | Prosedur rilis |
-| [docs/reference.md#batasan-yang-diketahui](docs/reference.md#batasan-yang-diketahui) | Batasan yang diketahui — dibaca sebelum mengandalkan runtime ini untuk jaminan keamanan |
+The delegated agent reads your source code. How strictly it is confined depends entirely
+on which provider you select.
+
+| | `opencode` | `codex` | `agy` |
+| --- | --- | --- | --- |
+| Write/edit denied by config | **Yes** | Not enforceable | No |
+| Secret-file reads denied | **Yes** | Declared, not enforced | No |
+| Shell commands restricted | **Yes**, read-only git allowlist | No | No |
+| Workspace mutation handling | Prevented | Prevented for writes | Detected after the fact |
+
+Three points worth understanding before deployment:
+
+1. **The write boundary lives in the global agent configuration**, installed by
+   `python install.py --apply`. A project initialised on a machine where that step never
+   ran has no write restriction. The project-local `opencode.json` covers secret-file
+   *reads* only.
+2. **`codex` passes filesystem permission flags on every call, but their runtime effect
+   is unverified** against the current CLI. Treat the boundary as unproven rather than
+   as established.
+3. **`agy` runs with permissions skipped and is guarded by detection, not prevention.**
+   The guard compares `git status` before and after each call, which means files matched
+   by `.gitignore` — including `.env` — are invisible to it.
+
+For projects holding secrets that must remain unreadable by the delegated agent, use
+`opencode`. Known limitations are enumerated in the
+[reference documentation](docs/reference.md#batasan-yang-diketahui).
+
+---
+
+## Documentation
+
+| Document | Contents |
+| --- | --- |
+| [docs/reference.md](docs/reference.md) | Complete technical reference: configuration schema, asynchronous jobs, fact store, evidence reuse, verify modes, sessions, tests *(written in Bahasa Indonesia)* |
+| [CHANGELOG.md](CHANGELOG.md) | Release history |
+| [RELEASE.md](RELEASE.md) | Release procedure |
+
+---
+
+## License
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for the full text.
+
+In brief, the licence permits use, modification, and distribution — including for
+commercial and proprietary purposes — provided that the copyright notice and licence are
+retained and modified files are marked as changed. It includes an express patent grant
+from contributors, which terminates for any party initiating patent litigation over the
+work. The software is provided without warranty of any kind.
+
+This summary is not legal advice; the [LICENSE](LICENSE) text is authoritative.
+
+```text
+Copyright 2026 dammar01
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
