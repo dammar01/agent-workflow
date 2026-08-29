@@ -30,7 +30,7 @@ from config.settings import TOOL_VERSION  # noqa: E402
 # only when it contains one of them, so adding a new mention means adding it here too —
 # deliberate: silent stamping of an unrelated version is how the drift started.
 TARGETS: dict[str, tuple[str, ...]] = {
-    "README.md": (
+    "docs/reference.md": (
         "# agent-workflow v",
         "## Install (v",
         "Kunci reliability (v",
@@ -49,7 +49,7 @@ TARGETS: dict[str, tuple[str, ...]] = {
     ),
     "dist/config/claude/skills/init.md": ("generated: run/inspect/check",),
     # `bench/BENCHMARK-PLAN.md` used to be stamped here, and stamping it was wrong. The
-    # benchmark's system under test is FROZEN at a tag (README.md, "System under test
+    # benchmark's system under test is FROZEN at a tag (docs/reference.md, "System under test
     # dibekukan"; the decision is recorded again in bench/STATE.md), so its `**Versi SUT:**`
     # line must NOT follow TOOL_VERSION — a SUT that shifts mid-measurement makes the
     # numbers attributable to no version at all. Auto-stamping it would have broken that
@@ -74,14 +74,14 @@ for _name, _bundle in PROVIDER_BUNDLES.items():
 # exemption was forgotten, edit a sentence about the past into a sentence about the present
 # — and the files most exposed to that are precisely the migration notes and changelog
 # entries someone reads to find out what changed. A noisy check is the cheaper failure.
-SCAN_PATHS: tuple[str, ...] = ("README.md", "dist/config")
+SCAN_PATHS: tuple[str, ...] = ("README.md", "docs/reference.md", "dist/config")
 
 # Lines inside SCAN_PATHS allowed to carry a semver that is NOT TOOL_VERSION, keyed the
 # same way TARGETS is: path -> substrings. Two legitimate kinds live here.
 #   - history: a sentence about a past release must keep saying what it said.
 #   - somebody else's version: a third-party tool's release is not ours to stamp.
 EXEMPT: dict[str, tuple[str, ...]] = {
-    "README.md": (
+    "docs/reference.md": (
         # The v3.4.2 -> v3.4.3 provider-key migration, described in the past tense.
         "memigrasi kunci v",
         "sejak v3.4.3 provider second_agent",

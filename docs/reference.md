@@ -772,8 +772,8 @@ Disebut terbuka karena diam soal ini akan membuat runtime terlihat lebih menjami
 ## Benchmark
 
 `bench/` berisi harness benchmark 3-arm yang mengukur ekonomi quality-adjusted tool ini
-terhadap dirinya sendiri. Rencananya di [`bench/BENCHMARK-PLAN.md`](bench/BENCHMARK-PLAN.md),
-progres eksekusi di [`bench/STATE.md`](bench/STATE.md).
+terhadap dirinya sendiri. Rencananya di [`bench/BENCHMARK-PLAN.md`](../bench/BENCHMARK-PLAN.md),
+progres eksekusi di [`bench/STATE.md`](../bench/STATE.md).
 
 Tiga arm: **A** = Claude langsung, **B** = native sub-agent, **C** = agent-workflow (repo
 ini). Arm A dan B dijalankan operator secara manual dan harness memanen biayanya per
@@ -795,7 +795,7 @@ Empat verdict: `accepted`, `rejected`, `security_violation`, `incomplete`. `not_
 `skipped` bukan pass — stage yang tidak dijalankan menghasilkan `incomplete`, dan
 `incomplete` bukan diterima.
 
-Pemetaan verdict dikunci [`bench/test_oracle.py`](bench/test_oracle.py), dijalankan
+Pemetaan verdict dikunci [`bench/test_oracle.py`](../bench/test_oracle.py), dijalankan
 terpisah dari `tests/run.py`:
 
 ```
@@ -805,7 +805,7 @@ python bench/test_oracle.py
 Terpisah karena oracle menjalankan `tests/run.py` sebagai stage-nya sendiri; test bench di
 dalam suite itu membuat oracle menilai instrumennya sendiri.
 
-Satu unit dijalankan [`bench/driver.py`](bench/driver.py) dalam enam fase, dan tiga di
+Satu unit dijalankan [`bench/driver.py`](../bench/driver.py) dalam enam fase, dan tiga di
 antaranya bukan milik mesin:
 
 ```
@@ -822,13 +822,13 @@ dua angka yang cuma operator lihat — `rework_cycles` dan `main_agent_rewrote` 
 disengaja: apakah main agent menulis ulang kerja delegatnya adalah fakta tentang sesi, bukan
 bentuk yang bisa dibaca dari patch akhir.
 
-[`bench/collect.py`](bench/collect.py) mengubah unit selesai jadi `ledger.jsonl`. Jalankan
+[`bench/collect.py`](../bench/collect.py) mengubah unit selesai jadi `ledger.jsonl`. Jalankan
 **sebelum** `teardown` — angka sisi worker arm C ada di dalam `.workflow` milik worktree.
 Baris tanpa biaya premium ditolak kecuali diminta eksplisit: `aggregate.py` memaksa biaya
 yang hilang jadi `$0`, jadi arm yang ekspornya tak pernah datang akan terbaca sebagai arm
 termurah.
 
-Batas run terkumpul di [`bench/policy.py`](bench/policy.py) — `python bench/policy.py`
+Batas run terkumpul di [`bench/policy.py`](../bench/policy.py) — `python bench/policy.py`
 mencetaknya. Waktu per unit, cap `rework_cycles`, dan cap panggilan terdelegasi ditegakkan
 saat jalan; budget per unit dan per run **tidak** — biaya datang dari tokenburn sesudah run
 selesai, jadi `collect.py` melaporkan pelampauan alih-alih mencegahnya.
@@ -843,8 +843,8 @@ dengan baris bergerbang penuh.
 
 ## Referensi
 
-- Catatan rilis: [`prompt/v3.4.5/changelog.md`](prompt/v3.4.5/changelog.md)
-- Kontrak canonical main_agent: [`dist/config/claude/CLAUDE.md`](dist/config/claude/CLAUDE.md)
-- Kontrak canonical second_agent: [`dist/config/opencode/AGENTS.md`](dist/config/opencode/AGENTS.md)
+- Catatan rilis: [`prompt/v3.4.5/changelog.md`](../prompt/v3.4.5/changelog.md)
+- Kontrak canonical main_agent: [`dist/config/claude/CLAUDE.md`](../dist/config/claude/CLAUDE.md)
+- Kontrak canonical second_agent: [`dist/config/opencode/AGENTS.md`](../dist/config/opencode/AGENTS.md)
 - Runtime entry point: [`main.py`](main.py)
-- Rencana benchmark: [`bench/BENCHMARK-PLAN.md`](bench/BENCHMARK-PLAN.md)
+- Rencana benchmark: [`bench/BENCHMARK-PLAN.md`](../bench/BENCHMARK-PLAN.md)
