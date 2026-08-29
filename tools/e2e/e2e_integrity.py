@@ -310,10 +310,20 @@ def integrity_checks(report: Report) -> None:
                     errors="replace",
                     cwd=str(project),
                 )
+                payload = _json_from(res.stdout or "")
+                # What is under test is that the command STARTS: argparse dying on a bare
+                # `--prompt` exits 2 and prints no JSON at all. The verdict itself is not:
+                # `doctor` exits 1 whenever the workspace is NOT_READY, and a CI runner
+                # with no provider CLI installed is exactly that — an environment fact,
+                # not a defect in the generated script. Asserting rc==0 here made the
+                # check pass only on a developer machine that happened to have the
+                # provider installed.
                 report.check(
                     f"entry script: `{command}` runs with no task argument",
-                    res.returncode == 0 and _json_from(res.stdout or "") is not None,
-                    f"rc={res.returncode} {(res.stderr or '')[:160]}",
+                    payload is not None and res.returncode in (0, 1),
+                    f"rc={res.returncode} "
+                    f"status={((payload or {}).get('meta') or {}).get('status')} "
+                    f"{(res.stderr or '')[:160]}",
                 )
 
         # --- fan-out capability probe ---

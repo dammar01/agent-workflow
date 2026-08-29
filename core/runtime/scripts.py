@@ -5,6 +5,15 @@ from core.workspace.workspace_paths import atomic_write_text
 from pathlib import Path
 from utils import osutil
 
+# PowerShell does not adopt the exit code of the native command it invoked: a .ps1 that
+# calls a python which exits 1 still exits 0 itself. Everything that scripts this runtime
+# reads the exit status first, so that silence turned a failed run into a reported success
+# on Windows while the .sh flavour — which `exec`s, and so inherits the code for free —
+# reported the same failure honestly. Every generated .ps1 ends with this line to close
+# the gap. `$LASTEXITCODE` is $null when the interpreter never launched at all (a missing
+# python, a bad path), and that case must not collapse to 0 either.
+_PS_PROPAGATE_EXIT = "if ($null -eq $LASTEXITCODE) { exit 1 } else { exit $LASTEXITCODE }\n"
+
 
 def _build_run_scripts(project_root: Path, main_py: str) -> list[tuple[Path, str]]:
     """Compose run/inspect/check scripts so main_agent calls one script.
@@ -62,6 +71,7 @@ def _build_run_scripts(project_root: Path, main_py: str) -> list[tuple[Path, str
         'if ($Task) { $a += @("--prompt", $Task) }\n'
         f'$a += @("--session", $Session, "--work-dir", "{root}", "--pretty")\n'
         f'& "{ps_py}" @a\n'
+        + _PS_PROPAGATE_EXIT
     )
     run_sh = (
         "#!/usr/bin/env bash\n"
@@ -96,6 +106,7 @@ def _build_run_scripts(project_root: Path, main_py: str) -> list[tuple[Path, str
     )
     inspect_ps1 = (
         f'& "{ps_py}" "{main_py}" --command inspect --work-dir "{root}" --pretty\n'
+        + _PS_PROPAGATE_EXIT
     )
     inspect_sh = (
         "#!/usr/bin/env bash\n"
@@ -108,6 +119,7 @@ def _build_run_scripts(project_root: Path, main_py: str) -> list[tuple[Path, str
         "param([Parameter(Mandatory=$true)][string]$JobId,"
         "[Parameter(ValueFromRemainingArguments=$true)]$Rest)\n"
         f'& "{ps_py}" "{check_py}" $JobId @Rest\n'
+        + _PS_PROPAGATE_EXIT
     )
     check_sh = (
         "#!/usr/bin/env bash\n"
