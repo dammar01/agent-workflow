@@ -277,7 +277,7 @@ def main() -> int:
             )
     # <project_root>/opencode.json (the secret-file boundary) is NOT installed here. It
     # belongs to a workspace, so init/upgrade owns it — see
-    # core.workflow_runtime._install_project_boundary. The upgrade call below reaches it.
+    # core.runtime.workflow_runtime._install_project_boundary. The upgrade call below reaches it.
     agent_path = REPO_ROOT / "main.py"
     if os.environ.get("AGENT_PATH") != str(agent_path):
         plan.add(
@@ -288,10 +288,7 @@ def main() -> int:
         # project_root is only set when a .workflow/ already exists here, so this is always
         # an in-place upgrade. Scaffolding a NEW workspace is `init`'s job (main.py
         # --command init --work-dir DIR) — one bootstrap path instead of two.
-        from core.workflow_runtime import (
-            upgrade_workflow_workspace,
-            workspace_versions,
-        )
+        from core.runtime.upgrade import upgrade_workflow_workspace, workspace_versions
 
         versions = workspace_versions(project_root)
         plan.add(

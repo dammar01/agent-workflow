@@ -35,7 +35,7 @@ def _string_constants(tree):
 
 def _sources():
     for directory in SCANNED:
-        yield from sorted((REPO_ROOT / directory).glob("*.py"))
+        yield from sorted((REPO_ROOT / directory).rglob("*.py"))
     for name in ROOT_FILES:
         path = REPO_ROOT / name
         if path.exists():

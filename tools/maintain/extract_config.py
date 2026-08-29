@@ -5,7 +5,7 @@ from a maintainer's live ~/.claude the first time (or when deliberately re-impor
 edits). Routine changes are made in dist/ directly. Skill bodies live only in
 `dist/config/claude/skills/*.md`; CLAUDE.md contains the command registry and
 orchestrator contract.
-`tools/sync_skills.py --check` verifies those files still match CLAUDE.md's command
+`tools/maintain/sync_skills.py --check` verifies those files still match CLAUDE.md's command
 registry, and `tools/gen_manifest.py` rebuilds the manifest from dist/. Do NOT run this to
 refresh the manifest after editing dist/ — it would overwrite dist/ with home-dir content
 and abort on the clobber guard.
@@ -36,7 +36,7 @@ import re
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from config.providers import PROVIDER_BUNDLES  # noqa: E402
@@ -328,7 +328,7 @@ def main() -> int:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(entry["text"], encoding="utf-8")
 
-    from tools.gen_manifest import _build
+    from tools.maintain.gen_manifest import _build
 
     MANIFEST.parent.mkdir(parents=True, exist_ok=True)
     MANIFEST.write_text(

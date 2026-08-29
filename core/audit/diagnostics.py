@@ -6,7 +6,7 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from core.workspace_paths import (
+from core.workspace.workspace_paths import (
     LOCK_TTL_SECONDS,
     atomic_write_json,
     atomic_write_text,
@@ -19,7 +19,7 @@ from utils.osutil import provider_callable
 
 # Split out of this module; re-exported because core/workflow_runtime.py re-exports
 # them FROM here, and callers still reach them through that chain.
-from core.bundle_integrity import (  # noqa: E402,F401
+from core.audit.bundle_integrity import (  # noqa: E402,F401
     _bundle_integrity,
     _expand_home,
     _installed_intent_mode,
@@ -28,7 +28,7 @@ from core.bundle_integrity import (  # noqa: E402,F401
     _os_variant_skip,
     _select_intent_section,
 )
-from core.mcp_scan import (  # noqa: E402,F401
+from core.audit.mcp_scan import (  # noqa: E402,F401
     _classify_mcp,
     _mcp_config_candidates,
     _mcp_reachable,
@@ -64,13 +64,9 @@ def python_callable() -> tuple[bool, str]:
 def run_doctor(
     project_root: Path, provider_command: str, session_id: str | None = None
 ) -> dict:
-    from core.workflow_runtime import (
-        needs_upgrade,
-        resolve_agent_workflow_path,
-        script_drift,
-        validate_config,
-        workspace_versions,
-    )
+    from core.runtime.config_defaults import validate_config
+    from core.runtime.scripts import script_drift
+    from core.runtime.upgrade import needs_upgrade, resolve_agent_workflow_path, workspace_versions
 
     paths = workflow_paths(project_root, session_id)
     issues: list[str] = []
@@ -278,7 +274,7 @@ def run_doctor(
 
     try:
         from config.settings import resolve_provider_config_for
-        from core.workspace_paths import PROVIDER_CONFIG_NAME
+        from core.workspace.workspace_paths import PROVIDER_CONFIG_NAME
 
         resolved = resolve_provider_config_for(project_root)
         provider_config = {
@@ -430,7 +426,7 @@ def run_doctor(
         if integrity.get("error"):
             issues.append(f"bundle integrity uncheckable: {integrity['error']}")
             recommended_fixes.append(
-                "Regenerate the manifest: python tools/gen_manifest.py"
+                "Regenerate the manifest: python tools/maintain/gen_manifest.py"
             )
         # Name the file AND why it drifted. "2 files differ" is the same sentence whether
         # the user edited a block on purpose or an install never ran, and those need
@@ -445,7 +441,7 @@ def run_doctor(
         if "locally_edited" in drift_by_reason or "content_differs" in drift_by_reason:
             recommended_fixes.append(
                 "Re-run install/upgrade to reinstall the shipped bundle; if dist/ changed on "
-                "purpose, regenerate the manifest (python tools/gen_manifest.py)"
+                "purpose, regenerate the manifest (python tools/maintain/gen_manifest.py)"
             )
         if "not_installed" in drift_by_reason:
             recommended_fixes.append("Re-run install to place the missing bundle files")
@@ -453,7 +449,7 @@ def run_doctor(
             issues.append(
                 "stale manifest: dist/ sources are newer than dist/manifest.json"
             )
-            recommended_fixes.append("Run: python tools/gen_manifest.py")
+            recommended_fixes.append("Run: python tools/maintain/gen_manifest.py")
         if integrity.get("hooks_installed") is False:
             issues.append(
                 "required hooks missing from install "
@@ -504,14 +500,14 @@ def run_doctor(
 
 
 def run_sweep(project_root: Path, session_id: str | None = None) -> dict:
-    from core.workflow_runtime import load_workspace_state, update_command_cache
+    from core.runtime.state import load_workspace_state, update_command_cache
 
     paths = workflow_paths(project_root, session_id)
     changed_files: list[str] = []
     diff_summary = ""
 
     def git_error(detail: str, operation: str) -> dict:
-        from core.contract import make_error
+        from core.evidence.contract import make_error
 
         return make_error(
             "sweep_git_error",

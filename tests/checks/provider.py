@@ -12,17 +12,17 @@ from pathlib import Path
 
 import check
 import main
-from adapters.opencode_adapter import OpenCodeAdapter
-from core.executor import Executor
-from core.job_manager import JobManager
-from core.prompt_builder import build_prompt
-from core.secret_patterns import (
+from adapters.providers.opencode_adapter import OpenCodeAdapter
+from core.provider.executor import Executor
+from core.jobs.job_manager import JobManager
+from core.prompt.prompt_builder import build_prompt
+from core.policy.secret_patterns import (
     CODEX_PERMISSION_PROFILE,
     SECRET_READ_ALLOWLIST,
     SECRET_READ_PATTERNS,
     codex_secret_globs,
 )
-from core.workflow_runtime import ensure_workflow_workspace
+from core.runtime.state import ensure_workflow_workspace
 
 from tests.checks.support import (
     FakeJobProcess,
@@ -41,7 +41,7 @@ def _test_provider_seam() -> None:
     particular is the only thing between a v3.4.2 workspace and silent loss of the
     user's tuning, so it is asserted on values, not just on the absence of a crash.
     """
-    from adapters.registry import (
+    from adapters.contract.registry import (
         UnknownProviderError,
         available_providers,
         hint_conflict,
@@ -49,8 +49,8 @@ def _test_provider_seam() -> None:
         resolve_adapter,
         selected_provider,
     )
-    from core.provider_migration import migrate_provider_keys
-    from core.workspace_paths import atomic_write_json
+    from core.workspace.provider_migration import migrate_provider_keys
+    from core.workspace.workspace_paths import atomic_write_json
 
     assert_true(
         "opencode" in available_providers(),
@@ -143,7 +143,7 @@ def _test_provider_seam() -> None:
 
     # Second line of defence: nothing forces a user to run upgrade before their next
     # delegated call, so SessionManager repairs a legacy record on read as well.
-    from core.session_manager import SessionManager
+    from core.workspace.session_manager import SessionManager
 
     stray = workflow_dir / "stray-sessions"
     stray.mkdir()
@@ -354,7 +354,7 @@ def _test_provider_seam() -> None:
         def run(self, prompt, session, model=None, work_dir=None):
             return {"ok": True, "content": "[EVIDENCE]", "meta": {}}
 
-    from adapters.base import SecondAgentAdapter
+    from adapters.contract.base import SecondAgentAdapter
 
     register(_ProbeProvider)
     assert_true(
@@ -416,9 +416,9 @@ def _test_provider_selection() -> None:
     """
     from config.providers import effort_args, model_efforts, provider_models
     from config.settings import validate_provider_config
-    from core import provider_select
-    from core.result_shaping import _verify_exit_code
-    from core.workspace_paths import atomic_write_json, read_json_file
+    from core.provider import provider_select
+    from core.evidence.result_shaping import _verify_exit_code
+    from core.workspace.workspace_paths import atomic_write_json, read_json_file
 
     temp_root = Path(tempfile.mkdtemp(prefix="agent-workflow-provider-"))
     workflow_dir = temp_root / ".workflow"
@@ -548,7 +548,7 @@ def _test_provider_selection() -> None:
     # actually lists; for anything else it means "unknown", and the two must not be
     # collapsed — one has to refuse, the other has to allow.
     from config import providers as providers_module
-    from core.router import Router
+    from core.prompt.router import Router
 
     original = providers_module.PROVIDER_BUNDLES["codex"]["models"]
     providers_module.PROVIDER_BUNDLES["codex"]["models"] = (
@@ -622,7 +622,7 @@ def _test_provider_selection() -> None:
     # A workspace initialized before `effort` existed gets the key on the next install
     # pass, at its default of None — the backfill is what carries new keys into projects
     # that were set up once and left alone.
-    from adapters.opencode_install import _merge_provider_config
+    from adapters.install.opencode_install import _merge_provider_config
 
     atomic_write_json(config_file, {"provider": "codex", "timeout_seconds": 1800})
     added = _merge_provider_config(temp_root, "")
@@ -646,16 +646,16 @@ def _test_agy_provider() -> None:
     tokens — the one thing a live call would prove that these do not is that agy still
     speaks this dialect, and that is what `probe` is for.
     """
-    from adapters.agy_adapter import AgyAdapter
-    from adapters.registry import adapter_class, available_providers
+    from adapters.providers.agy_adapter import AgyAdapter
+    from adapters.contract.registry import adapter_class, available_providers
     from config.providers import (
         PROVIDER_BUNDLES,
         effort_args,
         provider_opt_in_env,
     )
-    from core import agy_guard
-    from core import provider_select
-    from core.workspace_paths import read_json_file
+    from core.policy import agy_guard
+    from core.provider import provider_select
+    from core.workspace.workspace_paths import read_json_file
 
     assert_true(
         "agy" in available_providers(),
@@ -823,7 +823,7 @@ def _test_agy_provider() -> None:
     from config.providers import provider_install_module
 
     assert_true(
-        PROVIDER_BUNDLES["agy"]["install_module"] == "adapters.agy_install",
+        PROVIDER_BUNDLES["agy"]["install_module"] == "adapters.install.agy_install",
         "agy must declare an install module, or the boundary install path raises on it",
     )
     boundary = provider_install_module("agy").install_project_config(
@@ -931,16 +931,16 @@ def _assert_codex_provider() -> None:
     Everything here is argv- and parser-level. Nothing spawns codex — the CLI may not be
     installed, and a test that needs it would be skipped exactly where it matters.
     """
-    from adapters.base import SecondAgentAdapter
-    from adapters.codex_adapter import CodexAdapter
-    from adapters.registry import (
+    from adapters.contract.base import SecondAgentAdapter
+    from adapters.providers.codex_adapter import CodexAdapter
+    from adapters.contract.registry import (
         available_providers,
         hint_conflict,
         resolve_adapter,
         selected_provider,
     )
     from config.providers import bundle_for, provider_install_module
-    from core.mcp_scan import _mcp_config_candidates
+    from core.audit.mcp_scan import _mcp_config_candidates
 
     assert_true(
         "codex" in available_providers(),
@@ -1145,7 +1145,7 @@ def _assert_codex_provider() -> None:
             load_provider_config_for,
             resolve_provider_config_for,
         )
-        from core.executor import Executor
+        from core.provider.executor import Executor
 
         effective = load_provider_config_for(selected)
         assert_true(
@@ -1287,7 +1287,7 @@ def _assert_codex_provider() -> None:
 
     # The boundary is only real if it is on the argv of BOTH call shapes. A resumed thread
     # that dropped it would leave a hole that opens on the second call of a session.
-    from adapters.codex_adapter import CodexAdapter
+    from adapters.providers.codex_adapter import CodexAdapter
 
     adapter = CodexAdapter()
     for resume_id in (None, "01999999-0000-7000-8000-000000000000"):

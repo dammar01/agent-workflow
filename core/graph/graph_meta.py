@@ -21,9 +21,9 @@ import json
 import subprocess
 from pathlib import Path
 
-from core import graph_index
-from core.fact_store import _anchor_hash, _hash_index
-from core.workspace_paths import atomic_write_json
+from core.graph import graph_index
+from core.evidence.fact_store import _anchor_hash, _hash_index
+from core.workspace.workspace_paths import atomic_write_json
 
 GRAPH_META_FILENAME = "graph-meta.json"
 META_VERSION = 1

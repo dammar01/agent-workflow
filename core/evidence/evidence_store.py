@@ -8,8 +8,8 @@ import threading
 import time
 from pathlib import Path
 
-from core.fact_store import _anchor_hash, _FILELINE, current_anchor_line
-from core.workflow_runtime import _safe_component, now_iso, workflow_paths
+from core.evidence.fact_store import _anchor_hash, _FILELINE, current_anchor_line
+from core.workspace.workspace_paths import _safe_component, now_iso, workflow_paths
 from utils.redact import redact, redact_value
 
 EVIDENCE_FILENAME = "evidence.jsonl"

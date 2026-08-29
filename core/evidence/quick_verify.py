@@ -12,7 +12,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from core.workflow_runtime import now_iso
+from core.workspace.workspace_paths import now_iso
 from utils import osutil
 
 FILE_TIMEOUT_SECONDS = 20

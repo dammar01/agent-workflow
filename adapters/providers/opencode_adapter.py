@@ -13,8 +13,8 @@ from config.settings import (
     DEFAULT_TIMEOUT_SECONDS,
     OPENCODE_COMMAND,
 )
-from core.contract import make_error as _contract_make_error
-from core.contract import make_ok as _contract_make_ok
+from core.evidence.contract import make_error as _contract_make_error
+from core.evidence.contract import make_ok as _contract_make_ok
 from utils import osutil
 from utils.redact import redact, redact_value
 from utils.parser import ensure_text, first_non_empty
@@ -118,7 +118,7 @@ def _argv_meta(args: list[str]) -> dict:
 # Re-exported so call sites inside this module keep addressing `make_error` / `make_ok`
 # unqualified. The accounting they carry is shared: see adapters/redaction.py for why it
 # cannot live in each adapter.
-from adapters.redaction import (  # noqa: E402
+from adapters.shared.redaction import (  # noqa: E402
     attach_redactions as _attach_redactions,
     make_error,
     make_ok,

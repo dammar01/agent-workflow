@@ -11,14 +11,14 @@ import argparse
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from tools.e2e_delegated import delegated_checks  # noqa: E402
-from tools.e2e_installer import installer_checks  # noqa: E402
-from tools.e2e_integrity import integrity_checks  # noqa: E402
-from tools.e2e_local import local_checks  # noqa: E402
-from tools.e2e_support import Report, SKIP, _json_from, _run_cli  # noqa: E402,F401
+from tools.e2e.e2e_delegated import delegated_checks  # noqa: E402
+from tools.e2e.e2e_installer import installer_checks  # noqa: E402
+from tools.e2e.e2e_integrity import integrity_checks  # noqa: E402
+from tools.e2e.e2e_local import local_checks  # noqa: E402
+from tools.e2e.e2e_support import Report, SKIP, _json_from, _run_cli  # noqa: E402,F401
 
 
 def main() -> int:

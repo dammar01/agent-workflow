@@ -8,7 +8,7 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-from core.workspace_paths import (
+from core.workspace.workspace_paths import (
     JSON_INDENT,
     LOCK_TTL_SECONDS,
     now_iso,

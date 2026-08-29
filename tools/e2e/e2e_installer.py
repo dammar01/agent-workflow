@@ -1,7 +1,7 @@
 """Installer behaviour against a throwaway HOME."""
 
 from config.providers import bundle_for, provider_home
-from tools.e2e_support import (
+from tools.e2e.e2e_support import (
     Path,
     REPO_ROOT,
     Report,

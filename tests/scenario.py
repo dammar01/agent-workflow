@@ -26,11 +26,11 @@ sys.path.insert(0, str(REPO_ROOT))
 
 import check
 import main
-from adapters.opencode_adapter import OpenCodeAdapter
-from core.executor import Executor
-from core.job_manager import JobManager
-from core.prompt_builder import build_prompt
-from core.workflow_runtime import ensure_workflow_workspace
+from adapters.providers.opencode_adapter import OpenCodeAdapter
+from core.provider.executor import Executor
+from core.jobs.job_manager import JobManager
+from core.prompt.prompt_builder import build_prompt
+from core.runtime.state import ensure_workflow_workspace
 
 from tests.checks.support import (
     FakeJobProcess,
@@ -440,8 +440,8 @@ def run_tests() -> None:
         main.JOB_MANAGER.fail_job(dead_attach["job_id"], "test cleanup")
 
         # 11. Structured errors, idempotency, reaper, digest, guard, router
-        from core.contract import extract_digest, make_error, validate_verification_contract
-        from core.router import Router
+        from core.evidence.contract import extract_digest, make_error, validate_verification_contract
+        from core.prompt.router import Router
         from utils import osutil, path_guard
 
         # next_action mandatory
@@ -687,7 +687,9 @@ confidence: high — all requested checks ran
         assert_true(rich_res["meta"].get("next_action") == "STOP, ask user", "job path must preserve next_action")
 
         # 12. Liveness tri-state, heartbeat, runtime ceiling, probe
-        from core import fact_store, graph_index, job_manager as jm_mod
+        from core.evidence import fact_store
+        from core.graph import graph_index
+        from core.jobs import job_manager as jm_mod
 
         # Stall detection and the runtime ceiling are separate managers on purpose: the
         # ceiling outranks stall in get_result (a hard backstop must win over a probe
@@ -921,8 +923,8 @@ confidence: high — all requested checks ran
         )
 
         # 13. Sub-agent fan-out: instruction gating and honest usage detection
-        from core.contract import detect_subagent_usage
-        from core.workflow_runtime import subagent_fanout_enabled
+        from core.evidence.contract import detect_subagent_usage
+        from core.runtime.config_defaults import subagent_fanout_enabled
 
         def _p(has_leads, fanout):
             return build_prompt(

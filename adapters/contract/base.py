@@ -1,7 +1,7 @@
 """The contract a second_agent adapter answers to.
 
 Written as a Protocol rather than a base class on purpose. The adapter surface was
-already substitutable before it was ever written down — `tools/sim_flows.py` swaps a
+already substitutable before it was ever written down — `tools/sim/sim_flows.py` swaps a
 plain object in and the executor never notices — and turning it into an ABC now would
 break exactly those stand-ins for no gain. A Protocol records the shape without
 demanding inheritance, so a test double may implement `run()` alone while a real

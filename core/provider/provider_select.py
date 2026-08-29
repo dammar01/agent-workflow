@@ -54,7 +54,7 @@ from config.settings import (
     foreign_provider_values,
     resolve_provider_config_for,
 )
-from core.workspace_paths import (
+from core.workspace.workspace_paths import (
     JSON_INDENT,
     PROVIDER_CONFIG_NAME,
     atomic_write_text,
@@ -454,7 +454,7 @@ def _sync_config_hint(project_root: Path, provider: str) -> dict:
 def _refuse(message: str, next_action: str) -> dict:
     """Nothing is written on any refusal — a half-applied selection is the one state
     this command must never leave behind."""
-    from core.contract import make_error
+    from core.evidence.contract import make_error
 
     return make_error(
         "invalid_provider_selection",

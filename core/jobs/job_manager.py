@@ -473,7 +473,7 @@ class JobManager:
             if state == DEAD:
                 attempt = int(job.get("recovery_attempt") or 0)
                 if attempt >= 1:
-                    from core.contract import make_error
+                    from core.evidence.contract import make_error
 
                     message = f"worker died again after {attempt} recovery attempt(s)"
                     output = make_error(
@@ -826,7 +826,7 @@ class JobManager:
         as terminal. Best-effort: an unkillable worker still gets its job failed —
         reporting a stall the caller can act on beats blocking on a process kill.
         """
-        from core.contract import make_error
+        from core.evidence.contract import make_error
 
         with self._job_mutation(job_id):
             job = self._load(job_id)

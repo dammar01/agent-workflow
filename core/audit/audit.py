@@ -19,7 +19,7 @@ treat an empty trail as a clean one.
 import json
 from pathlib import Path
 
-from core.contracts import AUDIT_STREAM_NAME
+from core.evidence.contracts import AUDIT_STREAM_NAME
 
 
 def load_audit(project_root) -> list[dict]:

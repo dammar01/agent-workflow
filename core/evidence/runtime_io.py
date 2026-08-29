@@ -7,13 +7,13 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from core.contracts import AUDIT_STREAM_NAME, QUALITY_STREAM_NAME, USAGE_STREAM_NAME
-from core.runtime_lock import (
+from core.evidence.contracts import AUDIT_STREAM_NAME, QUALITY_STREAM_NAME, USAGE_STREAM_NAME
+from core.workspace.runtime_lock import (
     _runtime_lock_payload,
     acquire_runtime_lock,
     runtime_lock_owned,
 )
-from core.workspace_paths import (
+from core.workspace.workspace_paths import (
     ARCHIVE_KEEP,
     JSON_INDENT,
     atomic_write_json,
@@ -52,7 +52,7 @@ def write_prompt_handoff(
     prompt: str,
     lock_claim: dict | None = None,
 ) -> dict:
-    from core.workflow_runtime import load_workspace_state
+    from core.runtime.state import load_workspace_state
 
     loaded = load_workspace_state(project_root, session_id)
     loaded["paths"]["runtime_dir"].mkdir(parents=True, exist_ok=True)

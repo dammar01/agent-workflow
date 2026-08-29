@@ -1,5 +1,5 @@
 from config.roles import VALID_ROLES
-from core.governance import check_provider, tools_for
+from core.policy.governance import check_provider, tools_for
 from config.routing import COMMAND_ROUTES
 from config.settings import (
     DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,

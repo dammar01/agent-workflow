@@ -19,8 +19,8 @@ locks itself: change both and it stays green while the parser breaks.
 
 from config.roles import ROLE_EXPLORATION, ROLE_REASONING, ROLE_VERIFICATION
 from config.settings import DEFAULT_MAX_TASK_CHARS
-from core.executor import _EVIDENCE_MARKERS
-from core.prompt_builder import build_prompt
+from core.provider.continuation import _EVIDENCE_MARKERS
+from core.prompt.prompt_builder import build_prompt
 from tests.checks.support import assert_true
 
 # Accessor syntax that is code, never prose. Same list as messages.py, applied to text
@@ -91,7 +91,7 @@ def _test_prompt_contract_blocks() -> None:
         lowered = prompt.lower()
         assert_true(
             any(marker in lowered for marker in _EVIDENCE_MARKERS),
-            f"{label}: prompt asks for no section in core.executor._EVIDENCE_MARKERS, so "
+            f"{label}: prompt asks for no section in core.provider.continuation._EVIDENCE_MARKERS, so "
             "a perfectly obedient reply would be rejected as conversation",
         )
         assert_true(

@@ -1,6 +1,6 @@
 """Real delegated calls. Opt-in: spends provider quota."""
 
-from tools.e2e_support import (
+from tools.e2e.e2e_support import (
     FAIL,
     Path,
     Report,
@@ -17,7 +17,7 @@ from tools.e2e_support import (
 def delegated_checks(report: Report, session_id: str) -> None:
     """Real opencode calls. Minutes and real quota — only via --full."""
     print("\n[DELEGATED] real opencode — costs quota")
-    from core.contract import REQUIRED_FIELDS
+    from core.evidence.contract import REQUIRED_FIELDS
 
     project = Path(tempfile.mkdtemp(prefix="e2e-delegated-project-"))
     try:

@@ -8,8 +8,8 @@ added without registering `/.name` in CLAUDE.md, or a registry entry with no fil
 
 This tool checks that bijection. It writes nothing.
 
-  python tools/sync_skills.py            # report mismatches
-  python tools/sync_skills.py --check    # exit 1 if the sets differ (for CI / doctor)
+  python tools/maintain/sync_skills.py            # report mismatches
+  python tools/maintain/sync_skills.py --check    # exit 1 if the sets differ (for CI / doctor)
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ import re
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 CLAUDE_MD = REPO_ROOT / "dist" / "config" / "claude" / "CLAUDE.md"
 SKILLS_DIR = REPO_ROOT / "dist" / "config" / "claude" / "skills"
 

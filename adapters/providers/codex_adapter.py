@@ -64,9 +64,9 @@ from config.settings import (
     DEFAULT_POLL_INTERVAL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
 )
-from core.contract import make_error as _contract_make_error
-from core.contract import make_ok as _contract_make_ok
-from core.secret_patterns import codex_permission_args
+from core.evidence.contract import make_error as _contract_make_error
+from core.evidence.contract import make_ok as _contract_make_ok
+from core.policy.secret_patterns import codex_permission_args
 from utils import osutil
 from utils.parser import ensure_text
 from utils.redact import redact, redact_value
@@ -153,7 +153,7 @@ def _argv_meta(args: list[str]) -> dict:
 
 # Shared with every other adapter. The local copy this replaces dropped the redaction
 # hits, so a codex call that scrubbed a secret still recorded `redactions: 0`.
-from adapters.redaction import (  # noqa: E402
+from adapters.shared.redaction import (  # noqa: E402
     make_error,
     make_ok,
     sanitize_meta as _sanitize_meta,

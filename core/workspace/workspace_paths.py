@@ -36,7 +36,7 @@ LEGACY_PROVIDER_CONFIG_NAME = "opencode.json"
 LOCK_TTL_SECONDS = 300
 JSON_INDENT = 2
 ARCHIVE_KEEP = 20
-# Derived, not restated. `tools/stamp_version.py` makes TOOL_VERSION the single source for
+# Derived, not restated. `tools/maintain/stamp_version.py` makes TOOL_VERSION the single source for
 # every version string that ships, but this one was a hand-maintained literal outside its
 # TARGETS — guarded only by an e2e assertion, which reports the drift after it exists
 # rather than preventing it. The config schema is versioned in lockstep with the tool, so

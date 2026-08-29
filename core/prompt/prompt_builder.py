@@ -57,7 +57,7 @@ def _changed_files_block(project_root: str | None) -> list[str]:
     try:
         from pathlib import Path
 
-        from core.quick_verify import _run, changed_files
+        from core.evidence.quick_verify import _run, changed_files
 
         root = Path(project_root)
         files = changed_files(root)

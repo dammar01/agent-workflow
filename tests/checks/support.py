@@ -3,12 +3,12 @@
 import os
 import json
 
-from adapters.opencode_adapter import OpenCodeAdapter
-from core.job_manager import JobManager
-from core.executor import Executor
-from core.prompt_builder import build_prompt
-from core.workflow_runtime import ensure_workflow_workspace
-from adapters.opencode_adapter import OpenCodeAdapter as _OpenCodeAdapterForParsing
+from adapters.providers.opencode_adapter import OpenCodeAdapter
+from core.jobs.job_manager import JobManager
+from core.provider.executor import Executor
+from core.prompt.prompt_builder import build_prompt
+from core.runtime.state import ensure_workflow_workspace
+from adapters.providers.opencode_adapter import OpenCodeAdapter as _OpenCodeAdapterForParsing
 
 clean_output = _OpenCodeAdapterForParsing.clean_output
 extract_session_id = _OpenCodeAdapterForParsing.extract_session_id

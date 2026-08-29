@@ -1,7 +1,7 @@
 """What each second_agent provider ships, declared once.
 
-Before v3.4.3 the answer was spelled out four times — `tools/gen_manifest.py` TARGETS,
-`tools/extract_config.py` ALLOWLIST, `install.py` _targets, and the manifest itself —
+Before v3.4.3 the answer was spelled out four times — `tools/maintain/gen_manifest.py` TARGETS,
+`tools/maintain/extract_config.py` ALLOWLIST, `install.py` _targets, and the manifest itself —
 each with the literal string "opencode" baked in. Adding a provider meant finding all
 four and agreeing with yourself in every one.
 
@@ -99,7 +99,7 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # answers `load_config(path)`, `merge_policy(current, incoming, warn)`, and
         # `install_project_config(project_root, tool_dir)`; how it enforces anything is
         # its own business.
-        "install_module": "adapters.opencode_install",
+        "install_module": "adapters.install.opencode_install",
     },
     "codex": {
         "home_dir": ".codex",
@@ -164,7 +164,7 @@ PROVIDER_BUNDLES: dict[str, dict] = {
             {"id": "gpt-5.4", "efforts": ("low", "medium", "high", "xhigh")},
             {"id": "gpt-5.4-mini", "efforts": ("low", "medium", "high", "xhigh")},
         ),
-        "install_module": "adapters.codex_install",
+        "install_module": "adapters.install.codex_install",
     },
     "agy": {
         # agy keeps nothing under the user's home but `bin/` — no config directory, no
@@ -228,7 +228,7 @@ PROVIDER_BUNDLES: dict[str, dict] = {
             {"id": "claude-opus-4-6-thinking", "efforts": ()},
             {"id": "gpt-oss-120b-medium", "efforts": ()},
         ),
-        "install_module": "adapters.agy_install",
+        "install_module": "adapters.install.agy_install",
     },
 }
 

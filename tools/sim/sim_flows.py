@@ -25,17 +25,15 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from core.executor import Executor  # noqa: E402
-from core.job_manager import JobManager  # noqa: E402
-from core.session_manager import SessionManager  # noqa: E402
-from core.workflow_runtime import (  # noqa: E402
-    upgrade_workflow_workspace,
-    workflow_paths,
-)
-from adapters.opencode_adapter import OpenCodeAdapter  # noqa: E402
+from core.provider.executor import Executor  # noqa: E402
+from core.jobs.job_manager import JobManager  # noqa: E402
+from core.workspace.session_manager import SessionManager  # noqa: E402
+from core.runtime.upgrade import upgrade_workflow_workspace  # noqa: E402
+from core.workspace.workspace_paths import workflow_paths  # noqa: E402
+from adapters.providers.opencode_adapter import OpenCodeAdapter  # noqa: E402
 
 clean_output = OpenCodeAdapter.clean_output
 extract_session_id = OpenCodeAdapter.extract_session_id
@@ -692,7 +690,7 @@ def simulate():
         )
 
         # --- S20 routing guard ----------------------------------------------------
-        from core.router import Router
+        from core.prompt.router import Router
 
         rejected = None
         try:

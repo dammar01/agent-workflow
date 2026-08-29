@@ -1,6 +1,6 @@
 """The bundle's two hand-maintained bijections must hold.
 
-`tools/sync_skills.py` and `tools/sync_intent_map.py` were both written to be run "for
+`tools/maintain/sync_skills.py` and `tools/maintain/sync_intent_map.py` were both written to be run "for
 CI / doctor" — their own docstrings say so — and neither had a caller. `.github/workflows/
 ci.yml` gates `stamp_version` and `gen_manifest` and nothing else, so a skill file added
 without its registry entry, or an intent-map pattern added without the matching NL-map
@@ -38,7 +38,7 @@ def _run_check(module_name: str) -> tuple[int, str]:
     being swallowed. `SystemExit` is the tool's hard path (a source file missing entirely)
     and is reported as a failure rather than allowed to abort the run.
     """
-    module = __import__(f"tools.{module_name}", fromlist=["main"])
+    module = __import__(f"tools.maintain.{module_name}", fromlist=["main"])
     buffer = io.StringIO()
     original_argv = sys.argv
     sys.argv = [f"{module_name}.py", "--check"]

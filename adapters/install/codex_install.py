@@ -31,11 +31,11 @@ rather than a stub:
 
 from pathlib import Path
 
-from core.secret_patterns import (
+from core.policy.secret_patterns import (
     CODEX_PERMISSION_PROFILE,
     codex_filesystem_permissions,
 )
-from core.workspace_paths import read_json_file
+from core.workspace.workspace_paths import read_json_file
 
 
 def load_config(path: Path):
@@ -131,7 +131,7 @@ def _workspace_config_warnings(project_root: Path) -> list[str]:
     are told it is inert instead of discovering it by tuning a knob attached to nothing.
     """
     from config.settings import foreign_provider_values
-    from core.workspace_paths import WORKFLOW_DIRNAME
+    from core.workspace.workspace_paths import WORKFLOW_DIRNAME
 
     config_path = Path(project_root) / WORKFLOW_DIRNAME / "second_agent.json"
     try:

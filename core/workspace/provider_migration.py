@@ -19,7 +19,7 @@ provider session, and dropping the field would make every existing session re-bo
 
 from pathlib import Path
 
-from core.workspace_paths import (
+from core.workspace.workspace_paths import (
     LEGACY_PROVIDER_CONFIG_NAME,
     PROVIDER_CONFIG_NAME,
     WORKFLOW_DIRNAME,

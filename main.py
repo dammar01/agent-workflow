@@ -7,25 +7,16 @@ import sys
 import subprocess  # noqa: F401
 from pathlib import Path
 
-from core.contract import make_error
-from core.executor import Executor
-from core.job_manager import JobManager
-from core.session_manager import SessionManager
+from core.evidence.contract import make_error
+from core.provider.executor import Executor
+from core.jobs.job_manager import JobManager
+from core.workspace.session_manager import SessionManager
 from utils.path_guard import safe_path_component
-from core.workflow_runtime import (
-    acquire_runtime_lock,
-    detect_project_root,
-    ensure_workflow_workspace,
-    needs_upgrade,
-    prune_sessions,
-    release_runtime_lock,
-    resolve_agent_workflow_path,
-    run_doctor,
-    run_sweep,
-    upgrade_workflow_workspace,
-    workflow_paths,
-    workspace_versions,
-)
+from core.audit.diagnostics import prune_sessions, run_doctor, run_sweep
+from core.workspace.runtime_lock import acquire_runtime_lock, release_runtime_lock
+from core.runtime.state import ensure_workflow_workspace
+from core.runtime.upgrade import needs_upgrade, resolve_agent_workflow_path, upgrade_workflow_workspace, workspace_versions
+from core.workspace.workspace_paths import detect_project_root, workflow_paths
 from config.settings import (
     # These two are read as `_main().DEFAULT_*` from core/result_shaping.py, and the
     # harness lowers them on `main` to exercise the ref_only threshold. Imported here
@@ -52,7 +43,7 @@ BACKGROUND_COMMANDS = {"explore", "plan", "analyze", "verify"}
 
 # Split out in v3.4.3. Re-exported so every existing caller of `main.<name>`
 # keeps working; the singletons above stay here because this is the entry point.
-from core.job_lifecycle import (  # noqa: E402,F401
+from core.jobs.job_lifecycle import (  # noqa: E402,F401
     _apply_job_thresholds,
     _job_config,
     _max_probes,
@@ -66,7 +57,7 @@ from core.job_lifecycle import (  # noqa: E402,F401
     should_run_in_background,
     submit,
 )
-from core.result_shaping import (  # noqa: E402,F401
+from core.evidence.result_shaping import (  # noqa: E402,F401
     _as_ref_only,
     _finalize_verify_result,
     _HEAVY_META_KEYS,
@@ -118,7 +109,7 @@ def _cached_session_still_current(session_id: str, cache_root) -> bool:
     or while it was resolved recently enough to still be the one at the keyboard.
     """
     try:
-        from core.job_manager import JobManager
+        from core.jobs.job_manager import JobManager
 
         if JobManager().active_job_for_session(session_id):
             return True
@@ -188,7 +179,7 @@ def run(
         }
 
     if normalized_command == "clean":
-        from core import fact_store
+        from core.evidence import fact_store
 
         locks = JOB_MANAGER.release_stale_session_locks()
         summary = JOB_MANAGER.prune_jobs()
@@ -211,7 +202,7 @@ def run(
         return _inspect(project_root, session_id)
 
     if normalized_command == "provider":
-        from core import provider_select
+        from core.provider import provider_select
         return provider_select.run(project_root, task)
 
     if normalized_command == "sweep":
@@ -300,7 +291,7 @@ def probe_second_agent(work_dir: str | None = None, model: str | None = None) ->
     """
     project_root = detect_project_root(work_dir)
     config = load_provider_config_for(project_root)
-    from adapters.registry import resolve_adapter, selected_provider
+    from adapters.contract.registry import resolve_adapter, selected_provider
 
     overrides = (
         {"command": config["provider_command"]}
@@ -502,22 +493,22 @@ if __name__ == "__main__":
             allow_reuse,
         )
     elif args.command == "report":
-        from core import telemetry
-        from core.contract import make_ok
+        from core.audit import telemetry
+        from core.evidence.contract import make_ok
 
         root = detect_project_root(work_dir)
         result = make_ok("", meta={"command": "report", "project_root": str(root)})
         result["report"] = telemetry.report(root)
     elif args.command == "audit":
-        from core import audit
-        from core.contract import make_ok
+        from core.audit import audit
+        from core.evidence.contract import make_ok
 
         root = detect_project_root(work_dir)
         result = make_ok("", meta={"command": "audit", "project_root": str(root)})
         result["audit"] = audit.report(root)
     elif args.command == "graph-meta":
-        from core import graph_meta
-        from core.contract import make_error, make_ok
+        from core.graph import graph_meta
+        from core.evidence.contract import make_error, make_ok
 
         root = detect_project_root(work_dir)
         built = graph_meta.build(root)

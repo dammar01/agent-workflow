@@ -11,7 +11,7 @@ import re
 import shutil
 from pathlib import Path
 
-from core.workspace_paths import PROVIDER_CONFIG_NAME, WORKFLOW_DIRNAME
+from core.workspace.workspace_paths import PROVIDER_CONFIG_NAME, WORKFLOW_DIRNAME
 
 
 _MCP_SAFE = ("context7", "docs", "documentation", "read-only", "readonly", "search")
@@ -54,7 +54,7 @@ def _mcp_config_candidates(project_root: Path, provider: str | None = None) -> l
     project running a second_agent other than opencode is scanned instead of silently
     reported clean.
     """
-    from adapters.registry import selected_provider
+    from adapters.contract.registry import selected_provider
     from config.providers import PROVIDER_BUNDLES, provider_config_candidates
 
     try:

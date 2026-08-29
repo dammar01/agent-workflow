@@ -15,7 +15,7 @@ import re
 import time
 from pathlib import Path
 
-from core.workflow_runtime import (
+from core.workspace.workspace_paths import (
     _safe_component,
     now_iso,
     read_json_file,

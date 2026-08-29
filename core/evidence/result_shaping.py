@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from config.settings import SLIM_CONTENT_ENV
-from core.contract import validate_verification_contract, verify_exit_status
+from core.evidence.contract import validate_verification_contract, verify_exit_status
 from utils.redact import redact_value
 
 

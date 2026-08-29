@@ -9,8 +9,8 @@ Two hand-maintained copies of the same delegated intent logic exist:
 the two drift, the runtime gate and the prompt disagree about what counts as DELEGATED —
 exactly the class of bug this check exists to catch. It writes nothing.
 
-  python tools/sync_intent_map.py            # report drift
-  python tools/sync_intent_map.py --check    # exit 1 if they disagree (for CI / doctor)
+  python tools/maintain/sync_intent_map.py            # report drift
+  python tools/maintain/sync_intent_map.py --check    # exit 1 if they disagree (for CI / doctor)
 
 Checks (all hard under --check):
   1. delegated command SET in JSON == the DELEGATED registry set in CLAUDE.md
@@ -25,7 +25,7 @@ import re
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 CLAUDE_MD = REPO_ROOT / "dist" / "config" / "claude" / "CLAUDE.md"
 INTENT_MAP = REPO_ROOT / "dist" / "config" / "claude" / "hooks" / "intent-map.json"
 

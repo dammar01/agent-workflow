@@ -12,11 +12,11 @@ from pathlib import Path
 
 import check
 import main
-from adapters.opencode_adapter import OpenCodeAdapter
-from core.executor import Executor
-from core.job_manager import JobManager
-from core.prompt_builder import build_prompt
-from core.workflow_runtime import ensure_workflow_workspace
+from adapters.providers.opencode_adapter import OpenCodeAdapter
+from core.provider.executor import Executor
+from core.jobs.job_manager import JobManager
+from core.prompt.prompt_builder import build_prompt
+from core.runtime.state import ensure_workflow_workspace
 
 from tests.checks.support import (
     FakeJobProcess,
@@ -31,15 +31,11 @@ def _test_workspace_release_guards() -> None:
     """Runtime generations, upgrade corruption, and unborn staged diffs fail safely."""
     import shutil as _shutil
 
-    from core.workflow_runtime import (
-        acquire_runtime_lock,
-        release_runtime_lock,
-        run_sweep,
-        upgrade_workflow_workspace,
-        workflow_paths,
-        write_evidence_sidecars,
-        write_prompt_handoff,
-    )
+    from core.audit.diagnostics import run_sweep
+    from core.evidence.runtime_io import write_evidence_sidecars, write_prompt_handoff
+    from core.workspace.runtime_lock import acquire_runtime_lock, release_runtime_lock
+    from core.runtime.upgrade import upgrade_workflow_workspace
+    from core.workspace.workspace_paths import workflow_paths
 
     root = Path(tempfile.mkdtemp(prefix="workspace-release-"))
     try:
@@ -413,11 +409,8 @@ def _test_init_upgrade_and_session_guard() -> None:
     consumed programmatically and the run script is dispatched as a background task whose
     stderr nobody opens. A safeguard that only fires where nobody looks is not one.
     """
-    from core.workflow_runtime import (
-        needs_upgrade,
-        workflow_paths,
-        workspace_versions,
-    )
+    from core.runtime.upgrade import needs_upgrade, workspace_versions
+    from core.workspace.workspace_paths import workflow_paths
     from utils import osutil
 
     root = Path(tempfile.mkdtemp(prefix="init-upgrade-"))

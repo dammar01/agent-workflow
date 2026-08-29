@@ -22,9 +22,9 @@ matches it, and a config.json naming something else is reported through
 
 from pathlib import Path
 
-from adapters.agy_adapter import AgyAdapter
-from adapters.codex_adapter import CodexAdapter
-from adapters.opencode_adapter import OpenCodeAdapter
+from adapters.providers.agy_adapter import AgyAdapter
+from adapters.providers.codex_adapter import CodexAdapter
+from adapters.providers.opencode_adapter import OpenCodeAdapter
 from config.settings import DEFAULT_PROVIDER
 
 _ADAPTERS: dict[str, type] = {
@@ -103,7 +103,7 @@ def provider_hint(project_root=None) -> str | None:
     """
     if project_root is None:
         return None
-    from core.workspace_paths import WORKFLOW_DIRNAME, read_json_file
+    from core.workspace.workspace_paths import WORKFLOW_DIRNAME, read_json_file
 
     workspace = Path(project_root) / WORKFLOW_DIRNAME / "config.json"
     try:

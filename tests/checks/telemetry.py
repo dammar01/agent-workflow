@@ -10,9 +10,9 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from core import telemetry
-from core.contracts import UsageRecord
-from core.runtime_io import write_quality_record, write_usage_record
+from core.audit import telemetry
+from core.evidence.contracts import UsageRecord
+from core.evidence.runtime_io import write_quality_record, write_usage_record
 from tests.checks.support import assert_true
 
 

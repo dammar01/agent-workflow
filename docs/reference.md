@@ -156,8 +156,8 @@ itu dilaporkan `SKIPPED` — bukan didiamkan lalu dilaporkan READY.
 `dist/` dihasilkan dari config live maintainer:
 
 ```bash
-python tools/extract_config.py --dry-run
-python tools/extract_config.py
+python tools/maintain/extract_config.py --dry-run
+python tools/maintain/extract_config.py
 ```
 
 Postur keamanannya, berurutan menurut kepentingan:
@@ -171,8 +171,8 @@ Path absolut diredaksi jadi `{{HOME}}` / `{{PROJECT_ROOT}}`; installer yang meng
 ### E2E
 
 ```bash
-python tools/e2e.py          # lokal + installer: tanpa delegated run/kuota
-python tools/e2e.py --full   # plus command delegated: menit + kuota nyata
+python tools/e2e/e2e.py          # lokal + installer: tanpa delegated run/kuota
+python tools/e2e/e2e.py --full   # plus command delegated: menit + kuota nyata
 ```
 
 `--full` opt-in. Command delegated memakai anggaran rate-limit yang sama dengan yang dibutuhkan workflow itu sendiri; suite yang membakarnya diam-diam lebih buruk daripada tak ada suite.
@@ -741,7 +741,7 @@ Suite default tidak memanggil OpenCode sungguhan; alur agent memakai adapter pal
 sedangkan jalur subprocess, heartbeat, timeout, kill-tree, installer, rollback, dan
 kontrak persistence diuji secara lokal.
 
-Gunakan `python tools/e2e.py --full` bila ingin menambahkan smoke test OpenCode nyata; mode itu opt-in karena memakai quota.
+Gunakan `python tools/e2e/e2e.py --full` bila ingin menambahkan smoke test OpenCode nyata; mode itu opt-in karena memakai quota.
 
 Pemeriksaan tambahan:
 
@@ -759,7 +759,7 @@ Disebut terbuka karena diam soal ini akan membuat runtime terlihat lebih menjami
 - **Mutasi main_agent tak terlihat oleh runtime ini.** `/.execute` tak punya jalur Python sama sekali. Audit scope, penjaga operasi destruktif, dan atribusi perubahan file karena itu belum ada — perlu lapisan hook di sisi main_agent.
 - **Kontrak masih sebagian berbasis prompt.** Runtime memvalidasi struktur dan routing finding verify, tetapi kebenaran semantik klaim serta output kontrak milik main_agent tetap tidak dapat dibuktikan hanya dari penanda.
 - **Telemetry masih parsial.** Durasi, exit code, hasil kill, ukuran prompt/output, dan estimasi token dicatat per panggilan di `call.meta.json`; jumlah pemanggilan tool dan token provider aktual belum selalu tersedia.
-- **OpenCode nyata hanya diuji opt-in.** Suite default mensimulasikan provider; jalur `Popen`, persistence, installer, dan process lifecycle tetap dijalankan lokal. Gunakan `tools/e2e.py --full` untuk smoke test berkuota.
+- **OpenCode nyata hanya diuji opt-in.** Suite default mensimulasikan provider; jalur `Popen`, persistence, installer, dan process lifecycle tetap dijalankan lokal. Gunakan `tools/e2e/e2e.py --full` untuk smoke test berkuota.
 - **Probe PING memakai kuota.** Job yang terus stalled dapat diprobe berulang sesuai cadence; default `await` adalah 120 detik.
 - **Tuning liveness belum seragam di jalur attach.** `check.py --wait` memakai default tool untuk ambang stalled dan probe ulang, bukan nilai project-local.
 - **Deteksi upgrade dapat tertutupi backfill parsial.** Delegated load memperbarui marker versi `config.json` tanpa meregenerasi scripts atau `second_agent.json`, sehingga warning berikutnya dan `doctor` dapat menganggap workspace current.
@@ -782,7 +782,7 @@ bisa dibuat deterministik.
 
 System under test dibekukan di tag `v3.4.5`. Versi itu tidak ikut naik saat `TOOL_VERSION`
 naik: SUT yang bergeser di tengah pengukuran membuat hasilnya tidak bisa diatribusikan ke
-versi mana pun. `tools/stamp_version.py` menstempel baris `**Versi SUT:**` di
+versi mana pun. `tools/maintain/stamp_version.py` menstempel baris `**Versi SUT:**` di
 `bench/BENCHMARK-PLAN.md` — kalau SUT dan versi berjalan sudah berpisah, baris itu harus
 diperbarui sadar, bukan dibiarkan ikut stempel.
 

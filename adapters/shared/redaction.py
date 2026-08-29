@@ -20,8 +20,8 @@ Redaction itself is unchanged: `utils.redact` decides WHAT is a secret. This mod
 decides that the count survives the trip.
 """
 
-from core.contract import make_error as _contract_make_error
-from core.contract import make_ok as _contract_make_ok
+from core.evidence.contract import make_error as _contract_make_error
+from core.evidence.contract import make_ok as _contract_make_ok
 from utils.redact import redact, redact_value
 
 
@@ -66,7 +66,7 @@ def make_error(
     meta: dict | None = None,
     **fields,
 ) -> dict:
-    """`core.contract.make_error` with every string scrubbed and the count preserved."""
+    """`core.evidence.contract.make_error` with every string scrubbed and the count preserved."""
     clean_message, message_hits = redact(str(message or ""))
     clean_next, next_hits = redact(str(next_action or ""))
     clean_fields, field_hits = redact_value(fields)
@@ -77,7 +77,7 @@ def make_error(
 
 
 def make_ok(content: str, meta: dict | None = None, digest: dict | None = None) -> dict:
-    """`core.contract.make_ok` with every string scrubbed and the count preserved."""
+    """`core.evidence.contract.make_ok` with every string scrubbed and the count preserved."""
     clean_content, content_hits = redact(content or "")
     clean_digest, digest_hits = redact_value(digest)
     safe_meta = sanitize_meta(meta, [*content_hits, *digest_hits])

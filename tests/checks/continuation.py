@@ -12,9 +12,10 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from core.contract import validate_verification_contract
-from core.executor import _VERIFY_SHAPE_KINDS, Executor
-from core.workflow_runtime import ensure_workflow_workspace
+from core.evidence.contract import validate_verification_contract
+from core.provider.continuation import _VERIFY_SHAPE_KINDS
+from core.provider.executor import Executor
+from core.runtime.state import ensure_workflow_workspace
 
 from tests.checks.support import assert_true
 

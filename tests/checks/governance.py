@@ -16,8 +16,8 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from core.contracts import UsageRecord
-from core.governance import (
+from core.evidence.contracts import UsageRecord
+from core.policy.governance import (
     FORBIDDEN_TOOLS,
     allowed_providers,
     budget_limit,
@@ -25,8 +25,8 @@ from core.governance import (
     check_provider,
     tools_for,
 )
-from core.router import Router
-from core.runtime_io import write_usage_record
+from core.prompt.router import Router
+from core.evidence.runtime_io import write_usage_record
 from tests.checks.support import assert_true
 
 
@@ -118,8 +118,8 @@ def _budget() -> None:
 
 def _budget_refuses_through_executor() -> None:
     """The ceiling has to hold on the real entry point, not just in the helper."""
-    from core.executor import Executor
-    from core.workflow_runtime import ensure_workflow_workspace
+    from core.provider.executor import Executor
+    from core.runtime.state import ensure_workflow_workspace
 
     root = Path(tempfile.mkdtemp(prefix="aw-budget-"))
     try:
@@ -165,8 +165,8 @@ def _local_first_metadata() -> None:
     is a path built from a home directory or a temp dir, which reads perfectly well and is
     wrong in exactly the way nobody notices.
     """
-    from core.contracts import AUDIT_STREAM_NAME, QUALITY_STREAM_NAME, USAGE_STREAM_NAME
-    from core.runtime_io import write_audit_record, write_quality_record
+    from core.evidence.contracts import AUDIT_STREAM_NAME, QUALITY_STREAM_NAME, USAGE_STREAM_NAME
+    from core.evidence.runtime_io import write_audit_record, write_quality_record
 
     root = Path(tempfile.mkdtemp(prefix="aw-local-")).resolve()
     try:

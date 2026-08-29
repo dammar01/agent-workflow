@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 from config.providers import PROVIDER_BUNDLES
-from core.workspace_paths import read_json_file
+from core.workspace.workspace_paths import read_json_file
 
 
 def _expand_home(template: str, project_root: Path | str | None = None) -> str:

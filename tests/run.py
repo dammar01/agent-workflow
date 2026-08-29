@@ -191,7 +191,7 @@ def _record_outcome(project_root: str, selected: list, failures: list) -> None:
     try:
         from datetime import datetime, timezone
 
-        from core.runtime_io import write_quality_record
+        from core.evidence.runtime_io import write_quality_record
 
         write_quality_record(
             Path(project_root),

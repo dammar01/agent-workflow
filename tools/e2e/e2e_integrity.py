@@ -1,6 +1,6 @@
 """Workspace integrity: init, upgrade, locks, drift."""
 
-from tools.e2e_support import (
+from tools.e2e.e2e_support import (
     Path,
     REPO_ROOT,
     Report,
@@ -20,17 +20,14 @@ def integrity_checks(report: Report) -> None:
     print("\n[INTEGRITY] fact store, config validation, lazy upgrade")
 
     from config.settings import COMPONENT_VERSIONS
-    from core import fact_store
-    from core.workflow_runtime import (
-        ensure_workflow_workspace,
-        needs_upgrade,
-        upgrade_workflow_workspace,
-        validate_config,
-        workflow_paths,
-    )
+    from core.evidence import fact_store
+    from core.runtime.config_defaults import validate_config
+    from core.runtime.state import ensure_workflow_workspace
+    from core.runtime.upgrade import needs_upgrade, upgrade_workflow_workspace
+    from core.workspace.workspace_paths import workflow_paths
 
     # --- claim anchors + structural output checks (pure) ---
-    from core.contract import STRUCTURAL_KINDS, contract_warnings, split_claim
+    from core.evidence.contract import STRUCTURAL_KINDS, contract_warnings, split_claim
 
     bracketed = split_claim("entry point defined [app/main.py:1]")
     bare = split_claim("dispatch happens in app/main.py:48 before the lock")
@@ -90,7 +87,7 @@ def integrity_checks(report: Report) -> None:
     )
 
     # --- config validation (pure, no workspace needed) ---
-    from core.workflow_runtime import default_commands, default_policies
+    from core.runtime.config_defaults import default_commands, default_policies
 
     clean = {"commands": default_commands(), "policies": default_policies()}
     report.check(
@@ -249,7 +246,7 @@ def integrity_checks(report: Report) -> None:
             )
         else:
             script.write_text("# drifted\n", encoding="utf-8")
-            from core.workflow_runtime import script_drift
+            from core.runtime.scripts import script_drift
 
             seen = script_drift(project, str(REPO_ROOT / "main.py"))
             report.check(
@@ -320,8 +317,8 @@ def integrity_checks(report: Report) -> None:
                 )
 
         # --- fan-out capability probe ---
-        from core.contract import reported_no_spawn_tool
-        from core.workflow_runtime import fanout_capability, set_fanout_capability
+        from core.evidence.contract import reported_no_spawn_tool
+        from core.runtime.state import fanout_capability, set_fanout_capability
 
         report.check(
             "fan-out: detects opencode 'no spawn tool' self-report",
@@ -339,7 +336,7 @@ def integrity_checks(report: Report) -> None:
 
         # A dispatch that forgot its [cN] tags stays unconfirmed — but it must not read as
         # "no fan-out was attempted", which is the one thing that did not happen.
-        from core.contract import FANOUT_MISMATCH, detect_subagent_usage
+        from core.evidence.contract import FANOUT_MISMATCH, detect_subagent_usage
 
         untagged = detect_subagent_usage(
             "subagents: c0, c1 (dispatched wf-slice)\n- Router routes by command [x.py:1]"
@@ -365,7 +362,7 @@ def integrity_checks(report: Report) -> None:
 
     # --- active fan-out contract and compact prompt ---
     from config.roles import ROLE_EXPLORATION
-    from core.prompt_builder import build_prompt
+    from core.prompt.prompt_builder import build_prompt
 
     explore_prompt = build_prompt(
         role=ROLE_EXPLORATION,
@@ -438,7 +435,7 @@ def integrity_checks(report: Report) -> None:
 
     # Shipped docs quote a version back at the user; the code has exactly one.
     stamped = subprocess.run(
-        [sys.executable, str(REPO_ROOT / "tools" / "stamp_version.py"), "--check"],
+        [sys.executable, str(REPO_ROOT / "tools" / "maintain" / "stamp_version.py"), "--check"],
         capture_output=True,
         text=True,
         encoding="utf-8",

@@ -22,10 +22,10 @@ from config.settings import (
     MAIN_PY,
     load_provider_config_for,
 )
-from core.contract import make_error
-from core.job_manager import DEAD
-from core.result_shaping import _finalize_verify_result
-from core.workflow_runtime import detect_project_root
+from core.evidence.contract import make_error
+from core.jobs.job_manager import DEAD
+from core.evidence.result_shaping import _finalize_verify_result
+from core.workspace.workspace_paths import detect_project_root
 from utils import osutil
 
 

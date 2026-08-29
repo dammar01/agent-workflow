@@ -59,9 +59,9 @@ from config.settings import (
     DEFAULT_POLL_INTERVAL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
 )
-from core import agy_guard
-from core.contract import make_error as _contract_make_error
-from core.contract import make_ok as _contract_make_ok
+from core.policy import agy_guard
+from core.evidence.contract import make_error as _contract_make_error
+from core.evidence.contract import make_ok as _contract_make_ok
 from utils import osutil
 from utils.redact import redact, redact_value
 
@@ -148,7 +148,7 @@ def _too_long_for_cmd(args: list[str]) -> int | None:
 
 # Shared with every other adapter. The local copy this replaces dropped the redaction
 # hits, so an agy call that scrubbed a secret still recorded `redactions: 0`.
-from adapters.redaction import (  # noqa: E402
+from adapters.shared.redaction import (  # noqa: E402
     make_error,
     make_ok,
     sanitize_meta as _sanitize_meta,

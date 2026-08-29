@@ -10,11 +10,11 @@ from pathlib import Path
 
 import check
 import main
-from adapters.opencode_adapter import OpenCodeAdapter
-from core.executor import Executor
-from core.job_manager import JobManager
-from core.prompt_builder import build_prompt
-from core.workflow_runtime import ensure_workflow_workspace
+from adapters.providers.opencode_adapter import OpenCodeAdapter
+from core.provider.executor import Executor
+from core.jobs.job_manager import JobManager
+from core.prompt.prompt_builder import build_prompt
+from core.runtime.state import ensure_workflow_workspace
 
 from tests.checks.support import (
     FakeJobProcess,

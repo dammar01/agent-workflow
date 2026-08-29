@@ -32,7 +32,7 @@ def provider_callable(command_name: str) -> tuple[bool, str]:
 
     Lives here, not in a provider's install module. The check is `shutil.which` and nothing
     else — there is nothing opencode-shaped about it — but importing it from
-    `adapters.opencode_install` meant core/ reached into one provider's module to test
+    `adapters.install.opencode_install` meant core/ reached into one provider's module to test
     every provider's binary.
     """
     resolved = shutil.which(f"{command_name}.cmd") or shutil.which(command_name)

@@ -14,8 +14,8 @@ import json
 import tempfile
 from pathlib import Path
 
-from core.audit import load_audit, report
-from core.runtime_io import write_audit_record
+from core.audit.audit import load_audit, report
+from core.evidence.runtime_io import write_audit_record
 from tests.checks.support import assert_true
 
 

@@ -1,6 +1,6 @@
 """Fast local checks: prompts, contracts, result slimming."""
 
-from tools.e2e_support import (
+from tools.e2e.e2e_support import (
     Path,
     REPO_ROOT,
     Report,
@@ -105,7 +105,7 @@ def local_checks(report: Report) -> None:
 
     # The shipped example is what a fresh clone actually installs.
     from config.settings import load_provider_config
-    from core.router import Router
+    from core.prompt.router import Router
 
     example = REPO_ROOT / "config" / "second_agent.example.json"
     if example.exists():
@@ -122,7 +122,7 @@ def local_checks(report: Report) -> None:
         )
 
     from config.settings import COMPONENT_VERSIONS, TOOL_VERSION
-    from core.workflow_runtime import CONFIG_VERSION
+    from core.workspace.workspace_paths import CONFIG_VERSION
 
     manifest = json.loads(
         (REPO_ROOT / "dist" / "manifest.json").read_text(encoding="utf-8")

@@ -1,12 +1,12 @@
 from pathlib import Path
 
-from adapters.base import SecondAgentAdapter
-from adapters.registry import hint_conflict, resolve_adapter, selected_provider
+from adapters.contract.base import SecondAgentAdapter
+from adapters.contract.registry import hint_conflict, resolve_adapter, selected_provider
 from config.settings import (
     DEFAULT_MAX_TASK_CHARS,
     DEFAULT_TASK_TRUNCATION_HARD_RATIO,
 )
-from core.contract import (
+from core.evidence.contract import (
     FANOUT_DECLINED,
     FANOUT_DENIED,
     FANOUT_INCAPABLE,
@@ -21,37 +21,18 @@ from core.contract import (
     readable_claims,
     validate_verification_contract,
 )
-from core.contracts import TaskSpec, correlation_id_for, usage_from_result
-from core.governance import budget_limit, budget_state
-from core import telemetry
-from core import fact_store
-from core import evidence_store
-from core import graph_index
-from core.prompt_builder import build_prompt
-from core.router import Router
+from core.evidence.contracts import TaskSpec, correlation_id_for, usage_from_result
+from core.policy.governance import budget_limit, budget_state
+from core.audit import telemetry
+from core.evidence import fact_store
+from core.evidence import evidence_store
+from core.graph import graph_index
+from core.prompt.prompt_builder import build_prompt
+from core.prompt.router import Router
 from utils.redact import redact_value
-from core import quick_verify
-from core.workflow_runtime import (
-    CONFIG_VERSION,
-    acquire_runtime_lock,
-    active_chain_correlation,
-    auto_verify_after_execute,
-    bind_session,
-    detect_project_root,
-    fanout_capability,
-    graph_leads_enabled,
-    parse_questions,
-    release_runtime_lock,
-    runtime_lock_owned,
-    set_fanout_capability,
-    subagent_fanout_enabled,
-    stamp_task_chain,
-    run_sweep,
-    update_command_cache,
-    update_plan_scope,
-    update_state_from_agent_output,
-    verify_mode,
-    workflow_paths,
+from core.evidence import quick_verify
+from core.audit.diagnostics import run_sweep
+from core.evidence.runtime_io import (
     write_audit_record,
     write_call_meta,
     write_evidence_sidecars,
@@ -60,92 +41,33 @@ from core.workflow_runtime import (
     write_response_snapshot,
     write_usage_record,
 )
-from core.workspace_paths import now_iso
-
-
-def _scope_incomplete(content: str) -> bool:
-    """True when the run itself reported ground it did not cover.
-
-    Read off the agent's own `scope_not_covered` section: it is the one admission of
-    incompleteness that arrives without lowering the confidence line beside it.
-    """
-    lines = (content or "").splitlines()
-    collecting = False
-    for line in lines:
-        stripped = line.strip()
-        if stripped.lower().startswith("scope_not_covered"):
-            collecting = True
-            continue
-        if collecting:
-            if not stripped:
-                continue
-            if not stripped.startswith("-"):
-                break
-            body = stripped.lstrip("-").strip().lower()
-            if body and body not in {"none", "(none)", "n/a"}:
-                return True
-    return False
-
-
-def _attach_redactions(meta: dict, hits: list[dict]) -> None:
-    if not hits:
-        return
-    counts: dict[str, int] = {}
-    for hit in [*(meta.get("redactions") or []), *hits]:
-        if not isinstance(hit, dict) or not hit.get("kind"):
-            continue
-        kind = str(hit["kind"])
-        counts[kind] = counts.get(kind, 0) + int(hit.get("count") or 0)
-    meta["redactions"] = [
-        {"kind": kind, "count": count} for kind, count in counts.items()
-    ]
-    meta["redaction_count"] = sum(counts.values())
-
-
-def _without_raw_args(value):
-    """Remove argv payloads from injected/legacy adapter data."""
-    if isinstance(value, dict):
-        raw_args = value.get("args")
-        clean = {
-            key: _without_raw_args(child)
-            for key, child in value.items()
-            if key != "args"
-        }
-        if isinstance(raw_args, (list, tuple)):
-            clean.setdefault("argv_count", len(raw_args))
-            clean.setdefault("argv_chars", sum(len(str(arg)) for arg in raw_args))
-        return clean
-    if isinstance(value, list):
-        return [_without_raw_args(child) for child in value]
-    if isinstance(value, tuple):
-        return tuple(_without_raw_args(child) for child in value)
-    return value
-
-
-def _sanitize_result(result):
-    clean, hits = redact_value(_without_raw_args(result))
-    if isinstance(clean, dict):
-        meta = clean.setdefault("meta", {})
-        if isinstance(meta, dict):
-            _attach_redactions(meta, hits)
-    return clean, hits
-
-
-def _evidence_context(
-    route: dict,
-    fanout: bool,
-    graph_leads: dict | None,
-    known_facts: list[str] | None,
-) -> dict:
-    """Inputs that can materially change an otherwise identical delegated answer."""
-    return {
-        "schema": 2,
-        "runtime_config_version": CONFIG_VERSION,
-        "route": dict(route),
-        "fanout": bool(fanout),
-        "graph_leads": graph_leads,
-        "known_facts": known_facts or [],
-    }
+from core.workspace.runtime_lock import (
+    acquire_runtime_lock,
+    release_runtime_lock,
+    runtime_lock_owned,
+)
+from core.runtime.agent_output import parse_questions
+from core.runtime.config_defaults import auto_verify_after_execute, graph_leads_enabled, subagent_fanout_enabled, verify_mode
+from core.runtime.state import active_chain_correlation, bind_session, fanout_capability, set_fanout_capability, stamp_task_chain, update_command_cache, update_plan_scope, update_state_from_agent_output
+from core.provider.continuation import (
+    _EVIDENCE_MARKERS,
+    _contract_gap,
+    _continuation_prompt,
+    _merge_continuation,
+)
+from core.provider.result_prep import (
+    _attach_redactions,
+    _evidence_context,
+    _sanitize_result,
+    _scope_incomplete,
+    _without_raw_args,
+)
+from core.workspace.workspace_paths import (
+    CONFIG_VERSION,
+    detect_project_root,
+    now_iso,
+    workflow_paths,
+)
 
 
 # One line per way fan-out can fail to happen. Each says what to DO about it, because
@@ -177,160 +99,6 @@ _FANOUT_WARNINGS = {
         "is unknown; treat the result as a sequential read"
     ),
 }
-
-
-# Markers that say the reply is evidence rather than conversation. Kept as one list so the
-# gap detector and the failure path below cannot drift apart.
-_EVIDENCE_MARKERS = (
-    "[evidence]",
-    "[digest]",
-    "[exploration result]",
-    "entry_points",
-    "grounded:",
-    "assumptions:",
-    "scope_covered",
-)
-
-# Verify warnings that describe the SHAPE of the reply, not its findings. A run that
-# emitted a complete [VERIFICATION] block and honestly declared INCOMPLETE is finished
-# work and must never be re-prompted; one missing the fields never got there.
-_VERIFY_SHAPE_KINDS = {
-    "missing_fields",
-    "empty_section",
-    "checks_missing",
-    "invalid_confidence",
-    "invalid_finding_tags",
-    "verdict_mismatch",
-}
-
-# `finding_misrouted` is deliberately NOT here. The router already moves a blocking-class
-# finding into the verdict on its own, so nothing is lost by leaving it where the agent
-# put it — and a re-prompt would only offer it the chance to retract a true finding.
-_VERIFY_WANT_BY_KIND = {
-    "invalid_finding_tags": (
-        "the same findings again, each opening line carrying severity, origin and "
-        "scope_relation — no new findings, no removals"
-    ),
-    "verdict_mismatch": (
-        "the verdict line alone, made consistent with the blocking_findings you already "
-        "reported — change the verdict, not the findings"
-    ),
-}
-
-
-def _contract_gap(command: str, role: str, result) -> dict | None:
-    """Did the reply stop before the contract, or is it simply not evidence?
-
-    Distinct from a failed call, and distinct from a refusal. The observed case: the
-    second agent reads every file, then hits its own context ceiling and hands back a
-    work-state summary ending in "continue if you have next steps" — real work done,
-    contract never emitted. Treating that as failure throws away a completed read and
-    sends the user to /.local for evidence that already exists.
-
-    Returns None when there is nothing to continue: a failed call, a shape that is
-    already correct, or a verdict the agent reached deliberately.
-    """
-    if not isinstance(result, dict) or not result.get("ok"):
-        return None
-    content = result.get("content") or ""
-    meta = result.get("meta") or {}
-
-    if command == "verify":
-        if meta.get("mode") == "quick" or "quick_verify" in meta:
-            return None
-        assessment = validate_verification_contract(content)
-        shape = [
-            warning
-            for warning in assessment.get("warnings") or []
-            if warning.get("kind") in _VERIFY_SHAPE_KINDS
-        ]
-        if not shape:
-            return None
-        kinds = {warning.get("kind") for warning in shape}
-        # A block that arrived whole but tagged wrong needs a correction, not a rewrite:
-        # asking for the whole thing again invites the agent to redo the reading too.
-        narrow = [_VERIFY_WANT_BY_KIND[kind] for kind in sorted(kinds) if kind in _VERIFY_WANT_BY_KIND]
-        if narrow and len(narrow) == len(kinds):
-            wants = " and ".join(narrow)
-            reason = "verification contract emitted but malformed"
-        else:
-            wants = (
-                "the full [VERIFICATION] block — verdict, blocking_findings, "
-                "escalations, notes, checks_run, not_verified, confidence — "
-                "followed by [DIGEST]"
-            )
-            reason = "verification contract fields absent"
-        return {
-            "reason": reason,
-            "missing": [warning.get("detail") for warning in shape],
-            "wants": wants,
-        }
-
-    if role in ("exploration", "reasoning"):
-        body = content.lower()
-        if not any(marker in body for marker in _EVIDENCE_MARKERS):
-            return {
-                "reason": "no evidence contract in the reply",
-                "missing": ["none of the evidence section markers are present"],
-                "wants": "the normal [EVIDENCE] block followed by [DIGEST]",
-            }
-        damaged = [
-            issue["kind"]
-            for issue in contract_warnings(command, content)
-            if issue["kind"] in STRUCTURAL_KINDS
-        ]
-        if damaged:
-            return {
-                "reason": "reply ended before its digest",
-                "missing": damaged,
-                "wants": "the missing [DIGEST] block",
-            }
-    return None
-
-
-def _merge_continuation(first: str | None, retry: str | None) -> str:
-    """Keep the work from the first reply and the contract block from the second.
-
-    The continuation prompt asks for the missing block ONLY, so the follow-up comes back
-    carrying a digest and little else. Swapping it in wholesale threw away the evidence the
-    run had already paid for: artifacts landed holding a digest and zero anchors while the
-    body that earned them was discarded, and the reader was left summarising a summary.
-    """
-    first = (first or "").strip()
-    retry = (retry or "").strip()
-    if not first:
-        return retry
-    if not retry:
-        return first
-    # An agent that ignored "do NOT redo it" and re-sent the whole answer supersedes the
-    # first reply outright; concatenating there would duplicate every section.
-    head = "\n".join(first.splitlines()[:3]).strip()
-    if head and head in retry:
-        return retry
-    # A digest cut mid-block still opens with [DIGEST], and the contract check reads the
-    # FIRST marker it finds. Cut at the first one, not the last: a reply that quoted the
-    # template before stalling carries two markers, and trimming only the trailing one
-    # leaves the quoted header in front where it shadows the complete block behind it.
-    # Everything past that point is digest anyway — the evidence body is what precedes it.
-    if "[DIGEST]" in first and "[DIGEST]" in retry:
-        first = first.split("[DIGEST]", 1)[0].rstrip()
-    if not first:
-        return retry
-    return f"{first}\n\n{retry}"
-
-
-def _continuation_prompt(command: str, gap: dict) -> str:
-    """Ask for the missing part only — the work itself already happened."""
-    missing = "; ".join(str(item) for item in gap.get("missing") or []) or "unknown"
-    return (
-        f"Your previous reply for this {command} call stopped before the required "
-        f"output: {gap['reason']} ({missing}).\n"
-        "The work you already did in this session still counts. Do NOT redo it and do "
-        "NOT start over.\n"
-        f"Reply with {gap['wants']}, built from what you already found. If some part is "
-        "genuinely unverified, say so in the field it belongs to rather than omitting "
-        "the field."
-    )
 
 
 class Executor:

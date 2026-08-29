@@ -16,7 +16,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from core.contracts import (
+from core.evidence.contracts import (
     CONTRACT_VERSION,
     EvidenceBundle,
     RouteDecision,
@@ -26,10 +26,10 @@ from core.contracts import (
     correlation_id_for,
     usage_from_result,
 )
-from core.executor import Executor
-from core.router import Router
-from core.runtime_io import write_usage_record
-from core.workflow_runtime import ensure_workflow_workspace
+from core.provider.executor import Executor
+from core.prompt.router import Router
+from core.evidence.runtime_io import write_usage_record
+from core.runtime.state import ensure_workflow_workspace
 from tests.checks.support import assert_true
 
 
@@ -328,7 +328,7 @@ def _finalize_is_idempotent() -> None:
     carries executor entries (evidence contract misses, task truncation), so a replace
     would fix the duplication by dropping them.
     """
-    from core.result_shaping import _finalize_verify_result
+    from core.evidence.result_shaping import _finalize_verify_result
 
     foreign = {"kind": "task_truncated", "detail": "120 chars cut from the instruction"}
     result = {

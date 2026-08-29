@@ -13,7 +13,7 @@ SESSION_DIR = BASE_DIR / "storage" / "sessions"
 CACHE_FILE = BASE_DIR / "storage" / "cache.json"
 JOB_DIR = BASE_DIR / "storage" / "jobs"
 PROVIDER_CONFIG_FILE = BASE_DIR / "config" / "second_agent.json"
-# Which adapter serves as second_agent. Read by adapters.registry; a workspace
+# Which adapter serves as second_agent. Read by adapters.contract.registry; a workspace
 # config.json may override it per project.
 DEFAULT_PROVIDER = os.getenv("AI_PROXY_PROVIDER", "opencode")
 
@@ -520,9 +520,9 @@ def resolve_provider_config_for(project_root) -> dict:
     values so a wrong-looking model can be traced to the file that supplied it in one
     step, instead of being reconstructed from three files after the fact.
     """
-    # Deferred: core.workspace_paths imports TOOL_VERSION from this module, so a
+    # Deferred: core.workspace.workspace_paths imports TOOL_VERSION from this module, so a
     # top-level import here would close the cycle. Same pattern as _tool_paths.
-    from core.workspace_paths import resolve_provider_config
+    from core.workspace.workspace_paths import resolve_provider_config
 
     path, source = resolve_provider_config(project_root)
     if path is None:

@@ -9,8 +9,8 @@ from config.settings import (
     DEFAULT_MAX_PROBES,
     DEFAULT_PROBE_RECHECK_SECONDS,
 )
-from core.contract import validate_verification_contract, verify_exit_status
-from core.job_manager import JobManager
+from core.evidence.contract import validate_verification_contract, verify_exit_status
+from core.jobs.job_manager import JobManager
 
 JOB_MANAGER = JobManager()
 # Attach-path cadence for the stall checks. Fixed rather than per-project: check.py is

@@ -15,7 +15,7 @@ percentage lets the reader mistake the first for the second.
 import json
 from pathlib import Path
 
-from core.contracts import QUALITY_STREAM_NAME, USAGE_STREAM_NAME, UsageRecord
+from core.evidence.contracts import QUALITY_STREAM_NAME, USAGE_STREAM_NAME, UsageRecord
 
 
 def _stream_path(project_root, name: str) -> Path:

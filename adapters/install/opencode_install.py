@@ -13,7 +13,7 @@ import json
 import shutil
 from pathlib import Path
 
-from core.workspace_paths import (
+from core.workspace.workspace_paths import (
     JSON_INDENT,
     PROVIDER_CONFIG_NAME,
     WORKFLOW_DIRNAME,
@@ -24,7 +24,7 @@ from core.workspace_paths import (
 
 def load_config(path: Path):
     """Read one of this provider's config files. Tolerates JSONC, because opencode does."""
-    from core.opencode_policy import load_json_or_jsonc
+    from core.policy.opencode_policy import load_json_or_jsonc
 
     return load_json_or_jsonc(path)
 
@@ -32,11 +32,11 @@ def load_config(path: Path):
 def merge_policy(current: dict, incoming: dict, warn) -> tuple[dict, int, int]:
     """Merge shipped config into an existing one, enforcing workflow-owned permissions.
 
-    The installer reaches this by name, never by importing `core.opencode_policy`
+    The installer reaches this by name, never by importing `core.policy.opencode_policy`
     directly — that module encodes opencode's `agent.plan.permission` + root `permission`
     shape, which is one provider's answer rather than a contract every provider can meet.
     """
-    from core.opencode_policy import merge_opencode_policy
+    from core.policy.opencode_policy import merge_opencode_policy
 
     return merge_opencode_policy(current, incoming, warn)
 

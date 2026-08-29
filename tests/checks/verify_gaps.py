@@ -10,11 +10,11 @@ from pathlib import Path
 
 import check
 import main
-from adapters.opencode_adapter import OpenCodeAdapter
-from core.executor import Executor
-from core.job_manager import JobManager
-from core.prompt_builder import build_prompt
-from core.workflow_runtime import ensure_workflow_workspace
+from adapters.providers.opencode_adapter import OpenCodeAdapter
+from core.provider.executor import Executor
+from core.jobs.job_manager import JobManager
+from core.prompt.prompt_builder import build_prompt
+from core.runtime.state import ensure_workflow_workspace
 
 from tests.checks.support import (
     FakeJobProcess,
@@ -29,7 +29,7 @@ def _test_quick_verify_gaps() -> None:
     """Unavailable, deleted, and name-check failures cannot produce a pass verdict."""
     import shutil as _shutil
 
-    from core import quick_verify
+    from core.evidence import quick_verify
 
     root = Path(tempfile.mkdtemp(prefix="quick-verify-"))
     original_discover = quick_verify._discover_changed_files

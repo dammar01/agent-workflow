@@ -17,8 +17,8 @@ rather than three near-copies: a fourth provider joins this check by existing, w
 the same reason the accounting itself now lives in adapters/redaction.py.
 """
 
-from adapters import agy_adapter, codex_adapter, opencode_adapter
-from core.contract import ERROR_TYPES
+from adapters.providers import agy_adapter, codex_adapter, opencode_adapter
+from core.evidence.contract import ERROR_TYPES
 from tests.checks.support import assert_true
 
 # A key shaped like the real thing, kept obviously fake. Two distinct occurrences so a
@@ -108,15 +108,15 @@ def _test_adapter_redaction_is_shared() -> None:
     and then edits one copy — which is exactly how the original divergence appeared.
     Identity is the property that actually prevents a recurrence.
     """
-    from adapters import redaction
+    from adapters.shared import redaction
 
     for name, module in _ADAPTERS:
         assert_true(
             module.make_error is redaction.make_error,
-            f"{name}.make_error is a local copy rather than adapters.redaction.make_error; "
+            f"{name}.make_error is a local copy rather than adapters.shared.redaction.make_error; "
             "three copies of one rule is the shape the divergence grew in",
         )
         assert_true(
             module.make_ok is redaction.make_ok,
-            f"{name}.make_ok is a local copy rather than adapters.redaction.make_ok",
+            f"{name}.make_ok is a local copy rather than adapters.shared.redaction.make_ok",
         )

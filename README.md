@@ -13,6 +13,10 @@ file contents.
 [![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](#requirements)
 [![Version](https://img.shields.io/badge/version-3.4.5-informational.svg)](CHANGELOG.md)
 
+<br>
+
+<img src="docs/assets/flow.png" alt="agent-workflow architecture: the user asks a question; the main agent detects intent and calls the runtime; the runtime builds context, launches the read-only second agent, validates and redacts the response, then returns a digest with file:line anchors; the main agent reasons, writes the code, verifies, and commits. Only the main agent has write access." width="900">
+
 </div>
 
 ---

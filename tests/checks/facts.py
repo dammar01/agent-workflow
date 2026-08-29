@@ -10,11 +10,11 @@ from pathlib import Path
 
 import check
 import main
-from adapters.opencode_adapter import OpenCodeAdapter
-from core.executor import Executor
-from core.job_manager import JobManager
-from core.prompt_builder import build_prompt
-from core.workflow_runtime import ensure_workflow_workspace
+from adapters.providers.opencode_adapter import OpenCodeAdapter
+from core.provider.executor import Executor
+from core.jobs.job_manager import JobManager
+from core.prompt.prompt_builder import build_prompt
+from core.runtime.state import ensure_workflow_workspace
 
 from tests.checks.support import (
     FakeJobProcess,
@@ -35,8 +35,8 @@ def _test_facts_concurrency() -> None:
     import json as _json
     import shutil as _shutil
 
-    from core import fact_store
-    from core.workflow_runtime import workflow_paths
+    from core.evidence import fact_store
+    from core.workspace.workspace_paths import workflow_paths
 
     root = Path(tempfile.mkdtemp(prefix="facts-conc-"))
     try:
@@ -89,8 +89,8 @@ def _test_anchor_relocation() -> None:
     """
     import shutil as _shutil
 
-    from core import fact_store
-    from core.workflow_runtime import workflow_paths
+    from core.evidence import fact_store
+    from core.workspace.workspace_paths import workflow_paths
 
     root = Path(tempfile.mkdtemp(prefix="facts-reloc-"))
     try:
@@ -172,8 +172,9 @@ def _test_evidence_anchor_relocation() -> None:
     insertion above one cited line used to discard a whole artifact and force a re-run."""
     import shutil as _shutil
 
-    from core import evidence_store
-    from core.workflow_runtime import workflow_paths, write_response_snapshot
+    from core.evidence import evidence_store
+    from core.evidence.runtime_io import write_response_snapshot
+    from core.workspace.workspace_paths import workflow_paths
 
     root = Path(tempfile.mkdtemp(prefix="evidence-reloc-"))
     try:
@@ -225,8 +226,9 @@ def _test_evidence_reuse() -> None:
     """Reuse must read immutable, hash-checked artifacts and preserve concurrent rows."""
     import shutil as _shutil
 
-    from core import evidence_store
-    from core.workflow_runtime import workflow_paths, write_response_snapshot
+    from core.evidence import evidence_store
+    from core.evidence.runtime_io import write_response_snapshot
+    from core.workspace.workspace_paths import workflow_paths
 
     root = Path(tempfile.mkdtemp(prefix="evidence-reuse-"))
     try:
