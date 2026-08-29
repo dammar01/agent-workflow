@@ -18,6 +18,7 @@ from tools.e2e.e2e_delegated import delegated_checks  # noqa: E402
 from tools.e2e.e2e_installer import installer_checks  # noqa: E402
 from tools.e2e.e2e_integrity import integrity_checks  # noqa: E402
 from tools.e2e.e2e_local import local_checks  # noqa: E402
+from tools.e2e.e2e_promote import promote_checks  # noqa: E402
 from tools.e2e.e2e_support import Report, SKIP, _json_from, _run_cli  # noqa: E402,F401
 
 
@@ -36,6 +37,7 @@ def main() -> int:
     report = Report()
     local_checks(report)
     integrity_checks(report)
+    promote_checks(report)
     installer_checks(report)
     if args.full:
         delegated_checks(report, args.session)

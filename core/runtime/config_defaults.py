@@ -41,6 +41,17 @@ def default_policies() -> dict:
         # --- runtime-consumed (core/graph_index.py) ---
         # inject a ranked file shortlist from graphify-out/graph.json into evidence prompts
         "graph_leads_enabled": True,
+        # --- runtime-consumed (core/knowledge/) ---
+        # the branch /.promote treats as production. Promotion is refused anywhere else:
+        # promoted knowledge describes what is live, and a hypothesis written on a
+        # feature branch would enter the shared repository wearing that authority.
+        "production_branch": "main",
+        # where promoted knowledge files live, relative to the project root. Tracked by
+        # Git on purpose — this is the one workflow artifact that is NOT under the
+        # gitignored .workflow/ tree, because its whole value is being shared.
+        "knowledge_dir": "docs/project-knowledge",
+        # how many promoted knowledge documents may ride along in one delegated prompt.
+        "knowledge_relevant_limit": 3,
         # --- runtime-consumed (core/prompt_builder.py) ---
         # ask second_agent to spawn one sub-agent per graph cluster (or per role slice
         # when there is no graph). ON: a delegated call that reads the codebase serially
@@ -233,6 +244,46 @@ def graph_leads_enabled(project_root: Path) -> bool:
     if not isinstance(policies, dict):
         return True
     return bool(policies.get("graph_leads_enabled", True))
+
+def _policy(project_root: Path, key: str, fallback):
+    """One policy value, falling back rather than failing.
+
+    An unreadable config must not decide policy by accident: every reader here follows
+    graph_leads_enabled's precedent and degrades to the declared default, so a malformed
+    file changes what the user can fix, not what the runtime silently does.
+    """
+    try:
+        config = read_json_file(workflow_paths(project_root)["config"])
+    except (OSError, ValueError):
+        return fallback
+    policies = config.get("policies")
+    if not isinstance(policies, dict):
+        return fallback
+    value = policies.get(key, fallback)
+    # `bool` subclasses `int`, so a plain isinstance check accepts `true` where an integer
+    # is expected and hands back 1 — a config that reads as "on" silently becoming a limit
+    # of one document. The int case has to exclude bool explicitly; nothing else can.
+    if isinstance(fallback, bool):
+        acceptable = isinstance(value, bool)
+    elif isinstance(fallback, int):
+        acceptable = isinstance(value, int) and not isinstance(value, bool)
+    else:
+        acceptable = isinstance(value, type(fallback))
+    return value if acceptable else fallback
+
+
+def production_branch(project_root: Path) -> str:
+    """policies.production_branch. The only branch /.promote will write from."""
+    return _policy(project_root, "production_branch", default_policies()["production_branch"])
+
+
+def knowledge_relevant_limit(project_root: Path) -> int:
+    """policies.knowledge_relevant_limit, floored at zero (0 turns the sidecar off)."""
+    value = _policy(
+        project_root, "knowledge_relevant_limit", default_policies()["knowledge_relevant_limit"]
+    )
+    return max(0, int(value))
+
 
 def subagent_fanout_enabled(project_root: Path) -> bool:
     """policies.subagent_fanout_enabled. Defaults to ON.

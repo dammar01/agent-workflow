@@ -47,7 +47,8 @@ from core.workspace.runtime_lock import (
     runtime_lock_owned,
 )
 from core.runtime.agent_output import parse_questions
-from core.runtime.config_defaults import auto_verify_after_execute, graph_leads_enabled, subagent_fanout_enabled, verify_mode
+from core.knowledge import retrieve as knowledge_retrieve
+from core.runtime.config_defaults import auto_verify_after_execute, graph_leads_enabled, knowledge_relevant_limit, production_branch, subagent_fanout_enabled, verify_mode
 from core.runtime.state import active_chain_correlation, bind_session, fanout_capability, set_fanout_capability, stamp_task_chain, update_command_cache, update_plan_scope, update_state_from_agent_output
 from core.provider.continuation import (
     _EVIDENCE_MARKERS,
@@ -542,6 +543,7 @@ class Executor:
             return _sanitize_result(result)[0]
 
         known_facts = None
+        known_knowledge = None
         graph_leads = None
         fanout = False
         if graph_leads_enabled(project_root):
@@ -557,6 +559,21 @@ class Executor:
                 subagent_fanout_enabled(project_root)
                 and fanout_capability(project_root) is not False
             )
+            # Promoted knowledge rides the same roles as facts. Wrapped broadly because
+            # it reaches out to git: a repository that cannot answer must degrade this
+            # call to "no knowledge this time", never fail a delegated call that would
+            # otherwise have succeeded without it.
+            limit = knowledge_relevant_limit(project_root)
+            if limit:
+                try:
+                    known_knowledge = knowledge_retrieve.load_relevant(
+                        project_root,
+                        task,
+                        production_ref=production_branch(project_root),
+                        limit=limit,
+                    ) or None
+                except Exception:
+                    known_knowledge = None
         evidence_context = _evidence_context(
             route, fanout, graph_leads, known_facts
         )
@@ -564,7 +581,7 @@ class Executor:
         # Sidecars keep dynamic evidence off the Windows-limited command line; the
         # command prompt carries only the task and paths needed to read them.
         write_evidence_sidecars(
-            project_root, session_id, graph_leads, known_facts
+            project_root, session_id, graph_leads, known_facts, known_knowledge
         )
         runtime_dir = str(workflow_paths(project_root, session_id)["runtime_dir"])
 
@@ -577,6 +594,7 @@ class Executor:
             project_root=str(project_root),
             runtime_dir=runtime_dir,
             has_facts=bool(known_facts),
+            has_knowledge=bool(known_knowledge),
             has_leads=bool(graph_leads and graph_leads.get("files")),
             subagent_fanout=fanout,
             declared_tools=route.get("declared_tools"),

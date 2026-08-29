@@ -1,3 +1,4 @@
+import json
 import secrets
 import sys
 
@@ -123,6 +124,109 @@ def _cached_session_still_current(session_id: str, cache_root) -> bool:
     return age < MAIN_SESSION_CACHE_TTL_SECONDS
 
 
+def _promote(command: str, project_root: Path, task: str) -> dict:
+    """The three promote stages, each reading its document from the path in `--prompt`.
+
+    A path rather than the JSON itself: the task becomes one argv entry, and Windows caps
+    that at 8191 characters — the same limit that moved evidence leads out of the prompt
+    and into sidecars. A knowledge document with a dozen claims clears it easily.
+    """
+    from core.knowledge import reconcile, retrieve, schema, store, verify
+    from core.runtime.config_defaults import production_branch
+    from utils import git
+
+    if not task or not str(task).strip():
+        return make_error(
+            "promote_input_missing",
+            f"{command} needs the path to the knowledge JSON in --prompt",
+            next_action="Write the candidate document to a file and pass its path.",
+        )
+
+    source = Path(str(task).strip())
+    try:
+        doc = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return make_error(
+            "promote_input_unreadable",
+            f"cannot read {source} as JSON: {exc}",
+            next_action="Fix the candidate document, then retry.",
+        )
+
+    if command == "promote-validate":
+        errors = schema.validate(doc)
+        return {
+            "ok": not errors,
+            "content": "knowledge document is valid" if not errors else "knowledge document rejected",
+            "meta": {"errors": errors, "path": str(source)},
+        }
+
+    if command == "promote-verify":
+        result = verify.verify_doc(project_root, doc)
+        existing = store.load(project_root, doc.get("id", ""))
+        if not existing.get("ok"):
+            return make_error(
+                "promote_existing_unreadable",
+                existing["error"],
+                next_action="Repair or remove the malformed knowledge file, then retry.",
+            )
+        # Reconciled here, while the freshness verdicts are in hand, so the agent gets
+        # one report instead of having to join two.
+        merged = reconcile.reconcile(
+            (existing.get("doc") or {}).get("claims"), doc.get("claims"), result["claims"]
+        )
+        return {
+            "ok": True,
+            "content": (
+                f"{result['fresh_count']} fresh, {result['stale_count']} stale; "
+                + ", ".join(f"{k}={v}" for k, v in sorted(merged["counts"].items()))
+            ),
+            "meta": {
+                "verification": result,
+                "reconciliation": merged,
+                "existing_path": existing.get("path"),
+            },
+        }
+
+    # promote-write. The branch gate lives here rather than in the store because it is a
+    # policy about when promotion may happen, not about whether a document is well
+    # formed — and every other caller of store.write deserves to be refused for the
+    # shape of its document, not for where someone's HEAD happens to be.
+    branch = git.current_branch(project_root)
+    expected = production_branch(project_root)
+    if branch is None:
+        return make_error(
+            "promote_not_on_branch",
+            "not on a branch (detached HEAD, mid-rebase, or a repository with no commits)",
+            next_action=f"Check out {expected}, then retry.",
+        )
+    if branch != expected:
+        return make_error(
+            "promote_not_production_branch",
+            f"on {branch!r}, but promotion is only allowed on {expected!r}",
+            next_action=f"Check out {expected}, or change policies.production_branch.",
+            meta={"branch": branch, "production_branch": expected},
+        )
+
+    pruned = retrieve.prune_dead_exclusions(project_root, doc)
+    written = store.write(project_root, pruned["doc"])
+    if not written.get("ok"):
+        return make_error(
+            written.get("error_type", "promote_write_rejected"),
+            "; ".join(written.get("errors") or ["write refused"]),
+            next_action="Fix the reported problems, then retry.",
+            meta={"errors": written.get("errors") or []},
+        )
+    return {
+        "ok": True,
+        "content": (
+            f"wrote {written['claims']} claim(s) to {written['path']}"
+            if written["written"]
+            else f"{written['path']} already matched; nothing to write"
+        ),
+        "meta": {**written, "dropped_exclusions": pruned["dropped"], "branch": branch},
+    }
+
+
 def run(
     command: str,
     task: str,
@@ -209,6 +313,20 @@ def run(
         output = run_sweep(project_root, session_id)
         output["session_id"] = session_id
         return output
+
+    # The three promote stages. Staged as separate --command values rather than one
+    # command with a mode flag, following submit/await/status/result: that is already
+    # how this CLI expresses a flow whose steps are driven from outside.
+    #
+    # They sit above the runtime lock with the other local commands. The lock serialises
+    # delegated calls against one provider session; promote never reaches a provider.
+    #
+    # The split exists because approval happens between the stages. A CLI cannot ask the
+    # user anything — AskUserQuestion lives in the main agent's thread — so verification
+    # ends at a verdict, the agent runs the review, and writing is a separate call that
+    # can only happen after it.
+    if normalized_command in ("promote-verify", "promote-validate", "promote-write"):
+        return _promote(normalized_command, project_root, task)
 
     lock_path = workflow_paths(project_root, session_id)["lock"]
     lock_claim = acquire_runtime_lock(lock_path, normalized_command, session_id)
@@ -388,6 +506,9 @@ if __name__ == "__main__":
             "clean",
             "inspect",
             "provider",
+            "promote-verify",
+            "promote-validate",
+            "promote-write",
             "report",
             "audit",
             "graph-meta",

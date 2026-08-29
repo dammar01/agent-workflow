@@ -123,6 +123,7 @@ def write_evidence_sidecars(
     session_id: str | None,
     graph_leads: dict | None,
     known_facts: list[str] | None,
+    known_knowledge: list[dict] | None = None,
 ) -> dict:
     """Persist the task-ranked leads and facts to runtime files for the second agent.
 
@@ -157,13 +158,22 @@ def write_evidence_sidecars(
         atomic_write_json(path, payload)
         return True
 
+    # Reviewed, Git-tracked project knowledge. Kept in its own sidecar rather than
+    # folded into facts.json because the two carry different authority: facts are
+    # unreviewed runtime residue, knowledge went through a human. Merging them would
+    # hand the second agent one undifferentiated list and no way to weigh it.
+    knowledge_path = paths["runtime_dir"] / "knowledge.json"
+
     leads_written = _write_if_changed(paths["leads"], graph_leads)
     facts_written = _write_if_changed(paths["facts"], known_facts or [])
+    knowledge_written = _write_if_changed(knowledge_path, known_knowledge or [])
     return {
         "leads": str(paths["leads"]),
         "facts": str(paths["facts"]),
+        "knowledge": str(knowledge_path),
         "leads_written": leads_written,
         "facts_written": facts_written,
+        "knowledge_written": knowledge_written,
     }
 
 

@@ -1,9 +1,9 @@
-# Claude Code — Personal Global Config (v3.4.5)
+# Claude Code — Personal Global Config (v3.5.0)
 # Skills: ~/.claude/skills/   Memory: ~/.claude/memory/
 
-<!-- WORKFLOW-MAIN-AGENT:START — v3.4.5, do not edit manually -->
+<!-- WORKFLOW-MAIN-AGENT:START — v3.5.0, do not edit manually -->
 
-## Workflow Main Agent — v3.4.5
+## Workflow Main Agent — v3.5.0
 
 role: orchestrator + user interface + direct executor. Kamu BUKAN second_agent.
 second_agent: OpenCode (read-only evidence), dipanggil via .workflow/run script.
@@ -104,7 +104,7 @@ Saat gagal → WAJIB:
 Auto-fallback ke local tanpa tanya user = DILARANG.
 
 ### Command registry
-LOCAL:     /.execute -y /.init /.upgrade /.doctor /.sweep /.refactor /.commit /.review /.compress /.memory /.caveman /.local /.provider /.help
+LOCAL:     /.execute -y /.init /.upgrade /.doctor /.sweep /.refactor /.commit /.review /.compress /.memory /.caveman /.local /.provider /.promote /.help
 DELEGATED: /.explore /.plan /.analyze /.verify
 Definisi lengkap tiap skill = file standalone `~/.claude/skills/<name>.md` (dibuka saat "/.name" dipanggil). CLAUDE.md ini SENGAJA cuma orchestrator + registry — body skill TIDAK di-embed di sini (hemat token/turn; single source di skills/).
 <!-- AUTO-INTENT:START -->
@@ -141,6 +141,12 @@ NL map (auto-fire, lihat Intent detection). Cocokkan ke TRIGGER, bukan ke topik 
   commit   ← commit message | mau commit          (destruktif → konfirmasi dulu)
   memory   ← catat | ingat ini | simpan insight
   local    ← tanpa proxy | offline | jangan pakai second agent
+  promote  ← promosikan | jadikan knowledge | catat ke project knowledge | bikin dokumentasi fitur
+             | simpan sebagai pengetahuan project | promote
+             INTI: mengangkat evidence yang SUDAH terverifikasi jadi artefak ter-Git.
+             Beda dari /.memory: memory itu catatan pribadi lintas project, promote itu
+             pengetahuan project yang di-review dan di-share lewat Git.
+             Menulis file → jangan auto-fire, plan dulu lalu konfirmasi.
   provider ← ganti second agent | pakai codex | pakai opencode | ganti model second agent
              | atur effort | reasoning effort | pilih provider
              INTI: mengubah SIAPA yang mengerjakan evidence, bukan meminta evidence.

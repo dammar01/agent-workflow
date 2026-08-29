@@ -11,7 +11,7 @@ file contents.
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](#requirements)
-[![Version](https://img.shields.io/badge/version-3.4.5-informational.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.5.0-informational.svg)](CHANGELOG.md)
 
 <br>
 

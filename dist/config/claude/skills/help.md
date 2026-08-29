@@ -1,11 +1,11 @@
 # Skill: help
-description: Command reference v3.4.5
+description: Command reference v3.5.0
 
 ## Trigger
 /.help
 
 ## Output
-[COMMAND GUIDE — v3.4.5]
+[COMMAND GUIDE — v3.5.0]
 
 LOCAL (main_agent langsung):
   /.execute -y      implement code (wajib -y)
@@ -18,6 +18,7 @@ LOCAL (main_agent langsung):
   /.review <f>      one-line per issue review
   /.compress <f>    compress prose ke caveman
   /.memory <note>   simpan insight
+  /.promote <subj>  evidence terverifikasi → project knowledge ter-Git (plan dulu, approve)
   /.caveman [lite|full|ultra]  toggle compression
   /.local [on|off|status]      toggle no-proxy
   /.help            panduan ini
