@@ -167,6 +167,74 @@ def run_doctor(
         issues.append("root .gitignore does not ignore .workflow/")
         recommended_fixes.append("Add .workflow/ to root .gitignore or rerun init")
 
+    # --- promote readiness ---
+    # Doctor used to answer READY for a workspace where /.promote could not run at all.
+    # A readiness report that is silent about a command's preconditions is worse than one
+    # that omits the command: the user reads READY and blames the feature.
+    from core.knowledge import schema as knowledge_schema
+    from core.knowledge import store as knowledge_store
+    from core.runtime.config_defaults import knowledge_relevant_limit, production_branch
+    from utils import git as git_util
+
+    knowledge_dir = knowledge_store.knowledge_dir(project_root)
+    if knowledge_dir.exists():
+        knowledge_writable, knowledge_error = check_writable(knowledge_dir / ".touch")
+        try:
+            (knowledge_dir / ".touch").unlink()
+        except FileNotFoundError:
+            pass
+        checks["knowledge_folder_writable"] = knowledge_writable
+        if knowledge_error:
+            issues.append(f"knowledge folder not writable: {knowledge_error}")
+            recommended_fixes.append(f"Make {knowledge_dir} writable, or repoint policies.knowledge_dir")
+    else:
+        # Absence is the normal state for a project that has never promoted. Reported as
+        # lazy rather than missing so it does not read as a fault to fix.
+        checks["knowledge_folder_writable"] = "lazy (created on first promotion)"
+
+    expected_branch = production_branch(project_root)
+    current_branch = git_util.current_branch(project_root)
+    checks["promote_branch"] = {
+        "production_branch": expected_branch,
+        "current_branch": current_branch,
+        "promotable": current_branch == expected_branch,
+    }
+    if current_branch != expected_branch:
+        # NOT an issue. Working on a feature branch is the normal case, and flagging it
+        # would make doctor cry wolf on every branch. It is reported so that a later
+        # refusal from promote-write is something the user was already told about.
+        recommended_fixes.append(
+            f"/.promote only writes from {expected_branch!r}"
+            + (f"; currently on {current_branch!r}" if current_branch else "; currently on no branch")
+        )
+
+    malformed: list[str] = []
+    invalid: list[str] = []
+    for doc_id in knowledge_store.list_docs(project_root):
+        loaded = knowledge_store.load(project_root, doc_id)
+        if not loaded.get("ok"):
+            malformed.append(doc_id)
+            continue
+        if knowledge_schema.validate(loaded.get("doc")):
+            invalid.append(doc_id)
+    checks["knowledge_documents"] = {
+        "count": len(knowledge_store.list_docs(project_root)),
+        "malformed": malformed,
+        "schema_invalid": invalid,
+    }
+    if malformed or invalid:
+        # These are shared, Git-tracked files. A broken one is somebody's merge landing
+        # badly, and the next promotion of that subject refuses rather than repairs it.
+        issues.append(
+            "knowledge documents unreadable or schema-invalid: "
+            + ", ".join(sorted(malformed + invalid))
+        )
+        recommended_fixes.append(
+            f"Repair or remove the reported file(s) under {knowledge_dir}"
+        )
+
+    checks["knowledge_relevant_limit"] = knowledge_relevant_limit(project_root)
+
     resolver = resolve_agent_workflow_path(project_root)
     checks["agent_workflow_resolver"] = resolver
     configured_path = None

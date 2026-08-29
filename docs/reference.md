@@ -347,6 +347,9 @@ Second_agent hanya memasok evidence dan reasoning. Runtime tidak membuat atau me
 | `analyze` | terdelegasi | ya | analisis mendalam, nol perubahan kode |
 | `verify` | terdelegasi¹ | ya | verifikasi; kedalaman diatur `verify_mode` |
 | `sweep` | lokal | — | pindai staged, unstaged, dan untracked diff tanpa OpenCode |
+| `promote-validate` | lokal | ya² | validasi dokumen knowledge; nol tulisan |
+| `promote-verify` | lokal | ya² | freshness tiap klaim + rekonsiliasi lawan dokumen existing |
+| `promote-write` | lokal | ya² | satu-satunya jalur tulis ke direktori knowledge |
 | `submit` | job | ya | jalankan asinkron, kembalikan `job_id` |
 | `await` | job | ya | submit lalu tunggu selesai |
 | `status` | job | — | butuh `--job-id` |
@@ -354,6 +357,8 @@ Second_agent hanya memasok evidence dan reasoning. Runtime tidak membuat atau me
 | `worker` | internal | — | dipakai proses worker, jangan dipanggil manual |
 
 ¹ `verify` melewati OpenCode sepenuhnya ketika `verify_mode` bernilai `syntax`.
+
+² Ketiga tahap `promote-*` menerima **path ke file JSON** lewat `--prompt`, bukan dokumennya sendiri: satu dokumen knowledge melewati batas argv 8191 karakter Windows dengan mudah. Tahapnya dipisah karena persetujuan user terjadi di antaranya — CLI tak bisa bertanya apa pun, jadi verifikasi berhenti pada vonis, main_agent yang menjalankan review, dan penulisan adalah panggilan terpisah yang hanya bisa terjadi sesudahnya. `promote-write` menolak di luar `policies.production_branch`.
 
 Tidak ada command Python `execute`. `/.execute -y` tetap tersedia sebagai command user-facing di main_agent; menulis kode sengaja tidak didelegasikan ke runtime atau second_agent.
 
@@ -400,7 +405,7 @@ gunakan `await` seperti contoh di atas. `sweep` dan command lokal lain selesai l
 
 Dibuat saat `init`. Jalankan `upgrade` untuk mem-backfill key versi baru; nilai yang sudah kamu isi tetap menang.
 
-Lima key berikut benar-benar mengubah perilaku runtime Python:
+Delapan key berikut benar-benar mengubah perilaku runtime Python:
 
 | Key | Default | Arti |
 |---|---|---|
@@ -409,6 +414,9 @@ Lima key berikut benar-benar mengubah perilaku runtime Python:
 | `policies.fact_recurrence_threshold` | `5` | jumlah sesi **lain** yang harus melaporkan klaim sebelum dipromosikan |
 | `policies.graph_leads_enabled` | `true` | injeksi shortlist dari `graphify-out/graph.json` |
 | `policies.subagent_fanout_enabled` | `true` | minta fan-out untuk role exploration/reasoning |
+| `policies.production_branch` | `"main"` | satu-satunya branch tempat `promote-write` mau menulis. Promoted knowledge menggambarkan yang hidup; hipotesis dari feature branch tak boleh masuk repo bersama membawa otoritas itu |
+| `policies.knowledge_dir` | `"docs/project-knowledge"` | lokasi dokumen knowledge, relatif project root. Satu-satunya artefak workflow yang **ter-Git** — seluruh nilainya ada pada bisa dibagi |
+| `policies.knowledge_relevant_limit` | `3` | maksimum dokumen knowledge yang ikut satu prompt terdelegasi. `0` mematikan sidecar knowledge |
 
 `commands.auto_verify_after_execute` dibaca dan dikembalikan di `meta.policy`, tetapi hanya main_agent yang bisa menjalankannya karena Python tidak memiliki jalur `execute`.
 

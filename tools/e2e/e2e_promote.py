@@ -290,3 +290,34 @@ def promote_checks(report: Report) -> None:
         == retrieve.NEEDS_BRANCH_VERIFICATION,
         "no git repo here, so the comparison cannot be made",
     )
+
+    # --- doctor readiness ---
+    from core.audit.diagnostics import run_doctor
+
+    checks = run_doctor(root, "does-not-exist", "e2e-promote")["meta"].get("checks", {})
+    if not checks:
+        # run_doctor puts its checks in the report file, not the returned meta, on some
+        # paths. Read them back from the written report rather than skipping the checks.
+        from core.workspace.workspace_paths import read_json_file, workflow_paths
+
+        report_path = workflow_paths(root, "e2e-promote")["doctor_report"]
+        checks = read_json_file(report_path).get("checks", {}) if report_path.exists() else {}
+
+    report.check(
+        "doctor reports the knowledge document count",
+        checks.get("knowledge_documents", {}).get("count") == 1,
+        f"count={checks.get('knowledge_documents', {}).get('count')}",
+    )
+    report.check(
+        "doctor reports whether the current branch may promote",
+        checks.get("promote_branch", {}).get("production_branch") == "main",
+        str(checks.get("promote_branch")),
+    )
+
+    (store.knowledge_dir(root) / "broken.json").write_text("{ not json", encoding="utf-8")
+    broken_checks = run_doctor(root, "does-not-exist", "e2e-promote")["meta"]
+    report.check(
+        "doctor surfaces a malformed knowledge document as an issue",
+        any("knowledge documents" in i for i in broken_checks.get("issues", [])),
+        "; ".join(broken_checks.get("issues", []))[:100],
+    )
