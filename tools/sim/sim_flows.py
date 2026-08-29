@@ -486,7 +486,17 @@ def simulate():
             def __init__(self, pid):
                 self.pid = pid
 
-        main.subprocess.Popen = lambda *a, **kw: FakeProc(os.getpid())
+        def fake_popen(*a, **kw):
+            # Fake ONLY the worker spawn. `main.subprocess.Popen` is the real stdlib
+            # attribute, so `subprocess.run` goes through it too — a blanket fake breaks
+            # unrelated POSIX calls (`ps` in `_process_identity`) that Windows skips.
+            argv = a[0] if a else kw.get("args") or []
+            argv = [str(x) for x in argv] if isinstance(argv, (list, tuple)) else []
+            if "--command" in argv and "worker" in argv:
+                return FakeProc(os.getpid())
+            return original_popen(*a, **kw)
+
+        main.subprocess.Popen = fake_popen
         submitted = main.submit(
             "analyze", "long running task", "job-session", work_dir, None
         )

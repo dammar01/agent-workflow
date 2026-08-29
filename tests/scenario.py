@@ -240,7 +240,16 @@ def run_tests() -> None:
 
         # 7. Identical requests attach while alive and recover once after worker death.
         def fake_popen(*args, **kwargs):
-            return FakeJobProcess(os.getpid())
+            # Only the worker spawn is faked. `main.subprocess.Popen` is the real
+            # stdlib attribute, so `subprocess.run` resolves through it too — a
+            # blanket fake breaks unrelated POSIX calls (`_process_identity`
+            # shelling out to `ps` for a pid with no /proc entry), which is a
+            # Linux-only failure Windows never reaches.
+            argv = args[0] if args else kwargs.get("args") or []
+            argv = [str(a) for a in argv] if isinstance(argv, (list, tuple)) else []
+            if "--command" in argv and "worker" in argv:
+                return FakeJobProcess(os.getpid())
+            return original_popen(*args, **kwargs)
 
         main.subprocess.Popen = fake_popen
         submitted = main.submit("analyze", "long task", "submit-session", work_dir, None)
