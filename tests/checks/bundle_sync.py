@@ -4,7 +4,7 @@
 CI / doctor" — their own docstrings say so — and neither had a caller. `.github/workflows/
 ci.yml` gates `stamp_version` and `gen_manifest` and nothing else, so a skill file added
 without its registry entry, or an intent-map pattern added without the matching NL-map
-trigger, merged green. `tools/e2e_installer.py` checks that skills and `intent-map.json`
+trigger, merged green. `tools/e2e/e2e_installer.py` checks that skills and `intent-map.json`
 are *installed*, not that they *agree* with CLAUDE.md, which reads like coverage without
 being it.
 
@@ -65,5 +65,5 @@ def _test_bundle_registry_bijection() -> None:
             code == 0,
             f"{subject} disagree — the runtime gate and the prompt would classify "
             f"commands differently.\n{output}\n"
-            f"Run: python tools/{module_name}.py --check",
+            f"Run: python tools/maintain/{module_name}.py --check",
         )

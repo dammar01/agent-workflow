@@ -29,7 +29,7 @@ HOME = (
 )
 
 # REPO_ROOT is already sys.path[0] under `python install.py`; the insert covers being
-# imported from elsewhere (tools/e2e.py), and every installer module below relies on it
+# imported from elsewhere (tools/e2e/e2e.py), and every installer module below relies on it
 # to reach core.* and config.* — installer/settings.py dispatches to the provider's own
 # merge policy that way, so one definition of the deny-rule enforcement serves both
 # installer and runtime.

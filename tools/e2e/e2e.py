@@ -1,9 +1,9 @@
 """agent-workflow end-to-end checks.
 
-    python tools/e2e.py           # local + integrity + installer
-    python tools/e2e.py --full    # also the delegated calls (spends quota)
+    python tools/e2e/e2e.py           # local + integrity + installer
+    python tools/e2e/e2e.py --full    # also the delegated calls (spends quota)
 
-Check bodies live in tools/e2e_*.py; this module owns the CLI and the order they
+Check bodies live in tools/e2e/e2e_*.py; this module owns the CLI and the order they
 run in.
 """
 

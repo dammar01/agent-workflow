@@ -1,6 +1,6 @@
 """Install the agent-workflow config onto this machine.
 
-Consumes `dist/` (produced by tools/extract_config.py) and applies it to the local
+Consumes `dist/` (produced by tools/maintain/extract_config.py) and applies it to the local
 agent directories.
 
     python install.py              # DRY RUN — show every change, write nothing
@@ -60,7 +60,7 @@ from installer.base import (  # noqa: E402,F401
 )
 
 # After installer.base: it is what puts REPO_ROOT on sys.path when install.py is imported
-# rather than run directly (tools/e2e.py does exactly that).
+# rather than run directly (tools/e2e/e2e.py does exactly that).
 from config.providers import PROVIDER_BUNDLES  # noqa: E402
 from installer.check import (  # noqa: E402,F401
     _detect_project_root,
@@ -210,7 +210,7 @@ def main() -> int:
         args.only_command = _stored_only_command()
 
     if not MANIFEST.exists():
-        print("[INSTALL] dist/manifest.json missing — run tools/gen_manifest.py first")
+        print("[INSTALL] dist/manifest.json missing — run tools/maintain/gen_manifest.py first")
         return 1
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
 

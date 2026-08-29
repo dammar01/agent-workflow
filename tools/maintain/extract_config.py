@@ -6,7 +6,7 @@ edits). Routine changes are made in dist/ directly. Skill bodies live only in
 `dist/config/claude/skills/*.md`; CLAUDE.md contains the command registry and
 orchestrator contract.
 `tools/maintain/sync_skills.py --check` verifies those files still match CLAUDE.md's command
-registry, and `tools/gen_manifest.py` rebuilds the manifest from dist/. Do NOT run this to
+registry, and `tools/maintain/gen_manifest.py` rebuilds the manifest from dist/. Do NOT run this to
 refresh the manifest after editing dist/ — it would overwrite dist/ with home-dir content
 and abort on the clobber guard.
 
@@ -24,8 +24,8 @@ Security posture, in order of importance:
 3. **Read-only.** This tool never writes outside `dist/`.
 
 Usage:
-    python tools/extract_config.py                 # extract into dist/
-    python tools/extract_config.py --dry-run       # report only, write nothing
+    python tools/maintain/extract_config.py                 # extract into dist/
+    python tools/maintain/extract_config.py --dry-run       # report only, write nothing
 """
 
 import argparse

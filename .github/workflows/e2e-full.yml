@@ -35,4 +35,4 @@ jobs:
         run: python main.py --command doctor --work-dir . --pretty
 
       - name: End-to-end including delegated calls
-        run: python tools/e2e.py --full --session "${{ inputs.session }}"
+        run: python tools/e2e/e2e.py --full --session "${{ inputs.session }}"

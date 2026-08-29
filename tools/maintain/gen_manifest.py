@@ -2,7 +2,7 @@
 """Regenerate dist/manifest.json from the dist/ tree.
 
 dist/ is the canonical, Git-reviewed bundle; ~/.claude is an install target downstream of
-it. tools/extract_config.py still exists to *bootstrap* dist/ from a maintainer's ~/.claude,
+it. tools/maintain/extract_config.py still exists to *bootstrap* dist/ from a maintainer's ~/.claude,
 but once dist/ is edited in-repo the manifest must be rebuilt from dist/ itself — not from
 ~/.claude, which would drag stale home-dir content back in. This tool does exactly that,
 hashing the same way extract_config.py does so the two stay interchangeable:
@@ -10,8 +10,8 @@ hashing the same way extract_config.py does so the two stay interchangeable:
   sha256(read_text().encode("utf-8"))   # read_text normalises CRLF->LF (universal newlines)
 
 Usage:
-  python tools/gen_manifest.py            # rewrite dist/manifest.json
-  python tools/gen_manifest.py --check    # exit 1 if manifest is stale vs dist/
+  python tools/maintain/gen_manifest.py            # rewrite dist/manifest.json
+  python tools/maintain/gen_manifest.py --check    # exit 1 if manifest is stale vs dist/
 """
 
 from __future__ import annotations
@@ -173,7 +173,7 @@ def main() -> int:
             print("[gen_manifest] OK — manifest in sync with dist/")
             return 0
         print(
-            "[gen_manifest] STALE — manifest does not match dist/. Run: python tools/gen_manifest.py"
+            "[gen_manifest] STALE — manifest does not match dist/. Run: python tools/maintain/gen_manifest.py"
         )
         return 1
 

@@ -10,8 +10,8 @@ Only versions on anchored lines are touched. A bare semver anywhere else is left
 `utils/path_guard.py` legitimately says "removed in v3.4.1", and a changelog written for
 a past release must keep saying what it said.
 
-  python tools/stamp_version.py            # rewrite the stale ones
-  python tools/stamp_version.py --check    # exit 1 if any are stale (CI / e2e)
+  python tools/maintain/stamp_version.py            # rewrite the stale ones
+  python tools/maintain/stamp_version.py --check    # exit 1 if any are stale (CI / e2e)
 """
 from __future__ import annotations
 
@@ -118,7 +118,7 @@ def _scanned_files() -> list[Path]:
     Not restricted to `*.md`: a version can be written into a hook or a settings template
     as easily as into prose, and "only markdown was checked" is the kind of boundary that
     reads as coverage without being it. `dist/manifest.json` sits outside SCAN_PATHS
-    because `tools/gen_manifest.py --check` already owns it — two gates over one file
+    because `tools/maintain/gen_manifest.py --check` already owns it — two gates over one file
     disagree eventually, and that one hashes the whole bundle rather than guessing.
     """
     found: list[Path] = []
@@ -213,7 +213,7 @@ def main() -> int:
         )
         return 0
     if check_only:
-        print("Fix: python tools/stamp_version.py")
+        print("Fix: python tools/maintain/stamp_version.py")
         return 1
     return 0
 

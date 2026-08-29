@@ -67,7 +67,7 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     """Report drift without writing anything.
 
     Two independent questions: (1) does dist/ still match its manifest — catches a dist
-    edit that skipped `python tools/gen_manifest.py`; (2) does the installed ~/.claude match
+    edit that skipped `python tools/maintain/gen_manifest.py`; (2) does the installed ~/.claude match
     dist/ — catches a stale or hand-edited install. Full-overwrite targets (skills, hooks)
     compare whole-file; managed targets (CLAUDE.md, AGENTS.md) compare only the marker block,
     since the rest of those files is legitimately the user's own content.
@@ -208,6 +208,6 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     print(f"  status: {status}")
     if status != "READY":
         print(
-            "  fix: python tools/gen_manifest.py (bundle) | python install.py --apply (installed)"
+            "  fix: python tools/maintain/gen_manifest.py (bundle) | python install.py --apply (installed)"
         )
     return 0 if status == "READY" else 1

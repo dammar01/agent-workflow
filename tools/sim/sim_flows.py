@@ -1,9 +1,9 @@
 """Whole-pipeline flow simulation for agent-workflow.
 
-    python tools/sim_flows.py      # no opencode, no quota, seconds
+    python tools/sim/sim_flows.py      # no opencode, no quota, seconds
 
 Complements the two existing suites rather than repeating them. `tests/run.py`
-asserts units and `tools/e2e.py` asserts the CLI and installer contracts; this walks one
+asserts units and `tools/e2e/e2e.py` asserts the CLI and installer contracts; this walks one
 delegated call from `init` to `clean` against a throwaway git project with a faked
 OpenCode adapter, and reports what each STAGE returned — digest, artifacts, locks,
 verdicts, recovery. Every mismatch prints expected vs observed so a regression names the
@@ -11,7 +11,7 @@ stage it broke instead of a boolean.
 
 Nothing is written outside a temp dir, and no opencode process is spawned: the real
 subprocess path (bootstrap retry, rate-limit classification, stall probes) stays the job
-of `tools/e2e.py --full`.
+of `tools/e2e/e2e.py --full`.
 """
 
 import json

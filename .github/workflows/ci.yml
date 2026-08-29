@@ -44,10 +44,10 @@ jobs:
           python-version: '3.13'
 
       - name: Version stamp is in sync
-        run: python tools/stamp_version.py --check
+        run: python tools/maintain/stamp_version.py --check
 
       - name: Manifest matches dist/
-        run: python tools/gen_manifest.py --check
+        run: python tools/maintain/gen_manifest.py --check
 
       - name: Runtime is stdlib-only
         # Its own step rather than only inside the suite: this is the gate that decides
@@ -66,4 +66,4 @@ jobs:
         # Without --full: no provider CLI is invoked and no quota is spent. The delegated
         # checks stay opt-in because they cost real money and need credentials this
         # workflow deliberately does not hold.
-        run: python tools/e2e.py
+        run: python tools/e2e/e2e.py
