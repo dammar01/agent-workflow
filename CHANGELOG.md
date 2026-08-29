@@ -258,3 +258,69 @@ punya tool yang menganggur.
   membedakan key pensiun dari salah ketik — upgrade bersifat additive dan tidak pernah
   menghapus, jadi tiap workspace lama masih membawanya dan menyebutnya salah ketik berarti
   menyalahkan user atas default yang tool ini sendiri kirim.
+
+
+### Knowledge yang ter-Git, dan `/.promote` yang menulisnya
+
+`facts.jsonl` dan `evidence.jsonl` adalah memori runtime: dibatasi, dipangkas, terikat sesi,
+dan di-gitignore. Tak ada satu pun jalur yang membuat sebuah temuan bertahan lebih lama dari
+itu — pengetahuan yang sudah diverifikasi mati bersama sesinya, dan orang berikutnya
+membayarnya lagi. `core/knowledge/` memiliki apa yang selamat dari keduanya.
+
+- **Satu pintu tulis.** Segala yang berakhir di file knowledge ter-Git lewat
+  `core/knowledge/store.py::write()`. Itu seluruh desainnya: satu pintu, gerbangnya
+  terpasang di situ, supaya pemanggil di masa depan tak bisa mencapai file lewat rute yang
+  melompati validasi.
+- **Schema ditulis tangan, sengaja.** Project ini nol dependency pihak ketiga, dan sebuah
+  library JSON Schema akan menjadi yang pertama — untuk dokumen berisi delapan field. Teks
+  JSON Schema-nya tetap ikut dikirim di samping file knowledge supaya tooling eksternal
+  tetap punya kontrak.
+- **`verify.py` empat anak tangga, termurah dulu.** `verified_commit == HEAD` berarti tak
+  ada yang bergerak di repository dan nol file dibaca. Urutannya itulah intinya: freshness
+  yang mahal hanya dibayar ketika yang murah tak bisa menjawab.
+- **`reconcile.py` lima keluaran, aturan berhenti di kecocokan pertama.** Klaim baru,
+  klaim yang sama, klaim yang berubah — dibedakan eksplisit, karena "dokumen sudah ada"
+  bukan jawaban atas "apakah isinya masih sama".
+- **Tiga command, bukan satu.** `promote-validate`, `promote-verify`, `promote-write`
+  dipisah karena persetujuan user terjadi di antaranya, dan CLI tak bisa bertanya apa pun.
+  Ketiganya menerima **path ke file JSON** lewat `--prompt`, bukan dokumennya sendiri: satu
+  dokumen knowledge melewati batas argv 8191 karakter Windows dengan mudah.
+- **`promote-write` menolak di luar `policies.production_branch`** (default `main`).
+  Promoted knowledge menggambarkan yang hidup; hipotesis dari feature branch tak boleh masuk
+  repo bersama sambil membawa otoritas itu. `policies.knowledge_dir` default
+  `docs/project-knowledge` — satu-satunya artefak workflow yang ter-Git, karena seluruh
+  nilainya ada pada bisa dibagi. `policies.knowledge_relevant_limit` default `3`;
+  `0` mematikan sidecar knowledge pada prompt terdelegasi.
+- **`utils/git.py` lahir dari kebutuhan itu.** `current_branch`, `head_commit`, `blob_oid`,
+  `diff_names`, `is_ignored` — pembacaan git yang dipakai gerbang branch dan pengecekan
+  freshness. Sebelumnya tak ada satu tempat pun yang boleh menjawab "commit mana yang
+  memverifikasi klaim ini".
+- **`tools/e2e/e2e_promote.py`** menjalankan alur bertiga itu ujung ke ujung di jalur lokal,
+  jadi ia ikut `python tools/e2e/e2e.py` tanpa kuota.
+
+### CI GitLab, mirror dari `.github/workflows/`
+
+`.gitlab-ci.yml` plus `.gitlab/ci/ci.gitlab-ci.yml` dan `.gitlab/ci/e2e-full.gitlab-ci.yml`.
+Gerbangnya sama persis dan berurutan sama; yang berubah hanya kosakata runner. Split satu
+file per workflow dipertahankan supaya perubahan di satu sisi mudah di-diff lawan file
+GitHub yang dicerminkannya.
+
+- **Tag runner default kosong, dan itu perbaikan bug, bukan kehati-hatian.** Versi pertama
+  memakai default `saas-windows-medium-amd64` dan `self-hosted`. Tag yang tak ada runnernya
+  di GitLab **tidak** menggagalkan job — ia menggantungkannya dengan *"no runners that match
+  all of the job's tags"*, dan pipeline berdiri diam alih-alih merah. Kini
+  `WINDOWS_RUNNER_TAG` dan `E2E_RUNNER_TAG` default `""`, dan `rules` tiap job membuang
+  dirinya sendiri saat variabelnya kosong. Di project tanpa runner Windows, alternatif
+  jujurnya bukan "cakupan Windows", melainkan pipeline yang macet.
+- **Matrix OS jadi dua job.** GitLab memilih runner lewat `tags` dan Python lewat `image`,
+  dan keduanya tak bervariasi bersama dalam satu matrix dengan rapi. `checks:linux` dan
+  `checks:windows` berbagi satu blok `script` lewat `extends`.
+- **`on:` jadi `workflow:rules`.** `push` + `pull_request` + `workflow_dispatch` dinyatakan
+  sebagai pipeline source (`merge_request_event`, `web`, `schedule`) plus branch
+  `main`/`dev`; `concurrency: cancel-in-progress` jadi
+  `workflow.auto_cancel.on_new_commit: interruptible`.
+- **README, `docs/reference.md`, dan `RELEASE.md` akhirnya menyebut CI.** Sebelum ini CI
+  hanya disebut di `RELEASE.md` dan catatan rilis v3.4.5 — pembaca dokumentasi utama tak
+  punya cara tahu pipeline-nya ada. README punya section Continuous integration,
+  `docs/reference.md` punya section CI, dan tabel Command di keduanya berhenti menyembunyikan
+  `promote-*`, `provider`, `report`, `audit`, dan `graph-meta`.

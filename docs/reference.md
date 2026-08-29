@@ -342,6 +342,10 @@ Second_agent hanya memasok evidence dan reasoning. Runtime tidak membuat atau me
 | `doctor` | lokal | — | cek kesiapan, tulis `reports/doctor.json` |
 | `clean` | lokal | — | prune job, fakta usang/duplikat, sesi lama |
 | `inspect` | lokal | — | daftar job untuk sesi berjalan |
+| `provider` | lokal | — | baca/ubah provider second_agent dan reasoning effort |
+| `report` | lokal | — | ringkasan stream kualitas workspace (`quality.jsonl`) |
+| `audit` | lokal | — | baca `audit.jsonl` sesi |
+| `graph-meta` | lokal | — | status snapshot graphify: segar, usang, atau tak ada |
 | `explore` | terdelegasi | ya | peta codebase, entry point, pemilik |
 | `plan` | terdelegasi | ya | evidence + jejak dependency terbalik |
 | `analyze` | terdelegasi | ya | analisis mendalam, nol perubahan kode |
@@ -757,6 +761,69 @@ Pemeriksaan tambahan:
 python3 main.py --help
 python3 main.py --command doctor --work-dir . --pretty
 ```
+
+---
+
+## CI
+
+Repo membawa pipeline yang sama dua kali, satu per host. Keduanya menjalankan gerbang yang
+tanpanya seseorang harus ingat menjalankannya sendiri.
+
+| File | Host | Pemicu |
+|---|---|---|
+| `.github/workflows/ci.yml` | GitHub Actions | push ke `main`/`dev`, pull request, manual |
+| `.github/workflows/e2e-full.yml` | GitHub Actions | manual saja |
+| `.gitlab-ci.yml` + `.gitlab/ci/*.gitlab-ci.yml` | GitLab CI | merge request, `main`/`dev`, manual |
+
+Gerbang yang dijalankan jalur gratis, berurutan, sama persis di kedua host:
+
+```
+python tools/maintain/stamp_version.py --check
+python tools/maintain/gen_manifest.py --check
+python tests/run.py --only deps
+python tests/run.py --keep-going --record .
+python tools/e2e/e2e.py
+```
+
+`--only deps` berdiri sebagai step tersendiri, bukan hanya di dalam suite: itu gerbang yang
+memutuskan apakah ketiadaan lockfile masih benar, dan pembaca yang menyapu daftar step harus
+bisa melihatnya berlaku. `--keep-going` supaya satu kegagalan tak menyembunyikan sisanya;
+`--record .` menulis hasilnya ke stream kualitas workspace, jadi `--command report` bisa
+menunjukkan pass rate lintas waktu alih-alih hanya run terakhir. `e2e.py` tanpa `--full`:
+nol provider CLI dipanggil, nol kuota dibakar — itu sebabnya ia boleh jalan di tiap push.
+
+Jalur terdelegasi manual di kedua host dan tak pernah otomatis: ia memanggil second_agent
+sungguhan, memakan kuota nyata, dan butuh provider CLI plus kredensial yang sengaja tidak
+dipegang pipeline. Di GitHub ia workflow `workflow_dispatch` terpisah; di GitLab ia job
+manual yang inputnya berupa pipeline variable.
+
+### Perbedaan yang dipaksakan GitLab
+
+Bukan terjemahan satu-satu — tiga hal tak punya padanan langsung:
+
+- **Matrix OS jadi dua job.** GitHub memilih runner lewat `runs-on`, jadi `os: [ubuntu-latest,
+  windows-latest]` cukup. GitLab memilih runner lewat `tags` dan Python lewat `image`, dan
+  keduanya tak bervariasi bersama dalam satu matrix dengan rapi; jadi `checks:linux` dan
+  `checks:windows` dua job yang berbagi satu blok `script` lewat `extends`.
+- **Tag runner opt-in, default kosong.** Tag yang tak ada runnernya **tidak** menggagalkan
+  job — ia menggantungkannya selamanya dengan *"no runners that match all of the job's
+  tags"*. Karena itu `WINDOWS_RUNNER_TAG` dan `E2E_RUNNER_TAG` default `""`, dan `rules`
+  tiap job membuang dirinya sendiri saat variabelnya kosong. Isi variabelnya dengan tag
+  runner yang benar-benar kamu punya (Settings > CI/CD > Variables, atau form Run pipeline)
+  dan jobnya muncul. Konsekuensinya jujur: di project tanpa runner Windows, alternatifnya
+  bukan "cakupan Windows", melainkan pipeline yang menggantung.
+- **`on:` jadi `workflow:rules`.** Tak ada satu padanan untuk `push` + `pull_request` +
+  `workflow_dispatch`; ketiganya dinyatakan sebagai pipeline source
+  (`merge_request_event`, `web`, `schedule`) plus branch `main`/`dev`.
+  `concurrency: cancel-in-progress` menjadi `workflow.auto_cancel.on_new_commit:
+  interruptible` plus `interruptible: true` di job.
+
+Python di runner Windows GitLab tidak dipilih lewat image — runner Windows itu shell
+executor. `before_script`-nya memasang Python lewat Chocolatey hanya bila `python` belum
+ada, jadi runner self-hosted yang sudah membawanya lewat begitu saja.
+
+Yang **tidak** dilakukan CI, di host mana pun: bump, tag, publish. Langkah yang tetap milik
+manusia ada di `RELEASE.md`.
 
 ---
 

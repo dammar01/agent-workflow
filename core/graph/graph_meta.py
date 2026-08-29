@@ -24,6 +24,7 @@ from pathlib import Path
 from core.graph import graph_index
 from core.evidence.fact_store import _anchor_hash, _hash_index
 from core.workspace.workspace_paths import atomic_write_json
+from utils import osutil
 
 GRAPH_META_FILENAME = "graph-meta.json"
 META_VERSION = 1
@@ -51,6 +52,11 @@ def head_commit(project_root) -> str | None:
             capture_output=True,
             text=True,
             timeout=5,
+            # No console flash if this is ever reached from a process without a console.
+            # It is called from the parent today, where the flags change nothing — the
+            # cost of carrying them is one line, the cost of the class of bug is a window
+            # blinking on the user's screen from a path nobody re-audits.
+            **osutil.hidden_run_kwargs(),
         )
     except (OSError, subprocess.SubprocessError):
         return None

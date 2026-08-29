@@ -7,6 +7,12 @@ yet: rewriting three verified paths to introduce a helper buys no user-visible
 behaviour and hands back a real regression surface. It owns the queries promote
 needs, and is where those three belong when one of them next needs editing anyway.
 
+Every subprocess here carries `osutil.hidden_run_kwargs()`. On Windows a console
+program inherits its parent's console, and allocates a NEW one when the parent has none
+— which is exactly the delegated worker's situation, spawned DETACHED_PROCESS with no
+console of its own. Without the flags, `core/knowledge/retrieve.py` asking for the
+current branch flashes a console window on the user's screen once per delegated call.
+
 Every function answers with None on failure rather than raising. A promote precondition
 that cannot resolve the repository must produce a readable block reason, not a traceback
 from inside a subprocess call four frames down.
@@ -14,6 +20,8 @@ from inside a subprocess call four frames down.
 
 import subprocess
 from pathlib import Path
+
+from utils import osutil
 
 GIT_TIMEOUT_SECONDS = 10
 
@@ -27,6 +35,7 @@ def _git(args: list[str], cwd: Path) -> str | None:
             capture_output=True,
             text=True,
             timeout=GIT_TIMEOUT_SECONDS,
+            **osutil.hidden_run_kwargs(),
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -125,6 +134,7 @@ def is_ignored(project_root: Path, path: str) -> bool:
             capture_output=True,
             text=True,
             timeout=GIT_TIMEOUT_SECONDS,
+            **osutil.hidden_run_kwargs(),
         )
     except (OSError, subprocess.SubprocessError):
         return False

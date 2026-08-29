@@ -31,6 +31,7 @@ file contents.
 - [Installation](#installation)
 - [Usage](#usage)
 - [Commands](#commands)
+- [Continuous integration](#continuous-integration)
 - [Security considerations](#security-considerations)
 - [Documentation](#documentation)
 - [License](#license)
@@ -347,9 +348,57 @@ fall back to a shared identifier and can overwrite each other's state.
 | `analyze` | delegated | Causal analysis; no code changes |
 | `plan` | delegated | Evidence-backed implementation steps |
 | `verify` | delegated | Prove that completed work is correct |
+| `promote-*` | local | Turn verified evidence into a Git-tracked knowledge document |
 
-Asynchronous job commands (`submit`, `await`, `status`, `result`) are documented in the
+`promote-validate`, `promote-verify`, and `promote-write` are three stages of one flow, kept
+apart because the user's approval happens between them — the CLI cannot ask anything, so
+verification stops at a verdict and writing is a separate call that can only follow it.
+`promote-write` refuses outside `policies.production_branch`.
+
+Asynchronous job commands (`submit`, `await`, `status`, `result`) and the remaining local
+ones (`inspect`, `provider`, `report`, `audit`, `graph-meta`) are documented in the
 [full reference](docs/reference.md#command).
+
+---
+
+## Continuous integration
+
+The repository carries the same pipeline twice, once per host. Both run the checks a
+contributor would otherwise have to remember to run by hand.
+
+| File | Host | Trigger |
+| --- | --- | --- |
+| [.github/workflows/ci.yml](.github/workflows/ci.yml) | GitHub Actions | push to `main`/`dev`, pull requests, manual |
+| [.github/workflows/e2e-full.yml](.github/workflows/e2e-full.yml) | GitHub Actions | manual only |
+| [.gitlab-ci.yml](.gitlab-ci.yml) + [.gitlab/ci/](.gitlab/ci/) | GitLab CI | merge requests, `main`/`dev`, scheduled, manual |
+
+The no-cost path in both pipelines runs the version stamp check, the manifest check, the
+stdlib-only gate, the test suites, and the end-to-end suite without `--full`. No provider
+CLI is invoked and no quota is spent, which is why it can run on every push.
+
+The delegated end-to-end run is manual on both hosts and never automatic: it calls a real
+second agent, costs real quota, and needs a provider CLI plus credentials that neither
+pipeline holds. On GitHub it is a separate `workflow_dispatch` workflow; on GitLab it is a
+manual job whose inputs are pipeline variables.
+
+Runner tags on GitLab are opt-in, and deliberately so. An unmatched tag does not fail a
+job — it leaves it queued forever with *"no runners that match all of the job's tags"*, so
+both the Windows job and the delegated job are skipped until you name a runner you actually
+have:
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `WINDOWS_RUNNER_TAG` | *(empty)* | Empty skips the Windows job. Set it to the tag of a Windows runner to gain the second platform. |
+| `E2E_RUNNER_TAG` | *(empty)* | Empty skips the delegated job. Set it to a runner where the provider CLI is installed and authenticated. |
+
+Both operating systems are tested on purpose: the runtime ships a PowerShell runner and
+generates a POSIX one, and path handling differs where it matters most — locks and session
+directories. A single-OS run would pass while half the product stayed untested. GitHub
+expresses that as a matrix; GitLab picks runners by tag and image, which do not vary
+together in a matrix cleanly, so there it is two jobs sharing one script block.
+
+What CI does not do, on either host, is bump, tag, or publish. See
+[RELEASE.md](RELEASE.md) for the steps that stay human.
 
 ---
 
@@ -389,8 +438,9 @@ For projects holding secrets that must remain unreadable by the delegated agent,
 | Document | Contents |
 | --- | --- |
 | [docs/reference.md](docs/reference.md) | Complete technical reference: configuration schema, asynchronous jobs, fact store, evidence reuse, verify modes, sessions, tests *(written in Bahasa Indonesia)* |
+| [docs/runtime-contracts.md](docs/runtime-contracts.md) | Which `.workflow/config.json` keys the Python runtime actually obeys, and which it structurally cannot enforce |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
-| [RELEASE.md](RELEASE.md) | Release procedure |
+| [RELEASE.md](RELEASE.md) | Release procedure, and which of its steps CI already covers |
 
 ---
 
