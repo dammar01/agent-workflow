@@ -230,6 +230,13 @@
       "component": "prompt_bundle"
     },
     {
+      "path": "claude/commands/.promote.md",
+      "sha256": "2e512a75d3d45320d0d9811a758022c5ed56377de2674d97c9383fd787f2b81e",
+      "bytes": 168,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
       "path": "claude/commands/.provider.md",
       "sha256": "637eb6f04ea18f196ba2c45cb31078aaba6c477ab79110f051c596488ab0d686",
       "bytes": 170,

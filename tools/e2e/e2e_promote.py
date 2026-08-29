@@ -10,6 +10,8 @@ secret in someone's commit.
 from tools.e2e.e2e_support import (
     Path,
     Report,
+    _json_from,
+    _run_cli,
     json,
     tempfile,
 )
@@ -320,4 +322,70 @@ def promote_checks(report: Report) -> None:
         "doctor surfaces a malformed knowledge document as an issue",
         any("knowledge documents" in i for i in broken_checks.get("issues", [])),
         "; ".join(broken_checks.get("issues", []))[:100],
+    )
+
+    # --- the CLI's refusals ---
+    # Everything above calls core/knowledge/ directly, which is why every gate could pass
+    # here while every refusal crashed in practice: make_error raises on an error_type
+    # nobody registered, so a refusal the library returned cleanly left the CLI as a
+    # traceback. These go through main.py so a JSON envelope is what actually gets checked.
+    cli_root = Path(tempfile.mkdtemp(prefix="e2e-promote-cli-"))
+
+    def _cli_refusal(command: str, prompt: str | None) -> dict:
+        args = ["--command", command, "--work-dir", str(cli_root)]
+        if prompt is not None:
+            args += ["--prompt", prompt]
+        code, output = _run_cli(*args, cwd=cli_root)
+        return {"code": code, "output": output, "payload": _json_from(output)}
+
+    missing_arg = _cli_refusal("promote-verify", None)
+    report.check(
+        "a promote stage with no document path refuses as JSON, not a traceback",
+        (missing_arg["payload"] or {}).get("meta", {}).get("error_type") == "promote_input_missing",
+        f"rc={missing_arg['code']} {missing_arg['output'].strip()[-120:]}",
+    )
+
+    unreadable = _cli_refusal("promote-verify", str(cli_root / "does-not-exist.json"))
+    report.check(
+        "an unreadable candidate refuses as JSON, not a traceback",
+        (unreadable["payload"] or {}).get("meta", {}).get("error_type")
+        == "promote_input_unreadable",
+        f"rc={unreadable['code']} {unreadable['output'].strip()[-120:]}",
+    )
+
+    off_branch_doc = cli_root / "candidate.json"
+    off_branch_doc.write_text(json.dumps(_doc("0" * 16)), encoding="utf-8")
+    off_branch = _cli_refusal("promote-write", str(off_branch_doc))
+    off_branch_type = (off_branch["payload"] or {}).get("meta", {}).get("error_type")
+    report.check(
+        "promote-write off the production branch refuses as JSON, not a traceback",
+        off_branch_type in {"promote_not_on_branch", "promote_not_production_branch"},
+        f"rc={off_branch['code']} error_type={off_branch_type}",
+    )
+    report.check(
+        "the branch gate wrote nothing on its way out",
+        not (cli_root / "docs" / "project-knowledge").exists(),
+        "a refusal that still writes is worse than one that crashes",
+    )
+
+    # Every error_type the promote path can name has to be one make_error will accept.
+    # Registering them one at a time is how the last six went missing; assert the set.
+    from core.evidence.contract import ERROR_TYPES
+
+    promote_types = {
+        "promote_input_missing",
+        "promote_input_unreadable",
+        "promote_existing_unreadable",
+        "promote_not_on_branch",
+        "promote_not_production_branch",
+        "promote_write_rejected",
+        "invalid_knowledge",
+        "secret_shaped_content",
+        "ignored_source",
+        "ignored_destination",
+    }
+    report.check(
+        "every promote error_type is registered with the output contract",
+        promote_types <= ERROR_TYPES,
+        f"unregistered={sorted(promote_types - ERROR_TYPES)}",
     )

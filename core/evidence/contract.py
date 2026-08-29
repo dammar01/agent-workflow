@@ -47,6 +47,24 @@ ERROR_TYPES = {
     # nothing will fix itself by waiting or retrying, and the only next steps are raising
     # the ceiling or starting a fresh session.
     "budget_exceeded",
+    # The promote pipeline's refusals. Every one of them is a refusal the user has to read
+    # and act on — a candidate that will not parse, a HEAD that is not on the production
+    # branch, a statement shaped like a credential — so each carries an exact next_action
+    # and none of them belongs under `unknown`. Unregistered, they raised out of
+    # make_error and the caller got a traceback where the refusal should have been.
+    "promote_input_missing",
+    "promote_input_unreadable",
+    "promote_existing_unreadable",
+    "promote_not_on_branch",  # detached HEAD, mid-rebase, or a repo with no commits
+    "promote_not_production_branch",
+    "promote_write_rejected",  # store.write refused without naming a type of its own
+    # store.write's own refusals, surfaced through promote-write. Separate types rather
+    # than one rejection: the remedies differ (fix the document, remove the credential,
+    # stop citing an ignored path, point knowledge_dir somewhere Git tracks).
+    "invalid_knowledge",
+    "secret_shaped_content",
+    "ignored_source",
+    "ignored_destination",
     "unknown",
 }
 

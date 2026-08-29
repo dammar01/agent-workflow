@@ -65,6 +65,19 @@ def installer_checks(report: Report) -> None:
         report.check("CLAUDE.md installed", claude_md.exists())
         skills = list((fake_home / ".claude" / "skills").glob("*.md"))
         report.check("skills installed", len(skills) >= 10, f"{len(skills)} file(s)")
+        # Every skill needs the wrapper that makes `/.name` typeable, so a count on its own
+        # is not enough: /.promote shipped with a skill body and no wrapper, and a loose
+        # `>= 10` on skills alone had nothing to say about it. Compare the two sets.
+        wrappers = {
+            p.stem.lstrip(".")
+            for p in (fake_home / ".claude" / "commands").glob(".*.md")
+        }
+        missing_wrappers = sorted({p.stem for p in skills} - wrappers)
+        report.check(
+            "every installed skill has a command wrapper",
+            not missing_wrappers,
+            f"{len(wrappers)} wrapper(s); missing={missing_wrappers}",
+        )
         settings = fake_home / ".claude" / "settings.json"
         report.check("settings.json installed", settings.exists())
         intent_map = fake_home / ".claude" / "hooks" / "intent-map.json"
