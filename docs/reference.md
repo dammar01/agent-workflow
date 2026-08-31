@@ -805,21 +805,32 @@ Bukan terjemahan satu-satu — tiga hal tak punya padanan langsung:
   `os: [ubuntu-latest, windows-latest]` cukup. GitLab memilih runner lewat `tags`, jadi
   `checks:linux` dan `checks:windows` adalah job berbeda yang berbagi satu blok `script`
   lewat `extends`.
-- **Nol `image:` di job mana pun — semua shell executor.** Versi pertama memakai
-  `image: python:${PYTHON_VERSION}`, cara sebuah docker executor memaku toolchain karena
-  GitLab tak punya padanan `actions/setup-python`. Di runner self-hosted dengan egress
-  terbatas, itu membuat tiap pipeline bergantung pada Docker Hub, dan ia gagal persis di
-  situ: `TLS handshake timeout` saat menarik `python:3.13` dari `registry-1.docker.io`.
-  `retry` atau `pull_policy` cadangan cuma membuat kegagalan itu lebih jarang, bukan
-  hilang — pipeline tetap menelepon registry yang memang tak terjangkau. Membuang `image`
-  menghapus panggilan jaringannya.
-- **Konsekuensinya: versi Python di-ASSERT, bukan disediakan.** Nol yang memasang
-  interpreter sekarang, jadi `before_script` tiap job memeriksa yang ditemukannya dan
-  berhenti dengan kalimat yang menyebut kedua angka bila beda. Itu beda antara paku dan
-  harapan. `PYTHON_VERSION` diisi versi yang runner-mu benar-benar bawa, atau versi itu
-  yang dipasang di runner. Job POSIX juga memasang shim `python` ke `python3` bila hanya
-  nama berversi yang ada, supaya satu blok `script` tetap melayani dua platform tanpa
-  variabel `$PYTHON_BIN` yang PowerShell dan `sh` beda cara meng-expand-nya.
+- **`image: python:3.13` dideklarasikan sekali di `default:`, dengan
+  `pull_policy: if-not-present`.** Menamai image adalah cara docker executor memaku
+  toolchain, karena GitLab tak punya padanan `actions/setup-python`. Image ini sempat
+  dibuang: di bawah default runner `always`, tiap pipeline jadi round-trip ke Docker Hub,
+  dan di runner self-hosted dengan egress terbatas ia gagal persis di situ —
+  `TLS handshake timeout` saat menarik `python:3.13` dari `registry-1.docker.io`.
+  `if-not-present` mengubah BENTUK risikonya, bukan sekadar memperkecil peluangnya: runner
+  yang sudah memegang image itu tak menelepon registry sama sekali, jadi cuma pull pertama
+  yang bisa gagal. `docker pull python:3.13` sekali di runner menutup celah itu juga.
+  Dua prasyarat ada di sisi runner, bukan di repo ini: GitLab Runner 15.1+, dan
+  `allowed_pull_policies` di `[runners.docker]` wajib memuat `if-not-present`. Tanpa yang
+  kedua, job mati sebelum command pertama dengan `pull_policy ([if-not-present]) defined in
+  GitLab pipeline config is not one of the allowed_pull_policies`.
+- **Shell executor mengabaikan `image:`, dan itu yang membuat satu deklarasi global aman.**
+  `checks:windows` tak bisa menjalankan image Linux, dan `e2e:delegated` butuh binary
+  provider yang tak dibawa image Python polos. Keduanya tetap benar selama runner di balik
+  `WINDOWS_RUNNER_TAG` dan `E2E_RUNNER_TAG` adalah shell executor; daftarkan salah satunya
+  sebagai docker executor dan job itu rusak.
+- **Versi Python tetap di-ASSERT walau sekarang disediakan.** `before_script` tiap job masih
+  memeriksa interpreter yang ditemukannya dan berhenti dengan kalimat yang menyebut kedua
+  angka bila beda. Gratis di container yang memang sudah menjaminnya, dan jadi satu-satunya
+  penahan saat job jatuh ke shell runner yang membawa Python lain. `PYTHON_VERSION`
+  menyetir tag image sekaligus assertion-nya, jadi satu edit menggeser keduanya. Job POSIX
+  juga memasang shim `python` ke `python3` bila hanya nama berversi yang ada, supaya satu
+  blok `script` tetap melayani dua platform tanpa variabel `$PYTHON_BIN` yang PowerShell
+  dan `sh` beda cara meng-expand-nya.
 - **Tag runner adalah variabel, dan asimetri fallback-nya disengaja.** Tag yang tak ada
   runnernya **tidak** menggagalkan job — ia menggantungkannya selamanya dengan *"no runners
   that match all of the job's tags"*. `LINUX_RUNNER_TAG` kosong menjalankan job Linux

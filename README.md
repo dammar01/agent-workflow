@@ -381,26 +381,40 @@ second agent, costs real quota, and needs a provider CLI plus credentials that n
 pipeline holds. On GitHub it is a separate `workflow_dispatch` workflow; on GitLab it is a
 manual job whose inputs are pipeline variables.
 
-No GitLab job declares an `image`. They run on shell executors, which means the pipeline
-never contacts a container registry — a deliberate reversal. The Linux job originally used
-`image: python:3.13`, the way a docker executor pins a toolchain since GitLab has no
-`actions/setup-python`, and on a self-hosted runner with restricted egress that made every
-pipeline depend on Docker Hub. It failed there with a TLS handshake timeout pulling the
-image. A retry would have made that rarer, not absent; removing the image removes the
-network call.
+Every GitLab job inherits `image: python:3.13` with `pull_policy: if-not-present`, declared
+once at `default:` in [.gitlab-ci.yml](.gitlab-ci.yml). Naming an image is how a docker
+executor pins a toolchain, since GitLab has no `actions/setup-python`.
 
-What it costs is stated rather than hidden: nothing provisions the interpreter any more, so
-each job **asserts** the version instead. A runner carrying a different Python stops the job
-immediately with a message naming both numbers, rather than failing later as whatever a
-wrong interpreter happens to break first. Set `PYTHON_VERSION` to what your runners have, or
-install the named version on them.
+The pull policy is the load-bearing half. This image was dropped once: under the runner
+default of `always`, `image: python:3.13` made every pipeline a Docker Hub round-trip, and
+on a self-hosted runner with restricted egress it failed there with a TLS handshake timeout.
+`if-not-present` changes the shape of that risk rather than shaving its odds — a runner
+already holding the image never contacts the registry, so only the very first pull can fail.
+Seeding it once with `docker pull python:3.13` closes that gap too.
+
+Two prerequisites live on the runner, not in this repo: **GitLab Runner 15.1+**, and
+`allowed_pull_policies` under `[runners.docker]` must list `if-not-present`. Without the
+second, jobs die before their first command with *"pull_policy ([if-not-present]) defined in
+GitLab pipeline config is not one of the allowed_pull_policies"*.
+
+Shell executors ignore `image:` outright, and that is what makes one global declaration
+safe. `checks:windows` cannot run a Linux image, and `e2e:delegated` needs provider binaries
+a bare Python image does not carry — both stay correct as long as the runners behind
+`WINDOWS_RUNNER_TAG` and `E2E_RUNNER_TAG` are shell executors. Register either as a docker
+executor and that job breaks.
+
+For the same reason every job still **asserts** the Python version it found. The check is
+free where the container already guarantees it, and it is the only thing standing between a
+shell runner with the wrong interpreter and a result that looks trustworthy. A mismatch
+stops the job immediately with both numbers named. `PYTHON_VERSION` drives the image tag and
+the assertion together, so one edit moves both.
 
 Runner tags are variables, and an unmatched tag does not fail a job on GitLab — it leaves it
 queued forever with *"no runners that match all of the job's tags"*. So the tags are opt-in:
 
 | Variable | Default | Effect |
 | --- | --- | --- |
-| `PYTHON_VERSION` | `3.13` | Asserted, not installed. A job whose runner disagrees fails with both numbers named. |
+| `PYTHON_VERSION` | `3.13` | Drives the `default:` image tag **and** the per-job assertion. Provisioned on a docker executor; on a shell executor it is only asserted, and a runner that disagrees fails with both numbers named. |
 | `LINUX_RUNNER_TAG` | *(empty)* | Empty runs the Linux job **untagged**, so any available runner takes it. Set it to address a specific machine. |
 | `WINDOWS_RUNNER_TAG` | *(empty)* | Empty **skips** the Windows job. Set it to the tag of a Windows runner to gain the second platform. |
 | `E2E_RUNNER_TAG` | *(empty)* | Empty skips the delegated job. Set it to a runner where the provider CLI is installed and authenticated. |

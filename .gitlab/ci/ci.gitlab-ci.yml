@@ -11,22 +11,33 @@
 # while half the product stayed untested. GitHub expresses that as a matrix over `runs-on`;
 # GitLab picks runners by tag, so here it is two jobs sharing one script block.
 #
-# NO `image:` ON ANY JOB — both run on shell executors, on purpose.
+# THE IMAGE IS DECLARED ONCE, in .gitlab-ci.yml at `default:` — `python:$PYTHON_VERSION`
+# with `pull_policy: if-not-present`. No job in this file overrides it.
 #
-# The Linux job used to say `image: python:${PYTHON_VERSION}`, which is how a docker
-# executor pins a toolchain (GitLab has no `actions/setup-python`). On a self-hosted runner
-# with restricted egress that turned every pipeline into a Docker Hub dependency, and it
-# failed exactly there:
+# It was not always there. The Linux job originally said `image: python:${PYTHON_VERSION}`
+# under the runner's default pull policy of `always`, which is how a docker executor pins a
+# toolchain (GitLab has no `actions/setup-python`). On a self-hosted runner with restricted
+# egress that turned every pipeline into a Docker Hub dependency, and it failed exactly
+# there:
 #
 #   ERROR: Job failed: failed to pull image "python:3.13" ...
 #   Head "https://registry-1.docker.io/v2/library/python/manifests/3.13":
 #   net/http: TLS handshake timeout
 #
-# A retry or a pull_policy fallback would have made that failure rarer, not absent — the
-# pipeline would still reach out to a registry it cannot reliably talk to, and would still
-# be one network hiccup from red. Dropping the image removes the network call instead of
-# retrying it. What that costs is stated plainly in `before_script`: the Python version is
-# now the runner's property, so the job asserts it rather than providing it.
+# The image was dropped, and for a while this comment argued that a `pull_policy` fallback
+# would only have made that failure rarer. That reasoning holds for `retry`; it does not
+# hold for `if-not-present`. Under `always` the registry is contacted on every single run,
+# so a network it cannot reliably reach is a permanent tax. Under `if-not-present` a runner
+# that already holds the image never opens the connection at all — the pull happens once,
+# and the steady state contains no network call to be one hiccup away from red. Seeding the
+# runner with `docker pull python:3.13` closes even the first-run gap, on a machine that can
+# reach the registry once.
+#
+# What the imageless era bought is kept: a version ASSERTED rather than assumed.
+# `before_script` still checks the interpreter it found, because a runner registered with a
+# shell executor ignores `image:` and would otherwise run whatever Python it happens to
+# carry. The check is free where the container already settles it, and load-bearing where
+# it does not.
 
 .checks:
   stage: check
@@ -51,8 +62,9 @@
     # and need credentials this pipeline deliberately does not hold.
     - python tools/e2e/e2e.py
 
-# The POSIX half of the preflight. Two things it must settle before the shared script runs,
-# both of which a container used to settle for free:
+# The POSIX half of the preflight. Two things it must settle before the shared script runs.
+# The container settles both for free — this exists for the shell-executor case, where
+# `image:` is ignored and neither is settled by anything:
 #   1. `python` may not exist even where `python3` does — most distributions ship only the
 #      versioned name. A shim on PATH keeps ONE script block serving both platforms; the
 #      alternative is a `$PYTHON_BIN` variable that PowerShell and sh disagree about how to

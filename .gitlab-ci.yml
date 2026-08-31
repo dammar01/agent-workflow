@@ -11,6 +11,35 @@ stages:
   - check
   - delegated
 
+# GitLab has no `actions/setup-python`; a docker executor pins the toolchain by naming an
+# image instead. Declared once here at `default:` so every job in every included file
+# inherits it, rather than repeating the pin per job and letting the copies drift.
+#
+# `pull_policy: if-not-present` is the whole reason this is safe to reinstate. The image was
+# dropped once, after `image: python:3.13` under the runner's default policy of `always`
+# turned every pipeline into a Docker Hub round-trip and failed on a restricted-egress
+# runner with a TLS handshake timeout. `always` pays that toll on EVERY run. Under
+# `if-not-present` a runner that already holds the image never opens the connection, so only
+# the first pull can fail — the steady state has no network call in it. Seeding the runner
+# once with `docker pull python:3.13` closes the first-run gap too.
+#
+# TWO RUNNER-SIDE PREREQUISITES, neither of them expressible in this file:
+#   1. GitLab Runner 15.1 or newer.
+#   2. `allowed_pull_policies` under `[runners.docker]` must list `if-not-present`.
+#      Without it the job dies before its first command with:
+#        ERROR: pull_policy ([if-not-present]) defined in GitLab pipeline config is not
+#        one of the allowed_pull_policies
+#
+# Shell executors IGNORE `image:` outright, and that is what makes one global declaration
+# safe. Two jobs must not run in this container: `checks:windows` (a Linux image cannot
+# serve a Windows job) and `e2e:delegated` (a bare Python image carries no provider CLI).
+# Keep the runners behind WINDOWS_RUNNER_TAG and E2E_RUNNER_TAG on shell executors and the
+# image is a no-op there; register either as a docker executor and that job breaks.
+default:
+  image:
+    name: "python:$PYTHON_VERSION"
+    pull_policy: if-not-present
+
 # `on: push (main, dev) / pull_request / workflow_dispatch` has no single GitLab
 # equivalent — it is expressed as pipeline sources. Merge request pipelines plus
 # branch pipelines for the two long-lived branches, plus the manual web trigger
@@ -34,11 +63,14 @@ variables:
   # stdlib, which is the point at which a lockfile WOULD be needed. A constraints file
   # listing nothing would document the claim without testing it.
   #
-  # Both jobs run on shell executors, so nothing here PROVISIONS this version — the
-  # runner's machine already has whatever it has. The version is therefore ASSERTED
-  # instead: each job checks the interpreter it found and fails legibly if it disagrees,
-  # which is the difference between a pin and a wish. Set this to what your runners
-  # actually carry, or install the named version on them.
+  # This value is the single source for the toolchain: `default.image` above builds its tag
+  # from it, so one edit moves the container and the assertion together. On a docker
+  # executor it PROVISIONS the interpreter. On a shell executor — which ignores `image:`
+  # — nothing provisions anything and the runner's machine carries whatever it has, so each
+  # job still ASSERTS the version it actually found and fails legibly on a mismatch. That
+  # assertion is kept for exactly this case: free where the image already settles the
+  # answer, and the only thing that catches a shell runner holding the wrong Python. Set
+  # this to a tag that exists on the registry AND to what your shell runners carry.
   PYTHON_VERSION: "3.13"
   # Linux runner tag. Empty (the default) runs the job untagged, so any runner willing to
   # take untagged jobs picks it up — that keeps a fresh project from producing a pipeline
