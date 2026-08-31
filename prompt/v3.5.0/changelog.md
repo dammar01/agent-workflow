@@ -6,9 +6,9 @@ dan sampai rilis ini tak ada satu pun jalur yang membuat temuan yang sudah diver
 hidup lebih lama dari itu. `core/knowledge/` plus tiga command `promote-*` adalah jalurnya:
 satu pintu tulis, gerbang branch, dan dokumen JSON yang ter-Git supaya bisa dibagi.
 
-Di sekelilingnya: pipeline CI kedua untuk GitLab, generator skrip runner yang mendeteksi
-drift-nya sendiri, dua perbaikan yang membuat kegagalan berhenti terbaca sebagai sukses,
-dan lapisan benchmark yang dijalankan sungguhan untuk pertama kalinya.
+Di sekelilingnya: generator skrip runner yang mendeteksi drift-nya sendiri, dua perbaikan
+yang membuat kegagalan berhenti terbaca sebagai sukses, dan lapisan benchmark yang
+dijalankan sungguhan untuk pertama kalinya.
 
 ## Status rilis
 
@@ -313,27 +313,8 @@ membayarnya lagi. `core/knowledge/` memiliki apa yang selamat dari keduanya.
 - **`tools/e2e/e2e_promote.py`** menjalankan alur bertiga itu ujung ke ujung di jalur lokal,
   jadi ia ikut `python tools/e2e/e2e.py` tanpa kuota.
 
-### CI GitLab, mirror dari `.github/workflows/`
+### Dokumentasi CI
 
-`.gitlab-ci.yml` plus `.gitlab/ci/ci.gitlab-ci.yml` dan `.gitlab/ci/e2e-full.gitlab-ci.yml`.
-Gerbangnya sama persis dan berurutan sama; yang berubah hanya kosakata runner. Split satu
-file per workflow dipertahankan supaya perubahan di satu sisi mudah di-diff lawan file
-GitHub yang dicerminkannya.
-
-- **Tag runner default kosong, dan itu perbaikan bug, bukan kehati-hatian.** Versi pertama
-  memakai default `saas-windows-medium-amd64` dan `self-hosted`. Tag yang tak ada runnernya
-  di GitLab **tidak** menggagalkan job — ia menggantungkannya dengan *"no runners that match
-  all of the job's tags"*, dan pipeline berdiri diam alih-alih merah. Kini
-  `WINDOWS_RUNNER_TAG` dan `E2E_RUNNER_TAG` default `""`, dan `rules` tiap job membuang
-  dirinya sendiri saat variabelnya kosong. Di project tanpa runner Windows, alternatif
-  jujurnya bukan "cakupan Windows", melainkan pipeline yang macet.
-- **Matrix OS jadi dua job.** GitLab memilih runner lewat `tags` dan Python lewat `image`,
-  dan keduanya tak bervariasi bersama dalam satu matrix dengan rapi. `checks:linux` dan
-  `checks:windows` berbagi satu blok `script` lewat `extends`.
-- **`on:` jadi `workflow:rules`.** `push` + `pull_request` + `workflow_dispatch` dinyatakan
-  sebagai pipeline source (`merge_request_event`, `web`, `schedule`) plus branch
-  `main`/`dev`; `concurrency: cancel-in-progress` jadi
-  `workflow.auto_cancel.on_new_commit: interruptible`.
 - **README, `docs/reference.md`, dan `RELEASE.md` akhirnya menyebut CI.** Sebelum ini CI
   hanya disebut di `RELEASE.md` dan catatan rilis v3.4.5 — pembaca dokumentasi utama tak
   punya cara tahu pipeline-nya ada. README punya section Continuous integration,

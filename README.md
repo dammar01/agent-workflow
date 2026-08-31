@@ -363,75 +363,34 @@ ones (`inspect`, `provider`, `report`, `audit`, `graph-meta`) are documented in 
 
 ## Continuous integration
 
-The repository carries the same pipeline twice, once per host. Both run the checks a
-contributor would otherwise have to remember to run by hand.
+Two GitHub Actions workflows run the checks a contributor would otherwise have to remember
+to run by hand.
 
-| File | Host | Trigger |
-| --- | --- | --- |
-| [.github/workflows/ci.yml](.github/workflows/ci.yml) | GitHub Actions | push to `main`/`dev`, pull requests, manual |
-| [.github/workflows/e2e-full.yml](.github/workflows/e2e-full.yml) | GitHub Actions | manual only |
-| [.gitlab-ci.yml](.gitlab-ci.yml) + [.gitlab/ci/](.gitlab/ci/) | GitLab CI | merge requests, `main`/`dev`, scheduled, manual |
+| File | Trigger |
+| --- | --- |
+| [.github/workflows/ci.yml](.github/workflows/ci.yml) | push to `main`/`dev`, pull requests, manual |
+| [.github/workflows/e2e-full.yml](.github/workflows/e2e-full.yml) | manual only |
 
-The no-cost path in both pipelines runs the version stamp check, the manifest check, the
-stdlib-only gate, the test suites, and the end-to-end suite without `--full`. No provider
-CLI is invoked and no quota is spent, which is why it can run on every push.
+The no-cost path runs the version stamp check, the manifest check, the stdlib-only gate, the
+test suites, and the end-to-end suite without `--full`. No provider CLI is invoked and no
+quota is spent, which is why it can run on every push. Python is pinned to `3.13` through
+`actions/setup-python`, so the workflow provides the interpreter rather than hoping the
+runner carries it.
 
-The delegated end-to-end run is manual on both hosts and never automatic: it calls a real
-second agent, costs real quota, and needs a provider CLI plus credentials that neither
-pipeline holds. On GitHub it is a separate `workflow_dispatch` workflow; on GitLab it is a
-manual job whose inputs are pipeline variables.
-
-Every GitLab job inherits `image: python:3.13` with `pull_policy: if-not-present`, declared
-once at `default:` in [.gitlab-ci.yml](.gitlab-ci.yml). Naming an image is how a docker
-executor pins a toolchain, since GitLab has no `actions/setup-python`.
-
-The pull policy is the load-bearing half. This image was dropped once: under the runner
-default of `always`, `image: python:3.13` made every pipeline a Docker Hub round-trip, and
-on a self-hosted runner with restricted egress it failed there with a TLS handshake timeout.
-`if-not-present` changes the shape of that risk rather than shaving its odds — a runner
-already holding the image never contacts the registry, so only the very first pull can fail.
-Seeding it once with `docker pull python:3.13` closes that gap too.
-
-Two prerequisites live on the runner, not in this repo: **GitLab Runner 15.1+**, and
-`allowed_pull_policies` under `[runners.docker]` must list `if-not-present`. Without the
-second, jobs die before their first command with *"pull_policy ([if-not-present]) defined in
-GitLab pipeline config is not one of the allowed_pull_policies"*.
-
-Shell executors ignore `image:` outright, and that is what makes one global declaration
-safe. `checks:windows` cannot run a Linux image, and `e2e:delegated` needs provider binaries
-a bare Python image does not carry — both stay correct as long as the runners behind
-`WINDOWS_RUNNER_TAG` and `E2E_RUNNER_TAG` are shell executors. Register either as a docker
-executor and that job breaks.
-
-For the same reason every job still **asserts** the Python version it found. The check is
-free where the container already guarantees it, and it is the only thing standing between a
-shell runner with the wrong interpreter and a result that looks trustworthy. A mismatch
-stops the job immediately with both numbers named. `PYTHON_VERSION` drives the image tag and
-the assertion together, so one edit moves both.
-
-Runner tags are variables, and an unmatched tag does not fail a job on GitLab — it leaves it
-queued forever with *"no runners that match all of the job's tags"*. So the tags are opt-in:
-
-| Variable | Default | Effect |
-| --- | --- | --- |
-| `PYTHON_VERSION` | `3.13` | Drives the `default:` image tag **and** the per-job assertion. Provisioned on a docker executor; on a shell executor it is only asserted, and a runner that disagrees fails with both numbers named. |
-| `LINUX_RUNNER_TAG` | *(empty)* | Empty runs the Linux job **untagged**, so any available runner takes it. Set it to address a specific machine. |
-| `WINDOWS_RUNNER_TAG` | *(empty)* | Empty **skips** the Windows job. Set it to the tag of a Windows runner to gain the second platform. |
-| `E2E_RUNNER_TAG` | *(empty)* | Empty skips the delegated job. Set it to a runner where the provider CLI is installed and authenticated. |
-
-The Linux job falls back to untagged where the Windows one skips, and the asymmetry is the
-point: a skipped Linux job would leave a project with no coverage and a green pipeline,
-while an untagged Windows job would be picked up by a Linux runner and die on its first
-PowerShell line.
+The delegated end-to-end run is a separate `workflow_dispatch` workflow and never automatic:
+it calls a real second agent, costs real quota, and needs a provider CLI plus credentials the
+pipeline deliberately does not hold. Its session id and runner are dispatch inputs, defaulting
+to `e2e-dispatch` and `self-hosted` — the provider CLI has to be installed and authenticated
+on whatever machine answers.
 
 Both operating systems are tested on purpose: the runtime ships a PowerShell runner and
 generates a POSIX one, and path handling differs where it matters most — locks and session
-directories. A single-OS run would pass while half the product stayed untested. GitHub
-expresses that as a matrix over `runs-on`; GitLab picks runners by tag, so there it is
-separate jobs sharing one script block.
+directories. A single-OS run would pass while half the product stayed untested. `ci.yml`
+expresses that as a matrix over `runs-on` with `fail-fast: false`, so one platform going red
+does not hide the other's result.
 
-What CI does not do, on either host, is bump, tag, or publish. See
-[RELEASE.md](RELEASE.md) for the steps that stay human.
+What CI does not do is bump, tag, or publish. See [RELEASE.md](RELEASE.md) for the steps that
+stay human.
 
 ---
 

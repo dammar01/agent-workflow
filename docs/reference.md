@@ -766,16 +766,15 @@ python3 main.py --command doctor --work-dir . --pretty
 
 ## CI
 
-Repo membawa pipeline yang sama dua kali, satu per host. Keduanya menjalankan gerbang yang
-tanpanya seseorang harus ingat menjalankannya sendiri.
+Dua workflow GitHub Actions menjalankan gerbang yang tanpanya seseorang harus ingat
+menjalankannya sendiri.
 
-| File | Host | Pemicu |
-|---|---|---|
-| `.github/workflows/ci.yml` | GitHub Actions | push ke `main`/`dev`, pull request, manual |
-| `.github/workflows/e2e-full.yml` | GitHub Actions | manual saja |
-| `.gitlab-ci.yml` + `.gitlab/ci/*.gitlab-ci.yml` | GitLab CI | merge request, `main`/`dev`, manual |
+| File | Pemicu |
+|---|---|
+| `.github/workflows/ci.yml` | push ke `main`/`dev`, pull request, manual |
+| `.github/workflows/e2e-full.yml` | manual saja |
 
-Gerbang yang dijalankan jalur gratis, berurutan, sama persis di kedua host:
+Gerbang yang dijalankan jalur gratis, berurutan:
 
 ```
 python tools/maintain/stamp_version.py --check
@@ -792,59 +791,25 @@ bisa melihatnya berlaku. `--keep-going` supaya satu kegagalan tak menyembunyikan
 menunjukkan pass rate lintas waktu alih-alih hanya run terakhir. `e2e.py` tanpa `--full`:
 nol provider CLI dipanggil, nol kuota dibakar — itu sebabnya ia boleh jalan di tiap push.
 
-Jalur terdelegasi manual di kedua host dan tak pernah otomatis: ia memanggil second_agent
-sungguhan, memakan kuota nyata, dan butuh provider CLI plus kredensial yang sengaja tidak
-dipegang pipeline. Di GitHub ia workflow `workflow_dispatch` terpisah; di GitLab ia job
-manual yang inputnya berupa pipeline variable.
+Jalur terdelegasi manual dan tak pernah otomatis: ia memanggil second_agent sungguhan,
+memakan kuota nyata, dan butuh provider CLI plus kredensial yang sengaja tidak dipegang
+pipeline. Ia workflow `workflow_dispatch` terpisah, dengan session id dan runner sebagai
+input dispatch — default `e2e-dispatch` dan `self-hosted`.
 
-### Perbedaan yang dipaksakan GitLab
+### Toolchain dan matrix
 
-Bukan terjemahan satu-satu — tiga hal tak punya padanan langsung:
+Python dipaku ke `3.13` lewat `actions/setup-python`, jadi workflow MENYEDIAKAN interpreter
+alih-alih berharap runner membawanya. Matrix `runs-on` mencakup `ubuntu-latest` dan
+`windows-latest` dengan `fail-fast: false`: runtime mengirim runner PowerShell dan
+menghasilkan yang POSIX, dan penanganan path paling berbeda persis di tempat yang penting
+(lock, direktori sesi) — run satu-OS akan lolos sementara separuh produk tak teruji, dan satu
+platform yang merah tak boleh menyembunyikan hasil platform lain.
 
-- **Matrix OS jadi job terpisah.** GitHub memilih runner lewat `runs-on`, jadi
-  `os: [ubuntu-latest, windows-latest]` cukup. GitLab memilih runner lewat `tags`, jadi
-  `checks:linux` dan `checks:windows` adalah job berbeda yang berbagi satu blok `script`
-  lewat `extends`.
-- **`image: python:3.13` dideklarasikan sekali di `default:`, dengan
-  `pull_policy: if-not-present`.** Menamai image adalah cara docker executor memaku
-  toolchain, karena GitLab tak punya padanan `actions/setup-python`. Image ini sempat
-  dibuang: di bawah default runner `always`, tiap pipeline jadi round-trip ke Docker Hub,
-  dan di runner self-hosted dengan egress terbatas ia gagal persis di situ —
-  `TLS handshake timeout` saat menarik `python:3.13` dari `registry-1.docker.io`.
-  `if-not-present` mengubah BENTUK risikonya, bukan sekadar memperkecil peluangnya: runner
-  yang sudah memegang image itu tak menelepon registry sama sekali, jadi cuma pull pertama
-  yang bisa gagal. `docker pull python:3.13` sekali di runner menutup celah itu juga.
-  Dua prasyarat ada di sisi runner, bukan di repo ini: GitLab Runner 15.1+, dan
-  `allowed_pull_policies` di `[runners.docker]` wajib memuat `if-not-present`. Tanpa yang
-  kedua, job mati sebelum command pertama dengan `pull_policy ([if-not-present]) defined in
-  GitLab pipeline config is not one of the allowed_pull_policies`.
-- **Shell executor mengabaikan `image:`, dan itu yang membuat satu deklarasi global aman.**
-  `checks:windows` tak bisa menjalankan image Linux, dan `e2e:delegated` butuh binary
-  provider yang tak dibawa image Python polos. Keduanya tetap benar selama runner di balik
-  `WINDOWS_RUNNER_TAG` dan `E2E_RUNNER_TAG` adalah shell executor; daftarkan salah satunya
-  sebagai docker executor dan job itu rusak.
-- **Versi Python tetap di-ASSERT walau sekarang disediakan.** `before_script` tiap job masih
-  memeriksa interpreter yang ditemukannya dan berhenti dengan kalimat yang menyebut kedua
-  angka bila beda. Gratis di container yang memang sudah menjaminnya, dan jadi satu-satunya
-  penahan saat job jatuh ke shell runner yang membawa Python lain. `PYTHON_VERSION`
-  menyetir tag image sekaligus assertion-nya, jadi satu edit menggeser keduanya. Job POSIX
-  juga memasang shim `python` ke `python3` bila hanya nama berversi yang ada, supaya satu
-  blok `script` tetap melayani dua platform tanpa variabel `$PYTHON_BIN` yang PowerShell
-  dan `sh` beda cara meng-expand-nya.
-- **Tag runner adalah variabel, dan asimetri fallback-nya disengaja.** Tag yang tak ada
-  runnernya **tidak** menggagalkan job — ia menggantungkannya selamanya dengan *"no runners
-  that match all of the job's tags"*. `LINUX_RUNNER_TAG` kosong menjalankan job Linux
-  **tanpa tag**, jadi runner mana pun yang mau menerima job tanpa tag mengambilnya; job
-  Linux yang di-skip akan meninggalkan project tanpa cakupan sama sekali dengan pipeline
-  hijau. `WINDOWS_RUNNER_TAG` dan `E2E_RUNNER_TAG` kosong justru **membuang** jobnya, karena
-  job Windows tanpa tag akan diambil runner Linux lalu mati di baris PowerShell pertama.
-- **`on:` jadi `workflow:rules`.** Tak ada satu padanan untuk `push` + `pull_request` +
-  `workflow_dispatch`; ketiganya dinyatakan sebagai pipeline source
-  (`merge_request_event`, `web`, `schedule`) plus branch `main`/`dev`.
-  `concurrency: cancel-in-progress` menjadi `workflow.auto_cancel.on_new_commit:
-  interruptible` plus `interruptible: true` di job.
+`on: push` (`main`/`dev`) + `pull_request` + `workflow_dispatch`, dengan
+`concurrency: cancel-in-progress` supaya pipeline yang tersalip di ref yang sama dibatalkan
+alih-alih dibiarkan selesai melawan commit basi. Permission job dikunci ke `contents: read`.
 
-Yang **tidak** dilakukan CI, di host mana pun: bump, tag, publish. Langkah yang tetap milik
+Yang **tidak** dilakukan CI: bump, tag, publish. Langkah yang tetap milik
 manusia ada di `RELEASE.md`.
 
 ---

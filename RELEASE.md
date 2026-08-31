@@ -90,15 +90,12 @@ explicit list precisely so that an unrelated semver in prose is not rewritten by
 ## What CI already covers
 
 `.github/workflows/ci.yml` runs steps 2, 3, and 5 (without `--full`) on every push and pull
-request, on Linux and Windows. `.gitlab-ci.yml` mirrors it for GitLab, gated on merge
-requests and the `main`/`dev` branches, with the same steps in the same order — its Windows
-job is skipped unless `WINDOWS_RUNNER_TAG` names a runner, because an unmatched GitLab tag
-queues a job forever instead of failing it.
+request, on Linux and Windows.
 
-Neither host bumps, tags, or publishes anything. A release still requires a human to decide
+CI bumps nothing, tags nothing, publishes nothing. A release still requires a human to decide
 the number and run steps 1, 4, 6, 7. The delegated end-to-end run
-(`.github/workflows/e2e-full.yml`, and the `e2e:delegated` job on GitLab) is manual on both
-and covers no release step: it exists to spend quota deliberately, not on a schedule.
+(`.github/workflows/e2e-full.yml`) is manual and covers no release step: it exists to spend
+quota deliberately, not on a schedule.
 
 ## Known gap
 
