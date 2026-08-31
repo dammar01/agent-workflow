@@ -356,154 +356,176 @@ def _test_task_cap_follows_the_provider_transport() -> None:
     stdin and pays for none of it. A single number can only be right for one of them, and it
     was sized for the tighter one — so the looser transport was throwing away instruction it
     had room to carry.
+
+    Pinned to Windows WHOLESALE rather than block by block. Every argv budget below is
+    derived from a cmd.exe ceiling that only Windows enforces, so on Linux those same
+    assertions read a policy cap and fail — which is exactly what happened: three blocks
+    were pinned individually, the first one was missed, and the suite stayed green on the
+    only machine that ran it before CI did. A per-block pin is a rule every future block
+    has to remember; a function-wide one is a rule it cannot forget. The one deliberate
+    exception re-pins itself in the other direction, nested, below.
     """
-    argv = build_prompt(
-        role=ROLE_EXPLORATION,
-        task="short",
-        command="explore",
-        meta_sink=(argv_sink := {}),
-        transport=transport_budget("opencode"),
-        **_BASE,
-    )
-    assert_true(
-        argv_sink.get("task_cap_source") == "transport"
-        and argv_sink["task_cap"] > DEFAULT_MAX_TASK_CHARS,
-        "an argv provider must size the cap from its own command-line room, not from the "
-        f"static default: {argv_sink}",
-    )
-    assert_true(len(argv) > 0, "the probe pass must not consume the prompt it measured")
+    # Run twice, once under each ambient value. Both passes are identical when every block
+    # sits under the pin, and the second one fails the moment a future block does not —
+    # which is the whole failure this had already shipped: an assertion added outside the
+    # pin cannot be seen by a suite that only ever runs on one OS.
+    for ambient in (True, False):
+        with _pinned_platform(ambient):
+            _check_task_cap_transport()
 
-    # The guarantee is about the SERIALIZED command line, not about Python string length.
-    # opencode rewrites every newline as ` \n ` on its way into argv, so a cap derived
-    # from `len()` passes its own arithmetic and still hands the adapter a prompt it refuses
-    # — and only for newline-heavy tasks, which is to say only for the multi-point
-    # instructions that most needed the extra room. The assertion below reproduces the
-    # adapter's own measurement rather than trusting the cap that produced the prompt.
-    # Pinned rather than skipped off Windows. The 8191 ceiling is what this arithmetic
-    # exists for, and a check that only runs on the maintainer's laptop is a check the CI
-    # box reports as green without having performed.
+
+def _check_task_cap_transport() -> None:
+    # The pin is the FIRST statement and covers the whole body, so the caller's loop over
+    # ambient platform values actually tests something: anything added outside this block
+    # runs under both, and fails under the one that is not Windows. A per-block pin looks
+    # equivalent and is not — the block that shipped broken was simply never wrapped.
     with _pinned_platform(True):
-        _assert_serialized_argv_fits()
-
-    # And the mirror image: those ceilings are cmd.exe's and CreateProcess's. Both adapters
-    # decline to enforce them off Windows, so deriving a budget from them there only takes
-    # room away for a boundary that is not present.
-    with _pinned_platform(False):
-        posix_sink: dict = {}
-        build_prompt(
-            role=ROLE_VERIFICATION,
-            task="x" * 50000,
-            command="verify",
-            meta_sink=posix_sink,
+        argv = build_prompt(
+            role=ROLE_EXPLORATION,
+            task="short",
+            command="explore",
+            meta_sink=(argv_sink := {}),
             transport=transport_budget("opencode"),
             **_BASE,
         )
-    assert_true(
-        posix_sink.get("task_cap_source") == "policy"
-        and posix_sink["task_cap"] == DEFAULT_MAX_TASK_CHARS,
-        "off Windows the cap must fall back to policy rather than shrink to fit a limit "
-        f"nothing enforces there: {posix_sink}",
-    )
+        assert_true(
+            argv_sink.get("task_cap_source") == "transport"
+            and argv_sink["task_cap"] > DEFAULT_MAX_TASK_CHARS,
+            "an argv provider must size the cap from its own command-line room, not from the "
+            f"static default: {argv_sink}",
+        )
+        assert_true(len(argv) > 0, "the probe pass must not consume the prompt it measured")
+
+        # The guarantee is about the SERIALIZED command line, not about Python string length.
+        # opencode rewrites every newline as ` \n ` on its way into argv, so a cap derived
+        # from `len()` passes its own arithmetic and still hands the adapter a prompt it refuses
+        # — and only for newline-heavy tasks, which is to say only for the multi-point
+        # instructions that most needed the extra room. The assertion below reproduces the
+        # adapter's own measurement rather than trusting the cap that produced the prompt.
+        # Pinned rather than skipped off Windows. The 8191 ceiling is what this arithmetic
+        # exists for, and a check that only runs on the maintainer's laptop is a check the CI
+        # box reports as green without having performed.
+        _assert_serialized_argv_fits()
+
+        # And the mirror image: those ceilings are cmd.exe's and CreateProcess's. Both adapters
+        # decline to enforce them off Windows, so deriving a budget from them there only takes
+        # room away for a boundary that is not present.
+        with _pinned_platform(False):
+            posix_sink: dict = {}
+            build_prompt(
+                role=ROLE_VERIFICATION,
+                task="x" * 50000,
+                command="verify",
+                meta_sink=posix_sink,
+                transport=transport_budget("opencode"),
+                **_BASE,
+            )
+        assert_true(
+            posix_sink.get("task_cap_source") == "policy"
+            and posix_sink["task_cap"] == DEFAULT_MAX_TASK_CHARS,
+            "off Windows the cap must fall back to policy rather than shrink to fit a limit "
+            f"nothing enforces there: {posix_sink}",
+        )
 
 
-    # The non-prompt half of the command line is config, not a constant: an absolute
-    # provider_command, a model id, an agent name and a session id all live there and all
-    # come from files a user edits. A flat reserve is a guess about them, and a guess that
-    # is low does not degrade gracefully — it builds a prompt the adapter refuses.
-    #
-    # Asserted through the Executor rather than by recomputing the formula here. A test
-    # that does its own arithmetic passes whether or not the runtime performs the same
-    # arithmetic, which is exactly the gap that lets a measurement be written and never
-    # wired up.
-    _assert_executor_sizes_for_long_argv()
+        # The non-prompt half of the command line is config, not a constant: an absolute
+        # provider_command, a model id, an agent name and a session id all live there and all
+        # come from files a user edits. A flat reserve is a guess about them, and a guess that
+        # is low does not degrade gracefully — it builds a prompt the adapter refuses.
+        #
+        # Asserted through the Executor rather than by recomputing the formula here. A test
+        # that does its own arithmetic passes whether or not the runtime performs the same
+        # arithmetic, which is exactly the gap that lets a measurement be written and never
+        # wired up.
+        _assert_executor_sizes_for_long_argv()
 
-    # Scaffolding that all but fills the transport must SAY so rather than report a
-    # plausible-looking cap. The floor is not a budget; it is the point below which
-    # capping stops meaning anything and the adapter's oversize check is the real answer.
-    floor_sink: dict = {}
-    build_prompt(
-        role=ROLE_EXPLORATION,
-        task="short",
-        command="explore",
-        meta_sink=floor_sink,
-        transport={"kind": "argv", "limit": 1600, "headroom": 0, "newline_cost": 0,
-                   "reserved": 0},
-        **_BASE,
-    )
-    assert_true(
-        floor_sink.get("task_cap_source") == "floor",
-        "a transport whose scaffolding leaves almost no room reported its floor as a "
-        f"derived budget, which reads as room that is not there: {floor_sink}",
-    )
+        # Scaffolding that all but fills the transport must SAY so rather than report a
+        # plausible-looking cap. The floor is not a budget; it is the point below which
+        # capping stops meaning anything and the adapter's oversize check is the real answer.
+        floor_sink: dict = {}
+        build_prompt(
+            role=ROLE_EXPLORATION,
+            task="short",
+            command="explore",
+            meta_sink=floor_sink,
+            transport={"kind": "argv", "limit": 1600, "headroom": 0, "newline_cost": 0,
+                       "reserved": 0},
+            **_BASE,
+        )
+        assert_true(
+            floor_sink.get("task_cap_source") == "floor",
+            "a transport whose scaffolding leaves almost no room reported its floor as a "
+            f"derived budget, which reads as room that is not there: {floor_sink}",
+        )
 
-    # The scaffolding is not a constant either: verify carries a routing contract and a
-    # changed-files block that explore does not. Sizing off one number for both hands verify
-    # a budget measured against a smaller prompt than the one actually being sent.
-    verify_sink: dict = {}
-    build_prompt(
-        role=ROLE_VERIFICATION,
-        task="short",
-        command="verify",
-        meta_sink=verify_sink,
-        transport=transport_budget("opencode"),
-        **_BASE,
-    )
-    assert_true(
-        verify_sink["task_cap"] < argv_sink["task_cap"],
-        "verify carries more scaffolding than explore, so it must be left less room for a "
-        f"task: verify={verify_sink.get('task_cap')} explore={argv_sink.get('task_cap')}",
-    )
+        # The scaffolding is not a constant either: verify carries a routing contract and a
+        # changed-files block that explore does not. Sizing off one number for both hands verify
+        # a budget measured against a smaller prompt than the one actually being sent.
+        verify_sink: dict = {}
+        build_prompt(
+            role=ROLE_VERIFICATION,
+            task="short",
+            command="verify",
+            meta_sink=verify_sink,
+            transport=transport_budget("opencode"),
+            **_BASE,
+        )
+        assert_true(
+            verify_sink["task_cap"] < argv_sink["task_cap"],
+            "verify carries more scaffolding than explore, so it must be left less room for a "
+            f"task: verify={verify_sink.get('task_cap')} explore={argv_sink.get('task_cap')}",
+        )
 
-    # stdin does not touch argv, so no argv-derived number applies to it. It holds the
-    # policy default rather than inheriting another transport's ceiling OR being handed an
-    # unbounded one — a prompt too long for the provider still fails, just further away.
-    stdin_sink: dict = {}
-    build_prompt(
-        role=ROLE_EXPLORATION,
-        task="short",
-        command="explore",
-        meta_sink=stdin_sink,
-        transport=transport_budget("codex"),
-        **_BASE,
-    )
-    assert_true(
-        stdin_sink.get("task_cap_source") == "policy"
-        and stdin_sink["task_cap"] == DEFAULT_MAX_TASK_CHARS,
-        f"a stdin provider must hold the policy cap, not an argv-derived one: {stdin_sink}",
-    )
+        # stdin does not touch argv, so no argv-derived number applies to it. It holds the
+        # policy default rather than inheriting another transport's ceiling OR being handed an
+        # unbounded one — a prompt too long for the provider still fails, just further away.
+        stdin_sink: dict = {}
+        build_prompt(
+            role=ROLE_EXPLORATION,
+            task="short",
+            command="explore",
+            meta_sink=stdin_sink,
+            transport=transport_budget("codex"),
+            **_BASE,
+        )
+        assert_true(
+            stdin_sink.get("task_cap_source") == "policy"
+            and stdin_sink["task_cap"] == DEFAULT_MAX_TASK_CHARS,
+            f"a stdin provider must hold the policy cap, not an argv-derived one: {stdin_sink}",
+        )
 
-    # An unregistered provider is the case that must not get creative: unknown transport
-    # means the pre-existing static behaviour, never a guess.
-    unknown_sink: dict = {}
-    build_prompt(
-        role=ROLE_EXPLORATION,
-        task="short",
-        command="explore",
-        meta_sink=unknown_sink,
-        transport=transport_budget("not-a-provider"),
-        **_BASE,
-    )
-    assert_true(
-        unknown_sink.get("task_cap") == DEFAULT_MAX_TASK_CHARS,
-        f"an unknown provider must fall back to the static cap: {unknown_sink}",
-    )
+        # An unregistered provider is the case that must not get creative: unknown transport
+        # means the pre-existing static behaviour, never a guess.
+        unknown_sink: dict = {}
+        build_prompt(
+            role=ROLE_EXPLORATION,
+            task="short",
+            command="explore",
+            meta_sink=unknown_sink,
+            transport=transport_budget("not-a-provider"),
+            **_BASE,
+        )
+        assert_true(
+            unknown_sink.get("task_cap") == DEFAULT_MAX_TASK_CHARS,
+            f"an unknown provider must fall back to the static cap: {unknown_sink}",
+        )
 
-    # The whole point of the larger cap: a task an argv provider has room for must survive.
-    over_static = "x" * (DEFAULT_MAX_TASK_CHARS + 400)
-    kept_sink: dict = {}
-    build_prompt(
-        role=ROLE_EXPLORATION,
-        task=over_static,
-        command="explore",
-        meta_sink=kept_sink,
-        transport=transport_budget("opencode"),
-        **_BASE,
-    )
-    assert_true(
-        "task_truncated" not in kept_sink,
-        "a task over the static cap but within the transport's real room was still cut, "
-        f"which is the loss this sizing exists to stop: {kept_sink}",
-    )
+        # The whole point of the larger cap: a task an argv provider has room for must survive.
+        over_static = "x" * (DEFAULT_MAX_TASK_CHARS + 400)
+        kept_sink: dict = {}
+        build_prompt(
+            role=ROLE_EXPLORATION,
+            task=over_static,
+            command="explore",
+            meta_sink=kept_sink,
+            transport=transport_budget("opencode"),
+            **_BASE,
+        )
+        assert_true(
+            "task_truncated" not in kept_sink,
+            "a task over the static cap but within the transport's real room was still cut, "
+            f"which is the loss this sizing exists to stop: {kept_sink}",
+        )
 
 
 def _test_unknown_role_is_refused() -> None:
