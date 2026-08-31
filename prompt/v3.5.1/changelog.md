@@ -6,9 +6,11 @@ untuk menjawabnya.
 
 ## Status rilis
 
-**Belum di-tag.** `TOOL_VERSION` sudah `3.5.1`, `stamp_version --check` dan
-`gen_manifest --check` lolos. Langkah 6 `RELEASE.md` (commit lalu tag) belum dijalankan.
-v3.5.0 juga masih belum di-tag — keduanya menumpuk di tag yang sama nanti.
+**Di-tag `v3.5.1`.** Reproduksi dikonfirmasi dari checkout bersih tag: `stamp_version --check`,
+`gen_manifest --check`, dan `tests/run.py` lolos dengan nol perubahan working tree. `v3.5.0`
+ikut di-tag di `965b967` pada saat yang sama — utang tag yang menumpuk sejak rilis lalu.
+
+**Belum di-push.** Kedua tag baru ada di repo lokal.
 
 **`tools/e2e/e2e.py --full` belum dijalankan.** Nol panggilan provider sungguhan berdiri di
 belakang rilis ini. Yang hijau: `python tests/run.py` (suite scenario penuh).

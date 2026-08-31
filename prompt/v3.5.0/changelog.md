@@ -12,11 +12,12 @@ dijalankan sungguhan untuk pertama kalinya.
 
 ## Status rilis
 
-**Belum di-tag.** `TOOL_VERSION` sudah `3.5.0` sejak `e342c48`, `stamp_version --check` dan
-`gen_manifest --check` lolos, tetapi langkah 6 `RELEASE.md` (commit lalu tag) belum
-dijalankan dan `git tag` di repo ini masih kosong. Catatan ini ditulis mendahului tagnya —
-sengaja, karena versi yang sudah dipakai di seluruh dokumentasi tanpa catatan rilis adalah
-persis bentuk drift yang `CHANGELOG.md` ada untuk mencegahnya.
+**Di-tag `v3.5.0` di `965b967`.** Catatan ini ditulis mendahului tagnya — sengaja, karena
+versi yang sudah dipakai di seluruh dokumentasi tanpa catatan rilis adalah persis bentuk
+drift yang `CHANGELOG.md` ada untuk mencegahnya. Paragraf ini dikoreksi setelah tag dibuat,
+jadi salinan di dalam tag itu sendiri masih berbunyi "belum di-tag"; teks yang benar hidup
+di branch. Reproduksi dikonfirmasi dari checkout bersih tag tersebut: `stamp_version --check`,
+`gen_manifest --check`, dan `tests/run.py` lolos dengan nol perubahan working tree.
 
 **`tools/e2e/e2e.py --full` belum dijalankan.** Langkah 5 `RELEASE.md` menyebut ini satu-satunya
 langkah yang menguji panggilan terdelegasi nyata ujung ke ujung, dan memintanya dicatat
