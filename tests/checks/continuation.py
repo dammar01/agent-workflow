@@ -417,3 +417,35 @@ def _test_contract_continuation() -> None:
         )
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def _test_continuation_prompt_is_bounded() -> None:
+    """The recovery prompt must fit the same command line every other prompt does.
+
+    It quotes the reply that failed, so its size is chosen by the provider rather than by
+    this runtime: one malformed tag can carry a paragraph, and four of them a page. The
+    prompt travels through argv on opencode like any other, and an oversized one costs the
+    recovery itself — the adapter refuses the very call that existed to rescue the run,
+    turning a recoverable stall into a lost one.
+    """
+    from core.provider.continuation import _MISSING_CHARS, _continuation_prompt
+
+    gap = {
+        "reason": "verification contract emitted but malformed",
+        "missing": ["x" * 5000] * 4,
+        "wants": "the full [VERIFICATION] block",
+    }
+    prompt = _continuation_prompt("verify", gap)
+    # opencode's own accounting: each newline becomes ` \\n ` in argv.
+    cost = len(prompt) + 3 * prompt.count(chr(10))
+    assert_true(
+        cost < 8191 - 400,
+        f"a continuation quoting 20000 chars of malformed detail built a {cost}-char "
+        "command line, which the adapter refuses — the recovery call cannot be the one "
+        "prompt nobody sized",
+    )
+    assert_true(
+        str(len("x" * 5000 * 4 + "; " * 3) - _MISSING_CHARS) in prompt,
+        "the truncation is silent: a reader cannot tell a short list of missing fields "
+        "from a long one that was cut",
+    )

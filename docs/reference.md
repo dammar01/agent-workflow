@@ -1,4 +1,4 @@
-# agent-workflow v3.5.0
+# agent-workflow v3.5.1
 
 Runtime orkestrasi mandiri untuk alur kerja dua-agent. Tanpa dependency pihak ketiga.
 
@@ -70,7 +70,7 @@ git --version
 
 ---
 
-## Install (v3.5.0)
+## Install (v3.5.1)
 
 ### Anggota tim baru — urutan lengkap dari nol
 
@@ -479,7 +479,7 @@ Artinya second_agent codex bisa membaca tiap file di project yang kamu tunjuk, `
 
 Pakai `codex` bila project-nya memang tak menyimpan rahasia, atau bila kamu menerima risikonya. Untuk project yang rahasianya harus tetap tak terbaca second_agent, pakai `opencode`.
 
-Kunci reliability (v3.5.0):
+Kunci reliability (v3.5.1):
 
 | Kunci | Default | Arti |
 | --- | --- | --- |
@@ -693,7 +693,7 @@ pernah tercatat, runtime gagal sebagai `session_capture_failed` dan clean run di
 Request berbeda pada session yang masih terkunci tetap ditolak sebagai
 `job_already_running`.
 
-### Liveness worker (v3.5.0)
+### Liveness worker (v3.5.1)
 
 PID yang hidup **tidak** berarti sedang bekerja. Worker karena itu melaporkan heartbeat sekaligus usia output stream, lalu job diklasifikasi tiga keadaan:
 
@@ -905,7 +905,7 @@ dengan baris bergerbang penuh.
 
 ## Referensi
 
-- Catatan rilis: [`prompt/v3.5.0/changelog.md`](../prompt/v3.5.0/changelog.md)
+- Catatan rilis: [`prompt/v3.5.1/changelog.md`](../prompt/v3.5.1/changelog.md)
 - Kontrak canonical main_agent: [`dist/config/claude/CLAUDE.md`](../dist/config/claude/CLAUDE.md)
 - Kontrak canonical second_agent: [`dist/config/opencode/AGENTS.md`](../dist/config/opencode/AGENTS.md)
 - Runtime entry point: [`main.py`](main.py)

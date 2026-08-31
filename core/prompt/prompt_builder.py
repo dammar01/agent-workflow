@@ -5,11 +5,19 @@ from config.roles import (
     VALID_ROLES,
 )
 from config.settings import DEFAULT_MAX_TASK_CHARS
+from utils import osutil
 
 _EVIDENCE_ROLES = {ROLE_EXPLORATION, ROLE_REASONING}
 
 
-def _cap_task(task: str) -> tuple[str, dict | None]:
+# Below this an argv budget is not a cap, it is a refusal wearing one. If the scaffolding
+# leaves less room than this the prompt cannot carry a usable instruction anyway, and the
+# adapter's own oversize check is the right place for that to fail — loudly, naming the
+# real limit — rather than here, silently, having shredded the task first.
+_MIN_TASK_CHARS = 500
+
+
+def _cap_task(task: str, max_chars: int | None = None) -> tuple[str, dict | None]:
     """Cap the task string before it becomes part of the one-arg CLI prompt.
 
     Scaffolding is fixed cost; the task is the only caller-controlled size. Truncating
@@ -20,14 +28,14 @@ def _cap_task(task: str) -> tuple[str, dict | None]:
 
     Returns (capped_task, info) where info is None when no truncation happened.
     """
+    keep = DEFAULT_MAX_TASK_CHARS if max_chars is None else max_chars
     task = task.strip()
     original = len(task)
-    if original <= DEFAULT_MAX_TASK_CHARS:
+    if original <= keep:
         return task, None
-    keep = DEFAULT_MAX_TASK_CHARS
     capped = (
         task[:keep]
-        + f"\n…[task truncated: {original - keep} chars over {DEFAULT_MAX_TASK_CHARS}-char cap;"
+        + f"\n…[task truncated: {original - keep} chars over {keep}-char cap;"
         " split into narrower delegated calls if detail was lost]"
     )
     return capped, {
@@ -37,10 +45,110 @@ def _cap_task(task: str) -> tuple[str, dict | None]:
     }
 
 
+# What the in-band truncation marker costs once appended. It is written AFTER the slice, so
+# a budget spent entirely on task text leaves no room for the sentence explaining the cut.
+_MARKER_RESERVE = 200
+
+
+def _argv_cost(text: str, newline_cost: int) -> int:
+    """Characters `text` occupies on the command line, not in Python.
+
+    The two differ whenever the adapter rewrites the prompt on its way into argv. opencode
+    turns each newline into ` \\n `, so a prompt measured with `len()` fits a budget its
+    serialized form overruns — silently, and only for newline-heavy tasks, which is to say
+    only for the multi-point instructions most worth not truncating.
+    """
+    if newline_cost <= 0:
+        return len(text)
+    return len(text) + newline_cost * text.count("\n")
+
+
+def _fit_by_cost(task: str, budget: int, newline_cost: int) -> int:
+    """Longest prefix of `task` whose serialized cost fits `budget`, as a char count.
+
+    A char budget cannot be converted to a cost budget by division: the newlines are not
+    spread evenly through the task, so the answer depends on where they fall. Binary search
+    on the actual string is exact and costs a handful of `str.count` calls.
+    """
+    if newline_cost <= 0 or not task:
+        return max(0, budget)
+    if _argv_cost(task, newline_cost) <= budget:
+        # The budget, not the task length: a cap is what this prompt COULD carry, and
+        # reporting the size of a task that happened to be short describes the caller
+        # rather than the transport. Safe to slice against, since a string's cost is never
+        # below its length, so a task already inside the budget is inside this too.
+        return budget
+    low, high = 0, len(task)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if mid + newline_cost * task.count("\n", 0, mid) <= budget:
+            low = mid
+        else:
+            high = mid - 1
+    return low
+
+
+def _transport_cap(
+    transport: dict | None, probe: str, task: str
+) -> tuple[int, dict]:
+    """The largest task this transport can carry, given the `probe` prompt's scaffolding.
+
+    The static cap was one number for every provider, chosen for the tightest transport
+    any of them used. That made it wrong in both directions at once: too small for a
+    provider that pipes its prompt through stdin and never touches argv, and blind to the
+    fact that a verify prompt carries ~1.5 KB more scaffolding than an explore prompt, so
+    the room left for a task is not a constant either.
+
+    Measured rather than estimated: the scaffolding includes a changed-files block that
+    grows with the working tree, so the only honest overhead is the one this call just
+    produced.
+    """
+    static = DEFAULT_MAX_TASK_CHARS
+    if not transport or transport.get("kind") != "argv":
+        # stdin, or a provider not in the table. The static cap is the pre-existing
+        # behaviour and stays the answer until there is evidence for a better number.
+        return static, {"task_cap": static, "task_cap_source": "policy"}
+    if not osutil.IS_WINDOWS:
+        # The 8191/32767 ceilings are cmd.exe and CreateProcess limits. POSIX argv runs to
+        # megabytes, which is why both adapters' `_too_long_for_cmd` returns None off
+        # Windows and never refuses a call there. Deriving a budget from a limit nothing
+        # enforces would be pure loss: it cut the verify cap from 3000 to 1918 on Linux to
+        # respect a boundary that does not exist on Linux.
+        return static, {"task_cap": static, "task_cap_source": "policy"}
+    limit = transport.get("limit")
+    if not limit:
+        return static, {"task_cap": static, "task_cap_source": "policy"}
+    newline_cost = int(transport.get("newline_cost") or 0)
+    overhead = _argv_cost(probe, newline_cost)
+    budget = (
+        int(limit)
+        - int(transport.get("headroom") or 0)
+        - int(transport.get("reserved") or 0)
+        - _MARKER_RESERVE
+        - overhead
+    )
+    fitted = _fit_by_cost(task, budget, newline_cost)
+    cap = max(_MIN_TASK_CHARS, fitted)
+    return cap, {
+        "task_cap": cap,
+        # Named apart from `transport` on purpose. Hitting the floor means the scaffolding
+        # alone has all but filled the command line, so the number is no longer derived
+        # from available room — it is the minimum below which capping stops being useful,
+        # and the adapter's oversize check is what will actually refuse the call. Reporting
+        # both as `transport` would hide a prompt that cannot fit behind a plausible cap.
+        "task_cap_source": "floor" if fitted < _MIN_TASK_CHARS else "transport",
+        "prompt_overhead_chars": overhead,
+    }
+
+
 # Bounds, not preferences. The whole prompt is one command-line argument capped at 8191
 # characters on Windows, so an unbounded file list would push a verification prompt past
 # the shell limit and fail before opencode ran.
 _CHANGED_FILES_MAX = 25
+
+# The two routes whose prompt carries the working tree. Named once so the probe pass and
+# the send pass cannot disagree about whether the block is there.
+_CHANGED_FILES_COMMANDS = frozenset({"verify", "sweep"})
 
 
 def _changed_files_block(project_root: str | None) -> list[str]:
@@ -151,11 +259,46 @@ def build_prompt(
     subagent_fanout: bool = False,
     declared_tools: list | None = None,
     meta_sink: dict | None = None,
+    transport: dict | None = None,
+    _changed_block: list[str] | None = None,
 ) -> str:
     if role not in VALID_ROLES:
         raise ValueError(f"unsupported role: {role}")
 
-    task, trunc_info = _cap_task(task)
+    # Assembled once here and handed to the probe pass below. `_changed_files_block` shells
+    # out to git; measuring the scaffolding must not cost a second subprocess, and a block
+    # that changed between the two passes would make the measurement describe a prompt this
+    # call never sends.
+    changed_block = (
+        _changed_block
+        if _changed_block is not None
+        else (_changed_files_block(project_root) if command in _CHANGED_FILES_COMMANDS else [])
+    )
+
+    if _changed_block is None:
+        # Pass one measures; pass two sends. The empty task makes the result pure
+        # scaffolding, which is the only part whose size this call does not control.
+        probe = build_prompt(
+            role=role,
+            task="",
+            session_id=session_id,
+            command=command,
+            project_root=project_root,
+            runtime_dir=runtime_dir,
+            has_facts=has_facts,
+            has_leads=has_leads,
+            has_knowledge=has_knowledge,
+            subagent_fanout=subagent_fanout,
+            declared_tools=declared_tools,
+            _changed_block=changed_block,
+        )
+        cap, cap_info = _transport_cap(transport, probe, task)
+        if meta_sink is not None:
+            meta_sink.update(cap_info)
+    else:
+        cap = None
+
+    task, trunc_info = _cap_task(task, cap)
     if trunc_info and meta_sink is not None:
         meta_sink.update(trunc_info)
 
@@ -226,7 +369,7 @@ def build_prompt(
         return "\n".join(
             [
                 *header,
-                *_changed_files_block(project_root),
+                *changed_block,
                 *sidecar_block,
                 "[CONSTRAINTS — severity definitions in AGENTS.md 'Verify Routing'; the routing table itself is inline below]",
                 "- report only: no file writes, no user questions (main_agent's domain)",
@@ -252,7 +395,7 @@ def build_prompt(
         return "\n".join(
             [
                 *header,
-                *_changed_files_block(project_root),
+                *changed_block,
                 *sidecar_block,
                 "[CONSTRAINTS — sweep = blast-radius EVIDENCE gathering, not judgement]",
                 "- read-only; no file writes, no user questions (main_agent's domain)",

@@ -55,7 +55,10 @@ from tests.checks.workspace import (
     _test_project_session_isolation,
     _test_workspace_release_guards,
 )
-from tests.checks.continuation import _test_contract_continuation
+from tests.checks.continuation import (
+    _test_contract_continuation,
+    _test_continuation_prompt_is_bounded,
+)
 from tests.checks.contracts import _test_workflow_contracts
 from tests.checks.installer import (
     _test_installer_drift_check,
@@ -77,6 +80,7 @@ from tests.checks.registry import _test_every_check_is_registered
 from tests.checks.bundle_sync import _test_bundle_registry_bijection
 from tests.checks.adapters import (
     _test_adapter_error_normalization,
+    _test_stdin_failure_reaches_call_meta,
     _test_adapter_redaction_is_shared,
 )
 from tests.checks.audit import (
@@ -87,6 +91,7 @@ from tests.checks.audit import (
 from tests.checks.prompt import (
     _test_permitted_tools_line,
     _test_prompt_contract_blocks,
+    _test_task_cap_follows_the_provider_transport,
     _test_task_cap_is_visible_in_and_out_of_band,
     _test_unknown_role_is_refused,
     _test_verify_branch_carries_routing_contract,
@@ -101,10 +106,12 @@ def run_tests() -> None:
     _test_no_code_in_messages()
     _test_adapter_error_normalization()
     _test_adapter_redaction_is_shared()
+    _test_stdin_failure_reaches_call_meta()
     _test_prompt_contract_blocks()
     _test_verify_branch_carries_routing_contract()
     _test_permitted_tools_line()
     _test_task_cap_is_visible_in_and_out_of_band()
+    _test_task_cap_follows_the_provider_transport()
     _test_unknown_role_is_refused()
     _test_audit_report()
     _test_audit_survives_a_torn_row()
@@ -1071,6 +1078,7 @@ confidence: high — all requested checks ran
         _test_project_session_isolation()
         _test_init_upgrade_and_session_guard()
         _test_contract_continuation()
+        _test_continuation_prompt_is_bounded()
         _test_workflow_contracts()
         _test_installer_text_merging()
         _test_installer_settings_merge()

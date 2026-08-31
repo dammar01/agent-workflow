@@ -331,6 +331,62 @@ def effort_args(provider: str, effort: str | None) -> list[str]:
     return [part.format(value=effort) for part in template]
 
 
+# How each provider receives the prompt, and what that transport can carry.
+#
+# This lives in code rather than in `.workflow/second_agent.json` on purpose. The numbers
+# are properties of the OS and of the provider binary, not preferences: 8191 is cmd.exe's
+# command-line limit, 32767 is the Windows CreateProcess limit, and a user editing either
+# in a config file would be editing a fact. A wrong value there costs a lost invocation
+# and reads as a config mistake rather than the OS boundary it actually is.
+#
+# `reserved` is what the argv carries BESIDES the serialized prompt — subcommand, model,
+# effort, session, and the quoting the shell adds around them. Deliberately generous: the
+# adapter's own `_too_long_for_cmd` is the authority, and this only has to stay under it.
+#
+# codex declares `stdin` with no limit because its prompt does not touch argv at all
+# (`-` as the prompt argument, content piped in). That is NOT a claim that any length
+# works — a long prompt can still be refused downstream, which is why `stdin_budget`
+# stays at the policy default until that failure is measurable. See CodexAdapter's
+# stdin write path.
+# `newline_cost` is the extra characters each `\n` costs once the adapter serializes the
+# prompt into argv. opencode rewrites every newline as ` \n ` before handing it over, so a
+# newline is four characters on the command line and one in Python — measuring raw length
+# there under-counts a newline-heavy task by hundreds of characters and hands back a cap
+# whose prompt the adapter then refuses. agy passes the prompt through unchanged.
+#
+# `headroom` mirrors each adapter's own `_CMD_LINE_HEADROOM`, because the number a cap has
+# to stay under is the adapter's threshold, not the OS limit above it.
+PROVIDER_TRANSPORT: dict[str, dict] = {
+    "opencode": {
+        "kind": "argv",
+        "limit": 8191,
+        "headroom": 400,
+        "newline_cost": 3,
+        "reserved": 512,
+    },
+    "agy": {
+        "kind": "argv",
+        "limit": 32767,
+        "headroom": 1024,
+        "newline_cost": 0,
+        "reserved": 512,
+    },
+    "codex": {"kind": "stdin", "limit": None, "headroom": 0, "newline_cost": 0, "reserved": 0},
+}
+
+
+def transport_budget(provider: str | None) -> dict | None:
+    """What `provider`'s prompt transport can carry, or None when it is unknown.
+
+    None is the safe answer for an unregistered provider: the caller falls back to the
+    static cap, which is the behaviour every provider had before this table existed.
+    """
+    if not provider:
+        return None
+    budget = PROVIDER_TRANSPORT.get(provider)
+    return dict(budget) if budget else None
+
+
 def bundle_for(provider: str) -> dict:
     try:
         return PROVIDER_BUNDLES[provider]

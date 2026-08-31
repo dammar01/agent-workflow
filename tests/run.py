@@ -23,6 +23,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from tests.checks.adapters import (  # noqa: E402
     _test_adapter_error_normalization,
+    _test_stdin_failure_reaches_call_meta,
     _test_adapter_redaction_is_shared,
 )
 from tests.checks.audit import (  # noqa: E402
@@ -33,12 +34,16 @@ from tests.checks.audit import (  # noqa: E402
 from tests.checks.prompt import (  # noqa: E402
     _test_permitted_tools_line,
     _test_prompt_contract_blocks,
+    _test_task_cap_follows_the_provider_transport,
     _test_task_cap_is_visible_in_and_out_of_band,
     _test_unknown_role_is_refused,
     _test_verify_branch_carries_routing_contract,
 )
 from tests.checks.bundle_sync import _test_bundle_registry_bijection  # noqa: E402
-from tests.checks.continuation import _test_contract_continuation  # noqa: E402
+from tests.checks.continuation import (  # noqa: E402
+    _test_contract_continuation,
+    _test_continuation_prompt_is_bounded,
+)
 from tests.checks.contracts import _test_workflow_contracts  # noqa: E402
 from tests.checks.deps import _test_runtime_is_stdlib_only  # noqa: E402
 from tests.checks.governance import _test_governance_controls  # noqa: E402
@@ -98,6 +103,7 @@ SUITES: dict[str, tuple] = {
     "session-isolation": (_test_project_session_isolation, "one project's session cannot read another's"),
     "init-upgrade": (_test_init_upgrade_and_session_guard, "init/upgrade and the session guard"),
     "continuation": (_test_contract_continuation, "bounded continuation keeps the first reply's evidence"),
+    "continuation-size": (_test_continuation_prompt_is_bounded, "the recovery prompt fits the command line it travels on"),
     "contracts": (_test_workflow_contracts, "workflow contracts round-trip and the usage stream derives honestly"),
     "deps": (_test_runtime_is_stdlib_only, "shipped code imports nothing outside the stdlib"),
     "telemetry": (_test_telemetry_metrics, "P1 metrics count tasks, not calls, and report their denominators"),
@@ -105,10 +111,12 @@ SUITES: dict[str, tuple] = {
     "graph-verification": (_test_graph_verification, "per-node graph provenance, drift vs move, subgraph slicing"),
     "adapters": (_test_adapter_error_normalization, "every adapter normalises errors and counts redactions alike"),
     "adapters-shared": (_test_adapter_redaction_is_shared, "no adapter carries a private copy of the redaction helpers"),
+    "adapters-stdin": (_test_stdin_failure_reaches_call_meta, "a failed stdin handover names its cause in the call meta"),
     "prompt-blocks": (_test_prompt_contract_blocks, "every role/command branch asks for a shape the runtime parses"),
     "prompt-verify": (_test_verify_branch_carries_routing_contract, "verify prompt carries the severity routing triple"),
     "prompt-tools": (_test_permitted_tools_line, "declared tool policy reaches the prompt, absence stays absent"),
     "prompt-cap": (_test_task_cap_is_visible_in_and_out_of_band, "task truncation is reported in band and out"),
+    "prompt-transport-cap": (_test_task_cap_follows_the_provider_transport, "the task cap is derived from the provider transport, not one shared constant"),
     "prompt-role": (_test_unknown_role_is_refused, "an unknown role is refused instead of building an unparseable prompt"),
     "installer-text": (_test_installer_text_merging, "lenient decode, intent stanzas, managed-block splice"),
     "installer-settings": (_test_installer_settings_merge, "hook refresh keeps user hooks; POSIX rewrite ships bash"),

@@ -120,3 +120,57 @@ def _test_adapter_redaction_is_shared() -> None:
             module.make_ok is redaction.make_ok,
             f"{name}.make_ok is a local copy rather than adapters.shared.redaction.make_ok",
         )
+
+
+def _test_stdin_failure_reaches_call_meta() -> None:
+    """A prompt codex could not hand over must say so in the run meta.
+
+    stdin is the one transport where the handover can fail while the process is already
+    running: the child closes its end — typically because it rejected the input — and the
+    write lands on a broken pipe. The adapter then waits out a process that was never given
+    its question, and the call returns an empty answer with no cause attached. "Prompt too
+    long" has been guesswork for exactly that reason.
+
+    The assertion is about the meta a LATER reader gets, not about the moment the failure is
+    detected, because those came apart once already: `last_call_meta` is REBOUND wholesale
+    after the process ends, so recording the error when it happened wrote it onto an object
+    that was about to be discarded. The instrumentation read as correct and reached nothing.
+    """
+    import sys
+
+    adapter = codex_adapter.CodexAdapter()
+
+    # Exits without reading stdin, so a large write hits a closed pipe. Nothing about the
+    # size is special to codex — this reproduces the shape, not a specific provider limit.
+    adapter._popen_capture(
+        [sys.executable, "-c", "import sys; sys.exit(0)"],
+        "x" * 5_000_000,
+        None,
+        30,
+        "probe",
+        None,
+    )
+    meta = adapter.last_call_meta
+    assert_true(
+        meta.get("prompt_chars") == 5_000_000,
+        f"the size of the prompt that failed to send was not recorded: {meta.get('prompt_chars')}",
+    )
+    assert_true(
+        "BrokenPipe" in str(meta.get("stdin_write_failed") or ""),
+        "a failed stdin handover left no cause in the call meta, which is the silence this "
+        f"instrumentation exists to end: {meta.get('stdin_write_failed')!r}",
+    )
+
+    adapter._popen_capture(
+        [sys.executable, "-c", "import sys; sys.stdin.read()"],
+        "hello",
+        None,
+        30,
+        "probe",
+        None,
+    )
+    meta = adapter.last_call_meta
+    assert_true(
+        meta.get("prompt_chars") == 5 and meta.get("stdin_write_failed") is None,
+        f"a successful handover reported a failure, which would make the signal noise: {meta}",
+    )

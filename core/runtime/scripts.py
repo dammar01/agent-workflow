@@ -51,10 +51,12 @@ def _build_run_scripts(project_root: Path, main_py: str) -> list[tuple[Path, str
         '  [Console]::Error.WriteLine("[workflow] ERROR: session=default on delegated command \'$Command\'. Concurrent main agents on this project would share one lock, state and log directory and overwrite each other. Pass MAIN_SESSION_ID as argument 3 (the value from the [SESSION BINDING] block). To override deliberately: set AI_PROXY_ALLOW_DEFAULT_SESSION=1.")\n'
         "  exit 2\n"
         "}\n"
-        # Pre-dispatch task-size warning: the runtime truncates the task at
-        # DEFAULT_MAX_TASK_CHARS, silently. Surface it BEFORE dispatch so main_agent shortens
-        # the instruction instead of blindly pre-splitting into two calls.
-        f'if ($Task.Length -gt {DEFAULT_MAX_TASK_CHARS}) {{ [Console]::Error.WriteLine("[workflow] WARN: task is $($Task.Length) chars > {DEFAULT_MAX_TASK_CHARS}-char cap; it WILL be truncated. Shorten the instruction (do not paste evidence into the task) rather than pre-splitting into multiple calls.") }}\n'
+        # Pre-dispatch task-size warning. The threshold is the SMALLEST cap any provider
+        # applies, not the one this call will get: the real cap is derived at build time
+        # from the provider's transport and the scaffolding this command carries, and a
+        # generated script cannot know either. So it warns rather than asserts — the point
+        # is to make main_agent shorten the instruction instead of blindly pre-splitting.
+        f'if ($Task.Length -gt {DEFAULT_MAX_TASK_CHARS}) {{ [Console]::Error.WriteLine("[workflow] WARN: task is $($Task.Length) chars > {DEFAULT_MAX_TASK_CHARS}-char cap; it may be truncated (exact cap depends on the provider transport). Shorten the instruction (do not paste evidence into the task) rather than pre-splitting into multiple calls.") }}\n'
         "if ($bg -contains $Command) {\n"
         # Pre-flight gate: dispatching a delegated run satisfies the gate -> clear the marker
         # so the PreToolUse hook stops blocking gather tools for the rest of this turn.
@@ -88,7 +90,7 @@ def _build_run_scripts(project_root: Path, main_py: str) -> list[tuple[Path, str
         "      exit 2 ;;\n"
         "  esac\n"
         "fi\n"
-        f'[ "${{#TASK}}" -gt {DEFAULT_MAX_TASK_CHARS} ] && echo "[workflow] WARN: task is ${{#TASK}} chars > {DEFAULT_MAX_TASK_CHARS}-char cap; it WILL be truncated. Shorten the instruction rather than pre-splitting." >&2\n'
+        f'[ "${{#TASK}}" -gt {DEFAULT_MAX_TASK_CHARS} ] && echo "[workflow] WARN: task is ${{#TASK}} chars > {DEFAULT_MAX_TASK_CHARS}-char cap; it may be truncated (exact cap depends on the provider transport). Shorten the instruction rather than pre-splitting." >&2\n'
         'case " explore plan analyze verify " in\n'
         '  *" $COMMAND "*)\n'
         # Pre-flight gate: clear the marker before dispatching (delegation satisfies the gate).

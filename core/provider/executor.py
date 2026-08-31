@@ -2,10 +2,8 @@ from pathlib import Path
 
 from adapters.contract.base import SecondAgentAdapter
 from adapters.contract.registry import hint_conflict, resolve_adapter, selected_provider
-from config.settings import (
-    DEFAULT_MAX_TASK_CHARS,
-    DEFAULT_TASK_TRUNCATION_HARD_RATIO,
-)
+from config.providers import transport_budget
+from config.settings import DEFAULT_TASK_TRUNCATION_HARD_RATIO
 from core.evidence.contract import (
     FANOUT_DECLINED,
     FANOUT_DENIED,
@@ -587,6 +585,33 @@ class Executor:
         runtime_dir = str(workflow_paths(project_root, session_id)["runtime_dir"])
 
         prompt_meta: dict = {}
+        # The route names the configured provider, but an INJECTED adapter overrides that
+        # choice without touching the route — so sizing off the route alone would measure
+        # one provider's transport and send through another's. The adapter's own name wins
+        # when it was handed in; in every other case the two agree by construction, since
+        # `_adapter_for()` resolves from the same config the router read.
+        _sizing_provider = route.get("provider")
+        if self._adapter_override:
+            _sizing_provider = getattr(self.adapter, "adapter", None) or _sizing_provider
+        _transport = transport_budget(_sizing_provider)
+        if _transport and _transport.get("kind") == "argv":
+            # Measured, not assumed. A flat reserve is a guess about values the route is
+            # holding right here: an absolute provider_command path, a model id, an agent
+            # name, an effort flag, a session id. Config can make any of them long, and a
+            # guess that is too small does not degrade — it produces a prompt the adapter
+            # refuses. `len(v)+3` mirrors the adapters' own `_too_long_for_cmd` accounting;
+            # the trailing slack covers the subcommand and flag names neither side varies.
+            _transport["reserved"] = 160 + sum(
+                len(str(value)) + 3
+                for value in (
+                    route.get("provider_command"),
+                    route.get("provider_agent"),
+                    route.get("model"),
+                    route.get("effort"),
+                    session_id,
+                )
+                if value
+            )
         prompt = build_prompt(
             role=route["role"],
             task=task,
@@ -600,6 +625,11 @@ class Executor:
             subagent_fanout=fanout,
             declared_tools=route.get("declared_tools"),
             meta_sink=prompt_meta,
+            # Sized from the transport, not from one constant shared by every provider.
+            # The adapter is still bound late (below), but the provider NAME is settled
+            # here by the route — which is all the sizing needs, and lets the prompt be
+            # built once, correctly, rather than built and then re-measured.
+            transport=_transport,
         )
 
         # A cut instruction is answered in full confidence, so the only place it can be
@@ -612,7 +642,7 @@ class Executor:
                 return make_error(
                     "task_truncated",
                     f"task lost {lost} of {prompt_meta['task_original_chars']} chars "
-                    f"(cap {DEFAULT_MAX_TASK_CHARS}); too much of the instruction is gone "
+                    f"(cap {prompt_meta['task_kept_chars']}); too much of the instruction is gone "
                     "to trust an answer to it",
                     next_action=(
                         "Shorten the task to instructions only — move evidence, dumps, and "
@@ -925,6 +955,15 @@ class Executor:
         if digest is not None:
             result["digest"] = digest
 
+        # Above the role branch, and above the contract-warning branch inside it. The cap is
+        # what lets main_agent judge how much room a task had, and the cases that need it
+        # most are the ones both branches skip: a clean call, where nothing else implies the
+        # number, and verify/sweep, whose role never enters the evidence branch at all. It
+        # was reaching call.meta.json and no reader.
+        result.setdefault("meta", {}).update(
+            {k: v for k, v in prompt_meta.items() if k.startswith("task_")}
+        )
+
         if route["role"] in ("exploration", "reasoning"):
             # Reported, never enforced: a contract miss is worth surfacing, but it says
             # nothing about whether the evidence underneath is correct.
@@ -935,15 +974,12 @@ class Executor:
                         "kind": "task_truncated",
                         "detail": (
                             f"{prompt_meta['task_original_chars'] - prompt_meta['task_kept_chars']}"
-                            f" chars cut from the instruction (cap {DEFAULT_MAX_TASK_CHARS})"
+                            f" chars cut from the instruction (cap {prompt_meta['task_kept_chars']})"
                         ),
                     }
                 )
             if issues:
                 result.setdefault("meta", {})["contract_warnings"] = issues
-                result["meta"].update(
-                    {k: v for k, v in prompt_meta.items() if k.startswith("task_")}
-                )
 
             # A damaged payload needs its own field, not a line inside a warnings list.
             # The confidence cap below cannot carry this one: capping edits the digest, and

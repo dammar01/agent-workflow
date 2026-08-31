@@ -1,14 +1,14 @@
 {
-  "version": "3.5.0",
+  "version": "3.5.1",
   "versions": {
-    "prompt_bundle": "3.5.0",
-    "runtime": "3.5.0"
+    "prompt_bundle": "3.5.1",
+    "runtime": "3.5.1"
   },
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "31da41414a91989c7f169eaebe188368ab9c7ce25a6ef326be987b6ad11f3fa6",
-      "bytes": 24109,
+      "sha256": "8e2bf7bc3f4ee43bc0ecb03644d8002313f6ed5ce8cc40236aedb41e7707c642",
+      "bytes": 24324,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -42,7 +42,7 @@
     },
     {
       "path": "claude/skills/doctor.md",
-      "sha256": "04f9d33555c4830a601344068215c944e13c4f22563956d15d280def418831cd",
+      "sha256": "090b744d7eab62cafdcd276bd7120343a709ee3a533d091df67f7d64124ce326",
       "bytes": 1991,
       "merge": "replace",
       "component": "prompt_bundle"
@@ -63,14 +63,14 @@
     },
     {
       "path": "claude/skills/help.md",
-      "sha256": "7d5ea4c8af8fa79c7877c65e37def9c383b98545698e0ca8bb9bf72752ba08b7",
+      "sha256": "c6f64cfa55445620df1b39bb386b7671d2ac1011529e1c1081734c04573d0928",
       "bytes": 1572,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/skills/init.md",
-      "sha256": "22f4c4245a97d34b56d51b0f975c70fd2d7d0c31bc3f2126029ad61aac0dcea9",
+      "sha256": "ce379fa4130d7a2d68e52434de76df615517dbd39115c37e6563a1c555d4dadc",
       "bytes": 2093,
       "merge": "replace",
       "component": "prompt_bundle"
@@ -343,7 +343,7 @@
     },
     {
       "path": "opencode/AGENTS.md",
-      "sha256": "125130ccba5de3f09825c2367f829c94570a5ddc895216c660ac253376112d74",
+      "sha256": "dbaf3aa3537d91f7ab1166c042320e4d96fb5ac3b93ffa9d1b5db04392a8047f",
       "bytes": 17798,
       "merge": "merge",
       "component": "prompt_bundle"
@@ -385,14 +385,14 @@
     },
     {
       "path": "codex/AGENTS.md",
-      "sha256": "537cde341aa59fdc28e55b92bbcc14dfaa66e0c27541473b9a50bee24e168f1c",
+      "sha256": "b2d9491ff7d5bda429dcaa983b4ffd23e8784aa7f14aa27e24c3e2f9be69f27f",
       "bytes": 14978,
       "merge": "merge",
       "component": "prompt_bundle"
     },
     {
       "path": "agy/AGENTS.md",
-      "sha256": "f48ac69a7cb4b81c6f9a20a469377e2dec09e144bdb9138a071417fff3980615",
+      "sha256": "72f0470963da7f2e8e3420deef44be9237c1e69f7ee3de62fd7d56925f70b065",
       "bytes": 17353,
       "merge": "merge",
       "component": "prompt_bundle"

@@ -18,6 +18,11 @@ locks itself: change both and it stays green while the parser breaks.
 """
 
 from config.roles import ROLE_EXPLORATION, ROLE_REASONING, ROLE_VERIFICATION
+from adapters.providers import opencode_adapter
+import contextlib
+
+from config.providers import transport_budget
+from utils import osutil
 from config.settings import DEFAULT_MAX_TASK_CHARS
 from core.provider.continuation import _EVIDENCE_MARKERS
 from core.prompt.prompt_builder import build_prompt
@@ -25,7 +30,23 @@ from tests.checks.support import assert_true
 
 # Accessor syntax that is code, never prose. Same list as messages.py, applied to text
 # this module BUILDS rather than text it stores — a leak can arrive either way.
+_EVIDENCE_REPLY = (
+    "[EVIDENCE]\n"
+    "confidence: high\n"
+    "grounded:\n"
+    "- entry point at app/main.py [app/main.py:1]\n"
+    "[DIGEST]\n"
+    "summary: done.\n"
+)
+
 _LEAKS = ("_main().", "self.adapter.", "self.opencode.")
+
+# opencode's own refusal threshold: `_CMD_LINE_LIMIT - _CMD_LINE_HEADROOM`. Read from
+# the adapter rather than copied, so a change there fails this test instead of quietly
+# leaving it asserting a limit nobody enforces any more.
+_OPENCODE_THRESHOLD = (
+    opencode_adapter._CMD_LINE_LIMIT - opencode_adapter._CMD_LINE_HEADROOM
+)
 
 _BASE = {
     "session_id": "sid-1",
@@ -191,9 +212,297 @@ def _test_task_cap_is_visible_in_and_out_of_band() -> None:
         **_BASE,
     )
     assert_true(
-        not short_sink,
+        "task_truncated" not in short_sink,
         "a task under the cap reported truncation — a false `task_truncated` sends "
         "main_agent splitting work that was never too long",
+    )
+
+
+@contextlib.contextmanager
+def _pinned_platform(is_windows: bool):
+    """Run a block as if on `is_windows`.
+
+    Pinned rather than skipped: the argv arithmetic is a Windows guarantee, and a check
+    that only runs on a Windows machine is one the CI box reports green without having
+    performed. Both directions matter — off Windows the same code must STOP deriving a
+    budget from a ceiling nothing there enforces.
+    """
+    original = osutil.IS_WINDOWS
+    osutil.IS_WINDOWS = is_windows
+    try:
+        yield
+    finally:
+        osutil.IS_WINDOWS = original
+
+
+def _assert_serialized_argv_fits() -> None:
+    """Every prompt opencode would build must fit the argv length IT measures."""
+    for label, task in (
+        ("newline-heavy", "line of instruction\n" * 400),
+        ("newline dense", "a\n" * 4000),
+        ("no newlines", "x" * 40000),
+    ):
+        for command, role in (
+            ("explore", ROLE_EXPLORATION),
+            ("plan", ROLE_REASONING),
+            ("verify", ROLE_VERIFICATION),
+        ):
+            built = build_prompt(
+                role=role,
+                task=task,
+                command=command,
+                transport=transport_budget("opencode"),
+                **_BASE,
+            )
+            serialized = len(built.replace("\n", " \\n "))
+            assert_true(
+                serialized <= _OPENCODE_THRESHOLD,
+                f"a {label} task on {command} produced a command line of {serialized} "
+                f"chars, past the {_OPENCODE_THRESHOLD} the adapter refuses at — the cap "
+                "measured the prompt in a unit the transport does not use",
+            )
+
+
+def _assert_executor_sizes_for_long_argv() -> None:
+    """A route carrying long config values must never dispatch an oversize command line.
+
+    Asserted through the Executor rather than by recomputing the reserve here. A test that
+    does its own arithmetic passes whether or not the runtime performs the same arithmetic,
+    which is exactly the gap that lets a measurement be written and never wired up.
+
+    Two outcomes are correct and one is not. The call may be dispatched with a prompt that
+    fits, or refused before dispatch because too much of the instruction would be cut —
+    both leave the transport intact. What must not happen is a dispatch the adapter then
+    rejects, which is what a reserve guessed too low produces: sizing believes it fits,
+    the ratio gate sees no large cut because it is reading the same wrong number, and the
+    oversize prompt goes out.
+    """
+    import os
+    import tempfile
+    from pathlib import Path
+
+    from core.prompt.router import Router
+    from core.provider.executor import Executor
+    from core.runtime.state import ensure_workflow_workspace
+
+    command_path = "C:/" + "d" * 200 + "/opencode.cmd"
+    model = "m" * 1000
+    session = "s" * 40
+    router = Router(
+        {
+            "provider": "opencode",
+            "provider_command": command_path,
+            "provider_agent": "plan",
+            "default_model": model,
+            "routes": {},
+        }
+    )
+    non_prompt = sum(
+        len(str(value)) + 3
+        for value in (command_path, "run", "plan", "-m", model, "-s", session)
+    )
+
+    def _dispatch(task: str) -> tuple[str, dict]:
+        captured: dict = {}
+
+        class _Capture:
+            # Named so the executor sizes for opencode's transport, the way the late-bound
+            # adapter would have.
+            adapter = "opencode"
+
+            def run(self, prompt, session, model=None, work_dir=None) -> dict:
+                captured["prompt"] = prompt
+                return {"ok": True, "content": _EVIDENCE_REPLY, "meta": {}}
+
+        root = Path(tempfile.mkdtemp(prefix="argv-reserve-"))
+        ensure_workflow_workspace(root, os.getenv("AGENT_PATH"))
+        with _pinned_platform(True):
+            result = Executor(router=router, adapter=_Capture()).execute(
+                "explore", task, {"session_id": session}, str(root)
+            )
+        return captured.get("prompt") or "", result
+
+    # A task the transport has room for must actually go out, or the check below could pass
+    # on a harness that never dispatches anything.
+    small, _ = _dispatch("map the telemetry")
+    assert_true(bool(small), "the executor never reached the adapter, so nothing was sized")
+
+    # And one sized to fill a budget computed from a reserve that ignored the long model.
+    # 120 lines is not arbitrary: it is the size at which a reserve that ignores the long
+    # model still dispatches (8135 chars, past the 7791 threshold) while a measured one
+    # trims the task and stays inside it (7395). Smaller tasks fit under either reserve and
+    # would leave this assertion unable to tell them apart.
+    prompt, result = _dispatch(("a filler line of instruction text" + chr(10)) * 120)
+    if prompt:
+        total = len(prompt.replace("\n", " \\n ")) + 3 + non_prompt
+        assert_true(
+            total <= _OPENCODE_THRESHOLD,
+            f"a long command path and model id produced a {total}-char command line, past "
+            f"{_OPENCODE_THRESHOLD}: the reserve is a guess the runtime never measured",
+        )
+    else:
+        assert_true(
+            (result.get("meta") or {}).get("error_type") == "task_truncated",
+            "the call was neither dispatched nor refused for truncation, so what stopped "
+            f"it is not the sizing this asserts: {result.get('meta')}",
+        )
+
+
+def _test_task_cap_follows_the_provider_transport() -> None:
+    """The cap is a property of the transport, not one number shared by every provider.
+
+    One constant for all providers was wrong in both directions at once. opencode serialises
+    the prompt into argv and pays for every character of scaffolding; codex pipes it through
+    stdin and pays for none of it. A single number can only be right for one of them, and it
+    was sized for the tighter one — so the looser transport was throwing away instruction it
+    had room to carry.
+    """
+    argv = build_prompt(
+        role=ROLE_EXPLORATION,
+        task="short",
+        command="explore",
+        meta_sink=(argv_sink := {}),
+        transport=transport_budget("opencode"),
+        **_BASE,
+    )
+    assert_true(
+        argv_sink.get("task_cap_source") == "transport"
+        and argv_sink["task_cap"] > DEFAULT_MAX_TASK_CHARS,
+        "an argv provider must size the cap from its own command-line room, not from the "
+        f"static default: {argv_sink}",
+    )
+    assert_true(len(argv) > 0, "the probe pass must not consume the prompt it measured")
+
+    # The guarantee is about the SERIALIZED command line, not about Python string length.
+    # opencode rewrites every newline as ` \n ` on its way into argv, so a cap derived
+    # from `len()` passes its own arithmetic and still hands the adapter a prompt it refuses
+    # — and only for newline-heavy tasks, which is to say only for the multi-point
+    # instructions that most needed the extra room. The assertion below reproduces the
+    # adapter's own measurement rather than trusting the cap that produced the prompt.
+    # Pinned rather than skipped off Windows. The 8191 ceiling is what this arithmetic
+    # exists for, and a check that only runs on the maintainer's laptop is a check the CI
+    # box reports as green without having performed.
+    with _pinned_platform(True):
+        _assert_serialized_argv_fits()
+
+    # And the mirror image: those ceilings are cmd.exe's and CreateProcess's. Both adapters
+    # decline to enforce them off Windows, so deriving a budget from them there only takes
+    # room away for a boundary that is not present.
+    with _pinned_platform(False):
+        posix_sink: dict = {}
+        build_prompt(
+            role=ROLE_VERIFICATION,
+            task="x" * 50000,
+            command="verify",
+            meta_sink=posix_sink,
+            transport=transport_budget("opencode"),
+            **_BASE,
+        )
+    assert_true(
+        posix_sink.get("task_cap_source") == "policy"
+        and posix_sink["task_cap"] == DEFAULT_MAX_TASK_CHARS,
+        "off Windows the cap must fall back to policy rather than shrink to fit a limit "
+        f"nothing enforces there: {posix_sink}",
+    )
+
+
+    # The non-prompt half of the command line is config, not a constant: an absolute
+    # provider_command, a model id, an agent name and a session id all live there and all
+    # come from files a user edits. A flat reserve is a guess about them, and a guess that
+    # is low does not degrade gracefully — it builds a prompt the adapter refuses.
+    #
+    # Asserted through the Executor rather than by recomputing the formula here. A test
+    # that does its own arithmetic passes whether or not the runtime performs the same
+    # arithmetic, which is exactly the gap that lets a measurement be written and never
+    # wired up.
+    _assert_executor_sizes_for_long_argv()
+
+    # Scaffolding that all but fills the transport must SAY so rather than report a
+    # plausible-looking cap. The floor is not a budget; it is the point below which
+    # capping stops meaning anything and the adapter's oversize check is the real answer.
+    floor_sink: dict = {}
+    build_prompt(
+        role=ROLE_EXPLORATION,
+        task="short",
+        command="explore",
+        meta_sink=floor_sink,
+        transport={"kind": "argv", "limit": 1600, "headroom": 0, "newline_cost": 0,
+                   "reserved": 0},
+        **_BASE,
+    )
+    assert_true(
+        floor_sink.get("task_cap_source") == "floor",
+        "a transport whose scaffolding leaves almost no room reported its floor as a "
+        f"derived budget, which reads as room that is not there: {floor_sink}",
+    )
+
+    # The scaffolding is not a constant either: verify carries a routing contract and a
+    # changed-files block that explore does not. Sizing off one number for both hands verify
+    # a budget measured against a smaller prompt than the one actually being sent.
+    verify_sink: dict = {}
+    build_prompt(
+        role=ROLE_VERIFICATION,
+        task="short",
+        command="verify",
+        meta_sink=verify_sink,
+        transport=transport_budget("opencode"),
+        **_BASE,
+    )
+    assert_true(
+        verify_sink["task_cap"] < argv_sink["task_cap"],
+        "verify carries more scaffolding than explore, so it must be left less room for a "
+        f"task: verify={verify_sink.get('task_cap')} explore={argv_sink.get('task_cap')}",
+    )
+
+    # stdin does not touch argv, so no argv-derived number applies to it. It holds the
+    # policy default rather than inheriting another transport's ceiling OR being handed an
+    # unbounded one — a prompt too long for the provider still fails, just further away.
+    stdin_sink: dict = {}
+    build_prompt(
+        role=ROLE_EXPLORATION,
+        task="short",
+        command="explore",
+        meta_sink=stdin_sink,
+        transport=transport_budget("codex"),
+        **_BASE,
+    )
+    assert_true(
+        stdin_sink.get("task_cap_source") == "policy"
+        and stdin_sink["task_cap"] == DEFAULT_MAX_TASK_CHARS,
+        f"a stdin provider must hold the policy cap, not an argv-derived one: {stdin_sink}",
+    )
+
+    # An unregistered provider is the case that must not get creative: unknown transport
+    # means the pre-existing static behaviour, never a guess.
+    unknown_sink: dict = {}
+    build_prompt(
+        role=ROLE_EXPLORATION,
+        task="short",
+        command="explore",
+        meta_sink=unknown_sink,
+        transport=transport_budget("not-a-provider"),
+        **_BASE,
+    )
+    assert_true(
+        unknown_sink.get("task_cap") == DEFAULT_MAX_TASK_CHARS,
+        f"an unknown provider must fall back to the static cap: {unknown_sink}",
+    )
+
+    # The whole point of the larger cap: a task an argv provider has room for must survive.
+    over_static = "x" * (DEFAULT_MAX_TASK_CHARS + 400)
+    kept_sink: dict = {}
+    build_prompt(
+        role=ROLE_EXPLORATION,
+        task=over_static,
+        command="explore",
+        meta_sink=kept_sink,
+        transport=transport_budget("opencode"),
+        **_BASE,
+    )
+    assert_true(
+        "task_truncated" not in kept_sink,
+        "a task over the static cap but within the transport's real room was still cut, "
+        f"which is the loss this sizing exists to stop: {kept_sink}",
     )
 
 

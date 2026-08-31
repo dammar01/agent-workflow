@@ -1,9 +1,9 @@
-# Claude Code — Personal Global Config (v3.5.0)
+# Claude Code — Personal Global Config (v3.5.1)
 # Skills: ~/.claude/skills/   Memory: ~/.claude/memory/
 
-<!-- WORKFLOW-MAIN-AGENT:START — v3.5.0, do not edit manually -->
+<!-- WORKFLOW-MAIN-AGENT:START — v3.5.1, do not edit manually -->
 
-## Workflow Main Agent — v3.5.0
+## Workflow Main Agent — v3.5.1
 
 role: orchestrator + user interface + direct executor. Kamu BUKAN second_agent.
 second_agent: OpenCode (read-only evidence), dipanggil via .workflow/run script.
@@ -82,7 +82,7 @@ Native subagent (Task/Agent Claude, mis. cavecrew):
 ### Delegated commands — 1-call (NON-NEGOTIABLE)
 MINDSET (default): evidence → DELEGATE ke second_agent, jangan gather sendiri. Alasan: (1) hemat context main_agent — raw code tak masuk window, cuma digest; (2) second_agent handle VOLUME info lebih besar. Caveat: lebih banyak ≠ lebih baik — kuantitas milik second_agent, kualitas/atribusi/sintesis tetap tugas main_agent. Local read (Read/Grep) HANYA saat butuh atribusi file:line presisi tinggi DAN slice-nya kecil (satu/dua anchor) — bukan file besar/direktori penuh; ATAU evidence sudah terlanjur di context (re-delegate = mubazir). Volume besar walau minta file:line = tetap delegate. Ragu → delegate.
 Panggil: .workflow/run.ps1 (Windows) | .workflow/run.sh (mac/linux) <command> "<task>" "<MAIN_SESSION_ID>". Jalankan delegated runner lewat tool background-task Claude (`run_in_background: true`), BUKAN foreground blocking dan BUKAN shell `&`/`Start-Process`. Simpan task ID lalu ambil hasil task yang sama; timeout saat mengambil output bukan izin membuat invocation baru.
-- TASK BUDGET: <task> = INSTRUKSI ringkas (target ≤3000 char; runtime cap `DEFAULT_MAX_TASK_CHARS`, truncate senyap di atasnya). JANGAN tempel evidence/dump/isi file ke task — itu tugas second_agent gather, bukan isi prompt. Task kepanjangan → RINGKAS instruksinya, JANGAN pre-split buta jadi 2 call pakai angka argv (8191). Response bawa `meta.task_truncated` bila kena cap — itu sinyal ringkas, bukan izin split.
+- TASK BUDGET: <task> = INSTRUKSI ringkas (aman ≤3000 char di semua provider; cap SEBENARNYA diturunkan runtime dari transport provider — argv (opencode/agy) dapat sisa ruang command line yang terukur, stdin (codex) memakai `DEFAULT_MAX_TASK_CHARS`. Nilai efektif ada di `meta.task_cap` + `meta.task_cap_source`; truncate senyap di atasnya). JANGAN tempel evidence/dump/isi file ke task — itu tugas second_agent gather, bukan isi prompt. Task kepanjangan → RINGKAS instruksinya, JANGAN pre-split buta jadi 2 call pakai angka argv (8191). Response bawa `meta.task_truncated` bila kena cap — itu sinyal ringkas, bukan izin split.
 - <MAIN_SESSION_ID> = nilai [SESSION BINDING], WAJIB diteruskan arg ke-3 tiap explore/plan/analyze/verify. Tanpa ini, 2 main agent di project sama collapse ke sesi "default" yang sama (job saling block, state saling timpa). sweep memakai id itu hanya untuk lokasi report; doctor/init/upgrade/clean/inspect = direct.
 - Background task tetap menjalankan runner blocking dan akhirnya return {ok, content, meta, digest, evidence_ref}; task ID hanya ownership/wait handle milik Claude. Tak karang command, tak $AGENT_PATH. Normal path tak perlu check.py.
 - DIGEST-FIRST (kontrak premium⇄murah): baca `digest` DULU. Full `content`/`evidence_ref.artifact_path` dibuka HANYA saat (a) ada celah bukti di digest, ATAU (b) area kode kritis butuh verifikasi mekanisme. Buka evidence penuh tanpa alasan = balik "kerja kotor" yg justru didelegasi. `evidence_ref.reused=true` → bukti dari artifact sesi lampau (identik + anchor masih fresh); tetap dinilai kritis, staleness dijaga anchor_hash. `meta.content_mode=ref_only` → `content` cuma PREVIEW, bukan bukti penuh; teks lengkap ada di `evidence_ref.artifact_path` — baca file itu saat butuh detail, JANGAN simpulkan dari preview. Field absen = content utuh.

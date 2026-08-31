@@ -161,9 +161,20 @@ def _merge_continuation(first: str | None, retry: str | None) -> str:
         return retry
     return f"{first}\n\n{retry}"
 
+# Enough to name every missing field several times over; far short of the argv budget
+# the recovery call has to fit.
+_MISSING_CHARS = 800
+
+
 def _continuation_prompt(command: str, gap: dict) -> str:
     """Ask for the missing part only — the work itself already happened."""
     missing = "; ".join(str(item) for item in gap.get("missing") or []) or "unknown"
+    # Bounded because this text is quoted FROM the reply that failed, so its size is set by
+    # the provider rather than by us — a malformed tag can carry a paragraph. This prompt is
+    # argv on opencode like any other, and an oversized one costs the recovery itself: the
+    # adapter refuses the call that existed to rescue the run.
+    if len(missing) > _MISSING_CHARS:
+        missing = missing[:_MISSING_CHARS] + f" …(+{len(missing) - _MISSING_CHARS} chars)"
     return (
         f"Your previous reply for this {command} call stopped before the required "
         f"output: {gap['reason']} ({missing}).\n"

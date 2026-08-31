@@ -698,15 +698,27 @@ class CodexAdapter:
         for reader in readers:
             reader.start()
 
+        # Recorded, not swallowed. A prompt this adapter could not hand over is the one
+        # failure mode argv providers cannot have and this one can: the process is already
+        # running, so the write fails against a pipe the child closed — typically because
+        # it rejected the input — and the call then proceeds to wait on a process that was
+        # never given its question. Discarding the exception made that indistinguishable
+        # from an empty answer, which is why "prompt too long" has been guesswork rather
+        # than something the run meta could state.
+        stdin_error: str | None = None
         try:
             proc.stdin.write(prompt or "")
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - the reason is data here, not control flow
+            stdin_error = f"{type(exc).__name__}: {exc}"
         finally:
             try:
                 proc.stdin.close()
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001
+                # A close that fails after a successful write is the same broken pipe seen
+                # one step later; only report it when the write itself looked fine.
+                if stdin_error is None:
+                    stdin_error = f"{type(exc).__name__}: {exc} (on close)"
+        prompt_chars = len(prompt or "")
 
         timed_out = False
         kill_info: dict = {}
@@ -756,6 +768,13 @@ class CodexAdapter:
                 "output_complete": drained,
                 "idle_seconds": outcome["idle_seconds"],
                 "stderr_tail": outcome["stderr"][-2000:],
+                # Carried into THIS dict rather than written when they are learned, because
+                # this assignment replaces `last_call_meta` wholesale — anything set on the
+                # old object between the Popen above and here is discarded. The stdin write
+                # happens in that window, so recording it earlier looked correct and
+                # silently reached nothing.
+                "prompt_chars": prompt_chars,
+                "stdin_write_failed": stdin_error,
             }
         )
         return outcome

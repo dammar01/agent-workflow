@@ -72,6 +72,11 @@ class Router:
             "command": normalized,
             "role": role,
             "model": model,
+            # The selected provider by NAME, distinct from `provider_command` above, which
+            # is the binary and may be renamed or shimmed. Prompt sizing keys off the name
+            # because the transport — argv or stdin — is a property of the provider, not of
+            # whatever the binary happens to be called on this machine.
+            "provider": self.config.get("provider"),
             # No literal provider name as a fallback: `provider_command` is always present
             # (default_provider_config fills it for the SELECTED provider), and a hardcoded
             # one here would mean a config that somehow lost the key silently runs a
