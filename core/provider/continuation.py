@@ -3,6 +3,8 @@
 from core.evidence.contract import (
     STRUCTURAL_KINDS,
     contract_warnings,
+    digest_split,
+    digest_trim_point,
     validate_verification_contract,
 )
 
@@ -115,6 +117,11 @@ def _contract_gap(command: str, role: str, result) -> dict | None:
             }
     return None
 
+# How much of the first reply the digest trim may discard before the cut is read as a
+# mis-hit rather than a trim. A digest that belongs to this reply sits at its END, so
+# trimming it costs a tail; a cut that takes half the body found something else.
+_MIN_BODY_RETENTION = 0.5
+
 def _merge_continuation(first: str | None, retry: str | None) -> str:
     """Keep the work from the first reply and the contract block from the second.
 
@@ -134,13 +141,22 @@ def _merge_continuation(first: str | None, retry: str | None) -> str:
     head = "\n".join(first.splitlines()[:3]).strip()
     if head and head in retry:
         return retry
-    # A digest cut mid-block still opens with [DIGEST], and the contract check reads the
-    # FIRST marker it finds. Cut at the first one, not the last: a reply that quoted the
-    # template before stalling carries two markers, and trimming only the trailing one
-    # leaves the quoted header in front where it shadows the complete block behind it.
-    # Everything past that point is digest anyway — the evidence body is what precedes it.
-    if "[DIGEST]" in first and "[DIGEST]" in retry:
-        first = first.split("[DIGEST]", 1)[0].rstrip()
+    # Everything past the digest header is digest anyway, so the body is what precedes it
+    # and the truncated header the first reply stopped inside has to go: left in place it
+    # sits in front of the complete block behind it, and the contract reads the shadow.
+    #
+    # Two things narrow that cut. `digest_split` anchors to a standalone HEADER and takes
+    # the LAST one, so a marker named mid-sentence no longer counts as the start of a
+    # section. The retention floor catches what that still cannot: a quotation that happens
+    # to sit alone on its line. A task ABOUT this contract names "[DIGEST]" in its findings
+    # as a matter of course, and cutting there discarded every section that followed the
+    # mention — an artifact then indexed, and its anchors counted, from what survived.
+    if digest_split(retry) is not None:
+        cut = digest_trim_point(first)
+        if cut is not None:
+            trimmed = first[:cut].rstrip()
+            if len(trimmed) >= len(first) * _MIN_BODY_RETENTION:
+                first = trimmed
     if not first:
         return retry
     return f"{first}\n\n{retry}"

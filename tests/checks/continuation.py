@@ -12,7 +12,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from core.evidence.contract import validate_verification_contract
+from core.evidence.contract import _DIGEST_HEADER, validate_verification_contract
 from core.provider.continuation import _VERIFY_SHAPE_KINDS
 from core.provider.executor import Executor
 from core.runtime.state import ensure_workflow_workspace
@@ -194,13 +194,19 @@ def _test_contract_continuation() -> None:
         )
 
         # A reply that quoted the output template before stalling carries TWO [DIGEST]
-        # markers. The contract reads the first one, so trimming only the trailing marker
-        # left the quoted header in front and the join still read as damaged — the merge
-        # was silently rejected and the body lost anyway. Observed live before the cut was
-        # moved to the first marker.
+        # markers. Cutting at the FIRST match took the quotation for the start of the
+        # block and discarded everything behind it — sections, anchors, the whole body the
+        # run had already paid for. Observed live on tasks about this contract, which name
+        # the marker as a matter of course.
+        #
+        # The late anchor is the point of the fixture: it sits AFTER the quotation, so a
+        # cut at the first marker loses it while a cut at the standalone header keeps it.
+        # Without it the case passes under either behaviour and proves nothing.
         quoted = _TRUNCATED_BODY.replace(
             "assumptions: none",
-            "assumptions: none\nformat note: the [DIGEST] block wants summary/key_findings",
+            "assumptions: none\n"
+            "format note: the [DIGEST] block wants summary/key_findings\n"
+            "- late claim, after the quotation [core/telemetry.py:44]",
         )
         twice = _ScriptedAdapter([quoted, _DIGEST_ONLY])
         rescued = Executor(adapter=twice).execute(
@@ -213,10 +219,133 @@ def _test_contract_continuation() -> None:
             f"a quoted [DIGEST] in the stalled reply must not block the merge: {rescued.get('meta')}",
         )
         assert_true(
-            rescued_content.count("[DIGEST]") == 1,
-            "every [DIGEST] marker from the stalled reply must be cut, not just the last",
+            "core/telemetry.py:44" in rescued_content,
+            "a [DIGEST] named inside the body must not truncate the sections behind it",
+        )
+        assert_true(
+            len(_DIGEST_HEADER.findall(rescued_content)) == 1,
+            "the stalled reply's own digest header must be cut, leaving one real block "
+            "— the quotation in the body is prose and does not count",
         )
 
+
+        # The quotation can also sit ALONE on its line, where no amount of header-shape
+        # matching separates it from the real thing. What does: a digest is the last thing
+        # a reply writes, so sections FOLLOWING the marker mean the reply kept going and
+        # the marker was quoted. Cutting there cost every section behind it.
+        standalone_quote = (
+            "[EVIDENCE]\n"
+            "confidence: high\n"
+            "grounded:\n"
+            "- token estimate is chars//4 [core/executor.py:808]\n"
+            "the template reads:\n"
+            "\n"
+            "[DIGEST]\n"
+            "summary: <what main_agent needs>\n"
+            "\n"
+            "scope_covered:\n"
+            "- core/executor.py\n"
+            "uncertainties:\n"
+            "- cost fields unread [core/job_manager.py:191]\n"
+        )
+        kept = Executor(
+            adapter=_ScriptedAdapter([standalone_quote, _DIGEST_ONLY])
+        ).execute("explore", "map the telemetry", _session(), str(root))
+        kept_content = kept.get("content") or ""
+        assert_true(
+            "core/job_manager.py:191" in kept_content,
+            "sections written AFTER a quoted [DIGEST] prove it was not the block, and "
+            "must survive the merge",
+        )
+
+        # The tail-shape check passes whenever nothing after the marker HEADS a section,
+        # so a quotation followed by plain prose still slips through it. The retention
+        # floor is what stops that cut: a trim that discards most of the reply did not
+        # find the block this reply ends with, whatever it found.
+        prose_tail = (
+            "[EVIDENCE]\n"
+            "confidence: high\n"
+            "grounded:\n"
+            "- token estimate is chars//4 [core/executor.py:808]\n"
+            "quoting the template:\n"
+            "\n"
+            "[DIGEST]\n"
+            "summary: <what main_agent needs>\n"
+            "\n"
+            "- residual note 1 on telemetry [core/job_manager.py:191]\n"
+            "- residual note 2 on telemetry [core/job_manager.py:192]\n"
+            "- residual note 3 on telemetry [core/job_manager.py:193]\n"
+            "- residual note 4 on telemetry [core/job_manager.py:194]\n"
+            "- residual note 5 on telemetry [core/job_manager.py:195]\n"
+            "- residual note 6 on telemetry [core/job_manager.py:196]\n"
+            "- residual note 7 on telemetry [core/job_manager.py:197]\n"
+            "- residual note 8 on telemetry [core/job_manager.py:198]\n"
+            "- residual note 9 on telemetry [core/job_manager.py:199]\n"
+            "- residual note 10 on telemetry [core/job_manager.py:200]\n"
+            "- residual note 11 on telemetry [core/job_manager.py:201]\n"
+            "uncertainties: none\n"
+        )
+        floored = Executor(
+            adapter=_ScriptedAdapter([prose_tail, _DIGEST_ONLY])
+        ).execute("explore", "map the telemetry", _session(), str(root))
+        floored_content = floored.get("content") or ""
+        assert_true(
+            "core/job_manager.py:200" in floored_content,
+            "a trim that would discard most of the body must be refused, quoted marker "
+            "or not",
+        )
+
+        # Header matching is stricter than the substring search it replaced, and strictness
+        # has its own failure mode: a class of `[ \t]*` before `$` excludes `\r`, so every
+        # reply from a provider that emits CRLF reads as a MISSING digest. That is the
+        # false truncation this helper exists to prevent, arriving from the other side.
+        crlf_adapter = _ScriptedAdapter([_EVIDENCE.replace("\n", "\r\n"), _DIGEST_ONLY])
+        crlf = Executor(adapter=crlf_adapter).execute(
+            "explore", "map the telemetry", _session(), str(root)
+        )
+        assert_true(
+            len(crlf_adapter.calls) == 1,
+            "a complete CRLF reply carries its digest and must not trigger a continuation",
+        )
+        assert_true(
+            "resumed and finished" in (crlf.get("content") or ""),
+            "the CRLF reply's own digest must survive, not be replaced by a retry's",
+        )
+
+        # The reply that failed the contract is archived beside the one that replaced it.
+        # Without it the only trace of a failed contract is its character count, and asking
+        # later WHY it failed means guessing at text the recovery threw away.
+        first_files = sorted(
+            (root / ".workflow" / "sessions").glob("*/logs/*/output.first.md")
+        )
+        assert_true(
+            bool(first_files),
+            "a continuation must archive the reply it was asked to complete",
+        )
+        assert_true(
+            any("core/executor.py:808" in f.read_text(encoding="utf-8") for f in first_files),
+            "the archived first reply must be the failing text itself, not a summary",
+        )
+        # Archival is diagnostics for a call that already succeeded. A disk that cannot
+        # take the file must not turn a recovered run into a failed one.
+        import core.evidence.runtime_io as _io
+
+        def _refuse(*_a, **_k):
+            raise OSError("no space left on device")
+
+        _real_write = _io.atomic_write_text
+        _io.atomic_write_text = _refuse
+        try:
+            _io.write_first_reply(
+                root,
+                "some first reply",
+                prompt_id="20260101_000000_explore_deadbeef",
+                session_id=_session()["session_id"],
+            )
+        except Exception as exc:
+            raise AssertionError(f"archival I/O must not escape: {exc!r}") from exc
+        finally:
+            _io.atomic_write_text = _real_write
         # Bounded: an agent that cannot produce the contract twice is a real failure, and
         # must surface as one rather than being retried until the quota is gone.
         hopeless = _ScriptedAdapter([_STALLED, _STALLED])

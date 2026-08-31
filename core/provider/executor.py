@@ -38,6 +38,7 @@ from core.evidence.runtime_io import (
     write_evidence_sidecars,
     write_prompt_handoff,
     write_redaction_audit,
+    write_first_reply,
     write_response_snapshot,
     write_usage_record,
 )
@@ -701,6 +702,9 @@ class Executor:
         except Exception:
             pass
         continuation_meta: dict = {}
+        # Held across the continuation so the reply that failed the contract can be
+        # archived even when the merge discards it.
+        first_reply = ""
         try:
             result = self.adapter.run(
                 prompt,
@@ -717,6 +721,7 @@ class Executor:
             # produce it on the tenth try, and a loop here would spend quota discovering that.
             gap = _contract_gap(normalized_command, route.get("role"), result)
             if gap:
+                first_reply = result.get("content") or ""
                 continuation_meta = {
                     "continuation_reason": gap["reason"],
                     "continuation_missing": gap["missing"],
@@ -822,6 +827,15 @@ class Executor:
         write_response_snapshot(
             project_root,
             result.get("content") or "",
+            prompt_id=handoff.get("meta", {}).get("prompt_id"),
+            session_id=session_id,
+        )
+        # Written whenever a continuation was needed, not only when it discarded the first
+        # reply: a merged result no longer shows where the seam was, and the failing half is
+        # what a later diagnosis has to read.
+        write_first_reply(
+            project_root,
+            first_reply,
             prompt_id=handoff.get("meta", {}).get("prompt_id"),
             session_id=session_id,
         )

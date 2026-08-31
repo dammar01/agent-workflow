@@ -48,7 +48,7 @@ from tests.checks.facts import (
     _test_facts_concurrency,
 )
 from tests.checks.redaction import _test_redaction_boundary
-from tests.checks.verify_gaps import _test_quick_verify_gaps
+from tests.checks.verify_gaps import _test_quick_verify_gaps, _test_verification_routing
 from tests.checks.jobs import _test_submit_admission
 from tests.checks.workspace import (
     _test_init_upgrade_and_session_guard,
@@ -1065,6 +1065,7 @@ confidence: high — all requested checks ran
         _test_evidence_reuse()
         _test_redaction_boundary()
         _test_quick_verify_gaps()
+        _test_verification_routing()
         _test_submit_admission()
         _test_workspace_release_guards()
         _test_project_session_isolation()

@@ -65,7 +65,10 @@ from tests.checks.provider import (  # noqa: E402
 )
 from tests.checks.redaction import _test_redaction_boundary  # noqa: E402
 from tests.checks.registry import _test_every_check_is_registered  # noqa: E402
-from tests.checks.verify_gaps import _test_quick_verify_gaps  # noqa: E402
+from tests.checks.verify_gaps import (  # noqa: E402
+    _test_quick_verify_gaps,
+    _test_verification_routing,
+)
 from tests.checks.workspace import (  # noqa: E402
     _test_init_upgrade_and_session_guard,
     _test_project_session_isolation,
@@ -89,6 +92,7 @@ SUITES: dict[str, tuple] = {
     "evidence-reuse": (_test_evidence_reuse, "identical query served from a fresh artifact"),
     "redaction": (_test_redaction_boundary, "secret boundary on outbound payloads"),
     "verify-gaps": (_test_quick_verify_gaps, "quick verify reports gaps as incomplete"),
+    "verify-routing": (_test_verification_routing, "the routing table decides what blocks, both ways"),
     "jobs": (_test_submit_admission, "job admission, capacity, and lock"),
     "workspace-release": (_test_workspace_release_guards, "lock release guards"),
     "session-isolation": (_test_project_session_isolation, "one project's session cannot read another's"),

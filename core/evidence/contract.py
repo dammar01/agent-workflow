@@ -377,6 +377,65 @@ _DIGEST_COMMANDS = {"explore", "analyze", "plan"}
 # started is the cheapest available proof that the block never finished.
 _DIGEST_TAIL = re.compile(r"^\s*confidence\s*:", re.IGNORECASE | re.MULTILINE)
 _CODE_FENCE = re.compile(r"^\s*```", re.MULTILINE)
+# `[DIGEST]` opens a section on a line of its own. The same characters also appear INSIDE
+# an evidence body whenever the agent quotes the contract it was asked to follow — a task
+# ABOUT this workflow names the marker in its findings as a matter of course. A substring
+# search cannot tell a section header from a sentence mentioning one, and reading the first
+# match let a quoted mention shadow the real block behind it: the reply was judged
+# truncated, its merge rejected, and the body it had already earned thrown away.
+# `\r` belongs in the trailing class, not just spaces and tabs. In MULTILINE mode `$`
+# matches before `\n` and nowhere else, so on a CRLF reply the `\r` sits between the
+# marker and the anchor and the header never matches — a valid digest read as a missing
+# one, which is exactly the false truncation this helper replaced a substring search to
+# avoid. `_SECTION_HEAD` already tolerates it through `\s`; this is the sibling that did
+# not.
+_DIGEST_HEADER = re.compile(r"^[ \t]*\[DIGEST\][ \t\r]*$", re.MULTILINE)
+
+
+def digest_split(body: str) -> tuple[str, str] | None:
+    """(before, after) around the LAST standalone [DIGEST] header, or None if absent.
+
+    Last rather than first: a body may name the marker several times, and the block that
+    closes the reply is the final one. Taking the first match is what made a mention in
+    the middle of the evidence stand in for the section at the end of it.
+    """
+    matches = list(_DIGEST_HEADER.finditer(body or ""))
+    if not matches:
+        return None
+    last = matches[-1]
+    return body[: last.start()], body[last.end() :]
+
+
+# The fields a [DIGEST] block is made of. They are what separates a real digest tail from
+# a body that merely names the marker: anything else heading a section after the header
+# means the reply went on writing evidence, so the header was a quotation.
+_DIGEST_FIELDS = frozenset(
+    {
+        "summary",
+        "key_findings",
+        "evidence_basis",
+        "risk_level",
+        "recommended_next_action",
+        "confidence",
+    }
+)
+
+
+def digest_trim_point(body: str) -> int | None:
+    """Where a truncated [DIGEST] begins, so a continuation can replace it. None if none.
+
+    A digest the reply stopped inside is the LAST thing in that reply. Sections following
+    the header mean the reply kept going, and the header was something it quoted — cutting
+    there takes every section behind it with it, which is exactly how whole evidence
+    bodies were being thrown away.
+    """
+    parts = digest_split(body or "")
+    if parts is None:
+        return None
+    before, after = parts
+    if {name.lower() for name in _SECTION_HEAD.findall(after)} - _DIGEST_FIELDS:
+        return None
+    return len(before)
 # Closers that address the USER. The output is evidence material handed to another program;
 # a question at the end of it is a conversational turn that nothing will ever answer. Kept
 # to explicit phrases rather than "ends with ?" — a grounded claim may legitimately quote
@@ -412,7 +471,8 @@ def _structural_warnings(command: str, body: str) -> list[dict]:
     """
     warnings: list[dict] = []
     if command in _DIGEST_COMMANDS:
-        if "[DIGEST]" not in body:
+        digest_parts = digest_split(body)
+        if digest_parts is None:
             warnings.append(
                 {
                     "kind": "digest_missing",
@@ -422,7 +482,7 @@ def _structural_warnings(command: str, body: str) -> list[dict]:
                 }
             )
         else:
-            tail = body.split("[DIGEST]", 1)[1]
+            tail = digest_parts[1]
             if not _DIGEST_TAIL.search(tail) or extract_digest(body) is None:
                 warnings.append(
                     {
@@ -587,8 +647,9 @@ def validate_verification_contract(content: str) -> dict:
     verification_body = body
     if "[VERIFICATION]" in body:
         verification_body = body.split("[VERIFICATION]", 1)[1]
-    if "[DIGEST]" in verification_body:
-        verification_body = verification_body.split("[DIGEST]", 1)[0]
+    verification_parts = digest_split(verification_body)
+    if verification_parts is not None:
+        verification_body = verification_parts[0]
     warnings: list[dict] = []
     missing = validate_fields("verify", verification_body)
     if "[VERIFICATION]" not in body:
@@ -619,7 +680,6 @@ def validate_verification_contract(content: str) -> dict:
         name: _section_items(verification_body, name)
         for name in _VERIFY_SECTION_NAMES
     }
-    blocking = _meaningful_items(sections["blocking_findings"])
     checks = _meaningful_items(sections["checks_run"])
     gaps = _meaningful_items(sections["not_verified"])
 
@@ -632,7 +692,17 @@ def validate_verification_contract(content: str) -> dict:
                 }
             )
 
-    effective_blocking = list(blocking)
+    # What blocks is decided by the routing table, not by the heading the agent filed the
+    # finding under. Reading membership straight off `blocking_findings` made the table
+    # one-way: a note-class finding written into that section was flagged `finding_misrouted`
+    # and then obeyed anyway, so a run whose findings were all notes still came back a
+    # failure. Promotion out of escalations/notes is unchanged — that direction was already
+    # right, and is what keeps this fail-closed.
+    #
+    # The one thing membership is NOT read from the table: a finding already sitting in
+    # `blocking_findings` whose tags do not parse. The table cannot route what it cannot
+    # read, and an unreadable finding in that section is the last place to start guessing.
+    effective_blocking: list[str] = []
     for section_name in ("blocking_findings", "escalations", "notes"):
         for finding in _meaningful_items(sections[section_name]):
             tags, invalid = _verification_tags(finding)
@@ -646,6 +716,8 @@ def validate_verification_contract(content: str) -> dict:
                         "sample": finding[:240],
                     }
                 )
+                if section_name == "blocking_findings":
+                    effective_blocking.append(finding)
                 continue
             expected_section = _expected_verification_section(tags)
             if expected_section != section_name:
@@ -659,8 +731,8 @@ def validate_verification_contract(content: str) -> dict:
                         "sample": finding[:240],
                     }
                 )
-                if expected_section == "blocking_findings":
-                    effective_blocking.append(finding)
+            if expected_section == "blocking_findings":
+                effective_blocking.append(finding)
 
     if not re.search(
         r"^\s*confidence\s*:\s*(low|medium|high)\b",
@@ -784,9 +856,10 @@ def extract_digest(content: str) -> dict | None:
     """
     import re
 
-    if not content or "[DIGEST]" not in content:
+    parts = digest_split(content or "")
+    if parts is None:
         return None
-    block = content.split("[DIGEST]", 1)[1]
+    block = parts[1]
     # Stop at the next bracketed section, if any.
     block = re.split(r"\n\[[A-Z_]+\]", block, 1)[0]
 

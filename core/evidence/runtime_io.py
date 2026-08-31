@@ -191,6 +191,35 @@ def write_response_snapshot(
         atomic_write_text(run_dir / "output.raw.md", content)
 
 
+def write_first_reply(
+    project_root: Path,
+    content: str,
+    prompt_id: str | None = None,
+    session_id: str | None = None,
+) -> None:
+    """Archive the reply a continuation was asked to complete.
+
+    `output.raw.md` holds what the run finally returned. When the continuation supersedes
+    the first reply instead of merging with it, the text that failed the contract is the
+    one thing kept nowhere — only its length survives, in `continuation_first_reply_chars`.
+    Asking afterwards WHY a contract failed then means guessing the shape of a reply that
+    no longer exists, and the recovery destroys the evidence for the failure it recovered
+    from.
+    """
+    if not prompt_id or not content:
+        return
+    try:
+        paths = workflow_paths(project_root, session_id)
+        run_dir = paths["logs_dir"] / prompt_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        atomic_write_text(run_dir / "output.first.md", content)
+    except (OSError, TypeError, ValueError):
+        # Fail-open like write_call_meta, and for the same reason: this is diagnostics for
+        # a call that already succeeded. A recovered run must not be reported as failed
+        # because the archive of its first attempt could not be written.
+        pass
+
+
 def write_redaction_audit(
     project_root: Path,
     session_id: str | None,
