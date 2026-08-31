@@ -88,6 +88,19 @@ def _fit_by_cost(task: str, budget: int, newline_cost: int) -> int:
     return low
 
 
+def _argv_limit_enforced() -> bool:
+    """Whether this platform actually refuses an oversize command line.
+
+    A named seam rather than a bare `osutil.IS_WINDOWS` read, because the only way to test
+    the Windows arithmetic on a Linux runner is to make the answer differ from the host —
+    and forging the global platform flag to do that reaches far past this function. It also
+    reroutes `runtime_lock`, `job_manager` and `evidence_store` into their Windows branches,
+    which then `import msvcrt` on a machine that has none. That is not a hypothetical: it is
+    how the previous attempt at this pin broke CI, one failure after the one it fixed.
+    """
+    return osutil.IS_WINDOWS
+
+
 def _transport_cap(
     transport: dict | None, probe: str, task: str
 ) -> tuple[int, dict]:
@@ -108,7 +121,7 @@ def _transport_cap(
         # stdin, or a provider not in the table. The static cap is the pre-existing
         # behaviour and stays the answer until there is evidence for a better number.
         return static, {"task_cap": static, "task_cap_source": "policy"}
-    if not osutil.IS_WINDOWS:
+    if not _argv_limit_enforced():
         # The 8191/32767 ceilings are cmd.exe and CreateProcess limits. POSIX argv runs to
         # megabytes, which is why both adapters' `_too_long_for_cmd` returns None off
         # Windows and never refuses a call there. Deriving a budget from a limit nothing

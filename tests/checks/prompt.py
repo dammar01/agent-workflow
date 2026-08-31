@@ -22,7 +22,7 @@ from adapters.providers import opencode_adapter
 import contextlib
 
 from config.providers import transport_budget
-from utils import osutil
+from core.prompt import prompt_builder
 from config.settings import DEFAULT_MAX_TASK_CHARS
 from core.provider.continuation import _EVIDENCE_MARKERS
 from core.prompt.prompt_builder import build_prompt
@@ -220,19 +220,19 @@ def _test_task_cap_is_visible_in_and_out_of_band() -> None:
 
 @contextlib.contextmanager
 def _pinned_platform(is_windows: bool):
-    """Run a block as if on `is_windows`.
+    """Answer the argv-ceiling question as `is_windows`, without lying about the host.
 
-    Pinned rather than skipped: the argv arithmetic is a Windows guarantee, and a check
-    that only runs on a Windows machine is one the CI box reports green without having
-    performed. Both directions matter — off Windows the same code must STOP deriving a
-    budget from a ceiling nothing there enforces.
+    Patches the one function that asks it. Setting `osutil.IS_WINDOWS` would be shorter and
+    is what this did first — and it also sent `runtime_lock` into its Windows branch, which
+    `import msvcrt` on the Linux runner. The check that exercises the Executor runs real
+    locking code, so the forgery has to stop at the arithmetic it is there to reach.
     """
-    original = osutil.IS_WINDOWS
-    osutil.IS_WINDOWS = is_windows
+    original = prompt_builder._argv_limit_enforced
+    prompt_builder._argv_limit_enforced = lambda: is_windows
     try:
         yield
     finally:
-        osutil.IS_WINDOWS = original
+        prompt_builder._argv_limit_enforced = original
 
 
 def _assert_serialized_argv_fits() -> None:
