@@ -17,7 +17,7 @@ PROVIDER_CONFIG_FILE = BASE_DIR / "config" / "second_agent.json"
 # config.json may override it per project.
 DEFAULT_PROVIDER = os.getenv("AI_PROXY_PROVIDER", "opencode")
 
-TOOL_VERSION = "3.5.1"
+TOOL_VERSION = "3.5.2"
 MAIN_PY = BASE_DIR / "main.py"
 CHECK_PY = BASE_DIR / "check.py"
 
