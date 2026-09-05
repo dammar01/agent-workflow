@@ -152,6 +152,45 @@ yang hilang, melainkan jawabannya.
 
 **agy**: tak dikerjakan, keputusan scope.
 
+## Statusline: tempat angka itu terbaca
+
+Angka yang benar hanya berguna bila terlihat. Rilis ini memasang statusline global yang
+merender satu baris di setiap prompt:
+
+```
+agent-workflow | Second Agent 15.2M tok (14.5M cached) / 8 calls | Saved 642.7k tok
+```
+
+`Second Agent` membaca `actual_input_tokens` dan `actual_cached_input_tokens` — field yang
+baru ada karena perubahan di atas — dan jatuh kembali ke estimasi char-derived pada baris
+yang tak dihitung provider (`dist/config/claude/hooks/workflow-statusline.ps1:105-108`).
+Bar ini karena itu bukan fitur yang berdiri sendiri: ia permukaan pertama tempat selisih
+1.430× di tabel atas terbaca tanpa membuka `usage.jsonl`.
+
+Dua flavor dikirim, satu yang terpasang: Windows mendapat `.ps1`, POSIX mendapat `.sh`
+(`installer/base.py:381-395`). Key `statusLine` duduk di SEBELAH `hooks` di `settings.json`,
+jadi rewrite POSIX harus menjangkaunya terpisah — melewatkannya memasang statusline
+mac/linux yang memanggil `powershell`, dan Claude Code merender statusline rusak sebagai
+statusline kosong (`installer/settings.py:106-119`).
+
+### Namanya di-namespace sebelum sempat dirilis
+
+Nama pertamanya `statusline.ps1`/`.sh`. `~/.claude/hooks/statusline.ps1` adalah nama yang
+mungkin sekali sudah dipakai orang untuk statusline buatan sendiri, dan file hook adalah
+replace target: isi yang berbeda di-backup lalu ditimpa penuh (`installer/base.py:325-338`).
+Key `statusLine` di `settings.json` aman — installer hanya menulis key yang belum ada —
+tetapi key yang selamat sambil file yang ditunjuknya diganti bukan penyelamatan yang berarti.
+
+Nama akhirnya `workflow-statusline.{ps1,sh}`. Hook lain di direktori itu —
+`intent-gate-check`, `session-bind`, `graph-refresh` — sudah cukup spesifik untuk tidak
+bertabrakan; yang generik hanya satu, dan hanya itu yang diganti. Karena versinya belum
+di-tag, tak ada instalasi di luar mesin pengembang yang perlu dimigrasikan.
+
+`statusLine` juga ditambahkan ke `SETTINGS_KEEP_KEYS`
+(`tools/maintain/extract_config.py:74`). Tanpa itu, regenerasi template dari config live
+membuang registrasinya diam-diam — bug yang belum sempat menggigit hanya karena template
+yang ter-commit masih memilikinya.
+
 ## Diketahui, tak diubah
 
 - `provider` pada baris usage masih `None`. `call_meta` tak pernah menetapkan identitas
@@ -165,3 +204,8 @@ yang hilang, melainkan jawabannya.
 - Bila `session_token_budget` di-set, angkanya baru saja berubah sekitar seribu kali lipat.
   Ceiling yang masuk akal untuk `chars//4` akan menggigit di panggilan pertama. Spend-nya
   tidak bertambah; penutup matanya yang dilepas.
+- `_install_text` tak punya konsep kepemilikan untuk file fisik: file hook yang isinya
+  berbeda di-backup lalu diganti, dan `replace` terlihat sama apakah yang ditimpa versi lama
+  kita atau file asing milik user (`installer/base.py:325-338`). Bandingkan dengan
+  `settings.json`, yang justru berhati-hati sampai memperingatkan per key. Namespace di atas
+  mengecilkan peluang tabrakan; ia tidak menutup asimetrinya.
