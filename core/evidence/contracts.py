@@ -23,7 +23,10 @@ import hashlib
 from dataclasses import asdict, dataclass, field, fields
 from typing import Any
 
-CONTRACT_VERSION = 1
+# Bumped to 2 when the actual_* token fields landed. The number is a reading aid, not a
+# gate: `_coerce` drops unknown keys either way, so a v1 row stays readable and simply
+# reports its actual_* fields as None — which is the truth about it.
+CONTRACT_VERSION = 2
 
 # Where the usage stream lands, relative to the project's `.workflow` directory. A sibling
 # of redactions.jsonl and deliberately project-local: telemetry about a codebase is
@@ -255,7 +258,28 @@ class UsageRecord:
     digest_chars: int | None = None
     estimated_input_tokens: int | None = None
     estimated_output_tokens: int | None = None
+    # "estimated" (chars//4), "provider" (both directions measured), or "mixed" (one
+    # direction measured and the other estimated — the shape a provider that reports only
+    # its output count produces). A cost figure that cannot tell those apart is not one.
     token_source: str | None = None
+    # What the provider itself reported, when it reported anything. Kept BESIDE the
+    # estimates rather than replacing them, because the two count different things: a
+    # chars//4 estimate measures the answer that arrived, while a provider's output count
+    # includes the reasoning that never did. A row that cannot show both cannot explain
+    # the gap between them, and that gap is the whole reason these fields exist.
+    actual_input_tokens: int | None = None
+    actual_output_tokens: int | None = None
+    # Breakdowns, NOT addends. Every provider that reports reasoning counts it inside
+    # output_tokens, and cached input inside input_tokens; adding these to a total bills
+    # the same token twice. Recorded because the split is the interesting part, and
+    # spelled out here because a later reader summing every int on this row is the
+    # obvious mistake to make.
+    actual_reasoning_tokens: int | None = None
+    actual_cached_input_tokens: int | None = None
+    # Which provider invocation of this command produced the row. A continuation runs the
+    # adapter a second time, and this is what separates the retry's cost from the first
+    # attempt's. None for a row that never reached a provider at all, such as a reuse hit.
+    provider_call_index: int | None = None
     # Output the second agent produced that main_agent never had to read, because the
     # digest stood in for it. The digest-first contract's whole justification, finally
     # expressed as a number instead of an argument.
@@ -273,6 +297,33 @@ class UsageRecord:
     @classmethod
     def from_dict(cls, payload: dict | None) -> "UsageRecord":
         return _coerce(cls, payload)
+
+
+def billable_input(row: "UsageRecord") -> int:
+    """The input count to charge this row by: measured when measured, estimated otherwise.
+
+    Cached input is NOT added. It is already part of the input count that sits beside it,
+    and adding the two would bill the cheap half of a call twice.
+
+    Falls back to zero only for a row that has neither figure, which is a row that recorded
+    no call. Everywhere a distinction between "zero" and "unknown" matters, the nullable
+    fields are still there to read directly.
+    """
+    if row.actual_input_tokens is not None:
+        return row.actual_input_tokens
+    return row.estimated_input_tokens or 0
+
+
+def billable_output(row: "UsageRecord") -> int:
+    """The output count to charge this row by.
+
+    Reasoning is NOT added, for the same reason cached input is not: providers report it
+    as a breakdown OF this number. Summing them is the mistake that makes a token-spend
+    figure grow every time a model thinks harder about the same answer.
+    """
+    if row.actual_output_tokens is not None:
+        return row.actual_output_tokens
+    return row.estimated_output_tokens or 0
 
 
 def _digest_chars(digest: Any) -> int | None:
@@ -311,9 +362,19 @@ def usage_from_result(
         response_chars = len(content) if isinstance(content, str) else None
 
     digest_chars = _digest_chars(result.get("digest") if isinstance(result, dict) else None)
+    # What the digest stood in for is a property of the ANSWER the command returned, not
+    # of whichever provider call happened to produce the last piece of it. A continuation
+    # merges two replies and records a row per call; the row carrying the digest holds
+    # only its own half, and comparing the digest against that half would report a saving
+    # smaller than the one main_agent actually got — sometimes zero. `final_response_chars`
+    # is how the caller says "measure against the whole answer"; absent, the row's own
+    # count is the whole answer and the two are the same thing.
+    final_chars = call.get("final_response_chars")
+    if not isinstance(final_chars, int):
+        final_chars = response_chars
     avoided = None
-    if response_chars is not None and digest_chars is not None:
-        avoided = max(0, response_chars - digest_chars) // 4
+    if final_chars is not None and digest_chars is not None:
+        avoided = max(0, final_chars - digest_chars) // 4
 
     verdict = meta.get("verdict")
     accepted = None
@@ -340,6 +401,14 @@ def usage_from_result(
         estimated_input_tokens=call.get("estimated_input_tokens"),
         estimated_output_tokens=call.get("estimated_output_tokens"),
         token_source=call.get("token_source"),
+        # Read straight through from the call meta, with no arithmetic on the way. Whoever
+        # measured these is the only party entitled to combine them: reasoning already sits
+        # inside the output count, so a helpful-looking sum here would double-bill it.
+        actual_input_tokens=call.get("actual_input_tokens"),
+        actual_output_tokens=call.get("actual_output_tokens"),
+        actual_reasoning_tokens=call.get("actual_reasoning_tokens"),
+        actual_cached_input_tokens=call.get("actual_cached_input_tokens"),
+        provider_call_index=call.get("provider_call_index"),
         premium_context_avoided_tokens=avoided,
         reused_evidence=bool(meta.get("reused_evidence")),
         redactions=sum(

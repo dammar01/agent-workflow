@@ -229,6 +229,65 @@ def _usage_derivation() -> None:
         "a reuse hit is a delegated call that cost nothing — omitting it overstates cost per task",
     )
 
+    # Provider-reported counts travel through untouched. The assertion is deliberately on
+    # the values being IDENTICAL to what was measured: any arithmetic applied on the way
+    # here would be this layer inventing a number it is not entitled to invent.
+    measured = usage_from_result(
+        {"ok": True, "content": "x" * 40},
+        spec=TaskSpec.build("explore", "t", "sid", "/repo"),
+        call_meta={
+            "token_source": "provider",
+            "estimated_input_tokens": 10,
+            "estimated_output_tokens": 10,
+            "actual_input_tokens": 1200,
+            "actual_output_tokens": 900,
+            "actual_reasoning_tokens": 700,
+            "actual_cached_input_tokens": 1000,
+            "provider_call_index": 1,
+        },
+        recorded_at="2026-01-01T00:00:00+00:00",
+    )
+    assert_true(
+        measured.actual_input_tokens == 1200 and measured.actual_output_tokens == 900,
+        "provider-reported token counts must reach the record unmodified",
+    )
+    assert_true(
+        measured.actual_reasoning_tokens == 700
+        and measured.actual_reasoning_tokens < measured.actual_output_tokens,
+        "reasoning is a breakdown OF the output count, not a figure to add to it — a "
+        "reasoning total exceeding the output it lives inside would mean the two were summed",
+    )
+    assert_true(
+        measured.actual_cached_input_tokens == 1000
+        and measured.actual_cached_input_tokens < measured.actual_input_tokens,
+        "cached input is likewise a breakdown of the input count, never an addend",
+    )
+    assert_true(
+        measured.estimated_output_tokens == 10,
+        "the estimate stays on the row beside the measurement; dropping it would remove "
+        "the only baseline that shows how far chars//4 was off",
+    )
+    assert_true(
+        measured.provider_call_index == 1,
+        "the invocation index distinguishes a continuation retry from the first attempt",
+    )
+
+    # The far more common row: a provider that reports nothing. Absent must stay absent
+    # rather than becoming zero — an unmeasured count and a measured zero are different
+    # facts, and only one of them belongs in an average.
+    unmeasured = usage_from_result(
+        {"ok": True, "content": "x" * 40},
+        spec=TaskSpec.build("explore", "t", "sid", "/repo"),
+        call_meta={"token_source": "estimated", "estimated_output_tokens": 10},
+        recorded_at="2026-01-01T00:00:00+00:00",
+    )
+    assert_true(
+        unmeasured.actual_output_tokens is None
+        and unmeasured.actual_reasoning_tokens is None
+        and unmeasured.provider_call_index is None,
+        "a provider that reported no usage must leave the actual_* fields None, not zero",
+    )
+
 
 def _stream_append() -> None:
     root = Path(tempfile.mkdtemp(prefix="aw-contracts-"))

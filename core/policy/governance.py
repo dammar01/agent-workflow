@@ -16,6 +16,7 @@ control that is weaker than it sounds is worse than an absent one — it gets tr
 """
 
 from config.providers import bundled_providers
+from core.evidence.contracts import billable_input, billable_output
 
 # Tools each command legitimately needs. Read-only everywhere: the second agent gathers
 # evidence and never writes, which is the actual invariant this expresses. Verify gets
@@ -117,7 +118,11 @@ def budget_state(rows, session_id: str, limit: int | None) -> dict:
     for row in rows:
         if row.session_id != session_id:
             continue
-        spent += (row.estimated_input_tokens or 0) + (row.estimated_output_tokens or 0)
+        # Measured counts when the provider gave them, estimates otherwise. Worth knowing
+        # when reading a ceiling that suddenly bites sooner: a provider's output count
+        # includes reasoning the chars//4 estimate never saw, so the same work measures
+        # larger than it used to. The spend did not grow; the blindfold came off.
+        spent += billable_input(row) + billable_output(row)
     return {
         "limit": limit,
         "spent": spent,

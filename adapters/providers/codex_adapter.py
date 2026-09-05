@@ -71,6 +71,8 @@ from utils import osutil
 from utils.parser import ensure_text
 from utils.redact import redact, redact_value
 
+from adapters.shared.usage import merge_usage, normalize_usage
+
 CODEX_COMMAND = os.getenv("CODEX_COMMAND", "codex")
 # read-only is the whole point of a second agent: it gathers evidence and writes nothing.
 # Overridable for the rare caller that knows better, but never widened by this adapter.
@@ -223,6 +225,34 @@ class CodexAdapter:
         if found:
             return found
         return "" if saw_json else body.strip()
+
+    @staticmethod
+    def extract_usage(text: str) -> dict | None:
+        """Token counts codex reported, summed across every turn in the stream.
+
+        Read from the same raw JSONL `clean_output` reads, and read for a different reason:
+        that one keeps the last agent message, because only the final answer is wanted.
+        This one ADDS UP every `turn.completed`, because a run that took three turns spent
+        the tokens of all three, and keeping only the last would report a fraction of the
+        bill as the whole of it.
+
+        Returns None when the stream carries no usage, which is what a non-JSONL codex
+        build produces. The caller keeps its chars//4 estimate in that case rather than
+        gaining a zero, and the row says `token_source: estimated` — true, and visibly so.
+        """
+        total: dict | None = None
+        for line in ensure_text(text).splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("{"):
+                continue
+            try:
+                event = json.loads(stripped)
+            except ValueError:
+                continue
+            if not isinstance(event, dict) or event.get("type") != "turn.completed":
+                continue
+            total = merge_usage(total, normalize_usage(event.get("usage")))
+        return total
 
     def run(
         self,
@@ -775,6 +805,10 @@ class CodexAdapter:
                 # silently reached nothing.
                 "prompt_chars": prompt_chars,
                 "stdin_write_failed": stdin_error,
+                # Parsed from the stdout captured just above, while it is still the raw
+                # event stream. After this point the only survivor is the cleaned final
+                # message, and the usage events are not in it.
+                "provider_usage": self.extract_usage(outcome["stdout"]),
             }
         )
         return outcome

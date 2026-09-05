@@ -70,6 +70,7 @@ from tests.checks.deps import _test_runtime_is_stdlib_only
 from tests.checks.governance import _test_governance_controls
 from tests.checks.graph_verification import _test_graph_verification
 from tests.checks.telemetry import _test_telemetry_metrics
+from tests.checks.usage_tokens import _test_usage_token_accounting
 from tests.checks.messages import _test_no_code_in_messages
 from tests.checks.provider import (
     _test_agy_provider,
@@ -1086,6 +1087,7 @@ confidence: high — all requested checks ran
         _test_installer_drift_check()
         _test_runtime_is_stdlib_only()
         _test_telemetry_metrics()
+        _test_usage_token_accounting()
         _test_governance_controls()
         _test_graph_verification()
 

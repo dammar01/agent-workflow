@@ -20,6 +20,7 @@ from core.evidence.contract import (
     validate_verification_contract,
 )
 from core.evidence.contracts import TaskSpec, correlation_id_for, usage_from_result
+from adapters.shared.usage import token_source_for
 from core.policy.governance import budget_limit, budget_state
 from core.audit import telemetry
 from core.evidence import fact_store
@@ -101,6 +102,27 @@ _FANOUT_WARNINGS = {
 }
 
 
+
+def _apply_provider_usage(meta: dict, usage) -> None:
+    """Stamp provider-reported counts onto a call meta, or leave it estimated.
+
+    Copies four numbers and computes nothing from them. Reasoning already sits inside the
+    output count and cached input inside the input count, so the only arithmetic that
+    could happen here is the arithmetic that would be wrong.
+
+    A provider that reported nothing leaves every field untouched, which keeps the row's
+    chars//4 estimate and its `token_source: estimated`. That is a measurement this
+    runtime does not have, and saying so is more useful than a zero that reads as one.
+    """
+    if not isinstance(usage, dict):
+        return
+    meta["actual_input_tokens"] = usage.get("input_tokens")
+    meta["actual_output_tokens"] = usage.get("output_tokens")
+    meta["actual_reasoning_tokens"] = usage.get("reasoning_tokens")
+    meta["actual_cached_input_tokens"] = usage.get("cached_input_tokens")
+    meta["token_source"] = token_source_for(usage)
+
+
 class Executor:
     def __init__(
         self,
@@ -126,6 +148,11 @@ class Executor:
         # top of execute(): a reuse hit builds no call meta, and inheriting the previous
         # call's numbers would attribute a real provider spend to a free answer.
         self._last_call_meta: dict | None = None
+        # One entry per provider invocation of the run in flight, in order. A continuation
+        # runs the adapter twice, and a single call meta cannot describe two calls: the
+        # attribute the adapter writes is rebound wholesale on the second run, so whatever
+        # the first one measured is gone unless it was copied out before then.
+        self._call_metas: list[dict] = []
 
     def _adapter_for(self, project_root):
         """The adapter THIS project selects, resolved late enough to know the project.
@@ -281,6 +308,78 @@ class Executor:
         except Exception:
             return {"limit": None, "exceeded": False}
 
+    def _snapshot_invocation(self, prompt: str, result: dict) -> None:
+        """Copy out what THIS provider invocation measured, before the next one lands.
+
+        `adapter.last_call_meta` is a single attribute reassigned wholesale on every run,
+        so a continuation's second call destroys the first call's numbers. The adapters
+        carry the same warning about their own metadata for the same reason; this is that
+        hazard one level up, where two runs of one command meet.
+
+        Instrumentation: it never raises into the call it is measuring.
+        """
+        try:
+            content = result.get("content") if isinstance(result, dict) else None
+            self._call_metas.append(
+                {
+                    "adapter_meta": dict(
+                        getattr(self.adapter, "last_call_meta", None) or {}
+                    ),
+                    "prompt_chars": len(prompt),
+                    "response_chars": len(content) if isinstance(content, str) else None,
+                }
+            )
+        except Exception:
+            pass
+
+    def _per_invocation_metas(self, call_meta: dict) -> list[dict]:
+        """The archived call meta, split into one row per provider invocation.
+
+        Returns an empty list when the command made at most one provider call: a single
+        invocation is fully described by the call meta that already exists, and emitting a
+        near-duplicate of it would double every figure in the report.
+
+        Built from the ALREADY-REDACTED call meta, overriding only counts and durations.
+        Merging each invocation's raw adapter meta in here would route metadata into the
+        usage stream around the redaction boundary the aggregate row goes through.
+        """
+        snapshots = list(self._call_metas)
+        if len(snapshots) < 2:
+            return []
+        rows: list[dict] = []
+        for index, snap in enumerate(snapshots):
+            adapter_meta = snap.get("adapter_meta") or {}
+            prompt_chars = snap.get("prompt_chars")
+            resp_chars = snap.get("response_chars")
+            row = {
+                **call_meta,
+                "prompt_chars": prompt_chars,
+                "response_chars": resp_chars,
+                "estimated_input_tokens": (
+                    prompt_chars // 4 if isinstance(prompt_chars, int) else None
+                ),
+                "estimated_output_tokens": (
+                    resp_chars // 4 if isinstance(resp_chars, int) else None
+                ),
+                "token_source": "estimated",
+                "duration_seconds": adapter_meta.get("duration_seconds"),
+                "provider_call_index": index,
+                # Reset for this row: the aggregate may carry provider counts from the
+                # last invocation, and inheriting them would credit one call's tokens to
+                # both. Re-stamped below from this invocation's own usage, if it has any.
+                "actual_input_tokens": None,
+                "actual_output_tokens": None,
+                "actual_reasoning_tokens": None,
+                "actual_cached_input_tokens": None,
+            }
+            _apply_provider_usage(row, adapter_meta.get("provider_usage"))
+            rows.append(row)
+        # The saved-context figure is measured against the merged answer, and lands on the
+        # final row alongside the digest that earned it. Without this the last row would be
+        # compared against its own fragment of the reply.
+        rows[-1]["final_response_chars"] = call_meta.get("response_chars")
+        return rows
+
     def _record_usage(
         self,
         result: dict,
@@ -327,21 +426,43 @@ class Executor:
                 stamp_task_chain(project_root, session_id, correlation)
             elif command in ("execute", "verify"):
                 correlation = active_chain_correlation(project_root, session_id)
-            record = usage_from_result(
-                measured,
-                spec=TaskSpec.build(
-                    command,
-                    task,
-                    session_id,
-                    project_root,
-                    model=None,
-                    correlation_id=correlation,
-                ),
-                call_meta=self._last_call_meta,
-                recorded_at=now_iso(),
+            spec = TaskSpec.build(
+                command,
+                task,
+                session_id,
+                project_root,
+                model=None,
+                correlation_id=correlation,
             )
-            payload = record.to_dict()
-            write_usage_record(project_root, payload)
+            recorded_at = now_iso()
+            # One row per provider invocation, still written from this single place. The
+            # alternative — recording inside the provider flow — would lose the reuse hit,
+            # which reaches here having made no provider call at all and is the one row in
+            # the stream proving a delegated call can cost nothing.
+            metas = self._per_invocation_metas(self._last_call_meta or {}) or [
+                self._last_call_meta
+            ]
+            last = len(metas) - 1
+            payload = None
+            for index, call_meta in enumerate(metas):
+                # Everything derived from the FINAL answer belongs to the final row only.
+                # The digest, the saved-context figure it implies, and the verdict are
+                # properties of the result the command returned, not of each attempt that
+                # went into it; repeating them per row would count one saving twice.
+                measured_row = measured
+                if index != last:
+                    row_meta = dict(measured.get("meta") or {})
+                    row_meta.pop("verdict", None)
+                    row_meta.pop("redactions", None)
+                    measured_row = {**measured, "digest": None, "meta": row_meta}
+                record = usage_from_result(
+                    measured_row,
+                    spec=spec,
+                    call_meta=call_meta,
+                    recorded_at=recorded_at,
+                )
+                payload = record.to_dict()
+                write_usage_record(project_root, payload)
             # The audit row is a strict subset, written separately rather than derived
             # from the usage stream at read time: telemetry may legitimately be pruned or
             # resampled, and an audit trail that disappears with it is not a trail.
@@ -432,6 +553,7 @@ class Executor:
     ) -> dict:
         normalized_command = command.strip().lower()
         self._last_call_meta = None
+        self._call_metas = []
         provider_session_id = session["session_id"]
         session_id = str(workflow_session_id or provider_session_id)
         effective_session_manager = (
@@ -743,6 +865,7 @@ class Executor:
                 work_dir,
             )
             result, _ = _sanitize_result(result)
+            self._snapshot_invocation(prompt, result)
 
             # One bounded continuation. A reply that never reached its contract is not the
             # same failure as a refusal or a dead call: the session is alive and holding the
@@ -762,13 +885,18 @@ class Executor:
                 # which has none of the work and would simply answer from nothing.
                 if adapter_session.get("provider_session_id"):
                     continuation_meta["continuation_attempts"] = 1
+                    continuation_text = _continuation_prompt(normalized_command, gap)
                     retry = self.adapter.run(
-                        _continuation_prompt(normalized_command, gap),
+                        continuation_text,
                         adapter_session,
                         route.get("model"),
                         work_dir,
                     )
                     retry, _ = _sanitize_result(retry)
+                    # Snapshotted whether or not the retry is kept. A follow-up that failed
+                    # the contract still spent its tokens, and a stream that only records
+                    # the attempts that worked reports the cheap half of the bill.
+                    self._snapshot_invocation(continuation_text, retry)
                     if retry.get("ok"):
                         merged = {
                             **retry,
@@ -841,7 +969,14 @@ class Executor:
                 call_meta, [*meta_redactions, *persisted_meta_redactions]
             )
             call_meta["prompt_id"] = handoff.get("meta", {}).get("prompt_id")
+            # Applied after the literal above, not inside it: `**adapter_meta` merges the
+            # adapter's own keys last, so a token_source written earlier would be decided
+            # by merge order rather than by what was actually measured.
+            _apply_provider_usage(call_meta, adapter_meta.get("provider_usage"))
             self._last_call_meta = call_meta
+            # `_call_metas` deliberately keeps the RAW snapshots here. Expansion happens
+            # once, in `_record_usage`; expanding into the same attribute would feed the
+            # expansion its own output on the second pass and blank every count in it.
             write_call_meta(
                 project_root,
                 handoff.get("meta", {}).get("prompt_id"),

@@ -68,6 +68,7 @@ from tests.checks.provider import (  # noqa: E402
     _test_provider_seam,
     _test_provider_selection,
 )
+from tests.checks.usage_tokens import _test_usage_token_accounting  # noqa: E402
 from tests.checks.redaction import _test_redaction_boundary  # noqa: E402
 from tests.checks.registry import _test_every_check_is_registered  # noqa: E402
 from tests.checks.verify_gaps import (  # noqa: E402
@@ -107,6 +108,7 @@ SUITES: dict[str, tuple] = {
     "contracts": (_test_workflow_contracts, "workflow contracts round-trip and the usage stream derives honestly"),
     "deps": (_test_runtime_is_stdlib_only, "shipped code imports nothing outside the stdlib"),
     "telemetry": (_test_telemetry_metrics, "P1 metrics count tasks, not calls, and report their denominators"),
+    "usage-tokens": (_test_usage_token_accounting, "provider token counts reach the row, and breakdowns never become addends"),
     "governance": (_test_governance_controls, "provider allowlist, budget ceiling, tool policy, local-first streams"),
     "graph-verification": (_test_graph_verification, "per-node graph provenance, drift vs move, subgraph slicing"),
     "adapters": (_test_adapter_error_normalization, "every adapter normalises errors and counts redactions alike"),

@@ -15,7 +15,13 @@ percentage lets the reader mistake the first for the second.
 import json
 from pathlib import Path
 
-from core.evidence.contracts import QUALITY_STREAM_NAME, USAGE_STREAM_NAME, UsageRecord
+from core.evidence.contracts import (
+    QUALITY_STREAM_NAME,
+    USAGE_STREAM_NAME,
+    UsageRecord,
+    billable_input,
+    billable_output,
+)
 
 
 def _stream_path(project_root, name: str) -> Path:
@@ -99,13 +105,27 @@ def _cost(rows: list[UsageRecord]) -> dict:
     denominator a cost-per-task question actually needs is tokens, and multiplying that by
     today's rate is a decision for whoever reads the report.
     """
-    inputs = [row.estimated_input_tokens or 0 for row in rows]
-    outputs = [row.estimated_output_tokens or 0 for row in rows]
+    inputs = [billable_input(row) for row in rows]
+    outputs = [billable_output(row) for row in rows]
     sources = {row.token_source for row in rows if row.token_source}
+    # Reported beside the totals, never inside them. Reasoning is already counted in
+    # output_tokens, so this is the answer to "how much of that was thinking", not an
+    # amount to add to it. A history with no measured reasoning reports None rather than
+    # zero: no provider having told us is not the same as a provider telling us none.
+    reasoning = [
+        row.actual_reasoning_tokens for row in rows if row.actual_reasoning_tokens is not None
+    ]
     return {
         "input_tokens": sum(inputs),
         "output_tokens": sum(outputs),
         "total_tokens": sum(inputs) + sum(outputs),
+        # A breakdown OF output_tokens above, not an addend to it.
+        "reasoning_tokens_within_output": sum(reasoning) if reasoning else None,
+        "measured_calls": sum(
+            1
+            for row in rows
+            if row.actual_input_tokens is not None or row.actual_output_tokens is not None
+        ),
         # `estimated` means chars//4, not a provider count. A cost figure that cannot
         # tell an estimate from a measurement is not a cost figure.
         "token_source": sorted(sources) or ["unknown"],
@@ -238,7 +258,15 @@ def report(project_root) -> dict:
 
     accepted_count = acceptance["accepted"]
     return {
+        # Provider invocations, not commands. A continuation runs the adapter twice and
+        # now records both, so this number can exceed the number of commands issued.
         "calls": len(rows),
+        # What "calls" used to mean, kept as its own figure rather than left to be
+        # inferred from a number whose definition moved underneath it. Rows with no
+        # prompt_id (a reuse hit) are each their own piece of work.
+        "commands": len(
+            {row.prompt_id for row in rows if row.prompt_id}
+        ) + sum(1 for row in rows if not row.prompt_id),
         "calls_by_command": dict(sorted(by_command.items())),
         "cost": cost,
         "accepted_tasks": {

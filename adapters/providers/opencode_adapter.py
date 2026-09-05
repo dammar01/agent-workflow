@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import re
 import threading
@@ -18,6 +19,8 @@ from core.evidence.contract import make_ok as _contract_make_ok
 from utils import osutil
 from utils.redact import redact, redact_value
 from utils.parser import ensure_text, first_non_empty
+
+from adapters.shared.usage import merge_usage, normalize_usage
 
 # OpenCode's own output shapes. They belong to the adapter, not to a shared parser:
 # another provider names its sessions differently and prefixes its logs differently.
@@ -195,6 +198,36 @@ class OpenCodeAdapter:
             kept.append(line)
         return "\n".join(kept).strip()
 
+    @staticmethod
+    def extract_usage(text: str) -> dict | None:
+        """Token counts OpenCode reported, if this build reports any.
+
+        Written as a search rather than as a parser of a known shape, because this
+        repository cannot prove what that shape is: OpenCode's output here is prose plus
+        log lines, and neither the adapter nor any fixture has ever carried a usage field.
+        So the reader looks for a JSON object with a `usage` member anywhere in the stream,
+        hands it to the shared normaliser, and returns None when it finds nothing.
+
+        None is the expected result on today's evidence, and it is a correct one rather
+        than a silent failure: the row keeps its chars//4 estimate and says
+        `token_source: estimated`. What this buys is that the day an OpenCode build does
+        emit usage it is picked up without a code change, and until then nothing here
+        invents a number to stand in for the one it does not have.
+        """
+        total: dict | None = None
+        for line in ensure_text(text).splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("{") or "usage" not in stripped:
+                continue
+            try:
+                event = json.loads(stripped)
+            except ValueError:
+                continue
+            if not isinstance(event, dict):
+                continue
+            total = merge_usage(total, normalize_usage(event.get("usage")))
+        return total
+
     def _popen_capture(
         self,
         args: list[str],
@@ -318,6 +351,10 @@ class OpenCodeAdapter:
                 "output_complete": drained,
                 "idle_seconds": meta["idle_seconds"],
                 "stderr_tail": meta["stderr"][-2000:],
+                # Read from the captured stdout while it is still raw. Expected to be
+                # None on current OpenCode builds; see extract_usage for why that is
+                # recorded as an absent measurement rather than as a zero.
+                "provider_usage": self.extract_usage(meta["stdout"]),
             }
         )
         return meta
