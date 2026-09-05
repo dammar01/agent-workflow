@@ -52,6 +52,37 @@ def _run_check(module_name: str) -> tuple[int, str]:
     return int(code), buffer.getvalue().strip()
 
 
+def _test_every_shipped_hook_has_both_os_flavours() -> None:
+    """A hook shipped for one OS only disappears on the other, silently.
+
+    `installer/base.py:_targets` picks `.ps1` on Windows and `.sh` on POSIX, then filters
+    the mapping down to sources that exist. A missing sibling is therefore not an error
+    anywhere: the file is simply never installed, and the feature is absent on that
+    platform with nothing in the install output to say so. The failure surfaces as a
+    statusline that renders nothing, or a gate that stops gating.
+
+    Checked here rather than in the installer e2e because that harness installs on ONE
+    platform and cannot see what the other would have got.
+    """
+    hooks = REPO_ROOT / "dist" / "config" / "claude" / "hooks"
+    scripts: dict[str, set[str]] = {}
+    for path in sorted(hooks.iterdir()):
+        ext = path.suffix.lstrip(".").lower()
+        if path.is_file() and ext in ("ps1", "sh"):
+            scripts.setdefault(path.stem, set()).add(ext)
+    assert_true(bool(scripts), f"no hook scripts found under {hooks}")
+    missing = {
+        stem: sorted({"ps1", "sh"} - found)
+        for stem, found in scripts.items()
+        if found != {"ps1", "sh"}
+    }
+    assert_true(
+        not missing,
+        "every shipped hook needs both flavours; the installer selects one by OS and "
+        f"skips a missing sibling without complaining: {missing}",
+    )
+
+
 def _test_bundle_registry_bijection() -> None:
     """skills/ <-> CLAUDE.md registry, and intent-map.json <-> CLAUDE.md NL-map."""
     # Reported one at a time. A skills mismatch and an intent-map drift have different

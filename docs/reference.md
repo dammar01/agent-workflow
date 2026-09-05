@@ -139,6 +139,68 @@ memuat session dan state project yang tidak aman dihapus otomatis.
 
 Bila installer dijalankan dari dalam project yang sudah memiliki `.workflow/`, ia menjalankan **upgrade in-place**: scripts diregenerasi, key config baru di-backfill secara additive, `<project_root>/opencode.json` di-refresh, dan `sessions/` dipertahankan. Workspace baru tidak di-scaffold oleh installer — pakai `python main.py --command init --work-dir DIR` (skill `/.init`). Upgrade workspace ditolak bila masih ada job aktif; install global tetap selesai dan warning harus diperiksa.
 
+### Statusline (badge second agent)
+
+Installer memasang `~/.claude/hooks/statusline.<ps1|sh>` dan mendaftarkannya sebagai
+`statusLine` di `settings.json`.
+
+`settings.json` **additive**: hanya key yang belum ada yang ditulis. Sudah punya
+`statusLine` sendiri → punyamu menang, badge tak muncul, dan tabrakannya dilaporkan di
+output install. Hapus key itu lalu jalankan ulang `install.py --apply` bila ingin memakai
+yang dikirim.
+
+File script-nya sendiri ikut aturan `~/.claude/hooks/*` di tabel di atas: **replace**,
+dengan backup lebih dulu. Punya `statusline.ps1` buatan sendiri di sana → ia tertimpa
+(salinannya ada di `~/.claude/backups/install_<timestamp>/`). Yang dipertahankan adalah
+key `statusLine` di `settings.json`, bukan file di `hooks/`.
+
+```
+agent-workflow | Second Agent 15.2M tok (14.5M cached) / 8 calls | Saved 642.7k tok
+```
+
+| bagian | artinya |
+|---|---|
+| `Second Agent` | seluruh token yang diproses provider untuk sesi ini, cache read termasuk. `actual_*` didahulukan, estimasi `chars//4` cuma cadangan pada baris yang tak terhitung provider |
+| `(… cached)` | porsi cache read di dalam angka itu. Dicetak karena pada run agentic ia ~95% dari total — konteks sama dikirim ulang tiap langkah internal — dan angka sebesar itu tanpa penjelasan di sebelahnya terbaca sebagai bug, bukan fakta |
+| `calls` | jumlah **command**, bukan baris. Continuation menulis satu baris per invocation; menghitung baris akan membuat angka melompat tiap kali ada retry |
+| `Saved` | yang ditangani second agent dan **tak pernah** sampai ke context main agent: input segar (file dan output tool yang ia baca) plus reasoning (ada di dalam output, tak pernah jadi teks). Cache read dikecualikan — itu konteks yang sama dikirim ulang, bukan material baru. Teks jawabannya juga dikecualikan, karena ia **memang** sampai ke sini |
+| `~` | ada baris yang jatuh ke estimasi `chars//4`. Sesi yang seluruh barisnya terhitung provider tak membawa tanda ini — tak ada yang ditebak di dalamnya |
+
+Kedua angka selalu tampil, termasuk saat bernilai nol. Segmen yang hilang terbaca sebagai rusak, bukan sebagai kosong.
+
+Angka diambil dari `<project_root>/.workflow/usage.jsonl`, di-cache 30 detik. Sesi Claude
+dipetakan ke `MAIN_SESSION_ID` lewat `~/.claude/session_registry.json` yang ditulis
+`session-bind`. Belum ada `usage.jsonl`, atau sesi belum terpetakan, badge cuma menampilkan
+nama project — tak pernah menggagalkan prompt.
+
+**Semua angka ber-cakupan sesi.** `/clear` dan `/compact` memberi `MAIN_SESSION_ID` baru
+(`resume` memakai ulang yang lama), jadi ketiganya kembali nol bersamaan. Itu disengaja:
+angka seumur project di sebelah angka sesi terbaca sebagai rasio yang tak pernah diukur —
+tepat setelah `/clear`, bar sempat berbunyi `Second Agent 0 | Saved 129.5k`.
+
+Soal besarnya angka: pada satu sesi nyata provider memproses 15,2M token, tetapi 14,5M di
+antaranya cache read — hanya 595k yang input segar. Angka itu jujur ke apa yang diproses,
+bukan ke biaya: cache read ditagih jauh lebih murah, dan runtime sengaja tak punya price
+table, jadi badge tak pernah menyebut nominal uang.
+
+`Saved` mengukur kompresi **pekerjaan**, bukan kompresi jawaban. Pada sesi contoh: 594.684
+token input segar (file yang dibaca, output tool) plus 48.050 reasoning = 642.734 yang
+diproses second agent dan nol di antaranya masuk ke context main agent. Yang sampai ke sini
+cuma 34.018 token teks jawaban, dan itu sengaja **tidak** diklaim hemat — mengklaimnya
+berarti memuji main agent karena tak membaca apa yang baru saja ia baca.
+
+Cache read juga **tidak** masuk `Saved`, meski ia masuk `Second Agent`. Kedua angka memang
+menjawab pertanyaan berbeda: yang pertama "berapa yang diproses", yang kedua "berapa yang
+akan menempati jendela main agent bila ia mengerjakannya sendiri". Konteks yang sama
+dikirim ulang delapan puluh kali dihitung sekali pada pertanyaan kedua. Memasukkannya
+membuat `Saved` jadi 15,1M — 99,8% dari angka di sebelahnya, yakni satu angka dicetak dua
+kali. Sebagai 642,7k ia 4% dari total, dan dua angka itu berhenti saling membebek.
+
+Versi sebelumnya memakai `premium_context_avoided_tokens` (jawaban penuh dikurangi digest)
+dan menghasilkan 11,7k untuk sesi yang sama — 50× lebih kecil. Field itu kini jadi cadangan
+untuk baris yang tak terhitung provider, karena pada baris seperti itu estimasi `chars//4`
+mengukur panjang **prompt**, bukan berapa yang dibaca. Baris cadangan menyalakan `~`.
+
 ### Mode intent
 
 Default installer adalah **auto-intent**: bahasa natural dapat dipetakan ke command dan

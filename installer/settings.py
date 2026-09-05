@@ -88,17 +88,35 @@ def _merge_hook_entries(cur_entries: list, tmpl_entries: list) -> tuple[list, in
     return result, updated
 
 
+def _posix_command(cmd: str) -> str:
+    """One shipped Windows command line, pointed at its .sh sibling."""
+    cmd = cmd.replace(
+        'powershell -NoProfile -ExecutionPolicy Bypass -File "', 'bash "'
+    )
+    cmd = cmd.replace('.ps1"', '.sh"')
+    return cmd.replace("\\", "/")
+
+
 def _rewrite_hooks_for_posix(template: dict) -> dict:
-    """On POSIX, point our shipped hook commands at their .sh siblings via bash.
+    """On POSIX, point our shipped commands at their .sh siblings via bash.
 
     The template ships Windows-native commands (`powershell ... -File "...ps1"`) — those
     cannot run on mac/linux. For each entry that calls one of OUR scripts, swap the
     interpreter to `bash`, the extension to `.sh`, and normalise the backslash path the
     Windows template embedded. A user's foreign hook (no shipped script) is left untouched.
     Windows (`os.name == "nt"`) is returned unchanged.
+
+    `statusLine` is rewritten too, though it sits beside `hooks` rather than inside it.
+    It is the same shipped script under a different key, and a rewrite that walked only
+    `hooks` would install a mac/linux statusline that shells out to `powershell` — a
+    failure with no error to read, because Claude Code renders a broken statusline as an
+    empty one.
     """
     if os.name == "nt":
         return template
+    status = template.get("statusLine")
+    if isinstance(status, dict) and _hook_script_ids({"hooks": [status]}):
+        status["command"] = _posix_command(status.get("command", ""))
     hooks = template.get("hooks")
     if not isinstance(hooks, dict):
         return template
@@ -111,13 +129,7 @@ def _rewrite_hooks_for_posix(template: dict) -> dict:
             for hook in entry.get("hooks", []):
                 if not isinstance(hook, dict):
                     continue
-                cmd = hook.get("command", "")
-                cmd = cmd.replace(
-                    'powershell -NoProfile -ExecutionPolicy Bypass -File "', 'bash "'
-                )
-                cmd = cmd.replace('.ps1"', '.sh"')
-                cmd = cmd.replace("\\", "/")
-                hook["command"] = cmd
+                hook["command"] = _posix_command(hook.get("command", ""))
     return template
 
 

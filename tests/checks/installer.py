@@ -27,8 +27,113 @@ from installer.base import (
 )
 from installer.check import _settings_would_change
 from installer.rollback import _run_rollback
-from installer.settings import _merge_hook_entries, _rewrite_hooks_for_posix
+from installer.base import Plan
+from installer.settings import (
+    _install_settings,
+    _merge_hook_entries,
+    _rewrite_hooks_for_posix,
+)
 from tests.checks.support import assert_true
+
+
+def _test_installer_settings_are_additive() -> None:
+    """A key the user already set survives the install. Driven through the real merge.
+
+    The badge is the first thing this installer ships that a user plausibly already has —
+    `statusLine` is an obvious name to have configured by hand — and silently replacing it
+    would swap out something they look at on every prompt. `hooks` is exercised beside it
+    because it takes a different path (entry-level merge) and must stay additive too.
+
+    Written against `_install_settings` rather than against a restatement of its rule: a
+    check that reimplements the logic proves the reimplementation.
+    """
+    root = Path(tempfile.mkdtemp(prefix="aw-inst-additive-"))
+    try:
+        theirs = {"type": "command", "command": "my-own-statusline --fancy"}
+        their_hook = {
+            "hooks": [{"type": "command", "command": "echo user-owned"}]
+        }
+        dest = root / "settings.json"
+        dest.write_text(
+            json.dumps(
+                {
+                    "statusLine": json.loads(json.dumps(theirs)),
+                    "model": "their-model",
+                    "hooks": {"SessionStart": [json.loads(json.dumps(their_hook))]},
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        src = root / "template.json"
+        src.write_text(
+            json.dumps(
+                {
+                    "statusLine": {
+                        "type": "command",
+                        "command": (
+                            "powershell -NoProfile -ExecutionPolicy Bypass -File "
+                            '"/tmp/.claude/hooks/statusline.ps1"'
+                        ),
+                    },
+                    "model": "shipped-model",
+                    "brandNewKey": {"added": True},
+                    "hooks": {
+                        "SessionStart": [
+                            {
+                                "hooks": [
+                                    {
+                                        "type": "command",
+                                        "command": (
+                                            "powershell -NoProfile -ExecutionPolicy "
+                                            'Bypass -File "/tmp/.claude/hooks/'
+                                            'session-bind.ps1"'
+                                        ),
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        plan = Plan()
+        with contextlib.redirect_stdout(io.StringIO()):
+            _install_settings(src, dest, plan, True, root / "backup")
+        merged = json.loads(dest.read_text(encoding="utf-8"))
+
+        assert_true(
+            merged["statusLine"] == theirs,
+            "the user's own statusLine must survive verbatim; the installer adds the key "
+            f"only when it is missing: {merged['statusLine']}",
+        )
+        assert_true(
+            merged["model"] == "their-model",
+            "and every other value they set stays theirs too",
+        )
+        assert_true(
+            merged.get("brandNewKey") == {"added": True},
+            "a key they do NOT have must still arrive — additive means adding, not "
+            "declining to touch the file",
+        )
+        commands = [
+            hook["command"]
+            for entry in merged["hooks"]["SessionStart"]
+            for hook in entry.get("hooks", [])
+        ]
+        assert_true(
+            "echo user-owned" in commands
+            and any("session-bind" in c for c in commands),
+            f"a foreign hook must survive alongside the shipped one: {commands}",
+        )
+        assert_true(
+            any("statusLine" in w for w in plan.warnings),
+            f"and the collision must be reported, not silently passed over: {plan.warnings}",
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def _test_installer_text_merging() -> None:
@@ -174,14 +279,29 @@ def _test_installer_settings_merge() -> None:
     )
 
     template = {
+        "statusLine": {
+            "type": "command",
+            "command": (
+                "powershell -NoProfile -ExecutionPolicy Bypass -File "
+                '"C:\\Users\\x\\.claude\\hooks\\statusline.ps1"'
+            ),
+        },
         "hooks": {
             "SessionStart": [json.loads(json.dumps(shipped)), json.loads(json.dumps(foreign))]
-        }
+        },
     }
     original_os_name = settings_mod.os.name
     try:
         settings_mod.os.name = "posix"
         rewritten = _rewrite_hooks_for_posix(json.loads(json.dumps(template)))
+        assert_true(
+            rewritten["statusLine"]["command"]
+            == 'bash "C:/Users/x/.claude/hooks/statusline.sh"',
+            "statusLine sits BESIDE hooks, so a rewrite that walks only `hooks` leaves a "
+            "mac/linux statusline shelling out to powershell. Claude Code renders a "
+            "broken statusline as an empty one, so the symptom is a bar that silently "
+            f"stops saying anything: got {rewritten['statusLine']['command']!r}",
+        )
         ours = rewritten["hooks"]["SessionStart"][0]["hooks"][0]["command"]
         theirs = rewritten["hooks"]["SessionStart"][1]["hooks"][0]["command"]
         assert_true(

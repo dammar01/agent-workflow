@@ -63,6 +63,7 @@ from tests.checks.contracts import _test_workflow_contracts
 from tests.checks.installer import (
     _test_installer_drift_check,
     _test_installer_rollback_receipt,
+    _test_installer_settings_are_additive,
     _test_installer_settings_merge,
     _test_installer_text_merging,
 )
@@ -78,7 +79,10 @@ from tests.checks.provider import (
     _test_provider_selection,
 )
 from tests.checks.registry import _test_every_check_is_registered
-from tests.checks.bundle_sync import _test_bundle_registry_bijection
+from tests.checks.bundle_sync import (
+    _test_bundle_registry_bijection,
+    _test_every_shipped_hook_has_both_os_flavours,
+)
 from tests.checks.adapters import (
     _test_adapter_error_normalization,
     _test_stdin_failure_reaches_call_meta,
@@ -101,6 +105,7 @@ from tests.checks.prompt import (
 def run_tests() -> None:
     _test_every_check_is_registered()
     _test_bundle_registry_bijection()
+    _test_every_shipped_hook_has_both_os_flavours()
     _test_provider_seam()
     _test_provider_selection()
     _test_agy_provider()
@@ -1083,6 +1088,7 @@ confidence: high — all requested checks ran
         _test_workflow_contracts()
         _test_installer_text_merging()
         _test_installer_settings_merge()
+        _test_installer_settings_are_additive()
         _test_installer_rollback_receipt()
         _test_installer_drift_check()
         _test_runtime_is_stdlib_only()

@@ -93,6 +93,14 @@ def installer_checks(report: Report) -> None:
             ),
         )
 
+        want_ext = "ps1" if os.name == "nt" else "sh"
+        statusline = fake_home / ".claude" / "hooks" / f"statusline.{want_ext}"
+        report.check(
+            "statusline script installed for this OS",
+            statusline.exists(),
+            f"expected statusline.{want_ext}",
+        )
+
         if settings.exists():
             try:
                 loaded = json.loads(settings.read_text(encoding="utf-8"))
@@ -104,6 +112,22 @@ def installer_checks(report: Report) -> None:
                     "hook path resolved to this HOME",
                     "{{HOME}}" not in hook_text,
                     "placeholder left unresolved" if "{{HOME}}" in hook_text else "",
+                )
+                status_cmd = json.dumps(loaded.get("statusLine", {}))
+                report.check(
+                    "statusLine registered and resolved",
+                    "statusline" in status_cmd and "{{HOME}}" not in status_cmd,
+                    status_cmd[:120],
+                )
+                # `statusLine` sits BESIDE `hooks`, so the POSIX rewrite has to reach it
+                # separately. Getting this wrong ships a mac/linux statusline that shells
+                # out to `powershell`, and Claude Code renders a broken statusline as an
+                # empty one — no error, just a bar that stops saying anything.
+                report.check(
+                    "statusLine points at this OS's script flavour",
+                    f"statusline.{want_ext}" in status_cmd
+                    and ("powershell" in status_cmd) == (os.name == "nt"),
+                    status_cmd[:120],
                 )
             except json.JSONDecodeError as exc:
                 report.check("settings.json is valid JSON", False, str(exc))

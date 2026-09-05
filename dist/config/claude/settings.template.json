@@ -50,6 +50,10 @@
       }
     ]
   },
+  "statusLine": {
+    "type": "command",
+    "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"{{HOME}}\\.claude\\hooks\\statusline.ps1\""
+  },
   "enabledPlugins": {
     "caveman@caveman": true,
     "ui-ux-pro-max@ui-ux-pro-max-skill": true

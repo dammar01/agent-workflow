@@ -39,7 +39,10 @@ from tests.checks.prompt import (  # noqa: E402
     _test_unknown_role_is_refused,
     _test_verify_branch_carries_routing_contract,
 )
-from tests.checks.bundle_sync import _test_bundle_registry_bijection  # noqa: E402
+from tests.checks.bundle_sync import (  # noqa: E402
+    _test_bundle_registry_bijection,
+    _test_every_shipped_hook_has_both_os_flavours,
+)
 from tests.checks.continuation import (  # noqa: E402
     _test_contract_continuation,
     _test_continuation_prompt_is_bounded,
@@ -58,6 +61,7 @@ from tests.checks.facts import (  # noqa: E402
 from tests.checks.installer import (  # noqa: E402
     _test_installer_drift_check,
     _test_installer_rollback_receipt,
+    _test_installer_settings_are_additive,
     _test_installer_settings_merge,
     _test_installer_text_merging,
 )
@@ -88,6 +92,7 @@ SUITES: dict[str, tuple] = {
     "scenario": (run_tests, "stateful sequence + every standalone check (the full run)"),
     "registry": (_test_every_check_is_registered, "every check here is reachable from both entry points"),
     "bundle-sync": (_test_bundle_registry_bijection, "skills/ and intent-map.json agree with CLAUDE.md"),
+    "hook-flavours": (_test_every_shipped_hook_has_both_os_flavours, "every shipped hook ships .ps1 and .sh"),
     "provider-seam": (_test_provider_seam, "adapter registry and provider resolution"),
     "provider-selection": (_test_provider_selection, "interactive provider/model/effort write"),
     "agy": (_test_agy_provider, "agy parsing, argv, and its read-boundary guard"),
@@ -122,6 +127,7 @@ SUITES: dict[str, tuple] = {
     "prompt-role": (_test_unknown_role_is_refused, "an unknown role is refused instead of building an unparseable prompt"),
     "installer-text": (_test_installer_text_merging, "lenient decode, intent stanzas, managed-block splice"),
     "installer-settings": (_test_installer_settings_merge, "hook refresh keeps user hooks; POSIX rewrite ships bash"),
+    "installer-additive": (_test_installer_settings_are_additive, "settings merge adds missing keys and keeps the user's"),
     "installer-rollback": (_test_installer_rollback_receipt, "receipted rollback restores, deletes, and refuses drift"),
     "installer-check": (_test_installer_drift_check, "settings drift detection: missing, current, unparseable"),
     "audit": (_test_audit_report, "the governance trail reads back and keeps a null provider visible"),

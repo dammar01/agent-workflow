@@ -342,6 +342,20 @@
       "component": "runtime"
     },
     {
+      "path": "claude/hooks/statusline.ps1",
+      "sha256": "2174affbbf46fef0af8f9eefb2edd89776c52af18aefd486bd12760f0c7df55c",
+      "bytes": 11002,
+      "merge": "replace",
+      "component": "runtime"
+    },
+    {
+      "path": "claude/hooks/statusline.sh",
+      "sha256": "b1025e7196fcbd185c16bc02433b3d712c9f14f796ab4540302dd1489e48235b",
+      "bytes": 8760,
+      "merge": "replace",
+      "component": "runtime"
+    },
+    {
       "path": "opencode/AGENTS.md",
       "sha256": "589bf498299d5d9b324e679519d5aa9027a2b5ef42ca8350eff801b23e39ae4f",
       "bytes": 17798,
@@ -399,8 +413,8 @@
     },
     {
       "path": "claude/settings.template.json",
-      "sha256": "d9e3daabb332d4e50a84397ca6cb402e030796b018ea72dfff5206c6b15b41da",
-      "bytes": 1724,
+      "sha256": "572364a882e04babd48fcd2ac1715876d9d53e285c95c3ddac5e13be61971759",
+      "bytes": 1884,
       "merge": "merge",
       "component": "runtime"
     },
