@@ -52,7 +52,7 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"{{HOME}}\\.claude\\hooks\\statusline.ps1\""
+    "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"{{HOME}}\\.claude\\hooks\\workflow-statusline.ps1\""
   },
   "enabledPlugins": {
     "caveman@caveman": true,

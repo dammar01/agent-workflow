@@ -73,7 +73,7 @@ def _test_installer_settings_are_additive() -> None:
                         "type": "command",
                         "command": (
                             "powershell -NoProfile -ExecutionPolicy Bypass -File "
-                            '"/tmp/.claude/hooks/statusline.ps1"'
+                            '"/tmp/.claude/hooks/workflow-statusline.ps1"'
                         ),
                     },
                     "model": "shipped-model",
@@ -283,7 +283,7 @@ def _test_installer_settings_merge() -> None:
             "type": "command",
             "command": (
                 "powershell -NoProfile -ExecutionPolicy Bypass -File "
-                '"C:\\Users\\x\\.claude\\hooks\\statusline.ps1"'
+                '"C:\\Users\\x\\.claude\\hooks\\workflow-statusline.ps1"'
             ),
         },
         "hooks": {
@@ -296,7 +296,7 @@ def _test_installer_settings_merge() -> None:
         rewritten = _rewrite_hooks_for_posix(json.loads(json.dumps(template)))
         assert_true(
             rewritten["statusLine"]["command"]
-            == 'bash "C:/Users/x/.claude/hooks/statusline.sh"',
+            == 'bash "C:/Users/x/.claude/hooks/workflow-statusline.sh"',
             "statusLine sits BESIDE hooks, so a rewrite that walks only `hooks` leaves a "
             "mac/linux statusline shelling out to powershell. Claude Code renders a "
             "broken statusline as an empty one, so the symptom is a bar that silently "

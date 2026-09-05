@@ -71,6 +71,7 @@ SETTINGS_SOURCE = ".claude/settings.json"
 SETTINGS_DEST = "claude/settings.template.json"
 SETTINGS_KEEP_KEYS = (
     "hooks",
+    "statusLine",
     "enabledPlugins",
     "extraKnownMarketplaces",
     "model",

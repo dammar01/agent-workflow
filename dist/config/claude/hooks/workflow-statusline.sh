@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# statusline.sh - Claude Code statusline (POSIX parity of statusline.ps1)
+# workflow-statusline.sh - Claude Code statusline (POSIX parity of workflow-statusline.ps1)
 # Renders: <project> | Second Agent <tokens> (<cached>) / <calls> | Saved <tokens>
 # Every figure is scoped to the CURRENT session.
 #

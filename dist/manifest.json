@@ -342,16 +342,16 @@
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/statusline.ps1",
+      "path": "claude/hooks/workflow-statusline.ps1",
       "sha256": "2174affbbf46fef0af8f9eefb2edd89776c52af18aefd486bd12760f0c7df55c",
       "bytes": 11002,
       "merge": "replace",
       "component": "runtime"
     },
     {
-      "path": "claude/hooks/statusline.sh",
-      "sha256": "b1025e7196fcbd185c16bc02433b3d712c9f14f796ab4540302dd1489e48235b",
-      "bytes": 8760,
+      "path": "claude/hooks/workflow-statusline.sh",
+      "sha256": "37ff67953822fee2dcd2f628f112f6d8b0ad5887055cb9db503d42282e280a61",
+      "bytes": 8778,
       "merge": "replace",
       "component": "runtime"
     },
@@ -413,8 +413,8 @@
     },
     {
       "path": "claude/settings.template.json",
-      "sha256": "572364a882e04babd48fcd2ac1715876d9d53e285c95c3ddac5e13be61971759",
-      "bytes": 1884,
+      "sha256": "69e87a0ff7bfc870013c7796430bb00dea1939b6ac521328385fc6030aa82c0b",
+      "bytes": 1893,
       "merge": "merge",
       "component": "runtime"
     },

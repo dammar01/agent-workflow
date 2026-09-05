@@ -141,7 +141,7 @@ Bila installer dijalankan dari dalam project yang sudah memiliki `.workflow/`, i
 
 ### Statusline (badge second agent)
 
-Installer memasang `~/.claude/hooks/statusline.<ps1|sh>` dan mendaftarkannya sebagai
+Installer memasang `~/.claude/hooks/workflow-statusline.<ps1|sh>` dan mendaftarkannya sebagai
 `statusLine` di `settings.json`.
 
 `settings.json` **additive**: hanya key yang belum ada yang ditulis. Sudah punya
@@ -150,7 +150,7 @@ output install. Hapus key itu lalu jalankan ulang `install.py --apply` bila ingi
 yang dikirim.
 
 File script-nya sendiri ikut aturan `~/.claude/hooks/*` di tabel di atas: **replace**,
-dengan backup lebih dulu. Punya `statusline.ps1` buatan sendiri di sana → ia tertimpa
+dengan backup lebih dulu. Punya `workflow-statusline.ps1` buatan sendiri di sana → ia tertimpa
 (salinannya ada di `~/.claude/backups/install_<timestamp>/`). Yang dipertahankan adalah
 key `statusLine` di `settings.json`, bukan file di `hooks/`.
 

@@ -94,11 +94,11 @@ def installer_checks(report: Report) -> None:
         )
 
         want_ext = "ps1" if os.name == "nt" else "sh"
-        statusline = fake_home / ".claude" / "hooks" / f"statusline.{want_ext}"
+        statusline = fake_home / ".claude" / "hooks" / f"workflow-statusline.{want_ext}"
         report.check(
             "statusline script installed for this OS",
             statusline.exists(),
-            f"expected statusline.{want_ext}",
+            f"expected workflow-statusline.{want_ext}",
         )
 
         if settings.exists():
@@ -116,7 +116,7 @@ def installer_checks(report: Report) -> None:
                 status_cmd = json.dumps(loaded.get("statusLine", {}))
                 report.check(
                     "statusLine registered and resolved",
-                    "statusline" in status_cmd and "{{HOME}}" not in status_cmd,
+                    "workflow-statusline" in status_cmd and "{{HOME}}" not in status_cmd,
                     status_cmd[:120],
                 )
                 # `statusLine` sits BESIDE `hooks`, so the POSIX rewrite has to reach it
@@ -125,7 +125,7 @@ def installer_checks(report: Report) -> None:
                 # empty one — no error, just a bar that stops saying anything.
                 report.check(
                     "statusLine points at this OS's script flavour",
-                    f"statusline.{want_ext}" in status_cmd
+                    f"workflow-statusline.{want_ext}" in status_cmd
                     and ("powershell" in status_cmd) == (os.name == "nt"),
                     status_cmd[:120],
                 )
