@@ -107,9 +107,15 @@ baris itu benar-benar tahu. `reasoning_tokens_within_output` dilaporkan **di sam
 tak pernah di dalamnya. History yang tak punya reasoning terukur melaporkan `None`, bukan
 nol: tak ada provider yang memberitahu bukan hal yang sama dengan tak ada yang dihabiskan.
 
-`report()["calls"]` sekarang berarti panggilan provider, bukan command. `commands`
-ditambahkan supaya makna lamanya tak perlu disimpulkan dari angka yang definisinya bergeser
-di bawahnya.
+`report()["calls"]` **tetap** berarti command. Sempat diubah jadi jumlah baris selama
+pengerjaan, lalu dikembalikan: kunci itu dicetak `main.py --command report`, jadi ia dibaca
+di luar repo ini. Angka terbit yang definisinya bergeser di bawah namanya lebih buruk
+daripada nama baru — tak ada yang error, angkanya sekadar mulai berarti hal lain.
+
+Kuantitas barunya terbit sebagai `provider_calls`. `calls_by_command` ikut menghitung
+command, bukan baris, supaya tak ada dua definisi dalam satu report. `commands`
+dipertahankan sebagai alias `calls` untuk pembaca yang sempat ditulis terhadap bentuk
+sementara itu.
 
 ## Dua bug yang ditemukan saat mengerjakannya
 

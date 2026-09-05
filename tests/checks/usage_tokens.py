@@ -329,11 +329,313 @@ def _a_continuation_records_each_call_and_counts_the_saving_once() -> None:
             "not against the retry's fragment — that comparison reports near zero and "
             "quietly erases the digest contract's whole justification",
         )
+        report = telemetry.report(root)
         assert_true(
-            telemetry.report(root)["calls"] == 2
-            and telemetry.report(root)["commands"] == 1,
+            report["time_to_completion_seconds"]["measured_calls"] == 1
+            and report["security"]["total_calls"] == 1,
+            "every metric that counts WORK must agree that this was one command. A "
+            "retry is not a second delegated call to the user who waited for one answer, "
+            f"and a security rate that moves when one happens is measuring noise: {report}",
+        )
+        assert_true(
+            report["provider_calls"] == 2 and report["calls"] == 1,
             "the report must be able to say two provider calls served one command; a "
-            "single figure for both makes cost per task move when a retry happens",
+            "single figure for both makes cost per task move when a retry happens. "
+            "`calls` keeps its published meaning — a number read outside this repository "
+            f"must not start counting something else under the same name: {report}",
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _rows(root) -> list[dict]:
+    import json
+
+    path = root / ".workflow" / "usage.jsonl"
+    if not path.exists():
+        return []
+    return [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+
+
+def _the_common_single_call_path_records_who_reported_it() -> None:
+    """One adapter call, one row, and the row names its provider.
+
+    The end-to-end test that existed covered the continuation — two adapter calls, the
+    RARE shape. The single-call path underneath it is the one nearly every command takes
+    and it had no end-to-end assertion at all, so `_per_invocation_metas` returning `[]`
+    and the fallback that follows were only ever exercised by accident.
+    """
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    from core.provider.executor import Executor
+    from core.runtime.state import ensure_workflow_workspace
+    from tests.checks.support import FakeOpenCodeAdapter
+
+    root = Path(tempfile.mkdtemp(prefix="aw-usage-single-"))
+    try:
+        ensure_workflow_workspace(root, str(Path("main.py").resolve()))
+        result = Executor(adapter=FakeOpenCodeAdapter()).execute(
+            "analyze",
+            "why is this slow",
+            {"session_id": "sid-single", "provider_session_id": None},
+            str(root),
+        )
+        assert_true(result["ok"], f"the fake adapter returns evidence: {result}")
+        rows = _rows(root)
+        assert_true(
+            len(rows) == 1,
+            f"one adapter call must leave exactly one row, not zero and not the "
+            f"continuation's two; got {len(rows)}",
+        )
+        assert_true(
+            isinstance(rows[0]["provider"], str) and rows[0]["provider"],
+            "a row must name the provider that reported it. While one provider is "
+            "measured and another is not, a report showing both `provider` and "
+            "`estimated` in token_source cannot say which half is which if this is null",
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _a_failed_call_records_what_it_burned() -> None:
+    """Failure after the provider ran must still cost something in the stream.
+
+    Four shapes, and the differences between them are the whole point: a provider that
+    ran and errored, a provider that ran and answered with a menu (so the guard, not the
+    provider, rejected it), an adapter that refused BEFORE spawning anything, and a
+    refusal that happened before dispatch at all. The first two burned tokens and must
+    appear. The last two burned none and must not — a row there would invent spend,
+    which is this fix pointed backwards.
+
+    `returncode` is what separates them, so every fake here sets `last_call_meta` exactly
+    as its real counterpart would: the two that "ran" carry one, the preflight refusal
+    does not.
+    """
+    import json
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    from core.evidence.contract import make_error
+    from core.evidence.contracts import UsageRecord
+    from core.evidence.runtime_io import write_usage_record
+    from core.provider.executor import Executor
+    from core.runtime.state import ensure_workflow_workspace
+    from tests.checks.support import FakeOpenCodeAdapter
+
+    class _Spawning:
+        """Base for fakes that stand in for an adapter which did reach a subprocess."""
+
+        command = "opencode"
+        timeout_seconds = 0
+        no_timeout = True
+        last_call_meta = None
+
+        def _spawned(self) -> None:
+            self.last_call_meta = {"returncode": 0, "duration_seconds": 1.0}
+
+    class ErroringAdapter(_Spawning):
+        def run(self, prompt, session, model=None, work_dir=None):
+            self._spawned()
+            return {"ok": False, "content": "provider failed", "meta": {"returncode": 1}}
+
+    class MenuAdapter(_Spawning):
+        def run(self, prompt, session, model=None, work_dir=None):
+            self._spawned()
+            return {
+                "ok": True,
+                "content": "Specify command: explore, plan, analyze.",
+                "meta": {"provider_session_id": "ses_menu"},
+            }
+
+    class PreflightRefusingAdapter(_Spawning):
+        """Refuses before Popen, exactly as the oversized-command-line guard does."""
+
+        def run(self, prompt, session, model=None, work_dir=None):
+            return make_error(
+                "prompt_too_long",
+                "command line is 9999 chars",
+                next_action="Shorten the task text.",
+                meta={"command_line_chars": 9999},
+            )
+
+    root = Path(tempfile.mkdtemp(prefix="aw-usage-failed-"))
+    try:
+        ensure_workflow_workspace(root, str(Path("main.py").resolve()))
+
+        errored = Executor(adapter=ErroringAdapter()).execute(
+            "analyze",
+            "task one",
+            {"session_id": "sid-fail", "provider_session_id": None},
+            str(root),
+        )
+        assert_true(not errored["ok"], f"the adapter was told to fail: {errored}")
+        rows = _rows(root)
+        assert_true(
+            len(rows) == 1 and rows[0]["ok"] is False,
+            "a provider call that failed spent its tokens before failing; recording "
+            f"nothing leaves the most expensive shape of call invisible, got {rows}",
+        )
+
+        rejected = Executor(adapter=MenuAdapter()).execute(
+            "analyze",
+            "task two",
+            {"session_id": "sid-fail", "provider_session_id": None},
+            str(root),
+        )
+        assert_true(
+            rejected["meta"]["error_type"] == "invalid_evidence",
+            f"a menu is not evidence: {rejected}",
+        )
+        rows = _rows(root)
+        assert_true(
+            len(rows) == 2 and rows[1]["error_type"] == "invalid_evidence",
+            "here the ADAPTER succeeded and the guard threw the answer away — the most "
+            f"wasteful outcome there is, and it must still be billed; got {rows}",
+        )
+        assert_true(
+            "policy" not in (rejected.get("meta") or {}),
+            "recording a failed call must not drag the whole finalizer along with it: "
+            "that also writes the command cache, and a menu stored as last_analyze_result "
+            "would be read as evidence by the next command",
+        )
+
+        before = len(_rows(root))
+        refused_early = Executor(adapter=PreflightRefusingAdapter()).execute(
+            "analyze",
+            "task three",
+            {"session_id": "sid-fail", "provider_session_id": None},
+            str(root),
+        )
+        assert_true(
+            refused_early["meta"]["error_type"] == "prompt_too_long",
+            f"the adapter refuses before spawning: {refused_early}",
+        )
+        assert_true(
+            len(_rows(root)) == before,
+            "an adapter that refused before Popen spent nothing. `ok:false` alone is not "
+            "evidence that a provider ran, and billing every failure indiscriminately "
+            "invents spend — the same error as the missing row, pointing backwards",
+        )
+
+        before = len(_rows(root))
+        config_path = root / ".workflow" / "second_agent.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config["session_token_budget"] = 1
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        write_usage_record(
+            root,
+            UsageRecord(
+                session_id="sid-broke",
+                estimated_input_tokens=99,
+                estimated_output_tokens=99,
+            ).to_dict(),
+        )
+        refused = Executor(adapter=FakeOpenCodeAdapter()).execute(
+            "analyze",
+            "task four",
+            {"session_id": "sid-broke", "provider_session_id": None},
+            str(root),
+            workflow_session_id="sid-broke",
+        )
+        assert_true(
+            refused["meta"]["error_type"] == "budget_exceeded",
+            f"the ceiling must refuse before dispatch: {refused}",
+        )
+        assert_true(
+            len(_rows(root)) == before + 1,
+            "only the ceiling's own seeded row may have been added. A refusal that never "
+            "reached a provider spent nothing, and a row for it would report spend that "
+            "did not happen — the mirror image of the bug this fixes",
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _a_continuation_that_never_spawned_does_not_double_the_first_call() -> None:
+    """The stale-metadata trap, asserted at the seam where it would be invisible.
+
+    A first call spawns and is measured. The continuation is refused before Popen — an
+    oversized command line is the real trigger. `last_call_meta` is one attribute the
+    adapter never resets, so without clearing it per invocation the second snapshot
+    copies the FIRST call's numbers, `_per_invocation_metas` splits them into two rows,
+    and the run bills twice for one subprocess. Nothing errors; the total simply doubles.
+    """
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    from core.evidence.contract import make_error
+    from core.provider.executor import Executor
+    from core.runtime.state import ensure_workflow_workspace
+
+    class TruncatedThenRefusing:
+        """Answers short enough to trigger a continuation, then refuses to make one."""
+
+        command = "opencode"
+        timeout_seconds = 0
+        no_timeout = True
+        last_call_meta = None
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run(self, prompt, session, model=None, work_dir=None):
+            self.calls += 1
+            if self.calls == 1:
+                self.last_call_meta = {
+                    "returncode": 0,
+                    "duration_seconds": 1.0,
+                    "provider_usage": {
+                        "input_tokens": 4321,
+                        "output_tokens": 765,
+                        "reasoning_tokens": 700,
+                        "cached_input_tokens": None,
+                    },
+                }
+                return {
+                    "ok": True,
+                    "content": "[EVIDENCE]\nfindings:\n- something",
+                    "meta": {"provider_session_id": "ses_cont"},
+                }
+            # Refused before Popen: last_call_meta is left exactly as the adapter left it.
+            return make_error(
+                "prompt_too_long",
+                "command line is 9999 chars",
+                next_action="Shorten the task text.",
+                meta={"command_line_chars": 9999},
+            )
+
+    root = Path(tempfile.mkdtemp(prefix="aw-usage-stale-"))
+    try:
+        ensure_workflow_workspace(root, str(Path("main.py").resolve()))
+        adapter = TruncatedThenRefusing()
+        Executor(adapter=adapter).execute(
+            "analyze",
+            "a task that gets a short answer",
+            {"session_id": "sid-stale", "provider_session_id": "ses_cont"},
+            str(root),
+        )
+        rows = _rows(root)
+        assert_true(
+            len(rows) == 1,
+            "one subprocess ran, so one row. A second row here is the first call's "
+            f"tokens counted twice — same numbers, no error, double the bill; got {rows}",
+        )
+        assert_true(
+            rows[0]["actual_input_tokens"] == 4321
+            and rows[0]["actual_output_tokens"] == 765
+            and rows[0]["token_source"] == "provider",
+            "and the measurement must survive. Clearing the adapter's metadata per "
+            "invocation is what stops the double count, but the attempt that cleared it "
+            "reached no provider — reading it here would write `estimated` over a call "
+            f"that was actually counted, a downgrade with no error to show for it: {rows[0]}",
         )
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -347,3 +649,6 @@ def _test_usage_token_accounting() -> None:
     _billing_prefers_measurement_and_refuses_to_double_count()
     _report_and_budget_read_the_measured_rows()
     _a_continuation_records_each_call_and_counts_the_saving_once()
+    _the_common_single_call_path_records_who_reported_it()
+    _a_failed_call_records_what_it_burned()
+    _a_continuation_that_never_spawned_does_not_double_the_first_call()

@@ -308,6 +308,41 @@ class Executor:
         except Exception:
             return {"limit": None, "exceeded": False}
 
+    def _adapter_run(
+        self,
+        prompt: str,
+        session: dict,
+        model: str | None,
+        work_dir: str | None,
+    ) -> dict:
+        """Invoke the adapter with its metadata cleared first, every single time.
+
+        A wrapper rather than a line repeated at each call site: `last_call_meta` is
+        rebound per subprocess and never reset by the adapter, and one Executor serves
+        many calls (`main.EXECUTOR` is a singleton), so metadata left standing from an
+        earlier invocation reads as this one's. A continuation refused before it spawned
+        anything would then be measured with the FIRST call's numbers and bill them
+        twice. Clearing at the seam makes forgetting a call site impossible rather than
+        merely unlikely.
+        """
+        try:
+            self.adapter.last_call_meta = None
+        except Exception:
+            pass
+        return self.adapter.run(prompt, session, model, work_dir)
+
+    @staticmethod
+    def _reached_a_provider(adapter_meta: dict) -> bool:
+        """Whether this invocation actually spawned a provider subprocess.
+
+        `returncode` is the structural evidence: both adapters write it from the one
+        place they call Popen, and the refusals that happen first — an oversized command
+        line, a `provider_command` that is not the configured provider's binary — return
+        before reaching it. Presence, not truthiness: a timeout records `returncode: None`
+        and is very much a call that spent tokens.
+        """
+        return "returncode" in adapter_meta or bool(adapter_meta.get("timed_out"))
+
     def _snapshot_invocation(self, prompt: str, result: dict) -> None:
         """Copy out what THIS provider invocation measured, before the next one lands.
 
@@ -316,15 +351,22 @@ class Executor:
         carry the same warning about their own metadata for the same reason; this is that
         hazard one level up, where two runs of one command meet.
 
+        An attempt that never reached a provider is not an invocation and gets no
+        snapshot. `_per_invocation_metas` turns each snapshot into its own usage row, so
+        recording one here for a call that spawned nothing would add a row for spend that
+        did not happen — and, before the clearing in `_adapter_run`, would have carried
+        the previous call's numbers into it.
+
         Instrumentation: it never raises into the call it is measuring.
         """
         try:
+            adapter_meta = dict(getattr(self.adapter, "last_call_meta", None) or {})
+            if not self._reached_a_provider(adapter_meta):
+                return
             content = result.get("content") if isinstance(result, dict) else None
             self._call_metas.append(
                 {
-                    "adapter_meta": dict(
-                        getattr(self.adapter, "last_call_meta", None) or {}
-                    ),
+                    "adapter_meta": adapter_meta,
                     "prompt_chars": len(prompt),
                     "response_chars": len(content) if isinstance(content, str) else None,
                 }
@@ -488,6 +530,43 @@ class Executor:
             # path of every delegated command, and there is no failure here worth
             # converting a delivered answer into an error.
             pass
+
+    def _record_failed_call(
+        self,
+        result: dict,
+        project_root: Path,
+        command: str,
+        task: str,
+        session_id: str,
+    ) -> dict:
+        """Usage for a call that burned tokens and then failed anyway.
+
+        Deliberately NOT `_finalize_runtime_result`. That one also writes the command
+        cache, workflow state and plan scope, and a menu or a refusal stored as
+        `last_analyze_result` is a worse failure than the missing row this fixes: the
+        next command would build on it as though it were evidence. Only the spending is
+        recorded here.
+
+        The rows this adds are the expensive ones. A call that times out has burned a
+        full run of reasoning before being cut off, and it was previously the one shape
+        of call that recorded nothing — so the budget ceiling stopped watching precisely
+        where spend was highest. Returns its argument so a failing site stays a `return`.
+
+        Not every `ok:false` reached a provider, though. Both adapters refuse some calls
+        before spawning anything — an oversized command line, a `provider_command` that
+        is not the configured provider's binary — and those cost nothing at all. Writing
+        a row for them would invent spend, which is the same error as the missing row
+        this method exists to fix, pointing the other way.
+
+        A `returncode` key is the structural evidence that a subprocess ran: both adapters
+        write it from the one place they call Popen, and the pre-spawn refusals return
+        before reaching it. Presence, not truthiness — a timeout records `returncode:
+        None` and is very much a call that spent tokens.
+        """
+        if not self._reached_a_provider(self._last_call_meta or {}):
+            return result
+        self._record_usage(result, project_root, command, task, session_id)
+        return result
 
     def _maybe_reuse(
         self,
@@ -858,7 +937,7 @@ class Executor:
         # archived even when the merge discards it.
         first_reply = ""
         try:
-            result = self.adapter.run(
+            result = self._adapter_run(
                 prompt,
                 adapter_session,
                 route.get("model"),
@@ -886,7 +965,7 @@ class Executor:
                 if adapter_session.get("provider_session_id"):
                     continuation_meta["continuation_attempts"] = 1
                     continuation_text = _continuation_prompt(normalized_command, gap)
-                    retry = self.adapter.run(
+                    retry = self._adapter_run(
                         continuation_text,
                         adapter_session,
                         route.get("model"),
@@ -940,10 +1019,16 @@ class Executor:
             _content = _result.get("content") if isinstance(_result, dict) else None
             _prompt_chars = len(prompt)
             _resp_chars = len(_content) if isinstance(_content, str) else None
+            _adapter_meta = getattr(self.adapter, "last_call_meta", None) or {}
+            if not self._reached_a_provider(_adapter_meta) and self._call_metas:
+                # The LAST invocation reached no provider — a continuation refused before
+                # Popen is the case — but an earlier one did, and its numbers are the only
+                # measurement this command has. Reading the cleared attribute here would
+                # write `token_source: estimated` over a call that was actually counted,
+                # which is a silent downgrade: the row still looks like a row.
+                _adapter_meta = self._call_metas[-1].get("adapter_meta") or {}
             adapter_meta, meta_redactions = redact_value(
-                _without_raw_args(
-                    getattr(self.adapter, "last_call_meta", None) or {}
-                )
+                _without_raw_args(_adapter_meta)
             )
             if not isinstance(adapter_meta, dict):
                 adapter_meta = {}
@@ -973,6 +1058,14 @@ class Executor:
             # adapter's own keys last, so a token_source written earlier would be decided
             # by merge order rather than by what was actually measured.
             _apply_provider_usage(call_meta, adapter_meta.get("provider_usage"))
+            # Same reason, and the field usage rows were missing entirely: the route knows
+            # which provider was picked, but nothing carried the name down, so every row
+            # in the stream said `provider: null`. That is readable while one provider is
+            # measured and the rest are not — a report can then show both `provider` and
+            # `estimated` in `token_source` without being able to say which provider is
+            # which half.
+            call_meta["provider"] = route.get("provider")
+            call_meta["provider_command"] = route.get("provider_command")
             self._last_call_meta = call_meta
             # `_call_metas` deliberately keeps the RAW snapshots here. Expansion happens
             # once, in `_record_usage`; expanding into the same attribute would feed the
@@ -1027,7 +1120,9 @@ class Executor:
         )
 
         if not result.get("ok"):
-            return result
+            return self._record_failed_call(
+                result, project_root, normalized_command, task, session_id
+            )
 
         # Verify sits in the `verification` role alongside init/doctor/submit, which have no
         # second_agent reply to judge — hence the command check rather than a role check.
@@ -1052,12 +1147,22 @@ class Executor:
                 detail += (
                     f"; no continuation was possible ({continuation_meta['continuation_skipped']})"
                 )
-            return make_error(
-                "invalid_evidence",
-                detail,
-                next_action="STOP. Warn user [PROXY GAGAL]. Do NOT auto-fallback. Ask user: retry or /.local? (yes/no).",
-                meta=verify_meta,
-                raw_preview=(result.get("content") or "")[:240],
+            # Recorded despite the adapter having succeeded: the provider ran, the tokens
+            # are spent, and it is this guard rather than the provider that judged the
+            # reply unusable. A row omitted here bills nothing for the most wasteful
+            # outcome there is — a full call whose answer is thrown away.
+            return self._record_failed_call(
+                make_error(
+                    "invalid_evidence",
+                    detail,
+                    next_action="STOP. Warn user [PROXY GAGAL]. Do NOT auto-fallback. Ask user: retry or /.local? (yes/no).",
+                    meta=verify_meta,
+                    raw_preview=(result.get("content") or "")[:240],
+                ),
+                project_root,
+                normalized_command,
+                task,
+                session_id,
             )
 
         if route["role"] in ("exploration", "reasoning"):
@@ -1078,12 +1183,18 @@ class Executor:
                     detail += (
                         f"; no continuation was possible ({continuation_meta['continuation_skipped']})"
                     )
-                return make_error(
-                    "invalid_evidence",
-                    detail,
-                    next_action="STOP. Warn user [PROXY GAGAL]. Do NOT auto-fallback. Ask user: retry or /.local? (yes/no).",
-                    meta=result.get("meta", {}),
-                    raw_preview=(result.get("content") or "")[:240],
+                return self._record_failed_call(
+                    make_error(
+                        "invalid_evidence",
+                        detail,
+                        next_action="STOP. Warn user [PROXY GAGAL]. Do NOT auto-fallback. Ask user: retry or /.local? (yes/no).",
+                        meta=result.get("meta", {}),
+                        raw_preview=(result.get("content") or "")[:240],
+                    ),
+                    project_root,
+                    normalized_command,
+                    task,
+                    session_id,
                 )
 
         digest = extract_digest(result.get("content") or "")

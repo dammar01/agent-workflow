@@ -210,8 +210,13 @@ def security_pass_rate(rows: list[UsageRecord]) -> dict:
     leaked" and is stated as such: a call with zero redactions is a call where the
     scanner found nothing, not a proof that nothing was there.
     """
-    total = len(rows)
-    clean = sum(1 for row in rows if not row.redactions)
+    # Per command, not per row. A continuation writes two rows for one delegated call,
+    # and counting them separately would move this rate whenever a retry happened —
+    # a security figure drifting on an unrelated event. A command is clean only if
+    # nothing was redacted from any of the replies that went into it.
+    groups = _work_groups(rows)
+    total = len(groups)
+    clean = sum(1 for group in groups if not any(row.redactions for row in group))
     return {
         "clean_calls": clean,
         "total_calls": total,
@@ -240,10 +245,41 @@ def test_pass_rate(project_root) -> dict:
     }
 
 
+def _work_groups(rows) -> list[list]:
+    """Rows gathered into the pieces of work they belong to.
+
+    A continuation writes one row per provider invocation, all sharing the command's
+    `prompt_id`. A reuse hit has none — it never built a prompt — so each is its own unit
+    rather than collapsing with every other id-less row into one.
+
+    One grouping, used by every metric that counts work rather than invocations, so those
+    metrics cannot drift apart from each other the way they drifted from `calls`.
+    """
+    groups: dict[object, list] = {}
+    for index, row in enumerate(rows):
+        groups.setdefault(row.prompt_id or ("row", index), []).append(row)
+    return list(groups.values())
+
+
+def _work_units(rows) -> int:
+    """How many pieces of work these rows represent, not how many rows there are."""
+    return len(_work_groups(rows))
+
+
 def report(project_root) -> dict:
     """Every P1 metric, over the whole recorded history of this project."""
     rows = load_usage(project_root)
-    durations = [row.duration_seconds for row in rows if row.duration_seconds is not None]
+    # Time to complete a COMMAND, so a continuation's two invocations add up rather than
+    # being averaged as two independent calls. The user waited for their sum; a mean over
+    # the parts reports a wait nobody had, and reports it as shorter.
+    durations = []
+    unmeasured_durations = 0
+    for group in _work_groups(rows):
+        measured = [row.duration_seconds for row in group if row.duration_seconds is not None]
+        if measured:
+            durations.append(sum(measured))
+        else:
+            unmeasured_durations += 1
     avoided = [
         row.premium_context_avoided_tokens
         for row in rows
@@ -252,22 +288,29 @@ def report(project_root) -> dict:
     acceptance = accepted_tasks(rows)
     cost = _cost(rows)
 
-    by_command: dict[str, int] = {}
+    grouped: dict[str, list] = {}
     for row in rows:
-        by_command[row.command] = by_command.get(row.command, 0) + 1
+        grouped.setdefault(row.command, []).append(row)
 
     accepted_count = acceptance["accepted"]
     return {
-        # Provider invocations, not commands. A continuation runs the adapter twice and
-        # now records both, so this number can exceed the number of commands issued.
-        "calls": len(rows),
-        # What "calls" used to mean, kept as its own figure rather than left to be
-        # inferred from a number whose definition moved underneath it. Rows with no
-        # prompt_id (a reuse hit) are each their own piece of work.
-        "commands": len(
-            {row.prompt_id for row in rows if row.prompt_id}
-        ) + sum(1 for row in rows if not row.prompt_id),
-        "calls_by_command": dict(sorted(by_command.items())),
+        # Commands, as it has always meant. One command is one call here even when a
+        # continuation ran the adapter twice for it.
+        #
+        # `usage.jsonl` used to hold one row per command, so `len(rows)` and this were the
+        # same number and the distinction never had to be made. Now that a continuation
+        # writes a row per invocation they diverge, and this key is read outside the
+        # repository — `main.py --command report` prints it. A published number whose
+        # definition moves underneath its name is worse than a new name: nothing errors,
+        # the figure simply starts meaning something else.
+        "calls": _work_units(rows),
+        # The new quantity, under a name that says what it counts.
+        "provider_calls": len(rows),
+        # Kept as an alias of `calls` for readers written against the interim shape.
+        "commands": _work_units(rows),
+        "calls_by_command": {
+            command: _work_units(group) for command, group in sorted(grouped.items())
+        },
         "cost": cost,
         "accepted_tasks": {
             "accepted": accepted_count,
@@ -290,7 +333,7 @@ def report(project_root) -> dict:
             "measured_calls": len(durations),
             # Unmeasured calls are named, not averaged away. A mean over a third of the
             # calls is a different claim from a mean over all of them.
-            "unmeasured_calls": len(rows) - len(durations),
+            "unmeasured_calls": unmeasured_durations,
         },
         "first_pass_correctness": first_pass_correctness(rows),
         "rework": rework(rows),

@@ -202,11 +202,23 @@ def _worker_totals(record: dict) -> dict:
             continue
         seen += 1
         # Field names taken from a real call.meta.json, not guessed: the runtime writes
-        # `estimated_input_tokens` / `estimated_output_tokens` at the top level, with no
-        # `usage` wrapper (core/executor.py:1001-1017). The earlier aliases matched nothing,
-        # and `int(None or 0)` turned that into a confident zero.
-        inp += int(_first(meta, ("estimated_input_tokens", "input_tokens")) or 0)
-        out += int(_first(meta, ("estimated_output_tokens", "output_tokens")) or 0)
+        # these at the top level with no `usage` wrapper
+        # (core/provider/executor.py:950-980). The earlier aliases matched nothing, and
+        # `int(None or 0)` turned that into a confident zero.
+        #
+        # `actual_*` first. The runtime stamps provider-reported counts into the same file
+        # and stamps `token_source` beside them, so reading the estimates while reporting
+        # the source below announced `provider` over numbers that were still chars//4 —
+        # a claim of precision the figures did not have. Measured on a real codex call,
+        # the two differ by three orders of magnitude, so the mislabelling was not small.
+        inp += int(
+            _first(meta, ("actual_input_tokens", "estimated_input_tokens", "input_tokens"))
+            or 0
+        )
+        out += int(
+            _first(meta, ("actual_output_tokens", "estimated_output_tokens", "output_tokens"))
+            or 0
+        )
         sources.add(str(meta.get("token_source") or "estimated"))
     if seen == 0:
         return {
