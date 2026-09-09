@@ -30,6 +30,7 @@ cost, and dropping them would understate it.
 """
 
 import json
+import re
 from pathlib import Path
 
 # Record types carrying a conversation message. Everything else in a transcript
@@ -51,14 +52,29 @@ INJECTED_PREFIXES = (
 # counts human turns up to the first of these.
 EDIT_TOOLS = ("Edit", "Write", "NotebookEdit", "MultiEdit")
 
+# A path already absolute in either platform's flavour: a Windows drive root
+# (`E:\\...`, `E:/...`) or a POSIX/UNC root. Both flavours are matched whatever the
+# host is, because a transcript directory is named for the machine that wrote it,
+# which is not always the machine reading it.
+ABSOLUTE_PATH = re.compile(r"^(?:[A-Za-z]:[\\/]|[\\/])")
+
 
 def transcripts_root(home: Path | None = None) -> Path:
     return (home or Path.home()) / ".claude" / "projects"
 
 
 def project_slug(project_root) -> str:
-    """`E:\\Work\\project\\x` -> `E--Work-project-x`, the directory Claude Code writes to."""
-    text = str(Path(project_root).resolve())
+    """`E:\\Work\\project\\x` -> `E--Work-project-x`, the directory Claude Code writes to.
+
+    Claude Code names the directory after the root it was handed, so the slug must
+    not depend on where this process happens to be running. An already-absolute path
+    is slugified as written: resolving one spelled in the other platform's flavour --
+    a Windows root read on Linux, say -- reads it as relative and silently prefixes
+    the current directory, yielding a slug that names no transcript directory at all.
+    """
+    text = str(project_root)
+    if not ABSOLUTE_PATH.match(text):
+        text = str(Path(project_root).resolve())
     out = []
     for char in text:
         out.append(char if (char.isalnum() or char == "-") else "-")
