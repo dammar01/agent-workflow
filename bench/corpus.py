@@ -3,9 +3,14 @@
 Candidate commits are proposed, not chosen. The plan fixes difficulty labels BEFORE any
 run, and a label derived from diff size is a starting point for that judgement rather
 than the judgement itself — so this writes `difficulty` as a suggestion and leaves
-`prompt` and `oracle_tests` empty for a human to fill. A generated prompt would be a
-prompt written by something that had already seen the answer, which is the one thing the
-corpus must not contain.
+`prompt`, `test_tier` and `oracle_tests` empty for a human to fill. A generated prompt
+would be a prompt written by something that had already seen the answer, which is the one
+thing the corpus must not contain.
+
+`test_tier` is left blank for the same reason in a different shape. Whether a task is
+graded at unit, integration or end-to-end level is a decision about what the task IS, and
+guessing it from the files a commit touched would let the corpus quietly grade every task
+at whichever level was cheapest to detect.
 
 The leak check is the part worth being strict about. A worktree cut at `<sha>^` that
 still contains the answer commit invalidates the unit silently — the agent can simply
@@ -15,6 +20,11 @@ read the fix — so `verify_no_leak` exists to be run per worktree before the un
 import json
 import subprocess
 from pathlib import Path
+
+# The three levels a task is graded at. Every corpus entry declares exactly one, and the
+# oracle refuses an entry that declares none: an ungraded tier is a task whose result
+# cannot be compared with any other task's.
+TEST_TIERS = ("unit", "integration", "e2e")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CORPUS_PATH = Path(__file__).resolve().parent / "corpus.json"
@@ -99,6 +109,8 @@ def to_entries(rows: list[dict]) -> list[dict]:
                 "prompt": "",
                 "files_expected": row["files_expected"],
                 "difficulty": row["difficulty_suggested"],
+                # Empty on purpose, like `prompt`. One of TEST_TIERS, chosen by hand.
+                "test_tier": "",
                 "oracle_tests": [],
                 "_source_subject": row["subject"],
                 "_source_date": row["date"],

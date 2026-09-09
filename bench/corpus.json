@@ -1,0 +1,222 @@
+[
+  {
+    "task_id": "T01",
+    "base_sha": "874ae1537efbe5e09cf408c6a2ceaa6371e983d1^",
+    "answer_sha": "874ae1537efbe5e09cf408c6a2ceaa6371e983d1",
+    "prompt": "",
+    "files_expected": [
+      "tests/checks/installer.py",
+      "tools/e2e/e2e_installer.py",
+      "tools/maintain/extract_config.py"
+    ],
+    "difficulty": "medium",
+    "test_tier": "",
+    "oracle_tests": [],
+    "_source_subject": "feat: rename statusline scripts and update references to workflow-statusline",
+    "_source_date": "2026-09-05"
+  },
+  {
+    "task_id": "T02",
+    "base_sha": "5617dbd30da74363e44b9cbd9f0300962ba13705^",
+    "answer_sha": "5617dbd30da74363e44b9cbd9f0300962ba13705",
+    "prompt": "",
+    "files_expected": [
+      "config/settings.py"
+    ],
+    "difficulty": "easy",
+    "test_tier": "",
+    "oracle_tests": [],
+    "_source_subject": "chore: update version to 3.5.2 and add changelog for new release",
+    "_source_date": "2026-09-05"
+  },
+  {
+    "task_id": "T03",
+    "base_sha": "db327e08baf71e8214f39187511bcf6771cf44f8^",
+    "answer_sha": "db327e08baf71e8214f39187511bcf6771cf44f8",
+    "prompt": "",
+    "files_expected": [
+      "core/prompt/prompt_builder.py",
+      "tests/checks/prompt.py"
+    ],
+    "difficulty": "medium",
+    "test_tier": "",
+    "oracle_tests": [],
+    "_source_subject": "feat(prompt): introduce platform-specific argv limit enforcement for command line handling",
+    "_source_date": "2026-08-31"
+  },
+  {
+    "task_id": "T04",
+    "base_sha": "c47847c415fb9c7478f9b4398dfbef2607998fdf^",
+    "answer_sha": "c47847c415fb9c7478f9b4398dfbef2607998fdf",
+    "prompt": "",
+    "files_expected": [
+      "core/graph/graph_meta.py",
+      "utils/git.py"
+    ],
+    "difficulty": "medium",
+    "test_tier": "",
+    "oracle_tests": [],
+    "_source_subject": "feat: enhance CI documentation and add GitLab CI configuration details",
+    "_source_date": "2026-08-29"
+  },
+  {
+    "task_id": "T05",
+    "base_sha": "7f57590bc94721e3d4367317487a99970c83503a^",
+    "answer_sha": "7f57590bc94721e3d4367317487a99970c83503a",
+    "prompt": "",
+    "files_expected": [
+      "core/audit/diagnostics.py",
+      "tools/e2e/e2e_promote.py"
+    ],
+    "difficulty": "medium",
+    "test_tier": "",
+    "oracle_tests": [],
+    "_source_subject": "feat: add readiness checks for knowledge documents and promote workflow",
+    "_source_date": "2026-08-29"
+  },
+  {
+    "task_id": "T06",
+    "base_sha": "6f47e15f4ea5a3cc1fb2f90aecb50e989fa6d16c^",
+    "answer_sha": "6f47e15f4ea5a3cc1fb2f90aecb50e989fa6d16c",
+    "prompt": "",
+    "files_expected": [
+      "core/runtime/scripts.py",
+      "tools/e2e/e2e_integrity.py"
+    ],
+    "difficulty": "medium",
+    "test_tier": "",
+    "oracle_tests": [],
+    "_source_subject": "fix: ensure PowerShell scripts propagate exit codes correctly",
+    "_source_date": "2026-08-29"
+  },
+  {
+    "task_id": "T07",
+    "base_sha": "a7d42a89048ff0c4cfd90fcfa5892b1f87e10df5^",
+    "answer_sha": "a7d42a89048ff0c4cfd90fcfa5892b1f87e10df5",
+    "prompt": "",
+    "files_expected": [
+      "tests/scenario.py",
+      "tools/sim/sim_flows.py"
+    ],
+    "difficulty": "medium",
+    "test_tier": "",
+    "oracle_tests": [],
+    "_source_subject": "fix: refine fake subprocess handling to avoid breaking unrelated POSIX calls",
+    "_source_date": "2026-08-29"
+  },
+  {
+    "task_id": "T08",
+    "base_sha": "b354fa6c5ba1db06892fb5f050cec172fd935608^",
+    "answer_sha": "b354fa6c5ba1db06892fb5f050cec172fd935608",
+    "prompt": "",
+    "files_expected": [
+      "tools/stamp_version.py"
+    ],
+    "difficulty": "easy",
+    "test_tier": "",
+    "oracle_tests": [],
+    "_source_subject": "feat: add README.md version target for stamping process",
+    "_source_date": "2026-08-29"
+  },
+  {
+    "task_id": "T09",
+    "base_sha": "5aa8de655d27504297502da5c818568c5a318f94^",
+    "answer_sha": "5aa8de655d27504297502da5c818568c5a318f94",
+    "prompt": "",
+    "files_expected": [
+      "tools/stamp_version.py"
+    ],
+    "difficulty": "easy",
+    "test_tier": "",
+    "oracle_tests": [],
+    "_source_subject": "feat: update references in documentation and add LICENSE file",
+    "_source_date": "2026-08-29"
+  },
+  {
+    "task_id": "T10",
+    "base_sha": "162416c5c32f228a2f27de60e4765ac261b0dae7^",
+    "answer_sha": "162416c5c32f228a2f27de60e4765ac261b0dae7",
+    "prompt": "",
+    "files_expected": [
+      "config/providers.py"
+    ],
+    "difficulty": "easy",
+    "test_tier": "",
+    "oracle_tests": [],
+    "_source_subject": "feat: update OpenRouter deepseek provider ID to reflect new version",
+    "_source_date": "2026-08-27"
+  },
+  {
+    "task_id": "T11",
+    "base_sha": "319874c47e6c6a6e4a2ea885b8e438d8588ab17b^",
+    "answer_sha": "319874c47e6c6a6e4a2ea885b8e438d8588ab17b",
+    "prompt": "",
+    "files_expected": [
+      "config/providers.py"
+    ],
+    "difficulty": "easy",
+    "test_tier": "",
+    "oracle_tests": [],
+    "_source_subject": "feat: add new provider entries for OpenRouter with defined effort levels",
+    "_source_date": "2026-08-26"
+  },
+  {
+    "task_id": "T12",
+    "base_sha": "daf91b8ca39421f262cc1d8a85c1db8f75b571d8^",
+    "answer_sha": "daf91b8ca39421f262cc1d8a85c1db8f75b571d8",
+    "prompt": "",
+    "files_expected": [
+      "core/workflow_runtime.py",
+      "tools/stamp_version.py"
+    ],
+    "difficulty": "medium",
+    "test_tier": "",
+    "oracle_tests": [],
+    "_source_subject": "chore: update changelog for v3.4.5 release and correct SUT version in benchmark plan",
+    "_source_date": "2026-08-16"
+  },
+  {
+    "task_id": "T13",
+    "base_sha": "706f7a567ed505d77f3ddd89790cf633f3cc8a1e^",
+    "answer_sha": "706f7a567ed505d77f3ddd89790cf633f3cc8a1e",
+    "prompt": "",
+    "files_expected": [
+      "config/settings.py"
+    ],
+    "difficulty": "easy",
+    "test_tier": "",
+    "oracle_tests": [],
+    "_source_subject": "feat: update version to v3.4.3 and rename opencode.json to second_agent.json",
+    "_source_date": "2026-08-05"
+  },
+  {
+    "task_id": "T14",
+    "base_sha": "abe453b6ce86daf258564a2c116b52cd866f431e^",
+    "answer_sha": "abe453b6ce86daf258564a2c116b52cd866f431e",
+    "prompt": "",
+    "files_expected": [
+      "core/workflow_runtime.py"
+    ],
+    "difficulty": "easy",
+    "test_tier": "",
+    "oracle_tests": [],
+    "_source_subject": "feat: enhance question parsing and update documentation for interactive rendering",
+    "_source_date": "2026-08-04"
+  },
+  {
+    "task_id": "T15",
+    "base_sha": "07c69ef29e1ffeb5660bf309101e7a9ee4426e7d^",
+    "answer_sha": "07c69ef29e1ffeb5660bf309101e7a9ee4426e7d",
+    "prompt": "",
+    "files_expected": [
+      "install.py",
+      "tools/extract_config.py",
+      "tools/gen_manifest.py"
+    ],
+    "difficulty": "medium",
+    "test_tier": "",
+    "oracle_tests": [],
+    "_source_subject": "fix: remove generated_on field from manifest and improve text handling in various scripts",
+    "_source_date": "2026-07-27"
+  }
+]

@@ -29,6 +29,7 @@ on an abandoned unit is a claim nobody made.
 """
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -36,9 +37,12 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import oracle  # noqa: E402
 import policy  # noqa: E402
+from config.settings import default_provider_config  # noqa: E402
+from core.audit import transcript as transcript_reader  # noqa: E402
 from corpus import verify_no_leak  # noqa: E402
 
 BENCH_DIR = Path(__file__).resolve().parent
@@ -48,6 +52,18 @@ UNITS_DIR = BENCH_DIR / "units"
 WORKTREES_DIR = BENCH_DIR / "worktrees"
 
 ARMS = ("A", "B", "C")
+
+# Provider is a dimension of its own, not a fourth and fifth arm. Arms are topologies —
+# who does the work — and providers are who the second agent IS. Flattening them into
+# `A, B, C-opencode, C-codex` would break the paired A-vs-C comparison, because there
+# would no longer be a single C to pair A against.
+#
+# `claude` is the provider of arms A and B in the only sense that matters here: they run
+# no second agent at all, and naming that explicitly keeps the column total rather than
+# leaving a null that reads like a harvest failure.
+BASELINE_PROVIDER = "claude"
+WORKER_PROVIDERS = ("opencode", "codex")
+PROVIDERS = (BASELINE_PROVIDER,) + WORKER_PROVIDERS
 
 # task_id becomes a directory name, a unit-record filename, and a session id. Validated
 # rather than sanitised: `utils.path_guard.safe_path_component` would rewrite `T01` to
@@ -91,8 +107,8 @@ def check_task_id(task_id: str) -> str:
     return task_id
 
 
-def unit_id(task_id: str, arm: str, repeat: int) -> str:
-    return f"{check_task_id(task_id)}_{arm}_{repeat}"
+def unit_id(task_id: str, arm: str, repeat: int, provider: str = BASELINE_PROVIDER) -> str:
+    return f"{check_task_id(task_id)}_{arm}_{provider}_{repeat}"
 
 
 def _contained(path: Path, parent: Path) -> Path:
@@ -116,8 +132,8 @@ def unit_path(uid: str) -> Path:
 # with a sentence instead of a KeyError traceback three frames deep: valid JSON missing a
 # key is not a bug report the operator can act on unless it says which key.
 REQUIRED_UNIT_KEYS = (
-    "unit_id", "task_id", "arm", "repeat", "worktree", "session_id",
-    "workflow_installed", "status", "t_start",
+    "unit_id", "task_id", "arm", "provider", "test_tier", "repeat", "worktree",
+    "session_id", "workflow_installed", "status", "t_start",
 )
 
 
@@ -178,16 +194,87 @@ def _now() -> float:
     return time.time()
 
 
-def prepare(task_id: str, arm: str, repeat: int) -> dict:
+def check_provider(arm: str, provider: str) -> str:
+    """The provider this arm is allowed to run under.
+
+    Arms A and B install no `.workflow`, so they have no second agent to give a provider
+    to. Accepting one would mint a unit whose `provider` column claims a worker that never
+    existed — and that column is what the per-provider breakdown groups on.
+    """
+    if provider not in PROVIDERS:
+        raise DriverError(f"provider must be one of {PROVIDERS}, got {provider!r}")
+    if arm in WORKFLOW_ARMS and provider == BASELINE_PROVIDER:
+        raise DriverError(
+            f"arm {arm} runs a second agent, so it needs one of {WORKER_PROVIDERS}, not "
+            f"{BASELINE_PROVIDER!r}"
+        )
+    if arm not in WORKFLOW_ARMS and provider != BASELINE_PROVIDER:
+        raise DriverError(
+            f"arm {arm} installs no .workflow and runs no second agent, so its provider "
+            f"is {BASELINE_PROVIDER!r}, not {provider!r}"
+        )
+    return provider
+
+
+# Keys in `second_agent.json` that belong to the PROVIDER rather than to the workspace.
+# Every one of them is rebuilt when a unit is pinned. The rest — timeouts, poll intervals,
+# probe counts — are provider-neutral operational tuning and are left as `init` wrote them.
+PROVIDER_OWNED_KEYS = (
+    "provider",
+    "provider_command",
+    "provider_agent",
+    "default_model",
+    "effort",
+    "routes",
+)
+
+
+def _pin_provider(worktree: Path, provider: str) -> dict:
+    """Write the unit's provider into the worktree's own second_agent.json.
+
+    Written after `init` rather than passed to it: `init` seeds the file from the
+    operator's environment, which is whatever provider they happen to use day to day. A
+    unit that inherited that would be labelled with one provider in the ledger and run
+    under another, and nothing downstream would notice.
+
+    Every provider-owned key is REBUILT, not just the two that name the provider.
+    `routes[<command>].model` wins over `default_model` in `core/prompt/router.py`, so a
+    worktree seeded for opencode and then pinned to codex would keep sending opencode's
+    model names to codex on every delegated call — labelled codex in the ledger, running
+    on a model codex does not have. `default_provider_config` supplies the neutral set
+    (`default_model: None`, the shared command routes), which leaves the provider's own
+    default standing instead of guessing a model name here.
+    """
+    path = worktree / ".workflow" / "second_agent.json"
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return {"pinned": False, "reason": f"{type(exc).__name__}: {exc}"}
+    if not isinstance(config, dict):
+        return {"pinned": False, "reason": "second_agent.json is not a JSON object"}
+    defaults = default_provider_config(provider)
+    for key in PROVIDER_OWNED_KEYS:
+        config[key] = defaults[key]
+    try:
+        path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    except OSError as exc:
+        return {"pinned": False, "reason": f"{type(exc).__name__}: {exc}"}
+    return {"pinned": True, "reason": ""}
+
+
+def prepare(
+    task_id: str, arm: str, repeat: int, provider: str = BASELINE_PROVIDER
+) -> dict:
     """Create the worktree and open the unit record. Machine half, start of unit."""
     if arm not in ARMS:
         raise DriverError(f"arm must be one of {ARMS}, got {arm!r}")
     if repeat < 1:
         # Repeats are 1-based and appear in the unit id. A negative one mints a unit named
-        # `T01_A_-1`, which sorts oddly and reads as a mistake nobody made on purpose.
+        # `T01_A_claude_-1`, which sorts oddly and reads as a mistake nobody made on purpose.
         raise DriverError(f"repeat must be 1 or greater, got {repeat}")
+    provider = check_provider(arm, provider)
     task = find_task(task_id)
-    uid = unit_id(task_id, arm, repeat)
+    uid = unit_id(task_id, arm, repeat, provider)
 
     if unit_path(uid).exists():
         raise DriverError(
@@ -206,12 +293,17 @@ def prepare(task_id: str, arm: str, repeat: int) -> dict:
         "unit_id": uid,
         "task_id": task_id,
         "arm": arm,
+        "provider": provider,
+        # Copied from the corpus entry, not re-derived here: the tier is a property of the
+        # task, and two units of the same task graded at different tiers would not be
+        # repeats of each other.
+        "test_tier": task.get("test_tier") or "",
         "repeat": repeat,
         "base_sha": base_sha,
         "answer_sha": task["answer_sha"],
         "worktree": str(worktree),
-        # One session id per unit. Costs are attributed by session downstream, so two units
-        # sharing an id are two units whose spend can no longer be separated.
+        # One session id per unit. Token totals are attributed by session downstream, so
+        # two units sharing an id are two units whose usage can no longer be separated.
         "session_id": f"bench_{uid}",
         "workflow_installed": arm in WORKFLOW_ARMS,
         "prompt": task["prompt"],
@@ -235,6 +327,11 @@ def prepare(task_id: str, arm: str, repeat: int) -> dict:
         "rework_cycles": None,
         "main_agent_rewrote": None,
         "files_touched": None,
+        # The Claude Code session that drove this unit. Not knowable at prepare time: the
+        # operator opens that session afterwards. Stamped at `finish`, either from the id
+        # the operator passes or from the workflow session registry.
+        "claude_session_id": None,
+        "transcript_path": None,
         "status": STATUS_PREPARING,
     }
     # The record is written BEFORE the worktree exists, on purpose. The other order leaves
@@ -273,6 +370,17 @@ def prepare(task_id: str, arm: str, repeat: int) -> dict:
         installed = (worktree / ".workflow" / "config.json").exists()
         record["workflow_installed"] = installed
         record["init_returncode"] = init.returncode
+        if installed:
+            pinned = _pin_provider(worktree, provider)
+            record["provider_pinned"] = pinned["pinned"]
+            if not pinned["pinned"]:
+                _git(["worktree", "remove", "--force", str(worktree)])
+                unit_path(uid).unlink(missing_ok=True)
+                raise DriverError(
+                    f"unit {uid}: could not pin provider {provider!r} in {worktree} "
+                    f"({pinned['reason']}). Running it would label the row with a "
+                    "provider it did not use."
+                )
         if not installed:
             _git(["worktree", "remove", "--force", str(worktree)])
             unit_path(uid).unlink(missing_ok=True)
@@ -330,8 +438,8 @@ def delegate(uid: str, command: str, prompt: str | None = None) -> dict:
         "--prompt",
         prompt if prompt is not None else record["prompt"],
         # The unit's own session id, NOT --fresh-session. A generated id would be unknown
-        # to the harvester, and the unit's premium cost would land under a session nobody
-        # can map back to this row.
+        # to the harvester, and the unit's premium tokens would land under a session
+        # nobody can map back to this row.
         "--session",
         record["session_id"],
         "--work-dir",
@@ -391,7 +499,11 @@ def judge(uid: str) -> dict:
     if not worktree.exists():
         raise DriverError(f"worktree {worktree} is gone; cannot judge unit {uid}")
 
-    task = {"task_id": record["task_id"], "oracle_tests": record["oracle_tests"]}
+    task = {
+        "task_id": record["task_id"],
+        "test_tier": record["test_tier"],
+        "oracle_tests": record["oracle_tests"],
+    }
     result = oracle.judge(worktree, task)
 
     record["judge_runs"] += 1
@@ -414,6 +526,10 @@ def judge(uid: str) -> dict:
         "verdict": result["verdict"],
         "failed_at": result["failed_at"],
         "stages_not_run": result["stages_not_run"],
+        # Pass rate with its denominator attached. `stages_run` counts stages that
+        # actually ran, so a unit stopped at stage 1 reads as 0/1 rather than as 25%.
+        "stages_passed": result["stages_passed"],
+        "stages_run": result["stages_run"],
         # Which suites stage 2 skipped, if any. Empty for an unquarantined run.
         "quarantined": (result["stages"].get(oracle.STAGE_SUITE) or {}).get(
             "quarantined", []
@@ -423,12 +539,103 @@ def judge(uid: str) -> dict:
     return result
 
 
-def finish(uid: str, rework_cycles: int, main_agent_rewrote: bool) -> dict:
-    """Stamp the two fields only the operator saw, and close the unit.
+def _same_path(left, right) -> bool:
+    """Path equality that survives Windows case and separator differences."""
+    try:
+        return os.path.normcase(os.path.realpath(str(left))) == os.path.normcase(
+            os.path.realpath(str(right))
+        )
+    except (OSError, ValueError):
+        return False
+
+
+def _load_registry() -> dict:
+    registry = Path.home() / ".claude" / "session_registry.json"
+    try:
+        entries = json.loads(registry.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return entries if isinstance(entries, dict) else {}
+
+
+def _registry_entry(record: dict) -> tuple[str | None, dict | None]:
+    """The newest session-registry entry for a Claude session run in this worktree.
+
+    Matched on `cwd`, NOT on `main_session_id`. The two id spaces never meet: the driver
+    mints `bench_<unit_id>` for its own delegated calls, while `session-bind` mints
+    `main_<slug>_<timestamp>_<random>` of its own when a Claude session starts. Comparing
+    them found nothing, always — and found it silently, leaving every transcript column
+    null with no error to explain it.
+
+    The worktree is the real link, and it is a better one: `session-bind` is installed
+    globally, so it records arms A and B too even though they install no `.workflow`. One
+    worktree per unit is already an invariant of `prepare`.
+    """
+    worktree = record.get("worktree")
+    if not worktree:
+        return None, None
+    # `bound_at` is an ISO-8601 UTC string from both hook flavours, so lexical order is
+    # chronological order. No parsing, and therefore no timezone bug to get wrong.
+    #
+    # The id is the second sort key, and only ever breaks an exact tie. Without it the
+    # winner of a tie is whichever entry the dict happened to yield last, which means the
+    # same registry can resolve to two different transcripts on two runs — a result that
+    # cannot be reproduced is worse than one that is merely arbitrary.
+    matches = [
+        (str(entry.get("bound_at") or ""), str(claude_id), entry)
+        for claude_id, entry in _load_registry().items()
+        if isinstance(entry, dict) and _same_path(entry.get("cwd"), worktree)
+    ]
+    if not matches:
+        return None, None
+    _, best_id, best_entry = max(matches)
+    return best_id, best_entry
+
+
+def _resolve_transcript(
+    record: dict, claude_session_id: str | None
+) -> tuple[str | None, str | None]:
+    """(claude_session_id, transcript_path) for a unit, or (id, None) if no file exists.
+
+    Resolved by session id, never by modification time: two units running at once would
+    make an mtime guess pick the wrong transcript, and a wrong transcript still looks like
+    data once it is in the ledger.
+    """
+    registry_id, entry = _registry_entry(record)
+    session = claude_session_id or registry_id
+    if not session:
+        return None, None
+    if claude_session_id:
+        # An id the operator named still gets the registry's recorded path when the
+        # registry knows that id. Skipping the lookup would throw away the one path that
+        # was observed rather than derived.
+        named = _load_registry().get(claude_session_id)
+        entry = named if isinstance(named, dict) else None
+    # The hook records the path it was handed. Preferred over deriving one, because the
+    # derivation encodes an assumption about how Claude Code names its project directories
+    # and the hook encodes none.
+    if entry:
+        recorded = entry.get("transcript_path")
+        if recorded and Path(recorded).is_file():
+            return session, str(recorded)
+    path = transcript_reader.find_transcript(session, record.get("worktree") or REPO_ROOT)
+    return session, (str(path) if path else None)
+
+
+def finish(
+    uid: str,
+    rework_cycles: int,
+    main_agent_rewrote: bool,
+    claude_session_id: str | None = None,
+) -> dict:
+    """Stamp the fields only the operator saw, and close the unit.
 
     `main_agent_rewrote` is stamped, never inferred from the diff — the plan says so
     (§7) and it is the honest reading: whether the main agent rewrote the delegate's work
     is a fact about the session, not a shape in the final patch.
+
+    The transcript is located here rather than at collect time because the worktree path
+    it is keyed on is about to be torn down.
     """
     record = load_unit(uid)
     if record["status"] in (STATUS_PREPARING, STATUS_PREPARED):
@@ -444,6 +651,9 @@ def finish(uid: str, rework_cycles: int, main_agent_rewrote: bool) -> dict:
         )
     record["rework_cycles"] = rework_cycles
     record["main_agent_rewrote"] = bool(main_agent_rewrote)
+    session, path = _resolve_transcript(record, claude_session_id)
+    record["claude_session_id"] = session
+    record["transcript_path"] = path
     record["t_end"] = _now()
     record["unit_seconds"] = round(record["t_end"] - record["t_start"], 1)
     record["timed_out"] = policy.over_time(record["unit_seconds"])
@@ -481,6 +691,15 @@ def main() -> int:
     p_prepare = sub.add_parser("prepare", help="create the worktree and open the unit")
     p_prepare.add_argument("--task", required=True)
     p_prepare.add_argument("--arm", required=True, choices=list(ARMS))
+    p_prepare.add_argument(
+        "--provider",
+        default=BASELINE_PROVIDER,
+        choices=list(PROVIDERS),
+        help=(
+            f"second agent for this unit. Arms A and B run none, so they take "
+            f"{BASELINE_PROVIDER!r}; arm C takes one of {WORKER_PROVIDERS}."
+        ),
+    )
     p_prepare.add_argument("--repeat", type=int, default=1)
 
     p_delegate = sub.add_parser("delegate", help="one main.py delegated call (arm C)")
@@ -497,6 +716,16 @@ def main() -> int:
     p_finish.add_argument("--unit", required=True)
     p_finish.add_argument("--rework-cycles", type=int, required=True)
     p_finish.add_argument("--main-agent-rewrote", action="store_true")
+    p_finish.add_argument(
+        "--claude-session",
+        default=None,
+        help=(
+            "Claude Code session id that drove this unit. Arm C can usually be resolved "
+            "from the workflow session registry; arms A and B install no workflow, so "
+            "nothing binds for them and the id has to be given here or the transcript "
+            "columns stay null."
+        ),
+    )
 
     p_teardown = sub.add_parser("teardown", help="remove the unit's worktree")
     p_teardown.add_argument("--unit", required=True)
@@ -507,12 +736,14 @@ def main() -> int:
     args = parser.parse_args()
     try:
         if args.phase == "prepare":
-            record = prepare(args.task, args.arm, args.repeat)
+            record = prepare(args.task, args.arm, args.repeat, args.provider)
             _print(
                 {
                     "unit_id": record["unit_id"],
                     "worktree": record["worktree"],
                     "session_id": record["session_id"],
+                    "provider": record["provider"],
+                    "test_tier": record["test_tier"],
                     "workflow_installed": record["workflow_installed"],
                     "next": "run the agent session in the worktree, then `judge`",
                 }
@@ -529,8 +760,20 @@ def main() -> int:
                 }
             )
         elif args.phase == "finish":
-            record = finish(args.unit, args.rework_cycles, args.main_agent_rewrote)
-            _print({"unit_id": record["unit_id"], "status": record["status"]})
+            record = finish(
+                args.unit,
+                args.rework_cycles,
+                args.main_agent_rewrote,
+                args.claude_session,
+            )
+            _print(
+                {
+                    "unit_id": record["unit_id"],
+                    "status": record["status"],
+                    "claude_session_id": record["claude_session_id"],
+                    "transcript_path": record["transcript_path"],
+                }
+            )
         elif args.phase == "teardown":
             record = teardown(args.unit, args.force)
             _print({"unit_id": record["unit_id"], "status": record["status"]})
@@ -546,6 +789,8 @@ def main() -> int:
                     {
                         "unit_id": entry.get("unit_id"),
                         "arm": entry.get("arm"),
+                        "provider": entry.get("provider"),
+                        "test_tier": entry.get("test_tier"),
                         "status": entry.get("status"),
                         "verdict": entry.get("verdict"),
                     }

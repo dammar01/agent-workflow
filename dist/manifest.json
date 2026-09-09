@@ -329,15 +329,15 @@
     },
     {
       "path": "claude/hooks/session-bind.ps1",
-      "sha256": "ce7fc4e2d5cd5cc0986645f058a0ecc2766953777cfa4ff7715c84f6276114e1",
-      "bytes": 3637,
+      "sha256": "f4ba99ec8eba8b5370efb5a5ac19a1173a605f7d9d41e1bbe6ef63ecd1fded48",
+      "bytes": 3974,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/session-bind.sh",
-      "sha256": "deec3d5a57e1e7398f8af44c36c972120a2a00da1945643133eadcd470624057",
-      "bytes": 3317,
+      "sha256": "6eaaf174167c0de0e269c592f1d139691f014a58d7ca848ae4ff83ddbbae76d7",
+      "bytes": 3662,
       "merge": "replace",
       "component": "runtime"
     },

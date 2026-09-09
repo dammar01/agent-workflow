@@ -6,14 +6,16 @@ Rencana: `bench/BENCHMARK-PLAN.md`. Perbarui file ini setiap fase selesai.
 
 | Fase | Status | Tanggal | Keluaran |
 |------|--------|---------|----------|
-| P0.1 Tambal harga `claude-opus-5` | BELUM (blocker eksternal) | — | — |
+| ~~P0.1 Tambal harga `claude-opus-5`~~ | GUGUR 2026-09-09 | — | Studi beralih ke metrik token murni; `costUSD` tak lagi dibaca |
 | P0.2 Verifikasi unit → sessionId | BELUM | — | — |
 | P0.3 Uji `tokenburn proxy` (opsional) | BELUM | — | — |
 | 1. Bangun corpus 15 task | SEBAGIAN | 2026-08-15 | `bench/corpus.py` (generator jalan; `corpus.json` belum ditulis) |
 | 2. Driver per unit | SEBAGIAN | 2026-08-20 | `bench/driver.py`, `bench/collect.py`. Satu unit arm C dijalankan penuh (delegate nyata 68 s, worker token terpanen); sesi agen tetap kerja operator |
 | 3. Oracle dibekukan | SELESAI (dibuka sekali 2026-08-20, verdict `security_violation`) | 2026-08-15 | `bench/oracle.py`, `bench/test_oracle.py` |
-| 4. Panen data | SEBAGIAN | 2026-08-20 | `bench/collect.py` jadi; `bench/ledger.jsonl` belum ada data (P0.1) |
-| 5. Agregasi dan analisis | SELESAI | 2026-08-15 | `bench/aggregate.py` |
+| 4. Panen data | SEBAGIAN | 2026-09-09 | `bench/collect.py` jadi (token-only, plus kolom transcript); `bench/ledger.jsonl` belum ada data |
+| 5. Agregasi dan analisis | SELESAI | 2026-09-09 | `bench/aggregate.py` (per arm, per `tier/arm/provider`, paired per provider) |
+| 6. Provider jadi dimensi | SELESAI | 2026-09-09 | `driver.py --provider`, pin `second_agent.json`, `unit_id` memuat provider |
+| 7. Tier test | SELESAI | 2026-09-09 | `corpus.TEST_TIERS`, gerbang tier di `oracle.judge`, `e2e` menjalankan `tools/e2e/e2e.py` tanpa `--full` |
 
 Catatan status di atas sengaja tidak menulis SELESAI untuk Fase 1: generatornya ada dan
 terbukti jalan, tetapi `prompt` dan `oracle_tests` sengaja dibiarkan kosong. Prompt yang
@@ -41,27 +43,57 @@ Ini bukan driver setengah jadi yang menyamar siap: batas mesin/operator ditulis 
 supaya jelas kolom mana yang terukur dan kolom mana yang distempel tangan. Variansi operator
 menyentuh ketiga arm, bukan cuma A dan B — konsekuensinya masuk §10 Ancaman validitas.
 
-`bench/collect.py` menolak menulis baris tanpa biaya premium kecuali diminta
-(`--allow-missing-cost`). `aggregate._spend` memaksa nilai hilang jadi `0.0`, dan arm yang
-ekspor tokenburn-nya tak pernah datang akan terbaca sebagai arm termurah dalam studi.
+`bench/collect.py` menolak menulis baris tanpa token premium kecuali diminta
+(`--allow-missing-premium`). Nilai hilang menjumlah jadi `0`, dan arm yang ekspor
+tokenburn-nya tak pernah datang akan terbaca sebagai arm paling hemat dalam studi.
+
+**Nol mata uang di seluruh `bench/`.** Studi mengukur token. Paket langganan tidak menagih
+per token, jadi kolom USD hanya bisa jadi angka setara-API yang berpakaian biaya. Konsekuensi
+yang harus dipatuhi saat menulis laporan: boleh mengklaim "arm C memakai lebih sedikit token
+premium", tidak boleh mengklaim "arm C lebih murah".
 
 Batas run ada di `bench/policy.py` (§7b rencana). Waktu, retry, dan jumlah panggilan
 terdelegasi ditegakkan live oleh `driver.py`; budget cuma dilaporkan `collect.py` sesudahnya,
-karena biaya datang dari tokenburn setelah run selesai. Karantina flaky kosong: empat run
+karena hitungan token premium datang dari tokenburn setelah run selesai. Karantina flaky kosong: empat run
 hijau berturut pada 2026-08-20 bukan bukti stabil, cuma ketiadaan bukti tak-stabil, dan nol
 suite dikarantina atas dasar curiga.
 
 ## Gerbang aktif
 
-**P0.1 memblokir semua run.** Selama `claude-opus-5` berharga $0 di tokenburn, biaya arm A dan B terbaca nol dan hasil benchmark tidak berarti.
+**P0.1 gugur 2026-09-09.** Harga `claude-opus-5` yang nol di tokenburn tidak lagi memblokir
+apa pun: studi membaca kolom token, bukan kolom biaya, dan kolom token benar meski harganya
+salah.
+
+**P0.2 masih memblokir.** Pemetaan satu unit → satu `sessionId` Claude belum diverifikasi
+terhadap export tokenburn nyata. Selama itu belum terbukti, kolom `premium_*` bisa mendarat
+di baris yang salah — dan baris yang salah tetap terlihat seperti data.
 
 Cek cepat:
 
 ```bash
-tokenburn db export | awk -F, 'NR>1 && $4=="claude-opus-5"{c+=$10} END{print "opus5_cost="c}'
+tokenburn db export | awk -F, 'NR>1 && $4=="claude-opus-5"{t+=$6+$7} END{print "opus5_tokens="t}'
 ```
 
 Harus lebih besar dari 0.
+
+**Corpus masih kosong.** 15 task belum ditulis. `prompt`, `test_tier`, dan `oracle_tests`
+ketiganya dikosongkan generator dengan sengaja, dan `oracle.judge` menolak entri yang
+kehilangan tier atau `oracle_tests` — verdict `incomplete`, bukan `accepted`.
+
+Matrix yang direncanakan: 15 task x 4 sel (A/claude, B/claude, C/opencode, C/codex) x 1
+repeat = **60 unit**. `agy` di luar matrix: adapter-nya nol `provider_usage`, jadi token
+worker-nya estimasi dan barisnya tak sebanding.
+
+**Transcript.** Kolom `message_turns` dan `context_*` datang dari transcript Claude, bukan
+tokenburn. `driver.py finish` mencocokkan entri `session_registry.json` lewat **`cwd`**,
+bukan lewat `main_session_id`: driver mencetak `bench_<unit_id>` untuk panggilan
+terdelegasinya sendiri, sedangkan `session-bind` mencetak `main_<slug>_<ts>_<rand>` miliknya
+sendiri. Dua ruang id itu tak pernah bertemu, jadi pencocokan lewat id tak akan pernah
+menemukan apa pun — dan tak menemukannya secara diam-diam. Worktree adalah tautan yang
+sebenarnya, sekaligus tautan yang lebih baik: `session-bind` terpasang global, jadi arm A
+dan B ikut tercatat meski nol `.workflow`. `--claude-session` tetap ada sebagai override
+operator. Tanpa keduanya, kolom-kolom itu `null` — dan `collect.py` menyebut jumlah
+barisnya, bukan mendiamkannya.
 
 ## Yang diketahui rusak
 

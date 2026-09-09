@@ -24,6 +24,10 @@ try {
     $source    = $payload.source
     $claudeSid = $payload.session_id
     $cwd       = $payload.cwd
+    # Recorded, not derived. The benchmark harvester needs to find this session's
+    # transcript after the fact, and reconstructing the path means guessing how Claude
+    # Code names its project directories. The hook is handed the real one.
+    $transcriptPath = $payload.transcript_path
     if ([string]::IsNullOrWhiteSpace($cwd)) { $cwd = (Get-Location).Path }
 
     $root = $cwd
@@ -62,6 +66,7 @@ try {
             cwd             = $root
             bound_at        = $boundAt
             source          = $source
+            transcript_path = $transcriptPath
         }
     }
 

@@ -52,6 +52,7 @@ from tests.checks.deps import _test_runtime_is_stdlib_only  # noqa: E402
 from tests.checks.governance import _test_governance_controls  # noqa: E402
 from tests.checks.graph_verification import _test_graph_verification  # noqa: E402
 from tests.checks.telemetry import _test_telemetry_metrics  # noqa: E402
+from tests.checks.transcript import _test_transcript_parsing  # noqa: E402
 from tests.checks.facts import (  # noqa: E402
     _test_anchor_relocation,
     _test_evidence_anchor_relocation,
@@ -121,6 +122,7 @@ SUITES: dict[str, tuple] = {
     "deps": (_test_runtime_is_stdlib_only, "shipped code imports nothing outside the stdlib"),
     "telemetry": (_test_telemetry_metrics, "P1 metrics count tasks, not calls, and report their denominators"),
     "usage-tokens": (_test_usage_token_accounting, "provider token counts reach the row, and breakdowns never become addends"),
+    "transcript": (_test_transcript_parsing, "a Claude transcript yields human turns and per-turn context, not tool-call counts"),
     "governance": (_test_governance_controls, "provider allowlist, budget ceiling, tool policy, local-first streams"),
     "graph-verification": (_test_graph_verification, "per-node graph provenance, drift vs move, subgraph slicing"),
     "adapters": (_test_adapter_error_normalization, "every adapter normalises errors and counts redactions alike"),

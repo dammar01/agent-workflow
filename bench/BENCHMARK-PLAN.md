@@ -63,7 +63,7 @@ Jangan buka ulang tanpa alasan baru.
 | Lock 1 worker per `session_id`, TTL 300s | `core/workspace_paths.py:36` |
 | Cap worker global default 6 | `config/settings.py:155` (`AI_PROXY_MAX_GLOBAL_WORKERS`) |
 | `auto_verify_after_execute=False`, prompt-only, nol penegakan Python | `core/workflow_runtime.py:114-129` |
-| Nol data harga di repo | grep price/pricing/cost_per = nol match |
+| Nol data harga di repo | grep price/pricing/cost_per/usd = nol match; studi memakai token saja |
 | Nol modul agregasi metrik lintas run | dikonfirmasi eksplisit |
 | Harness test tunggal, pass/fail biner, tanpa report file | `tests/scenario.py:1016` |
 | `.workflow/run.sh` digenerate dinamis, OS-gated POSIX, tidak di-ship | — |
@@ -90,7 +90,11 @@ id,timestamp,provider,model,source,inputTokens,outputTokens,
 cacheReadTokens,cacheWriteTokens,costUSD,durationMs,promptHash,toolUse,stopReason
 ```
 
-**Temuan kritis — `claude-opus-5` berharga NOL:**
+**Temuan lama — `claude-opus-5` berharga NOL.** Dicatat di sini sebagai riwayat, bukan
+sebagai gerbang: sejak studi ini beralih ke metrik token murni, kolom `costUSD` tidak
+dibaca sama sekali dan harga yang salah tidak lagi memblokir apa pun. Kolom token
+(`inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`) yang dipakai, dan
+kolom itu benar meski harganya nol.
 
 | model | rows | cost |
 |-------|------|------|
@@ -292,34 +296,116 @@ Uji berpasangan per task, bukan antar grup. Laporkan selisih per pasang dengan s
 Satu baris JSONL per unit:
 
 ```
-task_id, arm, repeat, base_sha, session_id, worktree,
+task_id, arm, provider, test_tier, repeat, base_sha, session_id, worktree,
 t_start, t_first_submit, t_accepted, t_end,
 premium_cache_read_tokens, premium_cache_write_tokens,
-premium_output_tokens, premium_input_tokens, premium_cost_usd,
-worker_input_tokens, worker_output_tokens, worker_cost_usd, worker_token_source,
+premium_output_tokens, premium_input_tokens, premium_total_tokens,
+worker_input_tokens, worker_output_tokens, worker_token_source,
 delegated_calls, evidence_reused_hits,
 first_pass_accepted, rework_cycles,
-oracle_stage_failed, verdict,
+oracle_stage_failed, verdict, stages_passed, stages_run,
 main_agent_rewrote, files_touched,
 scan_findings,
-unit_seconds, timed_out, quarantined_suites, over_unit_budget
+unit_seconds, timed_out, quarantined_suites, over_unit_budget,
+message_turns, turns_to_first_edit,
+context_input_tokens, context_peak_tokens, context_sidechain_tokens,
+transcript_source
 ```
 
-Empat field terakhir ditambahkan 2026-08-20 bersama `bench/policy.py`. Masing-masing
-menjawab pertanyaan yang tak bisa dijawab dari daftar asli: berapa lama unit berjalan sama
-sekali, apakah ia lewat cap waktu, apakah ia dinilai dengan gerbang yang dikurangi, dan
-apakah biayanya lewat plafon per unit.
+`unit_seconds`, `timed_out`, `quarantined_suites`, dan `over_unit_budget` ditambahkan
+2026-08-20 bersama `bench/policy.py`. Masing-masing menjawab pertanyaan yang tak bisa
+dijawab dari daftar asli: berapa lama unit berjalan sama sekali, apakah ia lewat cap waktu,
+apakah ia dinilai dengan gerbang yang dikurangi, dan apakah pemakaian token premium-nya
+lewat plafon per unit.
+
+`provider` dan `test_tier` adalah dua dimensi desain, dibawa per baris, bukan diurai ulang
+dari `unit_id`. Kunci pengelompokan yang harus dipulihkan dengan memotong string cuma
+berjarak satu rename dari diam-diam menggabungkan semuanya jadi satu grup.
+
+`stages_passed`/`stages_run` adalah test pass rate berikut penyebutnya. `stages_run`
+menghitung stage yang benar-benar jalan, jadi unit yang berhenti di stage 1 terbaca 0/1,
+bukan 25% dari gerbang empat-stage yang tak pernah ia capai.
+
+Enam field terakhir berasal dari transcript Claude unit itu. Tokenburn melaporkan apa yang
+dihabiskan sesi; hanya transcript yang tahu berapa kali seorang manusia harus bertanya, dan
+berapa besar context yang dibawa tiap giliran.
+
+**Nol kolom mata uang.** Studi ini mengukur token. Paket langganan tidak menagih per token,
+jadi kolom USD hanya bisa jadi angka setara-API yang berpakaian biaya, dan setiap
+perbandingan yang bersandar padanya mewarisi fiksi itu. `costUSD` di export tokenburn
+sengaja dilewati, bukan disimpan di kolom yang tak boleh dikutip siapa pun.
 
 Catatan turunan:
 
-- `premium_*` dari tokenburn per `sessionId`.
-- `worker_*` dari `call.meta.json`, `token_source="estimated"` (`chars//4`).
+- `premium_*` dari tokenburn per `sessionId`. `premium_total_tokens` = input + output +
+  cache read + cache write; cache tidak dikurangkan, sebab giliran yang membaca 200k token
+  cache tetap membawa 200k token context.
+- `worker_*` dari `call.meta.json`, `token_source` dari runtime (`provider` atau
+  `estimated`/`chars//4`). Token premium dan token worker adalah dua sumber daya berbeda
+  dan **tidak pernah** dijumlahkan jadi satu angka.
+- `message_turns` = record `type=user` yang benar-benar prompt manusia. Tool result,
+  `<task-notification>`, dan injeksi `isMeta` juga datang di peran user; menghitungnya
+  mengubah "berapa kali manusia bertanya" jadi "berapa banyak tool yang dipanggil model".
+- `turns_to_first_edit` = giliran manusia sebelum model pertama kali menyentuh file.
+  `null` bila tak pernah — bukan `0`, yang justru terbaca "langsung mengedit".
+- `context_sidechain_tokens` dipisah dari `context_input_tokens`: subagent native adalah
+  arm B, jadi melebur keduanya menyembunyikan biaya arm B.
 - `evidence_reused_hits` dari `evidence_ref.reused` — proxy langsung token premium yang dihindari.
 - `main_agent_rewrote` distempel harness per fase, **tidak** ditebak dari isi diff. Ini yang menjawab "persen task yang akhirnya diulang Claude utama".
 - `rework_cycles` punya dua sumber: stempel harness dan `promptHash` berulang di CSV tokenburn. Silang-cek keduanya.
 - `quarantined_suites` kosong berarti unit dinilai dengan gerbang penuh. Tak kosong berarti
   stage 2 melewati suite yang disebut, dan baris itu tidak sebanding dengan baris bergerbang
   penuh — laporkan per baris, jangan diringkas jadi catatan kaki.
+
+## 7c. Provider sebagai dimensi
+
+Provider **bukan** arm keempat dan kelima. Arm adalah topologi — siapa yang mengerjakan —
+sedangkan provider adalah siapa second agent itu. Meratakannya jadi `A, B, C-opencode,
+C-codex` merusak perbandingan berpasangan A-lawan-C, karena tak ada lagi satu C tunggal
+untuk dipasangkan dengan A.
+
+| Arm | Provider yang sah | Alasan |
+|-----|-------------------|--------|
+| A | `claude` | nol `.workflow`, nol second agent |
+| B | `claude` | subagent native, tetap nol second agent |
+| C | `opencode`, `codex` | `.workflow` terpasang, provider dipin per unit |
+
+`agy` terdaftar di runtime tapi **tidak** masuk matrix: adapter-nya tak memancarkan
+`provider_usage`, jadi token worker-nya cuma estimasi `chars//4` dan barisnya tak sebanding
+dengan baris yang terukur.
+
+Identitas unit sekarang `(task, arm, provider, repeat)` — tercermin di `unit_id`, nama
+worktree, dan `session_id`. `driver.py prepare --provider` menolak pasangan yang tak sah,
+lalu menulis provider itu ke `second_agent.json` milik worktree setelah `init`. Ditulis
+sesudah `init`, bukan diteruskan ke dalamnya: `init` menyemai file itu dari environment
+operator, dan unit yang mewarisinya akan berlabel satu provider tapi berjalan di provider
+lain tanpa ada yang menyadarinya.
+
+Pin **membangun ulang seluruh kunci milik provider**, bukan cuma dua field yang menyebut
+namanya: `provider`, `provider_command`, `provider_agent`, `default_model`, `effort`, dan
+`routes`. Alasannya di `core/prompt/router.py` — `routes[<command>].model` menang atas
+`default_model`, jadi worktree yang disemai untuk opencode lalu dipin ke codex akan tetap
+mengirim nama model opencode di tiap panggilan terdelegasi, berlabel codex di ledger.
+Nilai netral diambil dari `config.settings.default_provider_config`, yang menulis
+`default_model: None` sehingga default milik provider itu sendiri yang berlaku — bukan
+tebakan nama model di sini. Kunci provider-netral (timeout, poll interval, jumlah probe)
+dibiarkan seperti tulisan `init`.
+
+## 7d. Tier test
+
+Tiap entri corpus menyatakan tepat satu `test_tier`: `unit`, `integration`, atau `e2e`.
+Dikosongkan generator dengan alasan yang sama seperti `prompt` — apakah sebuah task dinilai
+di level unit, integration, atau end-to-end adalah keputusan tentang task itu APA, dan
+menebaknya dari file yang disentuh commit akan membuat corpus diam-diam menilai semua task
+di level yang paling murah dideteksi.
+
+Oracle menolak entri tanpa tier. Tier yang tak dinyatakan tidak di-default ke yang termurah:
+task yang dinilai di level yang tak seorang pun pilih adalah task yang verdict-nya tak bisa
+dibandingkan dengan task mana pun.
+
+Tier `e2e` menjalankan `tools/e2e/e2e.py` sebagai tambahan stage 2 — **tanpa** `--full`.
+Flag itu membuat panggilan terdelegasi sungguhan, yang menghabiskan kuota provider yang
+justru sedang diukur studi ini dan menjadikan oracle peserta di arm yang ia nilai.
 
 ## 7b. Batas run
 
@@ -331,13 +417,17 @@ Terkumpul di `bench/policy.py`, satu tempat supaya mengubahnya jadi edit yang te
 | Timeout per stage oracle | 900 s | live, `oracle.py` |
 | `rework_cycles` maksimum | 3 | live, `driver.py finish` menolak di atasnya |
 | Panggilan terdelegasi per unit | 12 | live, `driver.py delegate` |
-| Budget per unit | $5,00 | **pasca-fakta**, dilaporkan `collect.py` |
-| Budget per run | $400,00 | **pasca-fakta**, dilaporkan `collect.py` |
+| Budget token premium per unit | 5.000.000 | **pasca-fakta**, dilaporkan `collect.py` |
+| Budget token premium per run | 400.000.000 | **pasca-fakta**, dilaporkan `collect.py` |
 | Suite dikarantina | kosong | dibaca `oracle.py` saat stage 2 |
 
-Budget tidak bisa ditegakkan live: biaya datang dari tokenburn setelah run selesai, jadi
-tak ada yang bisa memotong di tengah jalan. Menyebutnya penegakan akan menjadi klaim palsu
-tentang apa yang harness bisa lihat.
+Budget dihitung dalam token premium saja. Token worker sengaja di luar gerbang: itu sumber
+daya murah yang justru dibelanjakan desain ini untuk menghemat yang mahal, jadi
+menghitungnya di sini akan menghukum arm C karena melakukan hal yang sedang diuji.
+
+Budget tidak bisa ditegakkan live: hitungan token premium datang dari tokenburn setelah run
+selesai, jadi tak ada yang bisa memotong di tengah jalan. Menyebutnya penegakan akan menjadi
+klaim palsu tentang apa yang harness bisa lihat.
 
 Nilai budget dan cap waktu adalah keputusan operator, bukan turunan dari pengukuran — nol
 unit pernah dipanen waktu angka-angka itu ditulis. Tinjau ulang setelah batch pertama, dan
@@ -349,7 +439,10 @@ sebutkan di laporan bila direvisi.
 
 | Metrik | Rumus | Sumber |
 |--------|-------|--------|
-| Biaya per task diterima | (premium + worker) ÷ jumlah diterima | tokenburn + `call.meta.json` |
+| Token premium per task diterima | `premium_total_tokens` ÷ jumlah diterima | tokenburn |
+| Token worker per task diterima | `worker_input+output` ÷ jumlah diterima | `call.meta.json` |
+| Giliran pesan sampai eksekusi | `message_turns`, `turns_to_first_edit` | transcript Claude |
+| Context per task | `context_input_tokens` (jumlah), `context_peak_tokens` (puncak) | transcript Claude |
 | Premium-context token dihindari | `cacheRead+cacheWrite` arm A − arm C, per task sama | tokenburn `db export` |
 | First-pass correctness | proporsi `first_pass_accepted` | oracle |
 | Waktu sampai diterima | `t_accepted − t_start` | jam harness |
@@ -377,7 +470,7 @@ Naikkan jumlah ulangan bila variansi antar-ulangan melebihi selisih antar-arm.
 4. **`auto_verify_after_execute=False` prompt-only** (`core/workflow_runtime.py:114-129`). Harness menjalankan verify sendiri; jangan percaya klaim agen bahwa pekerjaan selesai.
 5. **Kontaminasi SUT** — instrumen dan subjek berada di repo yang sama. Worktree dipotong di `<sha>^` dan `bench/` di luar scope task.
 6. **Efek belajar** — task yang sama dilihat berkali-kali. Counterbalance dan worktree bersih mengurangi, tidak menghapus.
-7. **Mode subscription** — `costUSD` adalah nilai setara-API, bukan uang yang ditagih. Sebutkan framing ini di laporan.
+7. **Nol klaim biaya** — studi ini melaporkan token, bukan uang. Boleh dikatakan "arm C memakai 80% lebih sedikit token premium"; **tidak** boleh dikatakan "arm C lebih murah" tanpa tabel harga, dan tak ada tabel harga di repo ini.
 
 ---
 
@@ -394,7 +487,7 @@ Sesi Claude baru yang mengambil alih pekerjaan ini:
 Perintah pemeriksaan cepat:
 
 ```bash
-tokenburn db export | awk -F, 'NR>1 && $4=="claude-opus-5"{c+=$10} END{print "opus5_cost="c}'   # harus > 0
+tokenburn db export | awk -F, 'NR>1 && $4=="claude-opus-5"{t+=$6+$7} END{print "opus5_tokens="t}'   # harus > 0
 ls bench/corpus.json bench/ledger.jsonl 2>/dev/null                                            # progres fase 1 dan 4
 git worktree list                                                                              # worktree tersisa
 ```

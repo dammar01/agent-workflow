@@ -19,6 +19,10 @@ try:
     source = payload.get("source")
     claude_sid = payload.get("session_id")
     cwd = payload.get("cwd") or os.getcwd()
+    # Recorded, not derived. The benchmark harvester needs to find this session's
+    # transcript after the fact, and reconstructing the path means guessing how Claude
+    # Code names its project directories. The hook is handed the real one.
+    transcript_path = payload.get("transcript_path")
     try:
         root = os.path.realpath(cwd)
     except Exception:
@@ -56,6 +60,7 @@ try:
             "cwd": root,
             "bound_at": bound_at,
             "source": source,
+            "transcript_path": transcript_path,
         }
 
     # prune to newest 50 by bound_at

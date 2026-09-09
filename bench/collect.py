@@ -1,16 +1,22 @@
-"""Finished unit records + harvested cost data -> `bench/ledger.jsonl`.
+"""Finished unit records + harvested token data -> `bench/ledger.jsonl`.
 
 The ledger schema is `BENCHMARK-PLAN.md` §7. This file is its only writer;
 `aggregate.py` is its only reader.
 
 Two rules shape everything here.
 
-**Missing is not zero.** `aggregate._spend` coerces a missing cost to `0.0`, which is
-correct arithmetic and a terrible default for a harvester: an arm whose tokenburn export
-never arrived would read as the cheapest arm in the study. So a row with no premium cost is
-refused by default. `--allow-missing-cost` writes it anyway, with the gap named in
-`premium_cost_source`, because there are honest reasons to want the non-cost columns early
-— but it has to be asked for.
+**Missing is not zero.** A missing token count sums as `0`, which is correct arithmetic
+and a terrible default for a harvester: an arm whose tokenburn export never arrived would
+read as the thriftiest arm in the study. So a row with no premium token counts is refused
+by default. `--allow-missing-premium` writes it anyway, with the gap named in
+`premium_source`, because there are honest reasons to want the other columns early — but
+it has to be asked for.
+
+**There is no money in this schema.** The study measures tokens. A subscription plan does
+not bill per token, so a USD column could only ever have been an API-equivalent figure
+worn as a cost, and every comparison resting on it would have inherited that fiction.
+Tokens are what was consumed and tokens are what is recorded; `costUsd` in a tokenburn
+export is read past deliberately, not stored in a column nobody should cite.
 
 **The tokenburn shape is not guessed.** This harness has never inspected a real tokenburn
 export. Rather than pattern-match hopefully and quietly produce nulls, `_index_sessions`
@@ -18,7 +24,9 @@ states the keys it looked for and prints the keys it actually found. A wrong gue
 runs is worse than a clear failure.
 
 Run before `driver.py teardown`: arm C's worker numbers live in the worktree's `.workflow`,
-and teardown removes it.
+and teardown removes it. The premium side comes from two places that teardown does not
+touch — the tokenburn export in `--raw`, and the Claude transcript named by the unit's
+`transcript_path`.
 
     python bench/collect.py --raw bench/raw --out bench/ledger.jsonl
 """
@@ -31,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import policy  # noqa: E402
+from core.audit import transcript as transcript_reader  # noqa: E402
 from driver import REQUIRED_UNIT_KEYS  # noqa: E402
 from utils.path_guard import safe_path_component  # noqa: E402
 
@@ -49,7 +58,6 @@ HARVESTABLE = (STATUS_FINISHED, STATUS_TORN_DOWN)
 # instead of a row of silent nulls.
 SESSION_KEYS = ("sessionId", "session_id", "session")
 
-COST_KEYS = ("costUsd", "cost_usd", "cost")
 TOKEN_KEYS = {
     "premium_input_tokens": ("inputTokens", "input_tokens", "input"),
     "premium_output_tokens": ("outputTokens", "output_tokens", "output"),
@@ -58,20 +66,31 @@ TOKEN_KEYS = {
 }
 
 LEDGER_FIELDS = (
-    "task_id", "arm", "repeat", "base_sha", "session_id", "worktree",
+    "task_id", "arm", "provider", "test_tier", "repeat", "base_sha", "session_id",
+    "worktree",
     "t_start", "t_first_submit", "t_accepted", "t_end",
     "premium_cache_read_tokens", "premium_cache_write_tokens",
-    "premium_output_tokens", "premium_input_tokens", "premium_cost_usd",
-    "worker_input_tokens", "worker_output_tokens", "worker_cost_usd", "worker_token_source",
+    "premium_output_tokens", "premium_input_tokens", "premium_total_tokens",
+    # Which tokenburn report the premium columns came from, or "missing". Declared here
+    # rather than left implicit: a field written by `build_row` but absent from the schema
+    # is a column no reader knows to expect.
+    "premium_source",
+    "worker_input_tokens", "worker_output_tokens", "worker_token_source",
     "delegated_calls", "evidence_reused_hits",
     "first_pass_accepted", "rework_cycles",
-    "oracle_stage_failed", "verdict",
+    "oracle_stage_failed", "verdict", "stages_passed", "stages_run",
     "main_agent_rewrote", "files_touched",
     "scan_findings",
     # Extensions to the plan's §7 schema, added with W7. Each one answers a question the
     # original list left unanswerable from the ledger alone: whether the unit ran past its
     # cap, how long it took at all, and whether it was graded against a reduced gate.
     "unit_seconds", "timed_out", "quarantined_suites", "over_unit_budget",
+    # From the unit's Claude transcript. Tokenburn reports what the session spent; only
+    # the transcript says how many times a person had to ask, and how much context each
+    # turn carried. Null when no transcript was recorded for the unit.
+    "message_turns", "turns_to_first_edit",
+    "context_input_tokens", "context_peak_tokens", "context_sidechain_tokens",
+    "transcript_source",
 )
 
 
@@ -127,7 +146,7 @@ def _index_sessions(raw_dir: Path) -> tuple[dict, list[str]]:
             if session is None:
                 continue
             matched += 1
-            entry = {"premium_cost_usd": _first(row, COST_KEYS)}
+            entry = {}
             for field, aliases in TOKEN_KEYS.items():
                 entry[field] = _first(row, aliases)
             entry["_source_file"] = path.name
@@ -164,7 +183,6 @@ def _worker_totals(record: dict) -> dict:
         return {
             "worker_input_tokens": None,
             "worker_output_tokens": None,
-            "worker_cost_usd": None,
             "worker_token_source": "not_applicable",
         }
     worktree = Path(record.get("worktree") or "")
@@ -184,7 +202,6 @@ def _worker_totals(record: dict) -> dict:
         return {
             "worker_input_tokens": None,
             "worker_output_tokens": None,
-            "worker_cost_usd": None,
             # Named rather than blank: a torn-down worktree is a different situation from a
             # unit that made no delegated calls, and the two must not read alike.
             "worker_token_source": (
@@ -224,16 +241,14 @@ def _worker_totals(record: dict) -> dict:
         return {
             "worker_input_tokens": None,
             "worker_output_tokens": None,
-            "worker_cost_usd": None,
             "worker_token_source": "no_call_meta",
         }
     return {
         "worker_input_tokens": inp,
         "worker_output_tokens": out,
-        # The opencode worker is free under the locked decisions (BENCHMARK-PLAN.md §2), so
-        # zero here is a measurement, not a missing value. `worker_token_source` comes from
-        # the runtime's own `token_source` field rather than being asserted here.
-        "worker_cost_usd": 0.0,
+        # `worker_token_source` comes from the runtime's own `token_source` field rather
+        # than being asserted here: a row reading `provider` over chars//4 estimates would
+        # claim a precision the numbers do not have.
         "worker_token_source": "+".join(sorted(sources)) if sources else "estimated",
     }
 
@@ -249,10 +264,54 @@ def _relative_worktree(value) -> str | None:
         return path.name
 
 
+def _premium_total(row: dict) -> int | None:
+    """Every premium token the session consumed, or None if none were harvested.
+
+    Cache reads and writes are counted, not netted off: a turn that read 200k cached
+    tokens still carried 200k tokens of premium context. This is the figure the budget
+    gate is denominated in.
+    """
+    parts = [row.get(field) for field in TOKEN_KEYS]
+    if all(part is None for part in parts):
+        return None
+    return sum(int(part or 0) for part in parts)
+
+
+def _transcript_totals(record: dict) -> dict:
+    """Turn counts and per-turn context, from the unit's Claude transcript.
+
+    The path is whatever `driver.prepare` recorded. Nothing is searched for: a transcript
+    guessed by modification time picks the wrong session the moment two units run at once,
+    and a wrong transcript is worse than a null one because it still looks like data.
+    """
+    blank = {
+        "message_turns": None,
+        "turns_to_first_edit": None,
+        "context_input_tokens": None,
+        "context_peak_tokens": None,
+        "context_sidechain_tokens": None,
+        "transcript_source": None,
+    }
+    path = record.get("transcript_path")
+    if not path:
+        blank["transcript_source"] = "not_recorded"
+        return blank
+    if not Path(path).is_file():
+        blank["transcript_source"] = "missing"
+        return blank
+    summary = transcript_reader.summarize(path)
+    return {field: summary.get(field) for field in blank}
+
+
 def build_row(record: dict, premium: dict | None, scan: list | None) -> dict:
     row = {
         "task_id": record.get("task_id"),
         "arm": record.get("arm"),
+        # Two dimensions of the design, carried per row rather than parsed back out of
+        # `unit_id`. A grouping key that has to be re-derived by string-splitting is one
+        # rename away from silently grouping everything together.
+        "provider": record.get("provider"),
+        "test_tier": record.get("test_tier"),
         "repeat": record.get("repeat"),
         "base_sha": record.get("base_sha"),
         "session_id": record.get("session_id"),
@@ -271,6 +330,11 @@ def build_row(record: dict, premium: dict | None, scan: list | None) -> dict:
         "rework_cycles": record.get("rework_cycles"),
         "oracle_stage_failed": record.get("oracle_stage_failed"),
         "verdict": record.get("verdict"),
+        # Stage pass rate with its denominator. `stages_run` counts stages that ran, so a
+        # unit stopped at stage 1 reads 0/1 rather than as 25% of a four-stage gate it
+        # never reached.
+        "stages_passed": (record.get("last_oracle") or {}).get("stages_passed"),
+        "stages_run": (record.get("last_oracle") or {}).get("stages_run"),
         "main_agent_rewrote": record.get("main_agent_rewrote"),
         "files_touched": record.get("files_touched"),
         "scan_findings": scan if scan is not None else [],
@@ -282,21 +346,21 @@ def build_row(record: dict, premium: dict | None, scan: list | None) -> dict:
         "quarantined_suites": (record.get("last_oracle") or {}).get("quarantined", []),
     }
     if premium:
-        row["premium_cost_usd"] = premium.get("premium_cost_usd")
         for field in TOKEN_KEYS:
             row[field] = premium.get(field)
-        row["premium_cost_source"] = premium.get("_source_file")
+        row["premium_source"] = premium.get("_source_file")
     else:
-        row["premium_cost_usd"] = None
         for field in TOKEN_KEYS:
             row[field] = None
-        row["premium_cost_source"] = "missing"
+        row["premium_source"] = "missing"
+    row["premium_total_tokens"] = _premium_total(row)
     row.update(_worker_totals(record))
-    row["over_unit_budget"] = policy.over_budget_unit(row["premium_cost_usd"])
+    row.update(_transcript_totals(record))
+    row["over_unit_budget"] = policy.over_budget_unit(row["premium_total_tokens"])
     return row
 
 
-def collect(raw_dir: Path, allow_missing_cost: bool) -> tuple[list[dict], list[str]]:
+def collect(raw_dir: Path, allow_missing_premium: bool) -> tuple[list[dict], list[str]]:
     if not UNITS_DIR.is_dir():
         raise CollectError(f"no unit records under {UNITS_DIR}")
 
@@ -325,7 +389,7 @@ def collect(raw_dir: Path, allow_missing_cost: bool) -> tuple[list[dict], list[s
             # Every field here is read with .get(), so a half record would not crash — it
             # would harvest as a row of nulls. That is the worse failure: a row carrying an
             # arm but no verdict still counts in `per_arm`'s denominator and drags
-            # first_pass_correctness and cost_per_accepted down for a unit nobody ran.
+            # first_pass_correctness and tokens_per_accepted down for a unit nobody ran.
             notes.append(f"{path.name}: missing {', '.join(absent)}, skipped")
             skipped.append(f"{path.stem} (incomplete record)")
             continue
@@ -337,8 +401,8 @@ def collect(raw_dir: Path, allow_missing_cost: bool) -> tuple[list[dict], list[s
             continue
         session_id = str(record.get("session_id"))
         row = build_row(record, sessions.get(session_id), scans.get(session_id))
-        if row["premium_cost_usd"] is None and not allow_missing_cost:
-            skipped.append(f"{record.get('unit_id')} (no premium cost for {session_id})")
+        if row["premium_total_tokens"] is None and not allow_missing_premium:
+            skipped.append(f"{record.get('unit_id')} (no premium tokens for {session_id})")
             continue
         rows.append(row)
 
@@ -361,15 +425,15 @@ def main() -> int:
     parser.add_argument("--raw", default=str(DEFAULT_RAW_DIR), help="tokenburn export dir")
     parser.add_argument("--out", default=str(DEFAULT_LEDGER))
     parser.add_argument(
-        "--allow-missing-cost",
+        "--allow-missing-premium",
         action="store_true",
-        help="write rows whose premium cost was never harvested (they aggregate as $0)",
+        help="write rows whose premium tokens were never harvested (they aggregate as 0)",
     )
     parser.add_argument("--dry-run", action="store_true", help="report, write nothing")
     args = parser.parse_args()
 
     try:
-        rows, notes = collect(Path(args.raw), args.allow_missing_cost)
+        rows, notes = collect(Path(args.raw), args.allow_missing_premium)
     except CollectError as exc:
         print(f"collect: {exc}", file=sys.stderr)
         return 1
@@ -386,16 +450,16 @@ def main() -> int:
     over = [str(row["task_id"]) for row in rows if row.get("over_unit_budget")]
     if over:
         print(
-            f"  WARNING: {len(over)} unit(s) over the ${policy.UNIT_BUDGET_USD:.2f} unit "
-            f"budget: {', '.join(sorted(set(over)))}"
+            f"  WARNING: {len(over)} unit(s) over the "
+            f"{policy.UNIT_BUDGET_PREMIUM_TOKENS:,} premium-token unit budget: "
+            f"{', '.join(sorted(set(over)))}"
         )
-    total = sum(float(row.get("premium_cost_usd") or 0.0) for row in rows)
-    total += sum(float(row.get("worker_cost_usd") or 0.0) for row in rows)
+    total = sum(int(row.get("premium_total_tokens") or 0) for row in rows)
     if policy.over_budget_run(total):
         print(
-            f"  WARNING: harvested spend ${total:.2f} is over the ${policy.RUN_BUDGET_USD:.2f} "
-            "run budget. Nothing was stopped — cost arrives after the fact, so this is a "
-            "report, not a cutoff."
+            f"  WARNING: harvested {total:,} premium tokens is over the "
+            f"{policy.RUN_BUDGET_PREMIUM_TOKENS:,} run budget. Nothing was stopped — "
+            "tokenburn arrives after the fact, so this is a report, not a cutoff."
         )
     timed_out = [str(row["task_id"]) for row in rows if row.get("timed_out")]
     if timed_out:
@@ -411,12 +475,21 @@ def main() -> int:
         )
 
     missing = [
-        str(row["task_id"]) for row in rows if row["premium_cost_usd"] is None
+        str(row["task_id"]) for row in rows if row["premium_total_tokens"] is None
     ]
     if missing:
         print(
-            f"  WARNING: {len(missing)} row(s) carry no premium cost and will aggregate "
-            f"as $0: {', '.join(sorted(set(missing)))}"
+            f"  WARNING: {len(missing)} row(s) carry no premium tokens and will aggregate "
+            f"as 0: {', '.join(sorted(set(missing)))}"
+        )
+    no_transcript = [
+        str(row["task_id"]) for row in rows if row.get("message_turns") is None
+    ]
+    if no_transcript:
+        print(
+            f"  WARNING: {len(no_transcript)} row(s) have no readable transcript; "
+            "message_turns and context columns are null for them: "
+            f"{', '.join(sorted(set(no_transcript)))}"
         )
     return 0
 

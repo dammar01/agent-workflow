@@ -41,6 +41,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import policy  # noqa: E402
+from corpus import TEST_TIERS  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -49,6 +50,12 @@ STAGE_SUITE = "suite"
 STAGE_TASK_TESTS = "task_tests"
 STAGE_CHECKS = "checks"
 STAGES = (STAGE_SYNTAX, STAGE_SUITE, STAGE_TASK_TESTS, STAGE_CHECKS)
+
+# The end-to-end tier runs the repo's own e2e harness in ADDITION to the stages above.
+# Deliberately without `--full`: that flag makes real delegated calls, which spends the
+# provider quota the study is trying to measure and makes the oracle itself a participant
+# in the arm it is grading.
+E2E_COMMAND = ("tools/e2e/e2e.py",)
 
 VERDICT_ACCEPTED = "accepted"
 VERDICT_REJECTED = "rejected"
@@ -139,13 +146,29 @@ def judge(worktree: str | Path, task: dict) -> dict:
     `task` is one corpus entry; `oracle_tests` may be empty, in which case the
     task-specific stage is honestly reported as not run — and the verdict is capped at
     `incomplete`, never promoted to accepted on the strength of the stages that did run.
+
+    `test_tier` is treated the same way. A tier the corpus never declared is not defaulted
+    to the cheapest one: a task graded at a level nobody chose is a task whose verdict
+    cannot be compared with any other task's, and quietly picking `unit` would make the
+    whole tier breakdown a description of this function rather than of the corpus.
     """
     root = Path(worktree)
     stages: dict[str, dict] = {}
+    tier = str(task.get("test_tier") or "")
+    if tier not in TEST_TIERS:
+        stages[STAGE_SYNTAX] = {
+            "ran": False,
+            "ok": False,
+            "reason": (
+                f"test_tier {tier!r} is not one of {TEST_TIERS}; fill it in the corpus "
+                "entry before running this unit"
+            ),
+        }
+        return _verdict(stages, None, tier)
 
     stages[STAGE_SYNTAX] = _syntax(root)
     if not stages[STAGE_SYNTAX]["ok"]:
-        return _verdict(stages, STAGE_SYNTAX)
+        return _verdict(stages, STAGE_SYNTAX, tier)
 
     suite_args, quarantined = _suite_command(root)
     if not suite_args:
@@ -155,7 +178,7 @@ def judge(worktree: str | Path, task: dict) -> dict:
             "reason": "every suite is quarantined; stage 2 would check nothing",
             "quarantined": quarantined,
         }
-        return _verdict(stages, None)
+        return _verdict(stages, None, tier)
     stages[STAGE_SUITE] = _run(suite_args, root)
     if quarantined:
         # Carried on the stage so the ledger row can say which units were graded against a
@@ -163,12 +186,23 @@ def judge(worktree: str | Path, task: dict) -> dict:
         # be forgotten by the time the report is written.
         stages[STAGE_SUITE]["quarantined"] = quarantined
     if not stages[STAGE_SUITE]["ok"]:
-        return _verdict(stages, STAGE_SUITE)
+        return _verdict(stages, STAGE_SUITE, tier)
+    if tier == "e2e":
+        # The e2e tier is graded on the e2e harness as well as the suite. Folded into
+        # stage 2 rather than given a stage of its own so `STAGES` stays the same four for
+        # every tier — a tier-dependent stage list would make `stages_not_run` mean
+        # something different per row.
+        e2e = _run([sys.executable, *E2E_COMMAND], root)
+        stages[STAGE_SUITE]["e2e"] = e2e
+        if not e2e["ok"]:
+            stages[STAGE_SUITE]["ok"] = False
+            stages[STAGE_SUITE]["reason"] = "tools/e2e/e2e.py failed for an e2e-tier task"
+            return _verdict(stages, STAGE_SUITE, tier)
 
     selected = task.get("oracle_tests") or []
     if not selected:
         stages[STAGE_TASK_TESTS] = {"ran": False, "ok": False, "reason": "no oracle_tests in corpus entry"}
-        return _verdict(stages, None)
+        return _verdict(stages, None, tier)
     for command in selected:
         # shlex, not str.split: `--only "tests/test foo.py"` splits on whitespace into two
         # broken arguments, and the stage fails for a reason belonging to the harness rather
@@ -188,11 +222,11 @@ def judge(worktree: str | Path, task: dict) -> dict:
                     "slashes so quoting and path separators cannot fight each other"
                 ),
             }
-            return _verdict(stages, None)
+            return _verdict(stages, None, tier)
         outcome = _run([sys.executable, *shlex.split(str(command), posix=True)], root)
         stages[STAGE_TASK_TESTS] = outcome
         if not outcome["ok"]:
-            return _verdict(stages, STAGE_TASK_TESTS)
+            return _verdict(stages, STAGE_TASK_TESTS, tier)
 
     stages[STAGE_CHECKS] = _run(
         [sys.executable, "tests/run.py", "--only", "registry", "--only", "redaction",
@@ -200,12 +234,14 @@ def judge(worktree: str | Path, task: dict) -> dict:
         root,
     )
     if not stages[STAGE_CHECKS]["ok"]:
-        return _verdict(stages, STAGE_CHECKS)
-    return _verdict(stages, None)
+        return _verdict(stages, STAGE_CHECKS, tier)
+    return _verdict(stages, None, tier)
 
 
-def _verdict(stages: dict, failed_at: str | None) -> dict:
+def _verdict(stages: dict, failed_at: str | None, tier: str = "") -> dict:
     unrun = [name for name in STAGES if not stages.get(name, {}).get("ran")]
+    ran = [name for name in STAGES if stages.get(name, {}).get("ran")]
+    passed = [name for name in ran if stages[name].get("ok")]
     if failed_at == STAGE_CHECKS:
         # A unit that broke the security surface is not merely wrong. Folding it into
         # `rejected` would let it be counted alongside a failing assertion, and the one
@@ -227,6 +263,12 @@ def _verdict(stages: dict, failed_at: str | None) -> dict:
         "accepted": verdict == VERDICT_ACCEPTED,
         "failed_at": failed_at,
         "stages_not_run": unrun,
+        # Pass rate with its denominator attached, and the denominator counts stages that
+        # RAN. A stage that never ran is not a failed stage, and rolling it in would report
+        # a unit stopped at stage 1 as 25% passing rather than as incomplete.
+        "stages_passed": len(passed),
+        "stages_run": len(ran),
+        "test_tier": tier,
         "stages": stages,
     }
 

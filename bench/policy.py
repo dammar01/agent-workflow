@@ -12,9 +12,9 @@ Enforcement is split, and the split is not cosmetic:
   stamp one that ran past its deadline.
 - **Retry** is enforced live. `driver.py` refuses to close a unit whose rework count ran
   past the cap.
-- **Budget is NOT enforced live.** Cost arrives from tokenburn after the fact, so nothing
-  here can stop a run mid-flight. `collect.py` reports the overrun instead. Calling that
-  enforcement would be a lie about what the harness can see.
+- **Budget is NOT enforced live.** Premium token counts arrive from tokenburn after the
+  fact, so nothing here can stop a run mid-flight. `collect.py` reports the overrun
+  instead. Calling that enforcement would be a lie about what the harness can see.
 - **Quarantine** is read by `oracle.py` when it builds its stage-2 command.
 """
 
@@ -44,11 +44,21 @@ MAX_DELEGATED_CALLS = 12
 
 # --- Budget -----------------------------------------------------------------------------
 
+# The study measures tokens, not money. There is no price table here and no currency
+# anywhere in `bench/`: a subscription plan does not bill per token, so a USD column would
+# have been an API-equivalent figure dressed as a cost, and every comparison built on it
+# would inherit that fiction. Tokens are what was actually consumed, and they are what the
+# ceilings are denominated in.
+#
+# Premium tokens ONLY. Worker tokens are deliberately outside the gate: they are the cheap
+# resource the whole design spends in order to save the expensive one, so counting them
+# here would penalise arm C for doing the thing under test.
+#
 # Operator-set ceilings. NOT derived from any run: nothing has been harvested, and a
 # ceiling computed from zero observations would be a number pretending to be evidence.
 # Revisit both after the first batch, and say in the report if they were revised.
-UNIT_BUDGET_USD = 5.00
-RUN_BUDGET_USD = 400.00
+UNIT_BUDGET_PREMIUM_TOKENS = 5_000_000
+RUN_BUDGET_PREMIUM_TOKENS = 400_000_000
 
 
 # --- Flaky quarantine -------------------------------------------------------------------
@@ -71,13 +81,13 @@ def over_time(seconds: float) -> bool:
     return seconds > UNIT_TIMEOUT_SECONDS
 
 
-def over_budget_unit(cost_usd: float | None) -> bool:
+def over_budget_unit(premium_tokens: int | None) -> bool:
     """None means unharvested, which is not over budget — it is unknown."""
-    return cost_usd is not None and cost_usd > UNIT_BUDGET_USD
+    return premium_tokens is not None and premium_tokens > UNIT_BUDGET_PREMIUM_TOKENS
 
 
-def over_budget_run(total_usd: float) -> bool:
-    return total_usd > RUN_BUDGET_USD
+def over_budget_run(total_premium_tokens: int) -> bool:
+    return total_premium_tokens > RUN_BUDGET_PREMIUM_TOKENS
 
 
 def summary() -> dict:
@@ -86,8 +96,8 @@ def summary() -> dict:
         "oracle_stage_timeout_seconds": ORACLE_STAGE_TIMEOUT_SECONDS,
         "max_rework_cycles": MAX_REWORK_CYCLES,
         "max_delegated_calls": MAX_DELEGATED_CALLS,
-        "unit_budget_usd": UNIT_BUDGET_USD,
-        "run_budget_usd": RUN_BUDGET_USD,
+        "unit_budget_premium_tokens": UNIT_BUDGET_PREMIUM_TOKENS,
+        "run_budget_premium_tokens": RUN_BUDGET_PREMIUM_TOKENS,
         "quarantined_suites": list(QUARANTINED_SUITES),
     }
 

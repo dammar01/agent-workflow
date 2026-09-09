@@ -51,22 +51,40 @@ under your review. That is a design constraint, not a gap.
 
 ## Measured
 
-From 99 delegated calls logged on the maintainer's machine
-(`.workflow/usage.jsonl`; not committed, since `init` gitignores `.workflow/`):
+The status line reports two numbers while you work, and they are the two the design is
+about:
+
+```
+Second Agent 62.0M / 107 calls | Saved 3.2M
+```
+
+**Second Agent** is everything the delegate read and wrote. **Saved** is the part of that
+which never entered your premium context window. The gap between them is the whole point.
+
+From 107 delegated calls logged on the maintainer's machine (`.workflow/usage.jsonl`; not
+committed, since `init` gitignores `.workflow/`):
 
 | Metric | Value |
 | --- | --- |
-| Evidence produced by the second agent | 740,341 chars |
-| Digest handed to the main agent | 84,918 chars |
-| **Share that entered the premium context** | **11.5% — 8.7× smaller** |
-| Premium-context tokens avoided | 152,362 across 93 calls |
-| Call mix | `explore` 27, `analyze` 17, `plan` 14, `verify` 41 |
+| Tokens handled by the second agent | 61,939,405 |
+| ↳ of which cache reads | 58,468,608 |
+| **Kept out of the premium context** | **3,203,403** |
+| Evidence produced by the second agent | 836,812 chars |
+| Digest handed to the main agent | 92,192 chars |
+| **Share that entered the premium context** | **11.0% — 9.1× smaller** |
+| Call mix | `verify` 49, `explore` 30, `analyze` 17, `plan` 16 |
 
-That is a usage log from one machine, not a controlled benchmark: it shows how much text
-the digest contract keeps out of the window, not a cost or quality comparison against
-working without the runtime. The three-arm benchmark is specified in
-[bench/BENCHMARK-PLAN.md](bench/BENCHMARK-PLAN.md) and is **not finished** —
-`bench/ledger.jsonl` is still empty.
+Read that as a usage log from one machine, not as a comparison. It says how much text the
+digest contract kept out of the window; it does not say what the same work would have cost
+without the runtime, because nobody ran it that way. Two further caveats travel with the
+numbers rather than behind them:
+
+- **34 of the 112 rows carry provider-reported token counts.** The rest are `chars // 4`
+  estimates, and the row says which it is in `token_source` — a total mixing the two is a
+  total partly made of estimates.
+- **Cache reads are counted, not netted off.** A call that re-read 200k cached tokens still
+  handled 200k tokens; that is why the second-agent figure is large and the saved figure is
+  the smaller, stricter one.
 
 ---
 
@@ -260,7 +278,6 @@ limitations: [reference](docs/reference.md#batasan-yang-diketahui).
 | --- | --- |
 | [docs/reference.md](docs/reference.md) | Complete technical reference: configuration schema, asynchronous jobs, fact store, evidence reuse, verify modes, sessions, tests, CI *(written in Bahasa Indonesia)* |
 | [docs/runtime-contracts.md](docs/runtime-contracts.md) | Which `.workflow/config.json` keys the runtime actually obeys, and which it structurally cannot enforce |
-| [bench/BENCHMARK-PLAN.md](bench/BENCHMARK-PLAN.md) | Three-arm benchmark design; in progress |
 | [CHANGELOG.md](CHANGELOG.md) | Release history |
 | [RELEASE.md](RELEASE.md) | Release procedure, and which steps CI already covers |
 
