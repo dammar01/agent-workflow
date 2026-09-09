@@ -7,6 +7,7 @@ Release procedure: `RELEASE.md`.
 
 | Version | Notes | Theme |
 |---------|-------|-------|
+| 3.5.3 | [prompt/v3.5.3/changelog.md](prompt/v3.5.3/changelog.md) | opencode ikut terukur: adapter meminta `--format json`, membaca `step_finish.part.tokens`, dan melipat `cache.read` ke input serta `reasoning` ke output karena opencode melaporkan keduanya sebagai addend terpisah; stdin ditutup karena mode JSON menggantung tanpa itu; `clean_output` menyusun jawaban dari event `text` |
 | 3.5.2 | [prompt/v3.5.2/changelog.md](prompt/v3.5.2/changelog.md) | Token nyata dari provider masuk ke usage.jsonl: reasoning dan cached ikut terekam sebagai rincian yang tak pernah dijumlahkan; satu baris per panggilan provider; codex terukur, opencode tetap estimasi dengan alasan yang dicatat; statusline global merender angka itu di setiap prompt, dikirim sebagai `workflow-statusline.{ps1,sh}` |
 | 3.5.1 | [prompt/v3.5.1/changelog.md](prompt/v3.5.1/changelog.md) | Task cap diturunkan dari transport provider (argv vs stdin) alih-alih satu konstanta; kegagalan tulis stdin codex tak lagi ditelan; perbaikan parsing digest CRLF |
 | 3.5.0 | [prompt/v3.5.0/changelog.md](prompt/v3.5.0/changelog.md) | Knowledge ter-Git dan `/.promote` yang menulisnya; generator skrip runner dengan deteksi drift; benchmark dijalankan sungguhan |

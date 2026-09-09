@@ -580,9 +580,20 @@ _VERIFY_TAG_VALUES = {
 }
 
 
+# Horizontal whitespace only. `\s` includes the newline, and under re.MULTILINE a `\s*`
+# sitting after the colon walks off the end of the heading line: for an EMPTY section it
+# consumed the blank line and `(.*)$` then captured the NEXT heading, so
+# `blocking_findings:` with nothing under it came back holding one item — the literal
+# string "escalations:". That is the shape a clean verify has, so every honest pass was
+# reported as a verdict conflict, and the only spelling of "nothing to report" the parser
+# accepted was a literal `- none` line (`_NONE_ITEM`).
+_H_SPACE = r"[^\S\n]"
+
+
 def _section_items(content: str, name: str) -> list[str]:
     pattern = re.compile(
-        rf"^\s*{re.escape(name)}\s*:\s*(.*)$", re.IGNORECASE | re.MULTILINE
+        rf"^{_H_SPACE}*{re.escape(name)}{_H_SPACE}*:{_H_SPACE}*(.*)$",
+        re.IGNORECASE | re.MULTILINE,
     )
     match = pattern.search(content or "")
     if not match:

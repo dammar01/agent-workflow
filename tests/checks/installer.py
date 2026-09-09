@@ -512,3 +512,199 @@ def _test_installer_drift_check() -> None:
         )
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def _seed_fixture(root: Path) -> Path:
+    """A checkout with only the shipped example, as a fresh clone has it."""
+    (root / "config").mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(
+        Path(__file__).resolve().parents[2] / "config" / "second_agent.example.json",
+        root / "config" / "second_agent.example.json",
+    )
+    return root / "config" / "second_agent.json"
+
+
+@contextlib.contextmanager
+def _seed_repo(stdin_text: str | None = None):
+    """install.REPO_ROOT pointed at a temp checkout, with stdin optionally a fake tty.
+
+    The global is patched rather than the cwd because `_seed_second_agent_config` resolves
+    the destination from REPO_ROOT, and a test that changed directories instead would seed
+    the real repository the first time that resolution changed.
+    """
+    import sys
+
+    import install as install_mod
+
+    root = Path(tempfile.mkdtemp()) / "repo"
+    dest = _seed_fixture(root)
+    original_root, original_stdin = install_mod.REPO_ROOT, sys.stdin
+    install_mod.REPO_ROOT = root
+    if stdin_text is not None:
+
+        class _Tty(io.StringIO):
+            def isatty(self) -> bool:
+                return True
+
+        sys.stdin = _Tty(stdin_text)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            yield install_mod, dest
+    finally:
+        install_mod.REPO_ROOT = original_root
+        sys.stdin = original_stdin
+        shutil.rmtree(root.parent, ignore_errors=True)
+
+
+def _test_installer_seeds_second_agent_config() -> None:
+    """A missing config/second_agent.json is created; an existing one is never touched."""
+    with _seed_repo() as (install_mod, dest):
+        plan = Plan()
+        install_mod._seed_second_agent_config(plan, True, "codex", "gpt-5.6-sol")
+        written = json.loads(dest.read_text(encoding="utf-8"))
+        assert_true(
+            written["provider"] == "codex"
+            and written["default_model"] == "gpt-5.6-sol"
+            and written["provider_command"] == "codex",
+            "--provider/--model must land in the seeded config",
+        )
+        assert_true(
+            written["routes"]["explore"]["model"] == "gpt-5.6-sol"
+            and written["routes"]["sweep"]["model"] is None,
+            "the pin follows the selectable routes and leaves sweep alone",
+        )
+        assert_true(
+            "probe_timeout_seconds" in written,
+            "the seed is built on the example, so its other keys are inherited",
+        )
+
+    with _seed_repo() as (install_mod, dest):
+        dest.write_text('{"provider": "opencode", "default_model": "mine"}', "utf-8")
+        plan = Plan()
+        install_mod._seed_second_agent_config(plan, True, "codex", "gpt-5.6-sol")
+        assert_true(
+            json.loads(dest.read_text(encoding="utf-8"))["default_model"] == "mine",
+            "an existing second_agent.json is the user's selection and must survive",
+        )
+        assert_true(
+            any("ignored" in warning for warning in plan.warnings),
+            "flags that could not be honoured have to say so",
+        )
+
+    with _seed_repo() as (install_mod, dest):
+        plan = Plan()
+        install_mod._seed_second_agent_config(plan, False, "codex", None)
+        assert_true(not dest.exists(), "a dry run plans the seed but writes nothing")
+
+
+def _test_installer_seed_is_non_interactive_without_a_tty() -> None:
+    """CI and tools/e2e run install.py with no stdin; a prompt there would hang the run."""
+    import sys
+
+    import install as install_mod
+
+    root = Path(tempfile.mkdtemp()) / "repo"
+    dest = _seed_fixture(root)
+    original_root, original_stdin = install_mod.REPO_ROOT, sys.stdin
+    install_mod.REPO_ROOT = root
+    sys.stdin = io.StringIO("2\n1\n")  # readable, but isatty() is False
+    try:
+        plan = Plan()
+        with contextlib.redirect_stdout(io.StringIO()):
+            install_mod._seed_second_agent_config(plan, True, None, None)
+        assert_true(
+            dest.read_text(encoding="utf-8")
+            == (root / "config" / "second_agent.example.json").read_text("utf-8"),
+            "without a tty the example is copied verbatim, and stdin is not consumed",
+        )
+    finally:
+        install_mod.REPO_ROOT = original_root
+        sys.stdin = original_stdin
+        shutil.rmtree(root.parent, ignore_errors=True)
+
+
+def _test_installer_seed_prompt_answers() -> None:
+    """Every answer the picker accepts, including the two ways of declining."""
+    with _seed_repo("2\n1\n") as (install_mod, dest):
+        install_mod._seed_second_agent_config(Plan(), True, None, None)
+        written = json.loads(dest.read_text(encoding="utf-8"))
+        assert_true(
+            written["provider"] == "codex" and written["default_model"] == "gpt-5.6-sol",
+            "picking a provider then a model writes both",
+        )
+
+    with _seed_repo("3\n\n") as (install_mod, dest):
+        install_mod._seed_second_agent_config(Plan(), True, None, None)
+        written = json.loads(dest.read_text(encoding="utf-8"))
+        assert_true(
+            written["provider"] == "opencode" and written["default_model"] is None,
+            "a blank model leaves the pin unset so the CLI keeps its own default",
+        )
+
+    with _seed_repo("3\nopencode/not-on-the-menu\n") as (install_mod, dest):
+        plan = Plan()
+        install_mod._seed_second_agent_config(plan, True, None, None)
+        assert_true(
+            json.loads(dest.read_text(encoding="utf-8"))["default_model"]
+            == "opencode/not-on-the-menu",
+            "the shortlist is a picker, not the set of models that exist",
+        )
+        assert_true(
+            any("shortlist" in warning for warning in plan.warnings),
+            "an unlisted pin is accepted with a warning, not silently",
+        )
+
+    for answer, label in (("\n", "a blank provider"), ("", "stdin ending mid-prompt")):
+        with _seed_repo(answer) as (install_mod, dest):
+            install_mod._seed_second_agent_config(Plan(), True, None, None)
+            assert_true(
+                dest.read_text(encoding="utf-8")
+                == (dest.parent / "second_agent.example.json").read_text("utf-8"),
+                f"{label} declines the question and falls back to the example",
+            )
+
+
+def _test_installer_seed_reports_unenforced_provider() -> None:
+    """Choosing a provider with no read-only boundary has to say so at selection time."""
+    from config.providers import bundled_providers, provider_requires_opt_in
+
+    unenforced = [p for p in bundled_providers() if provider_requires_opt_in(p)]
+    assert_true(
+        bool(unenforced),
+        "fixture assumption: at least one bundled provider requires opt-in",
+    )
+    with _seed_repo() as (install_mod, _dest):
+        plan = Plan()
+        install_mod._seed_second_agent_config(plan, True, unenforced[0], None)
+        assert_true(
+            any("OPT_IN" in warning for warning in plan.warnings),
+            "the missing opt-in must be named while the choice is being made",
+        )
+
+
+def _test_installer_check_reports_second_agent_default() -> None:
+    """--check describes the seed without counting its absence as drift."""
+    import installer.check as check_mod
+
+    root = Path(tempfile.mkdtemp()) / "repo"
+    dest = _seed_fixture(root)
+    original_root = check_mod.REPO_ROOT
+    check_mod.REPO_ROOT = root
+    try:
+        assert_true(
+            check_mod._second_agent_state().startswith("NOT SET"),
+            "a checkout that has never been seeded reports NOT SET",
+        )
+        dest.write_text('{"provider": "codex", "default_model": "gpt-5.5"}', "utf-8")
+        assert_true(
+            check_mod._second_agent_state() == "codex, model=gpt-5.5",
+            "a seeded checkout reports the provider and model it selected",
+        )
+        dest.write_text("{not json", encoding="utf-8")
+        assert_true(
+            check_mod._second_agent_state().startswith("UNREADABLE"),
+            "a config that no longer parses is the case this line exists to catch",
+        )
+    finally:
+        check_mod.REPO_ROOT = original_root
+        shutil.rmtree(root.parent, ignore_errors=True)

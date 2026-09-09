@@ -38,6 +38,7 @@ def installer_checks(report: Report) -> None:
         dry = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py")],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -51,6 +52,7 @@ def installer_checks(report: Report) -> None:
         applied = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--apply"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -143,6 +145,7 @@ def installer_checks(report: Report) -> None:
         second = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--apply"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -158,6 +161,7 @@ def installer_checks(report: Report) -> None:
         checked = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -186,6 +190,7 @@ def installer_checks(report: Report) -> None:
                 "--only-command",
             ],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -206,6 +211,7 @@ def installer_checks(report: Report) -> None:
         checked = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -221,6 +227,7 @@ def installer_checks(report: Report) -> None:
         auto_intent = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--apply", "--auto-intent"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -244,6 +251,7 @@ def installer_checks(report: Report) -> None:
         settings_drift = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -259,6 +267,7 @@ def installer_checks(report: Report) -> None:
         settings_repair = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--apply", "--auto-intent"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -282,6 +291,7 @@ def installer_checks(report: Report) -> None:
         opencode_drift = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -297,6 +307,7 @@ def installer_checks(report: Report) -> None:
         opencode_repair = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--apply", "--auto-intent"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -317,6 +328,7 @@ def installer_checks(report: Report) -> None:
         repaired_check = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -335,6 +347,7 @@ def installer_checks(report: Report) -> None:
         order_drift = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -350,6 +363,7 @@ def installer_checks(report: Report) -> None:
         order_repair = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--apply", "--auto-intent"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -370,6 +384,7 @@ def installer_checks(report: Report) -> None:
         non_object_settings = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -390,6 +405,7 @@ def installer_checks(report: Report) -> None:
         non_object_opencode = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -425,6 +441,7 @@ def installer_checks(report: Report) -> None:
                     str(project),
                 ],
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
@@ -456,6 +473,7 @@ def installer_checks(report: Report) -> None:
                     str(project),
                 ],
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
@@ -479,6 +497,7 @@ def installer_checks(report: Report) -> None:
             project_install = subprocess.run(
                 [sys.executable, str(REPO_ROOT / "install.py"), "--apply"],
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
@@ -495,6 +514,7 @@ def installer_checks(report: Report) -> None:
             project_check = subprocess.run(
                 [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
                 capture_output=True,
+                stdin=subprocess.DEVNULL,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
@@ -524,6 +544,7 @@ def installer_checks(report: Report) -> None:
         installed = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--apply"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -551,6 +572,7 @@ def installer_checks(report: Report) -> None:
         rolled_back = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--rollback", "--apply"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -570,6 +592,7 @@ def installer_checks(report: Report) -> None:
         subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--apply"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -584,6 +607,7 @@ def installer_checks(report: Report) -> None:
         refused = subprocess.run(
             [sys.executable, str(REPO_ROOT / "install.py"), "--rollback", "--apply"],
             capture_output=True,
+            stdin=subprocess.DEVNULL,
             text=True,
             encoding="utf-8",
             errors="replace",

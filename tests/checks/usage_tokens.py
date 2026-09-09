@@ -12,6 +12,8 @@ rather than zeroed, because a zero reads as a measurement and averages into the 
 one.
 """
 
+from pathlib import Path
+
 from adapters.providers.codex_adapter import CodexAdapter
 from adapters.providers.opencode_adapter import OpenCodeAdapter
 from adapters.shared.usage import merge_usage, normalize_usage, token_source_for
@@ -19,6 +21,12 @@ from core.audit import telemetry
 from core.evidence.contracts import UsageRecord, billable_input, billable_output
 from core.policy.governance import budget_state
 from tests.checks.support import assert_true
+
+_FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "opencode"
+
+
+def _fixture(name: str) -> str:
+    return (_FIXTURES / name).read_text(encoding="utf-8")
 
 
 def _normalisation_reads_the_shapes_providers_send() -> None:
@@ -138,7 +146,9 @@ def _adapters_read_usage_out_of_their_own_streams() -> None:
     )
     assert_true(
         OpenCodeAdapter.extract_usage("some log line\nthe answer") is None,
-        "OpenCode reports no usage today, and inventing one would be worse than saying so",
+        "OpenCode's formatted output carries no counts — bootstrap and every error tail "
+        "still arrive this way, and inventing a number for them would be worse than "
+        "leaving the row estimated",
     )
     assert_true(
         OpenCodeAdapter.extract_usage('{"usage":{"input_tokens":5,"output_tokens":7}}')
@@ -148,8 +158,117 @@ def _adapters_read_usage_out_of_their_own_streams() -> None:
             "reasoning_tokens": None,
             "cached_input_tokens": None,
         },
-        "the day an OpenCode build does emit usage it must be picked up without a code "
-        "change, which is the only reason the reader exists ahead of the evidence",
+        "the older top-level shape stays supported: it costs one branch, and it is what "
+        "another build on PATH would most plausibly emit",
+    )
+
+
+def _opencode_maps_its_own_arithmetic_onto_the_shared_shape() -> None:
+    """Fixtures captured from a live `opencode run --format json`, unedited except for
+    trimming the file bodies a tool call embedded and adding three lines of noise.
+
+    Worth asserting against real captures rather than a hand-written stream because the
+    whole mapping rests on two facts about this provider that no other provider shares,
+    and both are only observable in a real run.
+    """
+    stream = _fixture("format-json-step-finish.jsonl")
+    usage = OpenCodeAdapter.extract_usage(stream)
+    assert_true(
+        usage
+        == {
+            "input_tokens": 45976,
+            "output_tokens": 85,
+            "reasoning_tokens": 0,
+            "cached_input_tokens": 17536,
+        },
+        "two steps, summed, with each step's cached read folded into its input. The "
+        f"capture's own totals add to 46061, and so must input+output here: {usage}",
+    )
+    assert_true(
+        (usage["input_tokens"] + usage["output_tokens"]) == 15863 + 30198,
+        "the mapping must reproduce the provider's own `total` exactly — losing "
+        "cache.read here would undercount this run by 17536 tokens with nothing to show "
+        "that anything was dropped",
+    )
+    assert_true(
+        OpenCodeAdapter.clean_output(stream) == "DONE",
+        "the answer is the text events and nothing else; returning the raw event objects "
+        "would hand the main agent a wall of JSON where the evidence belongs",
+    )
+
+    reasoning = OpenCodeAdapter.extract_usage(_fixture("format-json-reasoning.jsonl"))
+    assert_true(
+        reasoning
+        == {
+            "input_tokens": 16353,
+            "output_tokens": 65,
+            "reasoning_tokens": 38,
+            "cached_input_tokens": 0,
+        },
+        "OpenCode reports reasoning as a SIBLING of output, not inside it: that capture's "
+        "total is 16418 and input+output alone is 16380. The 38 it thought with have to "
+        "be folded into output here, because every layer above reads reasoning as a "
+        f"breakdown and will not add it again: {reasoning}",
+    )
+    assert_true(
+        token_source_for(reasoning) == "provider",
+        "both directions measured, so the row may say who counted it",
+    )
+
+
+def _opencode_survives_a_stream_that_is_not_all_events() -> None:
+    assert_true(
+        OpenCodeAdapter.extract_usage(
+            '{"type":"step_finish","part":{"tokens":{"total":1,\n'
+            "not json at all\n"
+            '{"type":"step_finish","part":{"tokens":{"input":10,"output":2,'
+            '"reasoning":0,"cache":{"write":0,"read":5}}}}'
+        )
+        == {
+            "input_tokens": 15,
+            "output_tokens": 2,
+            "reasoning_tokens": 0,
+            "cached_input_tokens": 5,
+        },
+        "a truncated line and a banner must cost nothing: the stream is shared with logs "
+        "and with this adapter's own truncation marker, and one bad line must not take "
+        "the run's measurement with it",
+    )
+    assert_true(
+        OpenCodeAdapter.extract_usage(
+            '{"type":"step_finish","part":{"reason":"stop"}}'
+        )
+        is None,
+        "a step that reported no tokens is an absent measurement, not a zero one",
+    )
+    assert_true(
+        OpenCodeAdapter.clean_output(
+            '{"type":"step_start","part":{}}\n'
+            '{"type":"step_finish","part":{"tokens":{"input":1,"output":1}}}'
+        )
+        == "",
+        "a JSON run that emitted no text has no answer to give, and must not fall back "
+        "to handing the caller its own event objects",
+    )
+    assert_true(
+        OpenCodeAdapter.clean_output(
+            "INFO  2026-01-01T00:00:00Z service=session id=ses_x\n> build\nthe answer"
+        )
+        == "the answer",
+        "bootstrap and error tails still arrive as formatted text, and still need their "
+        "logs stripped",
+    )
+    quoted = (
+        "[EVIDENCE]\ngrounded:\n- the endpoint returns\n"
+        '{"type":"request","id":1}\n'
+        "which the caller ignores"
+    )
+    assert_true(
+        OpenCodeAdapter.clean_output(quoted) == quoted,
+        "an evidence body that quotes a JSON object is prose, not a machine stream. "
+        "Telling the two apart by `type` alone would silently delete the quoted line from "
+        "the answer — evidence lost with the run still reported as a success, which is "
+        "why the event types are named rather than inferred",
     )
 
 
@@ -646,6 +765,8 @@ def _test_usage_token_accounting() -> None:
     _merging_adds_turns_but_never_fields()
     _token_source_admits_a_half_measurement()
     _adapters_read_usage_out_of_their_own_streams()
+    _opencode_maps_its_own_arithmetic_onto_the_shared_shape()
+    _opencode_survives_a_stream_that_is_not_all_events()
     _billing_prefers_measurement_and_refuses_to_double_count()
     _report_and_budget_read_the_measured_rows()
     _a_continuation_records_each_call_and_counts_the_saving_once()

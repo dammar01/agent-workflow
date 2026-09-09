@@ -17,14 +17,16 @@ PROVIDER_CONFIG_FILE = BASE_DIR / "config" / "second_agent.json"
 # config.json may override it per project.
 DEFAULT_PROVIDER = os.getenv("AI_PROXY_PROVIDER", "opencode")
 
-TOOL_VERSION = "3.5.2"
+TOOL_VERSION = "3.5.3"
 MAIN_PY = BASE_DIR / "main.py"
 CHECK_PY = BASE_DIR / "check.py"
 
 # Component stamps allow lazy upgrades and may diverge when only one surface changes.
-# Both surfaces changed in v3.4.5 (the agy opt-in gate reaches the runtime through
-# provider selection; the execute contract and the agy AGENTS.md are prompt bundle), so
-# both currently match TOOL_VERSION.
+# v3.5.3 is a runtime-only change (the opencode adapter now asks for the JSON event stream
+# and reads token counts out of it); no LLM-facing contract moved. The stamps still both
+# match TOOL_VERSION because they are what an installed workspace compares against, and
+# holding prompt_bundle back would only tell a workspace it is current when the bundle it
+# has was shipped under a different number.
 # The stamps no longer gate script regeneration — upgrade compares generated content
 # directly, so a generator change reaches existing workspaces whether or not this bumps.
 #   prompt_bundle : LLM-facing contract shipped to ~/.claude (CLAUDE.md, skills, AGENTS.md)

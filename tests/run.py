@@ -59,8 +59,13 @@ from tests.checks.facts import (  # noqa: E402
     _test_facts_concurrency,
 )
 from tests.checks.installer import (  # noqa: E402
+    _test_installer_check_reports_second_agent_default,
     _test_installer_drift_check,
     _test_installer_rollback_receipt,
+    _test_installer_seed_is_non_interactive_without_a_tty,
+    _test_installer_seed_prompt_answers,
+    _test_installer_seed_reports_unenforced_provider,
+    _test_installer_seeds_second_agent_config,
     _test_installer_settings_are_additive,
     _test_installer_settings_merge,
     _test_installer_text_merging,
@@ -76,6 +81,7 @@ from tests.checks.usage_tokens import _test_usage_token_accounting  # noqa: E402
 from tests.checks.redaction import _test_redaction_boundary  # noqa: E402
 from tests.checks.registry import _test_every_check_is_registered  # noqa: E402
 from tests.checks.verify_gaps import (  # noqa: E402
+    _test_empty_section_is_not_a_finding,
     _test_quick_verify_gaps,
     _test_verification_routing,
 )
@@ -104,6 +110,7 @@ SUITES: dict[str, tuple] = {
     "redaction": (_test_redaction_boundary, "secret boundary on outbound payloads"),
     "verify-gaps": (_test_quick_verify_gaps, "quick verify reports gaps as incomplete"),
     "verify-routing": (_test_verification_routing, "the routing table decides what blocks, both ways"),
+    "verify-empty-section": (_test_empty_section_is_not_a_finding, "an empty section holds nothing, not the next heading"),
     "jobs": (_test_submit_admission, "job admission, capacity, and lock"),
     "workspace-release": (_test_workspace_release_guards, "lock release guards"),
     "session-isolation": (_test_project_session_isolation, "one project's session cannot read another's"),
@@ -130,6 +137,11 @@ SUITES: dict[str, tuple] = {
     "installer-additive": (_test_installer_settings_are_additive, "settings merge adds missing keys and keeps the user's"),
     "installer-rollback": (_test_installer_rollback_receipt, "receipted rollback restores, deletes, and refuses drift"),
     "installer-check": (_test_installer_drift_check, "settings drift detection: missing, current, unparseable"),
+    "installer-seed": (_test_installer_seeds_second_agent_config, "second_agent.json is seeded once and never overwritten"),
+    "installer-seed-tty": (_test_installer_seed_is_non_interactive_without_a_tty, "no tty, no prompt: CI and e2e cannot hang"),
+    "installer-seed-prompt": (_test_installer_seed_prompt_answers, "every answer the provider/model picker accepts"),
+    "installer-seed-optin": (_test_installer_seed_reports_unenforced_provider, "an unenforced provider names its opt-in variable"),
+    "installer-seed-state": (_test_installer_check_reports_second_agent_default, "--check describes the seed without calling it drift"),
     "audit": (_test_audit_report, "the governance trail reads back and keeps a null provider visible"),
     "audit-torn": (_test_audit_survives_a_torn_row, "a partial final line does not hide the readable trail"),
     "audit-separate": (_test_audit_is_not_telemetry, "audit and usage stay separate readers over separate files"),

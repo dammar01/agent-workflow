@@ -10,6 +10,7 @@ from installer.base import (
     DIST_CONFIG,
     HOME,
     MARKERS,
+    REPO_ROOT,
     Plan,
     _apply_intent_mode,
     _hash,
@@ -46,6 +47,35 @@ def _provider_config_would_change(
         "not valid JSON/JSONC" in warning or "root is not a JSON object" in warning
         for warning in plan.warnings
     )
+
+
+def _second_agent_state() -> str:
+    """One line describing config/second_agent.json — the default every `init` copies.
+
+    Informational on purpose; see the call site in `_run_check` for why it stays out of
+    the drift tally. Reads the file rather than trusting it exists, because a hand-edited
+    one that no longer parses is the failure this line is worth printing for.
+    """
+    import json
+
+    from core.workspace.workspace_paths import PROVIDER_CONFIG_NAME
+
+    path = REPO_ROOT / "config" / PROVIDER_CONFIG_NAME
+    if not path.exists():
+        return (
+            f"NOT SET — {PROVIDER_CONFIG_NAME} absent; init falls back to "
+            "second_agent.example.json (opencode, no model pinned). "
+            "`python install.py --apply` asks, or pass --provider"
+        )
+    try:
+        config = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return f"UNREADABLE — {path} ({exc})"
+    if not isinstance(config, dict):
+        return f"UNREADABLE — {path} (root is not a JSON object)"
+    provider = config.get("provider") or "unset"
+    model = config.get("default_model") or "provider default"
+    return f"{provider}, model={model}"
 
 
 def _detect_project_root() -> Path | None:
@@ -180,6 +210,12 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
             print(f"    - MISSING {key}")
     if project_scope_note:
         print(f"  project scope: SKIPPED — {project_scope_note}")
+
+    # Reported beside the drift list rather than inside it. This file has no shipped
+    # counterpart to drift FROM, and its absence is not a fault: init falls back to
+    # second_agent.example.json and works. Folding it into `installed_missing` would turn
+    # a working checkout into DRIFTED and send the user to --apply for nothing.
+    print(f"  second agent default: {_second_agent_state()}")
 
     # Report component ownership so the required version bump is explicit.
     versions = manifest.get("versions") or {}

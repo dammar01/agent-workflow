@@ -48,7 +48,11 @@ from tests.checks.facts import (
     _test_facts_concurrency,
 )
 from tests.checks.redaction import _test_redaction_boundary
-from tests.checks.verify_gaps import _test_quick_verify_gaps, _test_verification_routing
+from tests.checks.verify_gaps import (
+    _test_empty_section_is_not_a_finding,
+    _test_quick_verify_gaps,
+    _test_verification_routing,
+)
 from tests.checks.jobs import _test_submit_admission
 from tests.checks.workspace import (
     _test_init_upgrade_and_session_guard,
@@ -61,8 +65,13 @@ from tests.checks.continuation import (
 )
 from tests.checks.contracts import _test_workflow_contracts
 from tests.checks.installer import (
+    _test_installer_check_reports_second_agent_default,
     _test_installer_drift_check,
     _test_installer_rollback_receipt,
+    _test_installer_seed_is_non_interactive_without_a_tty,
+    _test_installer_seed_prompt_answers,
+    _test_installer_seed_reports_unenforced_provider,
+    _test_installer_seeds_second_agent_config,
     _test_installer_settings_are_additive,
     _test_installer_settings_merge,
     _test_installer_text_merging,
@@ -183,6 +192,12 @@ def run_tests() -> None:
         assert_true(recording_opencode.run_calls[0]["work_dir"] == work_dir, "agent run must receive work_dir")
         run_args = recording_opencode.run_calls[0]["args"]
         assert_true("--print-logs" not in run_args, "agent run must not use --print-logs")
+        assert_true(
+            run_args[run_args.index("--format") + 1] == "json",
+            "agent run must ask for the JSON event stream: it is the only mode that "
+            "reports token counts, so losing this flag silently returns every usage row "
+            "to a chars//4 estimate",
+        )
         assert_true("--log-level" not in run_args, "agent run must not use --log-level after init")
         assert_true(run_args[-2:] == ["-s", "ses_boot123"], "agent run must resume captured OpenCode session")
 
@@ -1079,6 +1094,7 @@ confidence: high — all requested checks ran
         _test_redaction_boundary()
         _test_quick_verify_gaps()
         _test_verification_routing()
+        _test_empty_section_is_not_a_finding()
         _test_submit_admission()
         _test_workspace_release_guards()
         _test_project_session_isolation()
@@ -1091,6 +1107,11 @@ confidence: high — all requested checks ran
         _test_installer_settings_are_additive()
         _test_installer_rollback_receipt()
         _test_installer_drift_check()
+        _test_installer_seeds_second_agent_config()
+        _test_installer_seed_is_non_interactive_without_a_tty()
+        _test_installer_seed_prompt_answers()
+        _test_installer_seed_reports_unenforced_provider()
+        _test_installer_check_reports_second_agent_default()
         _test_runtime_is_stdlib_only()
         _test_telemetry_metrics()
         _test_usage_token_accounting()

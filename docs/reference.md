@@ -1,4 +1,4 @@
-# agent-workflow v3.5.2
+# agent-workflow v3.5.3
 
 Runtime orkestrasi mandiri untuk alur kerja dua-agent. Tanpa dependency pihak ketiga.
 
@@ -70,7 +70,7 @@ git --version
 
 ---
 
-## Install (v3.5.2)
+## Install (v3.5.3)
 
 ### Anggota tim baru — urutan lengkap dari nol
 
@@ -108,6 +108,7 @@ git clone <repo> && cd agent-workflow
 python install.py            # DRY RUN — tampilkan semua perubahan, tulis nol
 python install.py --apply    # baru menulis
 python install.py --apply --only-command      # matikan auto-intent
+python install.py --apply --provider codex --model gpt-5.6-sol   # pilih second agent tanpa ditanya
 python install.py --check                     # cek bundle + instalasi (termasuk project bila cwd punya .workflow/)
 python install.py --rollback                  # dry-run rollback terakhir
 python install.py --rollback --apply          # rollback setelah preflight hash
@@ -136,6 +137,52 @@ rollback berhenti dengan konflik, bukan menimpa edit user atau melakukan rollbac
 Receipt mencakup target instalasi global dan bundle. Init/upgrade stateful pada `.workflow/`
 serta penambahan `.workflow/` ke `.gitignore` tidak masuk rollback installer karena dapat
 memuat session dan state project yang tidak aman dihapus otomatis.
+
+#### Seed `config/second_agent.json`
+
+`config/second_agent.json` ada di `.gitignore`, jadi clone baru cuma punya
+`second_agent.example.json`. Installer mengisi kekosongan itu sekali per mesin — file
+inilah yang disalin `init` ke tiap `.workflow/second_agent.json` berikutnya
+(`adapters/install/opencode_install._copy_provider_config`, dengan example sebagai
+fallback terakhir).
+
+Urutan penentuan isinya:
+
+| Kondisi | Yang terjadi |
+|---|---|
+| `--provider NAME` (opsional `--model ID`) | dipakai apa adanya, nol pertanyaan |
+| `--apply` dari terminal | installer **bertanya** provider lalu model |
+| non-interaktif (CI, pipe, dry run) | `second_agent.example.json` disalin apa adanya — perilaku lama |
+
+Jalur ketiga bukan kelalaian: `tools/e2e/e2e_installer.py` dan CI memanggil `install.py`
+tanpa stdin, dan prompt di sana akan **menggantung** run, bukan menggagalkannya.
+
+Prompt menampilkan tiap provider beserta apakah CLI-nya ada di `PATH` dan apakah ia butuh
+opt-in (`AI_PROXY_<PROVIDER>_OPT_IN`), lalu shortlist model provider terpilih beserta
+reasoning effort yang diterima masing-masing. Blank adalah jawaban sah di dua langkah:
+blank pada provider membatalkan pemilihan (example disalin), blank pada model membiarkan
+`default_model` kosong sehingga CLI provider memakai default-nya sendiri. Id model di luar
+shortlist tetap diterima dengan warning — shortlist itu menu picker, bukan daftar model
+yang ada (`config/providers.model_is_listed`).
+
+File hasil seed dibangun **di atas** example, jadi key example yang bertambah kemudian
+ikut terwarisi; hanya `provider`, `provider_command`, `default_model`, dan `routes` yang
+diganti. Model dipin ke `SELECTABLE_ROUTES` (`explore`, `plan`, `analyze`, `verify`);
+`sweep` dibiarkan. `routes` diedit per-key lewat `_merge_routes` supaya `timeout_seconds`
+dan `agent` per-route tidak ikut terbuang.
+
+File yang sudah ada **tidak pernah** ditimpa — isinya pilihan user. `--provider`/`--model`
+yang diberikan saat file sudah ada diabaikan dengan warning; ubah lewat editor atau
+command `provider` pada workspace.
+
+Seed **tidak** masuk install receipt, alasan sama dengan `--set-env`: entry receipt tanpa
+backup akan DIHAPUS saat `--rollback`, sedangkan file ini menampung editan user setelah
+dibuat.
+
+`--check` melaporkannya sebagai baris `second agent default:` terpisah — `NOT SET`,
+`UNREADABLE`, atau `<provider>, model=<id>` — dan sengaja **di luar** hitungan drift:
+file ini nol padanan di `dist/` sehingga tak punya sumber untuk drift, dan ketiadaannya
+bukan kerusakan (init masih jalan lewat example).
 
 Bila installer dijalankan dari dalam project yang sudah memiliki `.workflow/`, ia menjalankan **upgrade in-place**: scripts diregenerasi, key config baru di-backfill secara additive, `<project_root>/opencode.json` di-refresh, dan `sessions/` dipertahankan. Workspace baru tidak di-scaffold oleh installer — pakai `python main.py --command init --work-dir DIR` (skill `/.init`). Upgrade workspace ditolak bila masih ada job aktif; install global tetap selesai dan warning harus diperiksa.
 
@@ -541,7 +588,7 @@ Artinya second_agent codex bisa membaca tiap file di project yang kamu tunjuk, `
 
 Pakai `codex` bila project-nya memang tak menyimpan rahasia, atau bila kamu menerima risikonya. Untuk project yang rahasianya harus tetap tak terbaca second_agent, pakai `opencode`.
 
-Kunci reliability (v3.5.2):
+Kunci reliability (v3.5.3):
 
 | Kunci | Default | Arti |
 | --- | --- | --- |
@@ -755,7 +802,7 @@ pernah tercatat, runtime gagal sebagai `session_capture_failed` dan clean run di
 Request berbeda pada session yang masih terkunci tetap ditolak sebagai
 `job_already_running`.
 
-### Liveness worker (v3.5.2)
+### Liveness worker (v3.5.3)
 
 PID yang hidup **tidak** berarti sedang bekerja. Worker karena itu melaporkan heartbeat sekaligus usia output stream, lalu job diklasifikasi tiga keadaan:
 
@@ -967,7 +1014,7 @@ dengan baris bergerbang penuh.
 
 ## Referensi
 
-- Catatan rilis: [`prompt/v3.5.2/changelog.md`](../prompt/v3.5.2/changelog.md)
+- Catatan rilis: [`prompt/v3.5.3/changelog.md`](../prompt/v3.5.3/changelog.md)
 - Kontrak canonical main_agent: [`dist/config/claude/CLAUDE.md`](../dist/config/claude/CLAUDE.md)
 - Kontrak canonical second_agent: [`dist/config/opencode/AGENTS.md`](../dist/config/opencode/AGENTS.md)
 - Runtime entry point: [`main.py`](main.py)

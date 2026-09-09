@@ -26,6 +26,8 @@ Safety:
 import argparse
 import json
 import os
+import shutil
+import sys
 from datetime import datetime, timezone
 
 # Split out in v3.4.3; re-exported so `main()` below and any external caller keep
@@ -89,6 +91,183 @@ from installer.settings import (  # noqa: E402,F401
 
 _ENV_BLOCK_MARKER = "# >>> agent-workflow AGENT_PATH >>>"
 _ENV_BLOCK_END = "# <<< agent-workflow AGENT_PATH <<<"
+
+
+def _second_agent_config(template: dict, provider: str, model: str | None) -> dict:
+    """The example config with one provider and model selected into it.
+
+    Built ON the example rather than from scratch so every key the example gains later —
+    timeouts, probe windows — is inherited by a seeded file instead of silently missing.
+    Only the four keys a selection owns are replaced; `_merge_routes` edits `model` inside
+    each route entry rather than replacing the entry, because a route also carries
+    `timeout_seconds` and `agent`.
+    """
+    from config.providers import provider_agent_default, provider_command_default
+    from core.provider.provider_select import SELECTABLE_ROUTES, _merge_routes
+
+    config = dict(template)
+    config["provider"] = provider
+    config["provider_command"] = provider_command_default(provider, os.getenv)
+    config["default_model"] = model
+    config["routes"] = _merge_routes(
+        template.get("routes"), {name: model for name in SELECTABLE_ROUTES}
+    )
+    agent = provider_agent_default(provider, os.getenv)
+    if agent:
+        config["provider_agent"] = agent
+    return config
+
+
+def _ask(prompt: str) -> str:
+    """One line from the operator, or "" when the stream ends or they interrupt."""
+    try:
+        return input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return ""
+
+
+def _prompt_second_agent() -> tuple[str | None, str | None]:
+    """Ask which second agent to use. Returns (provider, model); (None, None) to skip.
+
+    Only reached on --apply from a terminal — see `_seed_second_agent_config`. Skipping is
+    a first-class answer at both steps: an empty provider seeds the example unchanged, and
+    an empty model leaves the pin unset so the provider CLI keeps its own default.
+    """
+    from config.providers import (
+        bundled_providers,
+        opt_in_granted,
+        provider_command_default,
+        provider_models,
+        provider_opt_in_env,
+        provider_requires_opt_in,
+    )
+
+    providers = sorted(bundled_providers())
+    print()
+    print("  config/second_agent.json does not exist yet. Which second agent should it use?")
+    for index, name in enumerate(providers, start=1):
+        command = provider_command_default(name, os.getenv)
+        notes = ["on PATH" if shutil.which(command) else f"{command} not on PATH"]
+        if provider_requires_opt_in(name) and not opt_in_granted(name):
+            notes.append(f"no enforced boundary — needs {provider_opt_in_env(name)}")
+        print(f"    {index}) {name:<10} ({'; '.join(notes)})")
+    choice = _ask(f"  provider [1-{len(providers)}, blank = keep the example default]: ")
+    if not choice.isdigit() or not 1 <= int(choice) <= len(providers):
+        return None, None
+    provider = providers[int(choice) - 1]
+
+    models = provider_models(provider)
+    if not models:
+        return provider, None
+    print()
+    for index, entry in enumerate(models, start=1):
+        efforts = ", ".join(entry.get("efforts") or ()) or "no reasoning effort"
+        print(f"    {index}) {entry['id']:<42} ({efforts})")
+    choice = _ask(
+        f"  model [1-{len(models)}, or a model id, blank = let the CLI decide]: "
+    )
+    if not choice:
+        return provider, None
+    if choice.isdigit() and 1 <= int(choice) <= len(models):
+        return provider, models[int(choice) - 1]["id"]
+    # A pin the shortlist never mentioned still has to work: the menu is a picker, not
+    # the set of models that exist (config/providers.model_is_listed).
+    return provider, choice
+
+
+def _seed_second_agent_config(
+    plan, apply: bool, provider: str | None = None, model: str | None = None
+) -> None:
+    """Create config/second_agent.json when it is missing, choosing a provider for it.
+
+    The file is gitignored, so a fresh clone has only second_agent.example.json. Init then
+    falls back to the example (adapters/install/opencode_install._copy_provider_config),
+    which works — but leaves nothing in the tool directory to edit, so the provider/model
+    choice has to be made per project instead of once per machine.
+
+    How the choice is made, in order:
+      --provider/--model    taken as given, no questions;
+      a terminal on --apply  asked interactively, with skipping as a valid answer;
+      anything else          the example is copied verbatim, exactly as before.
+
+    That last case is what keeps CI and tools/e2e/e2e_installer.py working: they run this
+    with no stdin, and a prompt there would hang the run rather than fail it.
+
+    Never overwrites: an existing file is the user's own provider and model selection.
+
+    Deliberately NOT recorded in the install receipt, for the same reason as
+    _persist_agent_path: a receipt entry without a backup is DELETED on rollback, and this
+    file accumulates the user's own edits after we create it. The undo is printed instead.
+    """
+    from config.providers import (
+        model_is_listed,
+        opt_in_granted,
+        provider_opt_in_env,
+        provider_requires_opt_in,
+    )
+    from core.workspace.workspace_paths import JSON_INDENT, PROVIDER_CONFIG_NAME
+
+    dest = REPO_ROOT / "config" / PROVIDER_CONFIG_NAME
+    if dest.exists():
+        plan.add("same", dest, "second_agent config already present — left alone")
+        if provider or model:
+            plan.warn(
+                f"--provider/--model ignored: {dest.name} already exists "
+                "(edit it, or use `provider` on a workspace)"
+            )
+        return
+    src = REPO_ROOT / "config" / "second_agent.example.json"
+    if not src.exists():
+        plan.warn(f"cannot seed {dest.name}: {src} is missing from the checkout")
+        return
+    template = json.loads(src.read_text(encoding="utf-8"))
+
+    if provider is None:
+        if apply and sys.stdin.isatty():
+            provider, model = _prompt_second_agent()
+        elif not apply:
+            plan.add(
+                "create",
+                dest,
+                "seeded from the example; --apply from a terminal asks which provider "
+                "and model, or pass --provider/--model",
+            )
+            return
+
+    if provider is None:
+        plan.add(
+            "create",
+            dest,
+            f"seeded from {src.name} (provider=opencode, model unset; "
+            "pass --provider to choose)",
+        )
+        payload = src.read_text(encoding="utf-8")
+    else:
+        if provider_requires_opt_in(provider) and not opt_in_granted(provider):
+            plan.warn(
+                f"{provider} enforces no read-only boundary; the runtime refuses it "
+                f"until {provider_opt_in_env(provider)} is set"
+            )
+        if model and not model_is_listed(provider, model):
+            plan.warn(
+                f"{model!r} is not on {provider}'s shortlist — pinned anyway, but "
+                "verify the id is one the CLI accepts"
+            )
+        plan.add(
+            "create",
+            dest,
+            f"provider={provider}, model={model or 'provider default'}",
+        )
+        payload = (
+            json.dumps(
+                _second_agent_config(template, provider, model), indent=JSON_INDENT
+            )
+            + "\n"
+        )
+
+    if apply:
+        dest.write_text(payload, encoding="utf-8")
 
 
 def _persist_agent_path(agent_path, apply: bool) -> None:
@@ -189,6 +368,19 @@ def main() -> int:
         "the repo and outlives it. Dry run unless --apply is also given",
     )
     parser.add_argument(
+        "--provider",
+        choices=sorted(PROVIDER_BUNDLES),
+        help="which second agent config/second_agent.json should select, when that file "
+        "does not exist yet. Without it, --apply from a terminal asks; a non-interactive "
+        "run copies the example unchanged. Ignored if the file is already there",
+    )
+    parser.add_argument(
+        "--model",
+        metavar="ID",
+        help="pin this model in the seeded config/second_agent.json. Requires --provider. "
+        "An id outside the provider's shortlist is accepted with a warning",
+    )
+    parser.add_argument(
         "--check",
         action="store_true",
         help="report drift (installed config vs bundle, dist vs manifest, and the "
@@ -203,6 +395,9 @@ def main() -> int:
 
     if args.only_command and args.auto_intent:
         print("[INSTALL] --only-command and --auto-intent are opposites; pick one")
+        return 2
+    if args.model and not args.provider:
+        print("[INSTALL] --model needs --provider: a model id alone names no adapter")
         return 2
     # No flag = keep whatever the last install chose. An upgrade must not change a
     # deliberate choice just because it was not restated.
@@ -278,6 +473,7 @@ def main() -> int:
     # <project_root>/opencode.json (the secret-file boundary) is NOT installed here. It
     # belongs to a workspace, so init/upgrade owns it — see
     # core.runtime.workflow_runtime._install_project_boundary. The upgrade call below reaches it.
+    _seed_second_agent_config(plan, apply, args.provider, args.model)
     agent_path = REPO_ROOT / "main.py"
     if os.environ.get("AGENT_PATH") != str(agent_path):
         plan.add(

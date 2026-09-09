@@ -32,6 +32,60 @@ _SESSION_ID_PATTERNS = (
 _LOG_LINE = re.compile(r"^(TRACE|DEBUG|INFO|WARN|ERROR|FATAL)\s+\d{4}-\d{2}-\d{2}T")
 _QUOTED_LINE = re.compile(r"^>\s+")
 
+# OpenCode reports token counts under exactly one condition: `--format json`. In its
+# default (formatted) mode the run prints prose and log lines and no usage at all, which
+# is why every row this adapter wrote before carried a chars//4 estimate.
+#
+# The stream it emits instead is one JSON object per line, each with a top-level `type`
+# and a `part` payload:
+#   {"type":"text","part":{"type":"text","text":"DONE",...}}
+#   {"type":"step_finish","part":{"tokens":{"total":30198,"input":14448,"output":6,
+#                                 "reasoning":0,"cache":{"write":0,"read":15744}},...}}
+_JSON_FORMAT_ARGS = ("--format", "json")
+
+
+def _as_int(value: object) -> int | None:
+    """A reported count, or None when it is not one. Bools are not counts.
+
+    A negative count is not one either. Nothing can be billed minus-twelve tokens, so a
+    negative here means the field was malformed, and carrying it through would let one
+    bad step silently subtract from the rest of the run's total — a smaller number with
+    nothing to mark it as wrong. Unreported is the honest reading.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, float) and value.is_integer() and value >= 0:
+        return int(value)
+    return None
+
+
+def _sum_reported(*values: "int | None") -> int | None:
+    """Add the counts that were actually reported; None when none of them were.
+
+    An absent field is unreported, not zero — so it neither contributes to the sum nor
+    drags a reported sibling down to None.
+    """
+    present = [value for value in values if value is not None]
+    return sum(present) if present else None
+# The event types OpenCode's `--format json` stream is made of. Named rather than inferred
+# from "the line parses as JSON with a type field", because the fallback below has to tell
+# this stream apart from an evidence body that merely quotes a JSON object — and an
+# [EVIDENCE] block that happens to contain one is not a machine stream to be thrown away.
+_EVENT_TYPES = frozenset(
+    {
+        "step_start",
+        "step_finish",
+        "text",
+        "reasoning",
+        "tool_use",
+        "tool",
+        "file",
+        "error",
+    }
+)
+
 # Upper bound on captured stdout/stderr per stream (~4MB of text). A well-behaved evidence
 # run is a few hundred KB; this only clamps a runaway/pathological process so it cannot
 # grow the in-memory buffer without limit. The tail is kept (evidence blocks live at the end).
@@ -188,10 +242,75 @@ class OpenCodeAdapter:
         return None
 
     @staticmethod
-    def clean_output(text: str) -> str:
-        """Drop OpenCode's log lines and quoted echoes, keep the answer."""
-        kept = []
+    def _json_events(text: str) -> list[dict]:
+        """The `--format json` stream, parsed leniently.
+
+        Lenient because the stream is shared with anything else that reached the same
+        pipe: a plugin banner, a log line, a truncation marker this adapter added itself.
+        A line that is not a JSON object is skipped rather than treated as a parse
+        failure, so one stray line cannot cost the run its answer or its token counts.
+        """
+        events = []
         for line in ensure_text(text).splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("{"):
+                continue
+            try:
+                event = json.loads(stripped)
+            except ValueError:
+                continue
+            if isinstance(event, dict):
+                events.append(event)
+        return events
+
+    @staticmethod
+    def clean_output(text: str) -> str:
+        """The answer, whichever of OpenCode's two output modes produced it.
+
+        Under `--format json` the answer arrives as `text` events, and everything else on
+        the stream — steps, tool calls, file reads, token counts — is not the answer.
+        Parts are keyed by id and the last value for an id wins, so a build that streams a
+        part in growing pieces yields the finished text rather than every prefix of it.
+
+        The line-stripping fallback still handles bootstrap, which stays on the formatted
+        output, and every error path that hands this method a stderr tail. It also covers
+        the case worth being careful about: a JSON run that died before emitting a single
+        text event. Returning the raw event objects as the answer would put a wall of
+        machine output where evidence belongs, so the fallback runs when there was no text
+        event to find — not merely when the text it found looks short or empty.
+        """
+        body = ensure_text(text)
+        events = OpenCodeAdapter._json_events(body)
+        ordered: list[str] = []
+        parts: dict[str, str] = {}
+        for event in events:
+            if event.get("type") != "text":
+                continue
+            part = event.get("part")
+            if not isinstance(part, dict):
+                continue
+            value = part.get("text")
+            if not isinstance(value, str):
+                continue
+            key = part.get("id")
+            if not isinstance(key, str):
+                key = "__anon_%d" % len(ordered)
+            if key not in parts:
+                ordered.append(key)
+            parts[key] = value
+        if ordered:
+            return "\n".join(parts[key] for key in ordered).strip()
+
+        if any(event.get("type") in _EVENT_TYPES for event in events):
+            # An event stream that produced no text produced no answer. Saying so as an
+            # empty result is what lets the caller report an empty output; handing back
+            # the event objects instead would put a wall of JSON where the evidence
+            # contract belongs and read, upstream, as a run that succeeded and returned
+            # nonsense.
+            return ""
+
+        kept = []
+        for line in body.splitlines():
             stripped = line.strip()
             if _LOG_LINE.match(stripped) or _QUOTED_LINE.match(stripped):
                 continue
@@ -199,33 +318,68 @@ class OpenCodeAdapter:
         return "\n".join(kept).strip()
 
     @staticmethod
+    def _step_tokens(tokens: object) -> dict | None:
+        """One `step_finish` token object, mapped onto the four counts a usage row holds.
+
+        The mapping is not a rename, because OpenCode disagrees with the shared normaliser
+        about what its own numbers contain. Measured against live runs, its `total` is
+        `input + output + reasoning + cache.read` — every field a sibling of every other.
+        The usage row means the opposite by the same words: cached input is part of input,
+        reasoning is part of output, and adding either again bills a token twice. So
+        `cache.read` is folded into input and `reasoning` into output HERE, where this
+        provider's arithmetic is known, and the shared rule is left alone for the
+        providers that already satisfy it.
+
+        A field OpenCode did not report stays None rather than becoming a zero: a missing
+        measurement is something telemetry knows how to describe, and an invented zero is
+        not.
+        """
+        if not isinstance(tokens, dict):
+            return None
+        cache = tokens.get("cache")
+        cached = _as_int(cache.get("read")) if isinstance(cache, dict) else None
+        fresh_input = _as_int(tokens.get("input"))
+        output = _as_int(tokens.get("output"))
+        reasoning = _as_int(tokens.get("reasoning"))
+        normalized = {
+            "input_tokens": _sum_reported(fresh_input, cached),
+            "output_tokens": _sum_reported(output, reasoning),
+            "reasoning_tokens": reasoning,
+            "cached_input_tokens": cached,
+        }
+        if all(value is None for value in normalized.values()):
+            return None
+        return normalized
+
+    @staticmethod
     def extract_usage(text: str) -> dict | None:
-        """Token counts OpenCode reported, if this build reports any.
+        """Token counts OpenCode reported, summed across the run.
 
-        Written as a search rather than as a parser of a known shape, because this
-        repository cannot prove what that shape is: OpenCode's output here is prose plus
-        log lines, and neither the adapter nor any fixture has ever carried a usage field.
-        So the reader looks for a JSON object with a `usage` member anywhere in the stream,
-        hands it to the shared normaliser, and returns None when it finds nothing.
+        Summed rather than last-wins because the counts are per API request, not a running
+        total: a two-step run reported 79 output tokens and then 6, and a cumulative
+        counter cannot decrease. Each step is a separately billed request, so the run costs
+        their sum — the same reading codex applies to its `turn.completed` events.
 
-        None is the expected result on today's evidence, and it is a correct one rather
-        than a silent failure: the row keeps its chars//4 estimate and says
-        `token_source: estimated`. What this buys is that the day an OpenCode build does
-        emit usage it is picked up without a code change, and until then nothing here
-        invents a number to stand in for the one it does not have.
+        The older shape — any object carrying a top-level `usage` member — is still
+        accepted. It costs one branch, and it is the shape a future build (or a different
+        `opencode` on PATH) would most plausibly emit; dropping it would trade a working
+        measurement for nothing.
+
+        None remains a correct answer rather than a failure: a run that reported no usage
+        keeps its chars//4 estimate and says `token_source: estimated`, which is the honest
+        description of a row nobody measured.
         """
         total: dict | None = None
-        for line in ensure_text(text).splitlines():
-            stripped = line.strip()
-            if not stripped.startswith("{") or "usage" not in stripped:
+        for event in OpenCodeAdapter._json_events(text):
+            if event.get("type") == "step_finish":
+                part = event.get("part")
+                if isinstance(part, dict):
+                    total = merge_usage(
+                        total, OpenCodeAdapter._step_tokens(part.get("tokens"))
+                    )
                 continue
-            try:
-                event = json.loads(stripped)
-            except ValueError:
-                continue
-            if not isinstance(event, dict):
-                continue
-            total = merge_usage(total, normalize_usage(event.get("usage")))
+            if "usage" in event:
+                total = merge_usage(total, normalize_usage(event.get("usage")))
         return total
 
     def _popen_capture(
@@ -250,6 +404,14 @@ class OpenCodeAdapter:
         )
         proc = subprocess.Popen(
             args,
+            # Closed stdin is not tidiness, it is the difference between a run and a
+            # hang. Under `--format json` an inherited (open, idle) stdin leaves opencode
+            # blocked immediately after its `init` log line: no model call, no output, no
+            # error — it sits there until the timeout kills it. The identical argv with
+            # stdin at /dev/null returns in under two seconds. The default-format path
+            # never showed this, so the cost of leaving it out lands entirely on the mode
+            # this adapter now depends on.
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -470,6 +632,7 @@ class OpenCodeAdapter:
         if model:
             args.extend(["-m", model])
         args.extend(self._effort_args())
+        args.extend(_JSON_FORMAT_ARGS)
         args.extend(["-s", session_id])
         return self._run_args(args, work_dir)
 
@@ -482,6 +645,7 @@ class OpenCodeAdapter:
         if model:
             args.extend(["-m", model])
         args.extend(self._effort_args())
+        args.extend(_JSON_FORMAT_ARGS)
         # `-s <ses_id>` is appended once the session exists; a real id is ~30 chars.
         # Include a stand-in so the pre-bootstrap measurement matches the final argv.
         args.extend(["-s", "ses_" + "0" * 26])
