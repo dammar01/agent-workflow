@@ -615,6 +615,444 @@ class Executor:
         except Exception:
             return None
 
+    def _run_delegated(
+        self,
+        route: dict,
+        command: str,
+        task: str,
+        session: dict,
+        session_id: str,
+        project_root: Path,
+        work_dir: str | None,
+        on_progress,
+        session_manager,
+        *,
+        prompt: str,
+        prompt_meta: dict,
+        lock_claim: dict | None,
+        record_failure: bool = True,
+    ) -> dict:
+        """One delegated call, from prompt handoff to a judged reply.
+
+        Everything between "the prompt is built" and "the reply is usable" lives
+        here: the handoff file, adapter binding, the provider run, the single bounded
+        continuation, call-meta archiving, session persistence, redaction audit, and
+        the guards that turn a menu or a refusal into `invalid_evidence`. What it does
+        NOT do is the role-shaped bookkeeping around a public command — fact ingest,
+        evidence indexing, fan-out capability, command cache — which stays in
+        `execute()` so an internal caller (a verify stage that needs a second
+        delegated reply) can run a call without teaching the fact store about it.
+
+        Returns the result dict. Any `ok: false` here is already recorded for usage
+        where a provider was reached, so a caller may return it as-is. The prompt id
+        of the archived call is on `self._last_call_meta["prompt_id"]`.
+
+        `record_failure=False` is for a caller that keeps going after a failed call and
+        finalises one result for the whole command (the e2e stages). Usage rows are
+        written per snapshot in `_call_metas`, so recording here AND at that caller's
+        finalisation would bill every invocation so far twice. Such a caller owns the
+        recording: it either finalises, or calls `_record_failed_call` itself before
+        returning a failure.
+        """
+        record_failed = (
+            self._record_failed_call if record_failure else (lambda result, *_: result)
+        )
+        handoff = write_prompt_handoff(
+            project_root,
+            command,
+            session_id,
+            prompt,
+            lock_claim=lock_claim,
+        )
+        if not handoff.get("ok"):
+            return handoff
+
+        # Late binding: until here the adapter could only be the import-time default.
+        self.adapter = self._adapter_for(project_root)
+        # `or` rather than a dict default: the route always carries both keys, and a null
+        # value means "this provider has none" — not "fall back to another provider's".
+        self.adapter.command = route.get("provider_command") or getattr(
+            self.adapter, "command", None
+        )
+        self.adapter.agent = route.get("provider_agent") or getattr(
+            self.adapter, "agent", None
+        )
+        # Plain assignment, no `or` chain: None here means "send no effort flag", and
+        # inheriting the adapter's import-time value would make a config that cleared
+        # `effort` keep sending the one it just removed.
+        self.adapter.effort = route.get("effort")
+        self.adapter.timeout_seconds = route.get(
+            "timeout_seconds", getattr(self.adapter, "timeout_seconds", 0)
+        )
+        self.adapter.no_timeout = (
+            self.adapter.timeout_seconds is None or self.adapter.timeout_seconds <= 0
+        )
+        if route.get("bootstrap_timeout_seconds") is not None:
+            self.adapter.bootstrap_timeout_seconds = route["bootstrap_timeout_seconds"]
+        if route.get("poll_interval_seconds") is not None:
+            self.adapter.poll_interval = route["poll_interval_seconds"]
+        # Only the adapter's poll loop can emit liveness while opencode blocks.
+        self.adapter.on_progress = on_progress
+
+        adapter_session = dict(session)
+        adapter_session["session_id"] = session_id
+
+        def persist_new_session(provider_session_id: str) -> None:
+            adapter_session["provider_session_id"] = provider_session_id
+            session["provider_session_id"] = provider_session_id
+            if session_manager is not None:
+                session_manager.update_provider_session_id(
+                    session, provider_session_id
+                )
+
+        session_callback_bound = False
+        try:
+            if hasattr(self.adapter, "on_session_created"):
+                session_callback_bound = True
+                self.adapter.on_session_created = persist_new_session
+        except Exception:
+            session_callback_bound = False
+        try:
+            self.adapter.last_call_meta = {}
+        except Exception:
+            pass
+        continuation_meta: dict = {}
+        # Held across the continuation so the reply that failed the contract can be
+        # archived even when the merge discards it.
+        first_reply = ""
+        try:
+            result = self._adapter_run(
+                prompt,
+                adapter_session,
+                route.get("model"),
+                work_dir,
+            )
+            result, _ = _sanitize_result(result)
+            self._snapshot_invocation(prompt, result)
+
+            # One bounded continuation. A reply that never reached its contract is not the
+            # same failure as a refusal or a dead call: the session is alive and holding the
+            # work, so asking for the missing block costs one call and saves the whole read.
+            # Strictly once — a second agent that cannot produce the contract twice will not
+            # produce it on the tenth try, and a loop here would spend quota discovering that.
+            gap = _contract_gap(command, route.get("role"), result)
+            if gap:
+                first_reply = result.get("content") or ""
+                continuation_meta = {
+                    "continuation_reason": gap["reason"],
+                    "continuation_missing": gap["missing"],
+                    "continuation_attempts": 0,
+                    "continuation_recovered": False,
+                }
+                # Without a captured provider session the follow-up would open a NEW thread,
+                # which has none of the work and would simply answer from nothing.
+                if adapter_session.get("provider_session_id"):
+                    continuation_meta["continuation_attempts"] = 1
+                    continuation_text = _continuation_prompt(command, gap)
+                    retry = self._adapter_run(
+                        continuation_text,
+                        adapter_session,
+                        route.get("model"),
+                        work_dir,
+                    )
+                    retry, _ = _sanitize_result(retry)
+                    # Snapshotted whether or not the retry is kept. A follow-up that failed
+                    # the contract still spent its tokens, and a stream that only records
+                    # the attempts that worked reports the cheap half of the bill.
+                    self._snapshot_invocation(continuation_text, retry)
+                    if retry.get("ok"):
+                        merged = {
+                            **retry,
+                            "content": _merge_continuation(
+                                result.get("content"), retry.get("content")
+                            ),
+                        }
+                        # Prefer the merge: it carries both halves. Fall back to the
+                        # follow-up alone only if the join itself reads as damaged, so a
+                        # malformed first reply can never block a recovery that worked.
+                        for candidate, joined in ((merged, True), (retry, False)):
+                            if _contract_gap(
+                                command, route.get("role"), candidate
+                            ):
+                                continue
+                            continuation_meta["continuation_recovered"] = True
+                            continuation_meta["continuation_first_reply_chars"] = len(
+                                result.get("content") or ""
+                            )
+                            continuation_meta["continuation_merged"] = joined
+                            result = candidate
+                            break
+                else:
+                    continuation_meta["continuation_skipped"] = (
+                        "no provider_session_id captured — a follow-up would start an "
+                        "empty thread instead of continuing this one"
+                    )
+        finally:
+            self.adapter.on_progress = None
+            if session_callback_bound:
+                try:
+                    self.adapter.on_session_created = None
+                except Exception:
+                    pass
+            # Archive exit, duration, kill, and stderr metadata for failure diagnosis,
+            # plus minimal cost telemetry. Char counts are exact; token counts are
+            # rough len/4 estimates and are labelled token_source=estimated so they are
+            # never confused with provider-reported actuals (those would land in
+            # actual_input_tokens/actual_output_tokens with token_source=provider).
+            _result = locals().get("result")
+            _content = _result.get("content") if isinstance(_result, dict) else None
+            _prompt_chars = len(prompt)
+            _resp_chars = len(_content) if isinstance(_content, str) else None
+            _adapter_meta = getattr(self.adapter, "last_call_meta", None) or {}
+            if not self._reached_a_provider(_adapter_meta) and self._call_metas:
+                # The LAST invocation reached no provider — a continuation refused before
+                # Popen is the case — but an earlier one did, and its numbers are the only
+                # measurement this command has. Reading the cleared attribute here would
+                # write `token_source: estimated` over a call that was actually counted,
+                # which is a silent downgrade: the row still looks like a row.
+                _adapter_meta = self._call_metas[-1].get("adapter_meta") or {}
+            adapter_meta, meta_redactions = redact_value(
+                _without_raw_args(_adapter_meta)
+            )
+            if not isinstance(adapter_meta, dict):
+                adapter_meta = {}
+            call_meta = {
+                "command": command,
+                "role": route.get("role"),
+                "model": route.get("model"),
+                "timeout_seconds": self.adapter.timeout_seconds,
+                "prompt_chars": _prompt_chars,
+                "response_chars": _resp_chars,
+                "estimated_input_tokens": _prompt_chars // 4,
+                "estimated_output_tokens": (
+                    _resp_chars // 4 if _resp_chars is not None else None
+                ),
+                "token_source": "estimated",
+                **self._config_provenance(project_root),
+                **prompt_meta,
+                **adapter_meta,
+                **continuation_meta,
+            }
+            call_meta, persisted_meta_redactions = redact_value(call_meta)
+            _attach_redactions(
+                call_meta, [*meta_redactions, *persisted_meta_redactions]
+            )
+            call_meta["prompt_id"] = handoff.get("meta", {}).get("prompt_id")
+            # Applied after the literal above, not inside it: `**adapter_meta` merges the
+            # adapter's own keys last, so a token_source written earlier would be decided
+            # by merge order rather than by what was actually measured.
+            _apply_provider_usage(call_meta, adapter_meta.get("provider_usage"))
+            # Same reason, and the field usage rows were missing entirely: the route knows
+            # which provider was picked, but nothing carried the name down, so every row
+            # in the stream said `provider: null`. That is readable while one provider is
+            # measured and the rest are not — a report can then show both `provider` and
+            # `estimated` in `token_source` without being able to say which provider is
+            # which half.
+            call_meta["provider"] = route.get("provider")
+            call_meta["provider_command"] = route.get("provider_command")
+            self._last_call_meta = call_meta
+            # `_call_metas` deliberately keeps the RAW snapshots here. Expansion happens
+            # once, in `_record_usage`; expanding into the same attribute would feed the
+            # expansion its own output on the second pass and blank every count in it.
+            write_call_meta(
+                project_root,
+                handoff.get("meta", {}).get("prompt_id"),
+                session_id,
+                call_meta,
+            )
+
+        if continuation_meta:
+            # Rides out on the result too, not just the archived call meta: whether an
+            # answer arrived first-try or needed a nudge changes how much to trust it.
+            result.setdefault("meta", {}).update(continuation_meta)
+
+        write_response_snapshot(
+            project_root,
+            result.get("content") or "",
+            prompt_id=handoff.get("meta", {}).get("prompt_id"),
+            session_id=session_id,
+        )
+        # Written whenever a continuation was needed, not only when it discarded the first
+        # reply: a merged result no longer shows where the seam was, and the failing half is
+        # what a later diagnosis has to read.
+        write_first_reply(
+            project_root,
+            first_reply,
+            prompt_id=handoff.get("meta", {}).get("prompt_id"),
+            session_id=session_id,
+        )
+
+        provider_session_id = result.get("meta", {}).get(
+            "provider_session_id"
+        ) or adapter_session.get("provider_session_id") or session.get(
+            "provider_session_id"
+        )
+        if (
+            result.get("ok")
+            and provider_session_id
+            and not session.get("provider_session_id")
+        ):
+            session["provider_session_id"] = provider_session_id
+            if session_manager is not None:
+                session_manager.update_provider_session_id(
+                    session, provider_session_id
+                )
+
+        redactions = (result.get("meta") or {}).get("redactions")
+        self._audit_redactions(
+            project_root, session_id, command, redactions or []
+        )
+
+        if not result.get("ok"):
+            return record_failed(
+                result, project_root, command, task, session_id
+            )
+
+        # Verify sits in the `verification` role alongside init/doctor/submit, which have no
+        # second_agent reply to judge — hence the command check rather than a role check.
+        # Without this, a menu or a refusal returned for /.verify skipped the guard entirely
+        # and arrived as ok:true with an `incomplete` verdict, which reads as work done badly
+        # rather than as a proxy that never answered.
+        verify_meta = result.get("meta") or {}
+        if (
+            command == "verify"
+            and verify_meta.get("mode") != "quick"
+            and "quick_verify" not in verify_meta
+            and "[verification]" not in (result.get("content") or "").lower()
+        ):
+            attempted = continuation_meta.get("continuation_attempts")
+            detail = (
+                "second_agent returned no [VERIFICATION] block (menu/refusal/question), "
+                "not a verification"
+            )
+            if attempted:
+                detail += "; a continuation in the same session was requested and still returned none"
+            elif continuation_meta.get("continuation_skipped"):
+                detail += (
+                    f"; no continuation was possible ({continuation_meta['continuation_skipped']})"
+                )
+            # Recorded despite the adapter having succeeded: the provider ran, the tokens
+            # are spent, and it is this guard rather than the provider that judged the
+            # reply unusable. A row omitted here bills nothing for the most wasteful
+            # outcome there is — a full call whose answer is thrown away.
+            return record_failed(
+                make_error(
+                    "invalid_evidence",
+                    detail,
+                    next_action="STOP. Warn user [PROXY GAGAL]. Do NOT auto-fallback. Ask user: retry or /.local? (yes/no).",
+                    meta=verify_meta,
+                    raw_preview=(result.get("content") or "")[:240],
+                ),
+                project_root,
+                command,
+                task,
+                session_id,
+            )
+
+        if route["role"] in ("exploration", "reasoning"):
+            body = (result.get("content") or "").lower()
+            if not any(m in body for m in _EVIDENCE_MARKERS):
+                # Only reachable once the continuation above has already been tried and
+                # failed (or was impossible for want of a session to continue). The detail
+                # matters to the user: "it would not answer" and "it was never asked twice"
+                # call for different next steps.
+                attempted = continuation_meta.get("continuation_attempts")
+                detail = (
+                    "second_agent returned non-evidence output (menu/refusal/question), "
+                    "not analysis"
+                )
+                if attempted:
+                    detail += "; a continuation in the same session was requested and still returned none"
+                elif continuation_meta.get("continuation_skipped"):
+                    detail += (
+                        f"; no continuation was possible ({continuation_meta['continuation_skipped']})"
+                    )
+                return record_failed(
+                    make_error(
+                        "invalid_evidence",
+                        detail,
+                        next_action="STOP. Warn user [PROXY GAGAL]. Do NOT auto-fallback. Ask user: retry or /.local? (yes/no).",
+                        meta=result.get("meta", {}),
+                        raw_preview=(result.get("content") or "")[:240],
+                    ),
+                    project_root,
+                    command,
+                    task,
+                    session_id,
+                )
+        return result
+
+    def _build_delegated_prompt(
+        self,
+        route: dict,
+        command: str,
+        task: str,
+        session_id: str,
+        project_root: Path,
+        *,
+        has_facts: bool = False,
+        has_knowledge: bool = False,
+        has_leads: bool = False,
+        fanout: bool = False,
+        e2e_evidence: str | None = None,
+    ) -> tuple[str, dict]:
+        """The prompt for one delegated call, sized to the provider's transport.
+
+        Returns (prompt, prompt_meta). Split out of `execute()` so a verify stage can
+        build a second prompt on the same route without re-deriving the transport cap.
+        """
+        runtime_dir = str(workflow_paths(project_root, session_id)["runtime_dir"])
+
+        prompt_meta: dict = {}
+        # The route names the configured provider, but an INJECTED adapter overrides that
+        # choice without touching the route — so sizing off the route alone would measure
+        # one provider's transport and send through another's. The adapter's own name wins
+        # when it was handed in; in every other case the two agree by construction, since
+        # `_adapter_for()` resolves from the same config the router read.
+        _sizing_provider = route.get("provider")
+        if self._adapter_override:
+            _sizing_provider = getattr(self.adapter, "adapter", None) or _sizing_provider
+        _transport = transport_budget(_sizing_provider)
+        if _transport and _transport.get("kind") == "argv":
+            # Measured, not assumed. A flat reserve is a guess about values the route is
+            # holding right here: an absolute provider_command path, a model id, an agent
+            # name, an effort flag, a session id. Config can make any of them long, and a
+            # guess that is too small does not degrade — it produces a prompt the adapter
+            # refuses. `len(v)+3` mirrors the adapters' own `_too_long_for_cmd` accounting;
+            # the trailing slack covers the subcommand and flag names neither side varies.
+            _transport["reserved"] = 160 + sum(
+                len(str(value)) + 3
+                for value in (
+                    route.get("provider_command"),
+                    route.get("provider_agent"),
+                    route.get("model"),
+                    route.get("effort"),
+                    session_id,
+                )
+                if value
+            )
+        prompt = build_prompt(
+            role=route["role"],
+            task=task,
+            session_id=session_id,
+            command=command,
+            project_root=str(project_root),
+            runtime_dir=runtime_dir,
+            has_facts=has_facts,
+            has_knowledge=has_knowledge,
+            has_leads=has_leads,
+            subagent_fanout=fanout,
+            e2e_evidence=e2e_evidence,
+            declared_tools=route.get("declared_tools"),
+            meta_sink=prompt_meta,
+            # Sized from the transport, not from one constant shared by every provider.
+            # The adapter is still bound late (below), but the provider NAME is settled
+            # here by the route — which is all the sizing needs, and lets the prompt be
+            # built once, correctly, rather than built and then re-measured.
+            transport=_transport,
+        )
+        return prompt, prompt_meta
+
     def execute(
         self,
         command: str,
@@ -742,6 +1180,40 @@ class Executor:
             )
             return _sanitize_result(result)[0]
 
+        if normalized_command == "verify-browser":
+            # The request-driven browser pipeline, under the one lock this call already
+            # holds. Stage 1 and 3 go through `_run_delegated` directly — never back through
+            # `execute()`, whose role bookkeeping (facts, evidence index, fan-out) belongs
+            # to public commands. Stage 3 takes `verify`'s route so a per-command model
+            # choice for verification applies to the review too.
+            from core.evidence.e2e import runner as e2e_runner
+
+            try:
+                verify_route = self._router_for(project_root).route("verify", model_override=model)
+            except ValueError:
+                verify_route = route
+            bound = bind_session(project_root, session_id)
+            result = e2e_runner.run(
+                self,
+                project_root=project_root,
+                session_id=session_id,
+                session=session,
+                task=task,
+                work_dir=work_dir,
+                on_progress=on_progress,
+                session_manager=effective_session_manager,
+                lock_claim=_runtime_lock,
+                verify_route=verify_route,
+            )
+            if not result.get("ok"):
+                return result
+            # A run is finalised as `verify` (verdict, acceptance, usage baseline); a draft
+            # as `verify-browser`, so it never counts as a verification.
+            finalized_as = str((result.get("meta") or {}).get("command") or normalized_command)
+            return self._finalize_runtime_result(
+                result, project_root, finalized_as, task, session_id, bound, False
+            )
+
         known_facts = None
         known_knowledge = None
         graph_leads = None
@@ -783,54 +1255,17 @@ class Executor:
         write_evidence_sidecars(
             project_root, session_id, graph_leads, known_facts, known_knowledge
         )
-        runtime_dir = str(workflow_paths(project_root, session_id)["runtime_dir"])
 
-        prompt_meta: dict = {}
-        # The route names the configured provider, but an INJECTED adapter overrides that
-        # choice without touching the route — so sizing off the route alone would measure
-        # one provider's transport and send through another's. The adapter's own name wins
-        # when it was handed in; in every other case the two agree by construction, since
-        # `_adapter_for()` resolves from the same config the router read.
-        _sizing_provider = route.get("provider")
-        if self._adapter_override:
-            _sizing_provider = getattr(self.adapter, "adapter", None) or _sizing_provider
-        _transport = transport_budget(_sizing_provider)
-        if _transport and _transport.get("kind") == "argv":
-            # Measured, not assumed. A flat reserve is a guess about values the route is
-            # holding right here: an absolute provider_command path, a model id, an agent
-            # name, an effort flag, a session id. Config can make any of them long, and a
-            # guess that is too small does not degrade — it produces a prompt the adapter
-            # refuses. `len(v)+3` mirrors the adapters' own `_too_long_for_cmd` accounting;
-            # the trailing slack covers the subcommand and flag names neither side varies.
-            _transport["reserved"] = 160 + sum(
-                len(str(value)) + 3
-                for value in (
-                    route.get("provider_command"),
-                    route.get("provider_agent"),
-                    route.get("model"),
-                    route.get("effort"),
-                    session_id,
-                )
-                if value
-            )
-        prompt = build_prompt(
-            role=route["role"],
-            task=task,
-            session_id=session_id,
-            command=normalized_command,
-            project_root=str(project_root),
-            runtime_dir=runtime_dir,
+        prompt, prompt_meta = self._build_delegated_prompt(
+            route,
+            normalized_command,
+            task,
+            session_id,
+            project_root,
             has_facts=bool(known_facts),
             has_knowledge=bool(known_knowledge),
             has_leads=bool(graph_leads and graph_leads.get("files")),
-            subagent_fanout=fanout,
-            declared_tools=route.get("declared_tools"),
-            meta_sink=prompt_meta,
-            # Sized from the transport, not from one constant shared by every provider.
-            # The adapter is still bound late (below), but the provider NAME is settled
-            # here by the route — which is all the sizing needs, and lets the prompt be
-            # built once, correctly, rather than built and then re-measured.
-            transport=_transport,
+            fanout=fanout,
         )
 
         # A cut instruction is answered in full confidence, so the only place it can be
@@ -873,329 +1308,23 @@ class Executor:
                     audit_existing_redactions=True,
                 )
 
-        handoff = write_prompt_handoff(
-            project_root,
+        result = self._run_delegated(
+            route,
             normalized_command,
+            task,
+            session,
             session_id,
-            prompt,
+            project_root,
+            work_dir,
+            on_progress,
+            effective_session_manager,
+            prompt=prompt,
+            prompt_meta=prompt_meta,
             lock_claim=_runtime_lock,
         )
-        if not handoff.get("ok"):
-            return handoff
-
-        # Late binding: until here the adapter could only be the import-time default.
-        self.adapter = self._adapter_for(project_root)
-        # `or` rather than a dict default: the route always carries both keys, and a null
-        # value means "this provider has none" — not "fall back to another provider's".
-        self.adapter.command = route.get("provider_command") or getattr(
-            self.adapter, "command", None
-        )
-        self.adapter.agent = route.get("provider_agent") or getattr(
-            self.adapter, "agent", None
-        )
-        # Plain assignment, no `or` chain: None here means "send no effort flag", and
-        # inheriting the adapter's import-time value would make a config that cleared
-        # `effort` keep sending the one it just removed.
-        self.adapter.effort = route.get("effort")
-        self.adapter.timeout_seconds = route.get(
-            "timeout_seconds", getattr(self.adapter, "timeout_seconds", 0)
-        )
-        self.adapter.no_timeout = (
-            self.adapter.timeout_seconds is None or self.adapter.timeout_seconds <= 0
-        )
-        if route.get("bootstrap_timeout_seconds") is not None:
-            self.adapter.bootstrap_timeout_seconds = route["bootstrap_timeout_seconds"]
-        if route.get("poll_interval_seconds") is not None:
-            self.adapter.poll_interval = route["poll_interval_seconds"]
-        # Only the adapter's poll loop can emit liveness while opencode blocks.
-        self.adapter.on_progress = on_progress
-
-        adapter_session = dict(session)
-        adapter_session["session_id"] = session_id
-
-        def persist_new_session(provider_session_id: str) -> None:
-            adapter_session["provider_session_id"] = provider_session_id
-            session["provider_session_id"] = provider_session_id
-            if effective_session_manager is not None:
-                effective_session_manager.update_provider_session_id(
-                    session, provider_session_id
-                )
-
-        session_callback_bound = False
-        try:
-            if hasattr(self.adapter, "on_session_created"):
-                session_callback_bound = True
-                self.adapter.on_session_created = persist_new_session
-        except Exception:
-            session_callback_bound = False
-        try:
-            self.adapter.last_call_meta = {}
-        except Exception:
-            pass
-        continuation_meta: dict = {}
-        # Held across the continuation so the reply that failed the contract can be
-        # archived even when the merge discards it.
-        first_reply = ""
-        try:
-            result = self._adapter_run(
-                prompt,
-                adapter_session,
-                route.get("model"),
-                work_dir,
-            )
-            result, _ = _sanitize_result(result)
-            self._snapshot_invocation(prompt, result)
-
-            # One bounded continuation. A reply that never reached its contract is not the
-            # same failure as a refusal or a dead call: the session is alive and holding the
-            # work, so asking for the missing block costs one call and saves the whole read.
-            # Strictly once — a second agent that cannot produce the contract twice will not
-            # produce it on the tenth try, and a loop here would spend quota discovering that.
-            gap = _contract_gap(normalized_command, route.get("role"), result)
-            if gap:
-                first_reply = result.get("content") or ""
-                continuation_meta = {
-                    "continuation_reason": gap["reason"],
-                    "continuation_missing": gap["missing"],
-                    "continuation_attempts": 0,
-                    "continuation_recovered": False,
-                }
-                # Without a captured provider session the follow-up would open a NEW thread,
-                # which has none of the work and would simply answer from nothing.
-                if adapter_session.get("provider_session_id"):
-                    continuation_meta["continuation_attempts"] = 1
-                    continuation_text = _continuation_prompt(normalized_command, gap)
-                    retry = self._adapter_run(
-                        continuation_text,
-                        adapter_session,
-                        route.get("model"),
-                        work_dir,
-                    )
-                    retry, _ = _sanitize_result(retry)
-                    # Snapshotted whether or not the retry is kept. A follow-up that failed
-                    # the contract still spent its tokens, and a stream that only records
-                    # the attempts that worked reports the cheap half of the bill.
-                    self._snapshot_invocation(continuation_text, retry)
-                    if retry.get("ok"):
-                        merged = {
-                            **retry,
-                            "content": _merge_continuation(
-                                result.get("content"), retry.get("content")
-                            ),
-                        }
-                        # Prefer the merge: it carries both halves. Fall back to the
-                        # follow-up alone only if the join itself reads as damaged, so a
-                        # malformed first reply can never block a recovery that worked.
-                        for candidate, joined in ((merged, True), (retry, False)):
-                            if _contract_gap(
-                                normalized_command, route.get("role"), candidate
-                            ):
-                                continue
-                            continuation_meta["continuation_recovered"] = True
-                            continuation_meta["continuation_first_reply_chars"] = len(
-                                result.get("content") or ""
-                            )
-                            continuation_meta["continuation_merged"] = joined
-                            result = candidate
-                            break
-                else:
-                    continuation_meta["continuation_skipped"] = (
-                        "no provider_session_id captured — a follow-up would start an "
-                        "empty thread instead of continuing this one"
-                    )
-        finally:
-            self.adapter.on_progress = None
-            if session_callback_bound:
-                try:
-                    self.adapter.on_session_created = None
-                except Exception:
-                    pass
-            # Archive exit, duration, kill, and stderr metadata for failure diagnosis,
-            # plus minimal cost telemetry. Char counts are exact; token counts are
-            # rough len/4 estimates and are labelled token_source=estimated so they are
-            # never confused with provider-reported actuals (those would land in
-            # actual_input_tokens/actual_output_tokens with token_source=provider).
-            _result = locals().get("result")
-            _content = _result.get("content") if isinstance(_result, dict) else None
-            _prompt_chars = len(prompt)
-            _resp_chars = len(_content) if isinstance(_content, str) else None
-            _adapter_meta = getattr(self.adapter, "last_call_meta", None) or {}
-            if not self._reached_a_provider(_adapter_meta) and self._call_metas:
-                # The LAST invocation reached no provider — a continuation refused before
-                # Popen is the case — but an earlier one did, and its numbers are the only
-                # measurement this command has. Reading the cleared attribute here would
-                # write `token_source: estimated` over a call that was actually counted,
-                # which is a silent downgrade: the row still looks like a row.
-                _adapter_meta = self._call_metas[-1].get("adapter_meta") or {}
-            adapter_meta, meta_redactions = redact_value(
-                _without_raw_args(_adapter_meta)
-            )
-            if not isinstance(adapter_meta, dict):
-                adapter_meta = {}
-            call_meta = {
-                "command": normalized_command,
-                "role": route.get("role"),
-                "model": route.get("model"),
-                "timeout_seconds": self.adapter.timeout_seconds,
-                "prompt_chars": _prompt_chars,
-                "response_chars": _resp_chars,
-                "estimated_input_tokens": _prompt_chars // 4,
-                "estimated_output_tokens": (
-                    _resp_chars // 4 if _resp_chars is not None else None
-                ),
-                "token_source": "estimated",
-                **self._config_provenance(project_root),
-                **prompt_meta,
-                **adapter_meta,
-                **continuation_meta,
-            }
-            call_meta, persisted_meta_redactions = redact_value(call_meta)
-            _attach_redactions(
-                call_meta, [*meta_redactions, *persisted_meta_redactions]
-            )
-            call_meta["prompt_id"] = handoff.get("meta", {}).get("prompt_id")
-            # Applied after the literal above, not inside it: `**adapter_meta` merges the
-            # adapter's own keys last, so a token_source written earlier would be decided
-            # by merge order rather than by what was actually measured.
-            _apply_provider_usage(call_meta, adapter_meta.get("provider_usage"))
-            # Same reason, and the field usage rows were missing entirely: the route knows
-            # which provider was picked, but nothing carried the name down, so every row
-            # in the stream said `provider: null`. That is readable while one provider is
-            # measured and the rest are not — a report can then show both `provider` and
-            # `estimated` in `token_source` without being able to say which provider is
-            # which half.
-            call_meta["provider"] = route.get("provider")
-            call_meta["provider_command"] = route.get("provider_command")
-            self._last_call_meta = call_meta
-            # `_call_metas` deliberately keeps the RAW snapshots here. Expansion happens
-            # once, in `_record_usage`; expanding into the same attribute would feed the
-            # expansion its own output on the second pass and blank every count in it.
-            write_call_meta(
-                project_root,
-                handoff.get("meta", {}).get("prompt_id"),
-                session_id,
-                call_meta,
-            )
-
-        if continuation_meta:
-            # Rides out on the result too, not just the archived call meta: whether an
-            # answer arrived first-try or needed a nudge changes how much to trust it.
-            result.setdefault("meta", {}).update(continuation_meta)
-
-        write_response_snapshot(
-            project_root,
-            result.get("content") or "",
-            prompt_id=handoff.get("meta", {}).get("prompt_id"),
-            session_id=session_id,
-        )
-        # Written whenever a continuation was needed, not only when it discarded the first
-        # reply: a merged result no longer shows where the seam was, and the failing half is
-        # what a later diagnosis has to read.
-        write_first_reply(
-            project_root,
-            first_reply,
-            prompt_id=handoff.get("meta", {}).get("prompt_id"),
-            session_id=session_id,
-        )
-
-        provider_session_id = result.get("meta", {}).get(
-            "provider_session_id"
-        ) or adapter_session.get("provider_session_id") or session.get(
-            "provider_session_id"
-        )
-        if (
-            result.get("ok")
-            and provider_session_id
-            and not session.get("provider_session_id")
-        ):
-            session["provider_session_id"] = provider_session_id
-            if effective_session_manager is not None:
-                effective_session_manager.update_provider_session_id(
-                    session, provider_session_id
-                )
-
-        redactions = (result.get("meta") or {}).get("redactions")
-        self._audit_redactions(
-            project_root, session_id, normalized_command, redactions or []
-        )
-
         if not result.get("ok"):
-            return self._record_failed_call(
-                result, project_root, normalized_command, task, session_id
-            )
-
-        # Verify sits in the `verification` role alongside init/doctor/submit, which have no
-        # second_agent reply to judge — hence the command check rather than a role check.
-        # Without this, a menu or a refusal returned for /.verify skipped the guard entirely
-        # and arrived as ok:true with an `incomplete` verdict, which reads as work done badly
-        # rather than as a proxy that never answered.
-        verify_meta = result.get("meta") or {}
-        if (
-            normalized_command == "verify"
-            and verify_meta.get("mode") != "quick"
-            and "quick_verify" not in verify_meta
-            and "[verification]" not in (result.get("content") or "").lower()
-        ):
-            attempted = continuation_meta.get("continuation_attempts")
-            detail = (
-                "second_agent returned no [VERIFICATION] block (menu/refusal/question), "
-                "not a verification"
-            )
-            if attempted:
-                detail += "; a continuation in the same session was requested and still returned none"
-            elif continuation_meta.get("continuation_skipped"):
-                detail += (
-                    f"; no continuation was possible ({continuation_meta['continuation_skipped']})"
-                )
-            # Recorded despite the adapter having succeeded: the provider ran, the tokens
-            # are spent, and it is this guard rather than the provider that judged the
-            # reply unusable. A row omitted here bills nothing for the most wasteful
-            # outcome there is — a full call whose answer is thrown away.
-            return self._record_failed_call(
-                make_error(
-                    "invalid_evidence",
-                    detail,
-                    next_action="STOP. Warn user [PROXY GAGAL]. Do NOT auto-fallback. Ask user: retry or /.local? (yes/no).",
-                    meta=verify_meta,
-                    raw_preview=(result.get("content") or "")[:240],
-                ),
-                project_root,
-                normalized_command,
-                task,
-                session_id,
-            )
-
-        if route["role"] in ("exploration", "reasoning"):
-            body = (result.get("content") or "").lower()
-            if not any(m in body for m in _EVIDENCE_MARKERS):
-                # Only reachable once the continuation above has already been tried and
-                # failed (or was impossible for want of a session to continue). The detail
-                # matters to the user: "it would not answer" and "it was never asked twice"
-                # call for different next steps.
-                attempted = continuation_meta.get("continuation_attempts")
-                detail = (
-                    "second_agent returned non-evidence output (menu/refusal/question), "
-                    "not analysis"
-                )
-                if attempted:
-                    detail += "; a continuation in the same session was requested and still returned none"
-                elif continuation_meta.get("continuation_skipped"):
-                    detail += (
-                        f"; no continuation was possible ({continuation_meta['continuation_skipped']})"
-                    )
-                return self._record_failed_call(
-                    make_error(
-                        "invalid_evidence",
-                        detail,
-                        next_action="STOP. Warn user [PROXY GAGAL]. Do NOT auto-fallback. Ask user: retry or /.local? (yes/no).",
-                        meta=result.get("meta", {}),
-                        raw_preview=(result.get("content") or "")[:240],
-                    ),
-                    project_root,
-                    normalized_command,
-                    task,
-                    session_id,
-                )
+            return result
+        prompt_id = (self._last_call_meta or {}).get("prompt_id")
 
         digest = extract_digest(result.get("content") or "")
         if digest is not None:
@@ -1322,7 +1451,6 @@ class Executor:
             # Index the immutable per-run copy; response.last.md is mutable and cannot
             # identify which delegated response an evidence row certifies.
             try:
-                prompt_id = handoff.get("meta", {}).get("prompt_id")
                 if not prompt_id:
                     raise ValueError("prompt_id missing; immutable artifact unavailable")
                 artifact_path = (

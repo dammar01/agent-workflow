@@ -298,6 +298,16 @@ def run_doctor(
             "(unknown key or wrong type — silently ignored)"
         )
 
+    # /.verify-browser readiness, metadata only and never an issue: the browser and the
+    # app URL are checked by each run's preflight against the URL that run was given, and
+    # a project that never opens a browser has nothing to fix here.
+    from core.evidence.e2e.preflight import readiness as e2e_readiness
+
+    e2e = e2e_readiness()
+    checks["e2e_readiness"] = e2e
+    if e2e["fix"]:
+        recommended_fixes.append(e2e["fix"])
+
     # Version drift: the workspace still works, but its generated scripts and config
     # defaults are the previous build's. Reported as its own status rather than as an
     # issue — calling a working workspace NOT_READY would block flows over staleness.

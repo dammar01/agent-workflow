@@ -362,24 +362,68 @@ def _install_provider_config(
         _record("merge" if saved else "create", dest, key, saved, pre_sha256)
 
 
-def _install_deps(plan: Plan, apply: bool) -> None:
-    requirements = REPO_ROOT / "requirements.txt"
-    if not requirements.exists():
-        return
+E2E_REQUIREMENTS = "requirements-e2e.txt"
+E2E_BROWSER = "chromium"
+
+
+def _pip_install(plan: Plan, apply: bool, requirements: Path, empty_detail: str) -> str:
+    """One `pip install -r`. Returns "empty", "planned", "installed", or "failed"."""
     body = [
         line.strip()
         for line in requirements.read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.strip().startswith("#")
     ]
     if not body:
-        plan.add("skip", "pip install", "no runtime dependencies declared")
-        return
+        plan.add("skip", "pip install", empty_detail)
+        return "empty"
     plan.add("run", f"pip install -r {requirements}", f"{len(body)} package(s)")
+    if not apply:
+        return "planned"
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-r", str(requirements)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        plan.warn(f"pip install failed: {result.stderr.strip()[-300:]}")
+        return "failed"
+    return "installed"
+
+
+def _install_deps(plan: Plan, apply: bool, with_e2e: bool = False) -> None:
+    requirements = REPO_ROOT / "requirements.txt"
+    if requirements.exists():
+        _pip_install(plan, apply, requirements, "no runtime dependencies declared")
+    if with_e2e:
+        _install_e2e_deps(plan, apply)
+
+
+def _install_e2e_deps(plan: Plan, apply: bool) -> None:
+    """--with-e2e: the optional Playwright package, then the browser it drives.
+
+    Opt-in because only /.verify-browser uses it and the browser is a large download; the
+    runtime itself stays stdlib-only. The browser step runs through the same interpreter
+    pip installed into, so `playwright` resolves to the package just installed.
+    """
+    requirements = REPO_ROOT / E2E_REQUIREMENTS
+    if not requirements.exists():
+        plan.warn(f"--with-e2e: {E2E_REQUIREMENTS} is missing from this checkout; nothing installed")
+        return
+    outcome = _pip_install(plan, apply, requirements, f"{E2E_REQUIREMENTS} declares no packages")
+    if outcome in ("empty", "failed"):
+        plan.warn(f"--with-e2e: {E2E_BROWSER} download skipped because the playwright package is not installed")
+        return
+    plan.add(
+        "run",
+        f"python -m playwright install {E2E_BROWSER}",
+        "browser for /.verify-browser (large download, needs network)",
+    )
     if apply:
         result = subprocess.run(
-            [sys.executable, "-m", "pip", "install", "-r", str(requirements)],
+            [sys.executable, "-m", "playwright", "install", E2E_BROWSER],
             capture_output=True,
             text=True,
         )
         if result.returncode != 0:
-            plan.warn(f"pip install failed: {result.stderr.strip()[-300:]}")
+            detail = (result.stderr or result.stdout or "").strip()[-300:]
+            plan.warn(f"playwright install {E2E_BROWSER} failed: {detail}")

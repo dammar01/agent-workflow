@@ -96,6 +96,60 @@ not_verified:
 confidence: high - all requested checks ran
 """
 
+E2E_SPEC = """[EVIDENCE]
+confidence: high
+
+entry_points:
+- src/pages/Login.tsx:12
+
+grounded:
+- login posts to /api/login and redirects to /dashboard [src/routes/auth.ts:40]
+
+assumptions:
+- none
+
+scope_covered:
+- src/pages, src/routes
+
+scope_not_covered:
+- none
+
+uncertainties:
+- none
+
+[E2E SPEC]
+claims:
+- id: login-valid-user | severity: blocking | description: valid login opens dashboard | source_refs: src/pages/Login.tsx:12
+
+existing_tests:
+- none
+
+coverage_gap:
+- login-valid-user
+
+scenario_json:
+```json
+{"version": 1, "feature": "login",
+ "claims": [{"id": "login-valid-user", "severity": "blocking", "description": "valid login opens dashboard"}],
+ "steps": [
+   {"action": "goto", "url": "/login"},
+   {"action": "fill", "selector": {"role": "textbox", "name": "Email"}, "selector_provenance": {"type": "source"}, "value": "${E2E_USER}"},
+   {"action": "click", "selector": {"role": "button", "name": "Masuk"}, "selector_provenance": {"type": "source"}},
+   {"action": "expect_url", "contains": "/dashboard", "claim_id": "login-valid-user"}
+ ]}
+```
+
+spec_uncertainties:
+- none
+
+[DIGEST]
+summary: one blocking claim, no existing coverage.
+key_findings:
+- login redirect must be proven at runtime
+risk_level: medium
+confidence: high
+"""
+
 VERIFY_FAIL = """[VERIFICATION]
 verdict: DONE
 blocking_findings:
@@ -147,7 +201,7 @@ class SimAdapter:
                 },
             }
         command = None
-        for token in ("explore", "plan", "analyze", "verify"):
+        for token in ("explore", "plan", "analyze", "e2e_spec", "verify"):
             if f"[COMMAND] {token}" in prompt or f"command: {token}" in prompt.lower():
                 command = token
                 break
@@ -771,6 +825,96 @@ def simulate():
                     path.unlink()
                 except OSError:
                     pass
+
+        # --- S22 verify-browser: draft, confirmed run, fake player, canonical verdict ---
+        # The draft answers on the internal `e2e_spec` route with a spec, the run's review
+        # on `verify` with a clean review; the player is the shipped fake. Same entry
+        # point as every other flow (`main.run`), so the lock, the finaliser, and the exit
+        # code are the real ones. Settings travel in the session's request file only.
+        from core.evidence.e2e.request import request_path
+
+        # The file E2E_SPEC cites: grounding refuses a spec whose references do not exist.
+        login_source = project / "src" / "pages" / "Login.tsx"
+        login_source.parent.mkdir(parents=True, exist_ok=True)
+        login_source.write_text("\n".join(f"export const line{n} = {n};" for n in range(1, 21)) + "\n", encoding="utf-8")
+        adapter.body_for["e2e_spec"] = E2E_SPEC
+        adapter.body_for["verify"] = VERIFY_PASS
+        adapter.default_body = VERIFY_PASS
+        saved_env = {k: os.environ.get(k) for k in ("WORKFLOW_E2E_FAKE", "E2E_USER")}
+
+        def write_request(session, body):
+            path = request_path(project, session)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"version": 1, "settings": {}, **body}), encoding="utf-8")
+
+        def browser_flow(session):
+            write_request(session, {"phase": "draft"})
+            draft = main.run("verify-browser", "prove the login change", session, work_dir)
+            info = draft.get("meta", {}).get("e2e", {}).get("draft") or {}
+            if info.get("status") != "ready":
+                return draft, draft
+            write_request(session, {"phase": "run", "scenario": info["scenario"], "existing_tests": info["existing_tests"]})
+            return draft, main.run("verify-browser", "prove the login change", session, work_dir)
+
+        def exit_code(result):
+            command, _ = main._browser_exit_commands("verify-browser", result, "explore")
+            return main._verify_exit_code(command, result)
+
+        try:
+            os.environ["WORKFLOW_E2E_FAKE"] = "pass"
+            os.environ["E2E_USER"] = "sim-user"
+            before_calls = len(adapter.calls)
+            draft, e2e_pass = browser_flow("e2e-pass-session")
+            stage_cmds = [c.get("command") for c in e2e_pass.get("meta", {}).get("e2e", {}).get("stages", [])]
+            record(
+                "S22",
+                "verify-browser pass: draft spec, confirmed run, fake player, hybrid review",
+                "draft ready (exit 0), run stages request/player/verify, 2 provider calls, verdict pass, exit 0",
+                f"draft={draft.get('meta', {}).get('e2e', {}).get('draft', {}).get('status')}/exit={exit_code(draft)}, "
+                f"stages={stage_cmds}, new_calls={len(adapter.calls) - before_calls}, "
+                f"verdict={e2e_pass.get('meta', {}).get('verdict')}, exit={exit_code(e2e_pass)}",
+                draft.get("meta", {}).get("phase") == "draft"
+                and exit_code(draft) == 0
+                and e2e_pass.get("meta", {}).get("invocation") == "verify-browser"
+                and stage_cmds == [None, None, "verify"]
+                and len(adapter.calls) - before_calls == 2
+                and e2e_pass.get("meta", {}).get("verdict") == "pass"
+                and exit_code(e2e_pass) == 0,
+            )
+
+            os.environ["WORKFLOW_E2E_FAKE"] = "app_fail"
+            _, e2e_fail = browser_flow("e2e-fail-session")
+            record(
+                "S22b",
+                "verify-browser app failure outranks a clean review",
+                "verdict fail, NEEDS FIX, exit 2, reviewer override recorded",
+                f"verdict={e2e_fail.get('meta', {}).get('verdict')}, exit={exit_code(e2e_fail)}, "
+                f"overridden={any(w.get('kind') == 'reviewer_verdict_overridden' for w in e2e_fail.get('meta', {}).get('contract_warnings', []))}",
+                e2e_fail.get("meta", {}).get("verdict") == "fail"
+                and "verdict: NEEDS FIX" in (e2e_fail.get("content") or "")
+                and exit_code(e2e_fail) == 2,
+            )
+
+            os.environ["WORKFLOW_E2E_FAKE"] = "harness_fail"
+            before_calls = len(adapter.calls)
+            _, e2e_inc = browser_flow("e2e-inc-session")
+            record(
+                "S22c",
+                "verify-browser harness failure is incomplete and skips the reviewer",
+                "verdict incomplete, 1 provider call (draft spec only), reason named",
+                f"verdict={e2e_inc.get('meta', {}).get('verdict')}, new_calls={len(adapter.calls) - before_calls}, "
+                f"reason={e2e_inc.get('meta', {}).get('e2e', {}).get('reason')}",
+                e2e_inc.get("meta", {}).get("verdict") == "incomplete"
+                and len(adapter.calls) - before_calls == 1,
+            )
+        finally:
+            for key, value in saved_env.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            adapter.default_body = EVIDENCE
+            adapter.body_for.clear()
 
     finally:
         main.subprocess.Popen = original_popen

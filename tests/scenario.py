@@ -63,10 +63,22 @@ from tests.checks.continuation import (
     _test_contract_continuation,
     _test_continuation_prompt_is_bounded,
 )
+from tests.checks.cli import _test_cli_script_reaches_its_exit_code
 from tests.checks.contracts import _test_workflow_contracts
+from tests.checks.e2e_browser import _test_e2e_browser_session
+from tests.checks.e2e_doctor import _test_e2e_doctor_readiness
+from tests.checks.e2e_existing_tests import _test_e2e_existing_tests
+from tests.checks.e2e_metrics import _test_e2e_metrics
+from tests.checks.e2e_normalize import _test_e2e_classification_and_verdicts
+from tests.checks.e2e_redact import _test_e2e_redaction_variants
+from tests.checks.e2e_smoke import _test_e2e_real_browser_smoke
+from tests.checks.e2e_routing import _test_e2e_routing
+from tests.checks.e2e_spec import _test_e2e_spec_contract
+from tests.checks.e2e_supervisor import _test_e2e_supervisor
 from tests.checks.installer import (
     _test_installer_check_reports_second_agent_default,
     _test_installer_drift_check,
+    _test_installer_e2e_deps_are_opt_in,
     _test_installer_rollback_receipt,
     _test_installer_seed_is_non_interactive_without_a_tty,
     _test_installer_seed_prompt_answers,
@@ -1096,6 +1108,17 @@ confidence: high — all requested checks ran
         _test_quick_verify_gaps()
         _test_verification_routing()
         _test_empty_section_is_not_a_finding()
+        _test_cli_script_reaches_its_exit_code()
+        _test_e2e_spec_contract()
+        _test_e2e_classification_and_verdicts()
+        _test_e2e_supervisor()
+        _test_e2e_routing()
+        _test_e2e_browser_session()
+        _test_e2e_redaction_variants()
+        _test_e2e_doctor_readiness()
+        _test_e2e_existing_tests()
+        _test_e2e_metrics()
+        _test_e2e_real_browser_smoke()
         _test_submit_admission()
         _test_workspace_release_guards()
         _test_project_session_isolation()
@@ -1113,6 +1136,7 @@ confidence: high — all requested checks ran
         _test_installer_seed_prompt_answers()
         _test_installer_seed_reports_unenforced_provider()
         _test_installer_check_reports_second_agent_default()
+        _test_installer_e2e_deps_are_opt_in()
         _test_runtime_is_stdlib_only()
         _test_telemetry_metrics()
         _test_usage_token_accounting()

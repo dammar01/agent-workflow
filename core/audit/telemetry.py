@@ -245,6 +245,123 @@ def test_pass_rate(project_root) -> dict:
     }
 
 
+E2E_RUN_KINDS = ("project", "smoke", "fake")
+
+
+def _rate(numerator: int, denominator: int) -> float | None:
+    return round(numerator / denominator, 3) if denominator else None
+
+
+def _e2e_summary(runs: list[dict], usage_by_prompt: dict[str, list[UsageRecord]]) -> dict:
+    """Plan §24 over one run kind. Every rate carries the count it was taken over."""
+    total = len(runs)
+    verdicts = {v: sum(1 for r in runs if r.get("verdict") == v) for v in ("pass", "fail", "incomplete")}
+    reasons: dict[str, int] = {}
+    for run in runs:
+        if run.get("verdict") == "incomplete":
+            key = run.get("reason") or "unspecified"
+            reasons[key] = reasons.get(key, 0) + 1
+    claims = sum((run.get("claims") or {}).get("total") or 0 for run in runs)
+    browser_runs = sum(run.get("browser_runs") or 0 for run in runs)
+    screenshots = sum((run.get("artifacts") or {}).get("screenshots") or 0 for run in runs)
+    sent = sum(run.get("screenshots_sent_to_model") or 0 for run in runs)
+
+    tokens: list[float] = []
+    unmeasured = 0
+    for run in runs:
+        joined = [row for pid in run.get("provider_prompt_ids") or [] for row in usage_by_prompt.get(pid, [])]
+        if joined:
+            tokens.append(float(sum(billable_input(row) + billable_output(row) for row in joined)))
+        elif run.get("provider_calls"):
+            unmeasured += 1  # it called a provider, but the usage rows are gone or unjoined
+        else:
+            tokens.append(0.0)  # spec_path or replay, no reviewer: genuinely free
+    durations = [float(run["duration_seconds"]) for run in runs if isinstance(run.get("duration_seconds"), (int, float))]
+
+    # Reproducibility: the same scenario run more than once should reach the same browser
+    # verdict. Only scenarios that were actually repeated are a denominator.
+    by_scenario: dict[str, list] = {}
+    for run in runs:
+        if run.get("scenario_hash"):
+            by_scenario.setdefault(run["scenario_hash"], []).append(run.get("browser_verdict"))
+    repeated = [set(v) for v in by_scenario.values() if len(v) > 1]
+    stable = sum(1 for verdict_set in repeated if len(verdict_set) == 1)
+
+    harness_runs = sum(1 for run in runs if (run.get("failure_origins") or {}).get("harness"))
+    unknown_runs = sum(1 for run in runs if (run.get("failure_origins") or {}).get("unknown"))
+    return {
+        "runs": total,
+        "verdicts": verdicts,
+        "incomplete_rate": _rate(verdicts["incomplete"], total),
+        "incomplete_by_reason": dict(sorted(reasons.items())),
+        # False failures need a human judgement per failed run; what the stream can say is
+        # how often the harness, or nobody, was to blame. Those are the candidates.
+        "harness_failure_rate": _rate(harness_runs, total),
+        "unknown_origin_rate": _rate(unknown_runs, total),
+        "claims": claims,
+        "browser_runs_per_claim": _rate(browser_runs, claims),
+        "probes_per_run": _mean([float(run.get("probes") or 0) for run in runs]),
+        "screenshots_kept": screenshots,
+        "screenshot_analysis_rate": _rate(sent, screenshots),
+        "tokens_per_run": {
+            "mean": _mean(tokens),
+            "median": _median(tokens),
+            "measured_runs": len(tokens),
+            "unmeasured_runs": unmeasured,
+        },
+        "duration_seconds": {"mean": _mean(durations), "median": _median(durations)},
+        "reproducibility": {"repeated_scenarios": len(repeated), "stable": stable, "rate": _rate(stable, len(repeated))},
+        "replayed_runs": sum(1 for run in runs if run.get("replay_used")),
+        "existing_test_runs": sum(1 for run in runs if run.get("existing_tests")),
+    }
+
+
+def e2e_metrics(project_root, rows: list[UsageRecord] | None = None) -> dict:
+    """/.verify-browser runs from the quality stream, split by run kind before anything is
+    aggregated.
+
+    A fake-player run proves the pipeline and a smoke run proves the browser; only a
+    project run says anything about value. Pooling them would let the test suite's own
+    runs pass for evidence that e2e verification works on real changes.
+
+    The baseline is delegated verification in the same workspace: `verify` usage rows that
+    belong to no e2e run. There is no visual-browser-loop baseline to compare against
+    here, and the report says so instead of inventing one (plan acceptance #13).
+    """
+    rows = load_usage(project_root) if rows is None else rows
+    runs = [row for row in load_quality(project_root) if row.get("kind") == "e2e_run"]
+    usage_by_prompt: dict[str, list[UsageRecord]] = {}
+    for row in rows:
+        if row.prompt_id:
+            usage_by_prompt.setdefault(row.prompt_id, []).append(row)
+    e2e_prompts = {pid for run in runs for pid in run.get("provider_prompt_ids") or []}
+    summary = {kind: _e2e_summary([r for r in runs if r.get("run_kind") == kind], usage_by_prompt) for kind in E2E_RUN_KINDS}
+
+    baseline = _work_groups([row for row in rows if row.command == "verify" and row.prompt_id not in e2e_prompts])
+    baseline_tokens = [float(sum(billable_input(r) + billable_output(r) for r in group)) for group in baseline]
+    baseline_durations = [
+        float(sum(r.duration_seconds for r in group if r.duration_seconds is not None))
+        for group in baseline
+        if any(r.duration_seconds is not None for r in group)
+    ]
+    project_tokens = summary["project"]["tokens_per_run"]["mean"]
+    baseline_mean = _mean(baseline_tokens)
+    return {
+        "runs": len(runs),
+        "by_run_kind": summary,
+        "delegated_verify_baseline": {
+            "verifications": len(baseline),
+            "tokens_per_verification": {"mean": baseline_mean, "median": _median(baseline_tokens)},
+            "duration_seconds": {"mean": _mean(baseline_durations), "median": _median(baseline_durations)},
+        },
+        "project_vs_baseline_token_ratio": (
+            round(project_tokens / baseline_mean, 2) if project_tokens is not None and baseline_mean else None
+        ),
+        "visual_browser_loop_baseline": None,
+        "labels": sorted({run["label"] for run in runs if run.get("label")}),
+    }
+
+
 def _work_groups(rows) -> list[list]:
     """Rows gathered into the pieces of work they belong to.
 
@@ -339,4 +456,5 @@ def report(project_root) -> dict:
         "rework": rework(rows),
         "security": security_pass_rate(rows),
         "tests": test_pass_rate(project_root),
+        "e2e": e2e_metrics(project_root, rows),
     }

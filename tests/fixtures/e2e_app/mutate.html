@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Items</title></head>
+<body>
+  <h1 data-testid="items">Items</h1>
+  <!-- A real form POST: the smoke server counts every write it receives. -->
+  <form method="post" action="/items/delete">
+    <input type="hidden" name="id" value="7">
+    <button type="submit">Delete item</button>
+  </form>
+</body>
+</html>

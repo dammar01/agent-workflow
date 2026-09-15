@@ -161,7 +161,7 @@ _CHANGED_FILES_MAX = 25
 
 # The two routes whose prompt carries the working tree. Named once so the probe pass and
 # the send pass cannot disagree about whether the block is there.
-_CHANGED_FILES_COMMANDS = frozenset({"verify", "sweep"})
+_CHANGED_FILES_COMMANDS = frozenset({"verify", "sweep", "e2e_spec"})
 
 
 def _changed_files_block(project_root: str | None) -> list[str]:
@@ -273,6 +273,7 @@ def build_prompt(
     declared_tools: list | None = None,
     meta_sink: dict | None = None,
     transport: dict | None = None,
+    e2e_evidence: str | None = None,
     _changed_block: list[str] | None = None,
 ) -> str:
     if role not in VALID_ROLES:
@@ -303,6 +304,7 @@ def build_prompt(
             has_knowledge=has_knowledge,
             subagent_fanout=subagent_fanout,
             declared_tools=declared_tools,
+            e2e_evidence=e2e_evidence,
             _changed_block=changed_block,
         )
         cap, cap_info = _transport_cap(transport, probe, task)
@@ -346,10 +348,12 @@ def build_prompt(
         return "\n".join(
             [
                 *header,
+                *changed_block,
                 *sidecar_block,
                 "[CONSTRAINTS — full evidence protocol in AGENTS.md; anchors only here]",
                 "- read-only evidence; grounded claims need file:line; unproven numbers/deps → `assumptions`; DB/MCP findings → `external`",
                 "- you are the PRIMARY worker: do the exploration yourself, trace reverse deps into `dependents`, state `scope_covered` vs `scope_not_covered`",
+                *(_e2e_spec_constraints() if command == "e2e_spec" else []),
                 "",
                 "[TASK]",
                 task,
@@ -362,6 +366,7 @@ def build_prompt(
                     if role == ROLE_EXPLORATION
                     else _reasoning_format()
                 ),
+                *(["", *_e2e_spec_format()] if command == "e2e_spec" else []),
                 *(
                     [
                         "",
@@ -384,6 +389,7 @@ def build_prompt(
                 *header,
                 *changed_block,
                 *sidecar_block,
+                *(_e2e_evidence_block(e2e_evidence) if e2e_evidence else []),
                 "[CONSTRAINTS — severity definitions in AGENTS.md 'Verify Routing'; the routing table itself is inline below]",
                 "- report only: no file writes, no user questions (main_agent's domain)",
                 "- verify ONLY the changed files above and their consumers (blast radius); no scope expansion",
@@ -391,6 +397,13 @@ def build_prompt(
                 "- ROUTE BY TAGS, never by severity alone: introduced|regression + critical|high => blocking_findings; unknown + critical|high => blocking_findings (fail closed, until evidence moves it off `unknown`); pre_existing + critical|high => escalations; introduced|regression + out_of_scope + medium|low => escalations; everything else => notes",
                 "- EVIDENCE = file:line OR non-code ref (db:/mcp:/runtime:/cmd:); no ref + no concrete failing scenario => NOT critical/high",
                 "- `checks_run` = what you actually ran/read; an unrun check is never a pass",
+                *(
+                    [
+                        "- [E2E EVIDENCE] above is runtime fact from a local browser run, not a claim to re-verify: judge whether its claims cover the change, whether a `pass` rests on assertions strong enough to catch the regression, and give each app-origin failure a temporal `origin` from the code and git scope; keep `app|harness|unknown` out of the `origin` tag",
+                    ]
+                    if e2e_evidence
+                    else []
+                ),
                 "",
                 "[TASK]",
                 task,
@@ -481,6 +494,49 @@ def _exploration_format() -> list[str]:
         "uncertainties:",
         "- <list>",
     ]
+
+
+def _e2e_spec_constraints() -> list[str]:
+    return [
+        "- this is stage 1 of a browser verification: derive what the change must PROVE at runtime, not how the code reads",
+        "- every claim needs source_refs (`path:line` or `req:<id>`) in the prose line AND the JSON claim; a step without an assertion proves nothing",
+        "- prefer the project's own E2E tests when they cover a claim; a claim covered by a listed existing test may skip scenario steps, but the run proves it only if the project runs that test — when unsure, assert it in steps too",
+        "- selectors: role+name > label > data-testid > stable text > css; tag each with provenance (source|existing_test|heuristic); alternatives go in selector_candidates, strongest first",
+        "- navigation: relative paths under base_url; an absolute URL must share base_url's origin or it is refused",
+        "- a step that creates, modifies or deletes data declares side_effect, test_environment_required: true and cleanup; it is refused unless the user enabled side effects, so prefer read-only flows",
+        "- credentials only as ${ENV_NAME} placeholders; never a literal value, never a production URL",
+        "- allowed actions: goto, click, fill, select, press, wait_dom, expect_dom, expect_url, expect_title, probe — nothing else",
+    ]
+
+
+def _e2e_spec_format() -> list[str]:
+    return [
+        "[E2E SPEC]",
+        "claims:",
+        "- id: <kebab-id> | severity: <blocking|non_blocking> | description: <behaviour to prove> | source_refs: <file:line, ...>",
+        "",
+        "existing_tests:",
+        "- path: <test file> | covers: <claim ids> | confidence: <low|medium|high> | none",
+        "",
+        "coverage_gap:",
+        "- <claim ids not covered by existing tests> | none",
+        "",
+        "scenario_json:",
+        "```json",
+        '{"version": 1, "feature": "<name>", "claims": [{"id": "...", "severity": "blocking", "description": "...", "source_refs": ["src/...:12"]}],',
+        ' "steps": [{"action": "goto", "url": "/..."},',
+        '  {"action": "click", "selector_candidates": [{"selector": {"role": "button", "name": "..."}, "selector_provenance": {"type": "source"}},',
+        '   {"selector": {"testid": "..."}, "selector_provenance": {"type": "source"}}]},',
+        '  {"action": "expect_url", "contains": "/...", "claim_id": "..."}]}',
+        "```",
+        "",
+        "spec_uncertainties:",
+        "- <selector or flow you could not ground> | none",
+    ]
+
+
+def _e2e_evidence_block(evidence: str) -> list[str]:
+    return [*evidence.rstrip("\n").splitlines(), ""]
 
 
 def _verification_format() -> list[str]:

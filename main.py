@@ -8,6 +8,7 @@ import sys
 import subprocess  # noqa: F401
 from pathlib import Path
 
+from config.routing import INTERNAL_COMMANDS
 from core.evidence.contract import make_error
 from core.provider.executor import Executor
 from core.jobs.job_manager import JobManager
@@ -40,7 +41,7 @@ SESSION_MANAGER = SessionManager()
 _DEFAULT_SESSION_MANAGER = SESSION_MANAGER
 EXECUTOR = Executor(session_manager=SESSION_MANAGER)
 JOB_MANAGER = JobManager()
-BACKGROUND_COMMANDS = {"explore", "plan", "analyze", "verify"}
+BACKGROUND_COMMANDS = {"explore", "plan", "analyze", "verify", "verify-browser"}
 
 # Split out in v3.4.3. Re-exported so every existing caller of `main.<name>`
 # keeps working; the singletons above stay here because this is the entry point.
@@ -238,6 +239,16 @@ def run(
     require_provider_session: bool = False,
 ) -> dict:
     normalized_command = command.strip().lower()
+    if normalized_command in INTERNAL_COMMANDS:
+        # An internal route reached by name is a caller that skipped the stage that owns
+        # it. Refused here, not in the executor: the executor is exactly where the owning
+        # stage calls it from.
+        return make_error(
+            "routing_error",
+            f"'{normalized_command}' is an internal stage, not a command",
+            next_action="Use a supported command (explore/plan/analyze/verify/sweep).",
+            meta={"command": normalized_command},
+        )
     project_root = detect_project_root(work_dir)
 
     if normalized_command == "init":
@@ -370,7 +381,12 @@ def run(
             workflow_session_id=session_id,
             _runtime_lock=lock_claim,
         )
-        output = _finalize_verify_result(normalized_command, output)
+        finalize_as = normalized_command
+        if normalized_command == "verify-browser":
+            # A browser run ends in the canonical [VERIFICATION] and is judged as one
+            # (meta.command == "verify"); a draft is not a verification at all.
+            finalize_as = str((output.get("meta") or {}).get("command") or normalized_command)
+        output = _finalize_verify_result(finalize_as, output)
         try:
             provider_sessions.record_run(session, command)
         except (OSError, ValueError) as exc:
@@ -484,6 +500,21 @@ def _inspect(project_root, session_id: str | None = None) -> dict:
     }
 
 
+# Defined above the `__main__` block on purpose: that block runs top to bottom when the
+# file is executed as a script, so a helper placed after it does not exist yet when called.
+def _browser_exit_commands(command: str, result: dict, job_command: str) -> tuple[str, str]:
+    """verify-browser exits like verify once it ran a scenario; a draft exits like any
+    non-verify command. Decided by the result's meta.command, which the runner sets."""
+    via_job = command in {"await", "result"}
+    if (job_command if via_job else command) != "verify-browser":
+        return command, job_command
+    payload = result
+    if command == "result" and isinstance(result, dict) and isinstance(result.get("output"), dict):
+        payload = result["output"]
+    meta = (payload.get("meta") or {}) if isinstance(payload, dict) else {}
+    mapped = "verify" if meta.get("command") == "verify" else "verify-browser"
+    return (command, mapped) if via_job else (mapped, job_command)
+
 
 if __name__ == "__main__":
     import argparse
@@ -502,6 +533,7 @@ if __name__ == "__main__":
             "plan",
             "analyze",
             "verify",
+            "verify-browser",
             "sweep",
             "clean",
             "inspect",
@@ -549,7 +581,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--job-command",
         default="explore",
-        choices=["explore", "plan", "analyze", "verify"],
+        choices=["explore", "plan", "analyze", "verify", "verify-browser"],
         help="workflow command to execute asynchronously via submit",
     )
     parser.add_argument(
@@ -582,7 +614,7 @@ if __name__ == "__main__":
         except OSError as exc:
             raise SystemExit(f"cannot read prompt file: {exc}")
     if (
-        args.command in {"explore", "plan", "analyze", "verify", "submit", "await"}
+        args.command in {"explore", "plan", "analyze", "verify", "verify-browser", "submit", "await"}
         and not prompt
     ):
         raise SystemExit("--prompt or --prompt-file is required for this command")
@@ -674,4 +706,5 @@ if __name__ == "__main__":
             exit_job_command = str(stored_job.get("command") or exit_job_command)
     result = _slim_result(result)
     print(json.dumps(result, indent=2) if args.pretty else json.dumps(result))
-    raise SystemExit(_verify_exit_code(args.command, result, exit_job_command))
+    exit_command, exit_job_command = _browser_exit_commands(args.command, result, exit_job_command)
+    raise SystemExit(_verify_exit_code(exit_command, result, exit_job_command))

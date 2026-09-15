@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Third party</title></head>
+<body>
+  <h1 data-testid="greeting">Hello</h1>
+  <!-- {{THIRD_PARTY}} is a second local origin: its widget throws and its beacon answers 503. -->
+  <script src="{{THIRD_PARTY}}/widget.js"></script>
+  <script>
+    fetch("{{THIRD_PARTY}}/beacon", {mode: "no-cors"}).catch(() => null).finally(() => {
+      const done = document.createElement("p");
+      done.dataset.testid = "beacon-done";
+      done.textContent = "beacon sent";
+      document.body.appendChild(done);
+    });
+  </script>
+</body>
+</html>

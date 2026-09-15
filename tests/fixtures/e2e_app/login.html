@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Login</title></head>
+<body>
+  <h1>Masuk</h1>
+  <form onsubmit="return false">
+    <label>Email <input name="email" type="email"></label>
+    <label>Password <input name="password" type="password"></label>
+    <button type="button" id="submit">Masuk</button>
+  </form>
+  <script>
+    // Echoes the typed address into the next URL on purpose: the smoke suite proves the
+    // resolved value never reaches an artifact in raw or URL-encoded form.
+    document.getElementById("submit").addEventListener("click", () => {
+      const email = document.querySelector("input[name=email]").value;
+      location.href = "/dashboard.html?u=" + encodeURIComponent(email);
+    });
+  </script>
+</body>
+</html>

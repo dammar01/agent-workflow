@@ -40,7 +40,7 @@ def _build_run_scripts(project_root: Path, main_py: str) -> list[tuple[Path, str
         '[string]$Task="",'
         "[string]$Session=$env:MAIN_SESSION_ID)\n"
         'if (-not $Session) { $Session = "default" }\n'
-        "$bg = @('explore','plan','analyze','verify')\n"
+        "$bg = @('explore','plan','analyze','verify','verify-browser')\n"
         # session=default on a DELEGATED command is not a warning-shaped problem: two main
         # agents on one project silently share a lock, state and logs, and each overwrites
         # the other's evidence. This used to print to stderr and proceed — but the caller
@@ -84,14 +84,14 @@ def _build_run_scripts(project_root: Path, main_py: str) -> list[tuple[Path, str
         # Same refusal as the PowerShell branch, same reasoning: a shared default session
         # is fatal for delegated commands and harmless for local ones.
         'if [ "$SESSION" = "default" ] && [ -z "${AI_PROXY_ALLOW_DEFAULT_SESSION:-}" ]; then\n'
-        '  case " explore plan analyze verify " in\n'
+        '  case " explore plan analyze verify verify-browser " in\n'
         '    *" $COMMAND "*)\n'
         '      echo "[workflow] ERROR: session=default on delegated command \'$COMMAND\'. Concurrent main agents on this project would share one lock, state and log directory and overwrite each other. Pass MAIN_SESSION_ID as argument 3 (the value from the [SESSION BINDING] block). To override deliberately: set AI_PROXY_ALLOW_DEFAULT_SESSION=1." >&2\n'
         "      exit 2 ;;\n"
         "  esac\n"
         "fi\n"
         f'[ "${{#TASK}}" -gt {DEFAULT_MAX_TASK_CHARS} ] && echo "[workflow] WARN: task is ${{#TASK}} chars > {DEFAULT_MAX_TASK_CHARS}-char cap; it may be truncated (exact cap depends on the provider transport). Shorten the instruction rather than pre-splitting." >&2\n'
-        'case " explore plan analyze verify " in\n'
+        'case " explore plan analyze verify verify-browser " in\n'
         '  *" $COMMAND "*)\n'
         # Pre-flight gate: clear the marker before dispatching (delegation satisfies the gate).
         f'    MK="{root}/.workflow/sessions/$SESSION/runtime/delegated.marker"\n'

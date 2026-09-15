@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "6cbc1cd6f9dac6d22e2e4f4a9086644a968eb7d4851f2854ba6766fd21968257",
-      "bytes": 24324,
+      "sha256": "ca040b5ec14619c7f54bc8cec5847501fcd8aa3ac671e92c844e34d6bfbb3a21",
+      "bytes": 25022,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -135,6 +135,13 @@
       "path": "claude/skills/upgrade.md",
       "sha256": "4d2c3f6732e44ade864642107ef99b147b03e7b53b01393b6219cf9ad749d490",
       "bytes": 1021,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "claude/skills/verify-browser.md",
+      "sha256": "374b73aaeeca92db9e832c797266914de899cad084884fb8fdc996ce8a86ed6f",
+      "bytes": 7465,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -268,6 +275,13 @@
       "path": "claude/commands/.upgrade.md",
       "sha256": "f84c74137387cf9f135035b0a64df1d67577b33c5fd62d12c7319bd08d6e5ea1",
       "bytes": 168,
+      "merge": "replace",
+      "component": "prompt_bundle"
+    },
+    {
+      "path": "claude/commands/.verify-browser.md",
+      "sha256": "18e55dd8d558987449525ed5b45d1d20046560f9d14acfbd0a7fc99c60da4b3e",
+      "bytes": 182,
       "merge": "replace",
       "component": "prompt_bundle"
     },

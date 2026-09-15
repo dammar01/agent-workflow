@@ -92,6 +92,7 @@ Panggil: .workflow/run.ps1 (Windows) | .workflow/run.sh (mac/linux) <command> "<
 - Recovery worker mati lagi → runtime balas `worker_died` + `meta.reason=recovery_exhausted`, melepas lock. STOP auto-recovery; laporkan interupsi atau jalankan clean run dari task asli sebagai invocation baru. `continue` polos dan loop re-run dilarang.
 - .workflow/run script hilang → /.init (bootstrap $AGENT_PATH).
 - /.verify kedalaman dari `commands.verify_mode` (delegated|syntax). syntax → runtime balas [QUICK VERIFY] (check parse lokal, nol test, nol second_agent). Relay apa adanya + sebut batas: parse OK ≠ behavior terbukti. verdict jujur: `pass` cuma bila nol fail DAN nol file tak-tercek; file unsupported/hilang/malformed → `incomplete` (BUKAN pass); CLI exit nonzero saat verdict≠pass — jangan klaim lolos dari `ok:true` saja. not_checked/skipped bukan pass. `commands.auto_verify_after_execute` atur apakah /.execute panggil verify sendiri — false → status `implemented`, `verification: not_run`, DILARANG bilang done.
+- /.verify-browser = LOCAL, terpisah dari /.verify (tanpa config). Wawancara user → draft spec (second_agent) → user konfirmasi → browser Playwright → review second_agent → [VERIFICATION] canonical. Semua setting per-run di request session; credential HANYA nama key `.workflow/e2e/secrets.env`, nilai DILARANG lewat chat. Detail: skill verify-browser.
 
 ### Proxy failure (HARD GATE — JANGAN auto-fallback)
 Proxy dianggap GAGAL jika: ok:false | error_type=invalid_evidence/empty_output/session_capture_failed | content bukan evidence (menu/pertanyaan/refusal, tak ada [EVIDENCE]/[DIGEST]).
@@ -104,7 +105,7 @@ Saat gagal → WAJIB:
 Auto-fallback ke local tanpa tanya user = DILARANG.
 
 ### Command registry
-LOCAL:     /.execute -y /.init /.upgrade /.doctor /.sweep /.refactor /.commit /.review /.compress /.memory /.caveman /.local /.provider /.promote /.help
+LOCAL:     /.execute -y /.init /.upgrade /.doctor /.sweep /.refactor /.commit /.review /.compress /.memory /.caveman /.local /.provider /.promote /.verify-browser /.help
 DELEGATED: /.explore /.plan /.analyze /.verify
 Definisi lengkap tiap skill = file standalone `~/.claude/skills/<name>.md` (dibuka saat "/.name" dipanggil). CLAUDE.md ini SENGAJA cuma orchestrator + registry — body skill TIDAK di-embed di sini (hemat token/turn; single source di skills/).
 <!-- AUTO-INTENT:START -->
@@ -131,6 +132,11 @@ NL map (auto-fire, lihat Intent detection). Cocokkan ke TRIGGER, bukan ke topik 
   verify   ← cek hasil | bener gak | test dong | sudah jalan belum | udah bener | pastikan
              | validasi | cek lagi
              INTI: sesuatu SUDAH dikerjakan, minta pembuktian. Kata lampau = sinyal kuat.
+
+  verify-browser ← test di browser | cek di browser | uji ui | playwright | e2e browser
+             | coba klik di browser | tes alur login di browser
+             INTI: pembuktian lewat browser sungguhan. Wawancara + konfirmasi dulu —
+             JANGAN auto-jalankan browser; skill yang bertanya sebelum run.
 
   sweep    ← dampak | impact | apa yg kena | diff | apa aja yang berubah | blast radius
              INTI: apa yang tersentuh oleh perubahan yang SUDAH ada di working tree.

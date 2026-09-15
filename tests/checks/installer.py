@@ -13,9 +13,12 @@ rather than the process environment, so nothing here can touch the real ~/.claud
 import contextlib
 import io
 import json
+import re
 import shutil
+import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 from installer import rollback as rollback_mod
 from installer import settings as settings_mod
@@ -680,6 +683,78 @@ def _test_installer_seed_reports_unenforced_provider() -> None:
             any("OPT_IN" in warning for warning in plan.warnings),
             "the missing opt-in must be named while the choice is being made",
         )
+
+
+def _test_installer_e2e_deps_are_opt_in() -> None:
+    """--with-e2e installs the Playwright extra then its browser; without it, nothing runs.
+
+    `subprocess` is replaced on the settings module only, so no pip or browser download can
+    happen whatever the assertions decide.
+    """
+    shipped = settings_mod.REPO_ROOT / "requirements-e2e.txt"
+    body = [line for line in shipped.read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#")]
+    assert_true(
+        len(body) == 1 and re.match(r"^playwright==\d+\.\d+\.\d+$", body[0]),
+        f"the shipped extra pins exactly one playwright version: {body}",
+    )
+
+    root = Path(tempfile.mkdtemp(prefix="aw-inst-e2e-"))
+    calls: list[list[str]] = []
+    failing: set[str] = set()
+
+    def fake_run(argv, **_kwargs):
+        calls.append(list(argv))
+        code = 1 if any(tool in argv for tool in failing) else 0
+        return SimpleNamespace(returncode=code, stdout="", stderr="simulated failure" if code else "")
+
+    original_root, original_subprocess = settings_mod.REPO_ROOT, settings_mod.subprocess
+    settings_mod.REPO_ROOT = root
+    settings_mod.subprocess = SimpleNamespace(run=fake_run)
+    requirements = root / "requirements-e2e.txt"
+    pip = [sys.executable, "-m", "pip", "install", "-r", str(requirements)]
+    browser = [sys.executable, "-m", "playwright", "install", "chromium"]
+    try:
+        requirements.write_text("playwright==1.60.0\n", encoding="utf-8")
+
+        plan = Plan()
+        settings_mod._install_deps(plan, True)
+        assert_true(calls == [] and plan.actions == [], f"no flag, no extra: {calls} {plan.actions}")
+
+        plan = Plan()
+        settings_mod._install_deps(plan, False, True)
+        targets = [target for verb, target, _ in plan.actions if verb == "run"]
+        assert_true(calls == [], "a dry run executes nothing")
+        assert_true(
+            len(targets) == 2 and "requirements-e2e.txt" in targets[0] and targets[1].endswith("playwright install chromium"),
+            f"a dry run plans pip, then the browser: {targets}",
+        )
+
+        plan = Plan()
+        settings_mod._install_deps(plan, True, True)
+        assert_true(calls == [pip, browser] and not plan.warnings, f"apply runs pip then the browser, same interpreter: {calls}")
+
+        calls.clear()
+        failing = {"pip"}
+        plan = Plan()
+        settings_mod._install_deps(plan, True, True)
+        assert_true(calls == [pip], f"a failed pip install skips the browser download: {calls}")
+        assert_true(any("download skipped" in w for w in plan.warnings), f"and says so: {plan.warnings}")
+
+        calls.clear()
+        failing = {"playwright"}
+        plan = Plan()
+        settings_mod._install_deps(plan, True, True)
+        assert_true(calls == [pip, browser] and any("playwright install chromium failed" in w for w in plan.warnings), "a failed browser install is a warning")
+
+        calls.clear()
+        requirements.unlink()
+        plan = Plan()
+        settings_mod._install_deps(plan, True, True)
+        assert_true(calls == [] and any("missing" in w for w in plan.warnings), "a checkout without the file installs nothing and warns")
+    finally:
+        settings_mod.REPO_ROOT = original_root
+        settings_mod.subprocess = original_subprocess
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def _test_installer_check_reports_second_agent_default() -> None:

@@ -47,7 +47,18 @@ from tests.checks.continuation import (  # noqa: E402
     _test_contract_continuation,
     _test_continuation_prompt_is_bounded,
 )
+from tests.checks.cli import _test_cli_script_reaches_its_exit_code  # noqa: E402
 from tests.checks.contracts import _test_workflow_contracts  # noqa: E402
+from tests.checks.e2e_browser import _test_e2e_browser_session  # noqa: E402
+from tests.checks.e2e_doctor import _test_e2e_doctor_readiness  # noqa: E402
+from tests.checks.e2e_existing_tests import _test_e2e_existing_tests  # noqa: E402
+from tests.checks.e2e_metrics import _test_e2e_metrics  # noqa: E402
+from tests.checks.e2e_normalize import _test_e2e_classification_and_verdicts  # noqa: E402
+from tests.checks.e2e_redact import _test_e2e_redaction_variants  # noqa: E402
+from tests.checks.e2e_smoke import _test_e2e_real_browser_smoke  # noqa: E402
+from tests.checks.e2e_routing import _test_e2e_routing  # noqa: E402
+from tests.checks.e2e_spec import _test_e2e_spec_contract  # noqa: E402
+from tests.checks.e2e_supervisor import _test_e2e_supervisor  # noqa: E402
 from tests.checks.deps import _test_runtime_is_stdlib_only  # noqa: E402
 from tests.checks.governance import _test_governance_controls  # noqa: E402
 from tests.checks.graph_verification import _test_graph_verification  # noqa: E402
@@ -62,6 +73,7 @@ from tests.checks.facts import (  # noqa: E402
 from tests.checks.installer import (  # noqa: E402
     _test_installer_check_reports_second_agent_default,
     _test_installer_drift_check,
+    _test_installer_e2e_deps_are_opt_in,
     _test_installer_rollback_receipt,
     _test_installer_seed_is_non_interactive_without_a_tty,
     _test_installer_seed_prompt_answers,
@@ -103,6 +115,7 @@ SUITES: dict[str, tuple] = {
     "provider-seam": (_test_provider_seam, "adapter registry and provider resolution"),
     "provider-selection": (_test_provider_selection, "interactive provider/model/effort write"),
     "agy": (_test_agy_provider, "agy parsing, argv, and its read-boundary guard"),
+    "cli": (_test_cli_script_reaches_its_exit_code, "main.py run as a script prints JSON and exits through its exit-code mapping"),
     "messages": (_test_no_code_in_messages, "AST scan: no code leaks into user-facing text"),
     "facts-concurrency": (_test_facts_concurrency, "fact store under concurrent writers"),
     "anchor-relocation": (_test_anchor_relocation, "facts survive a line moving"),
@@ -112,6 +125,16 @@ SUITES: dict[str, tuple] = {
     "verify-gaps": (_test_quick_verify_gaps, "quick verify reports gaps as incomplete"),
     "verify-routing": (_test_verification_routing, "the routing table decides what blocks, both ways"),
     "verify-empty-section": (_test_empty_section_is_not_a_finding, "an empty section holds nothing, not the next heading"),
+    "e2e-spec": (_test_e2e_spec_contract, "[E2E SPEC] parses, validates, and knows when only the section is missing"),
+    "e2e-normalize": (_test_e2e_classification_and_verdicts, "app/harness/unknown origins and the fail-closed verdict matrix"),
+    "e2e-supervisor": (_test_e2e_supervisor, "the player child process: protocol, idle/total timeouts, tree kill"),
+    "e2e-routing": (_test_e2e_routing, "verify-browser: draft then confirmed run under one lock, request and secrets.env only, /.verify back to delegated|syntax"),
+    "e2e-browser": (_test_e2e_browser_session, "the real player's step semantics, origin guard, and observers against a stand-in page"),
+    "e2e-redact": (_test_e2e_redaction_variants, "resolved ${ENV} values scrubbed raw, URL-encoded, and escaped, in events and text artifacts"),
+    "e2e-smoke": (_test_e2e_real_browser_smoke, "real Chromium against the fixture app through the full runner (opt-in: WORKFLOW_E2E_SMOKE=1)"),
+    "e2e-existing-tests": (_test_e2e_existing_tests, "the project's own tests: user command and allowlist only, no shell, bounded, scrubbed, not trusted blindly"),
+    "e2e-metrics": (_test_e2e_metrics, "e2e runs as quality rows: rates per run kind, token join, reproducibility, delegated baseline"),
+    "e2e-doctor": (_test_e2e_doctor_readiness, "doctor reports verify-browser readiness from package metadata and probes nothing"),
     "jobs": (_test_submit_admission, "job admission, capacity, and lock"),
     "workspace-release": (_test_workspace_release_guards, "lock release guards"),
     "session-isolation": (_test_project_session_isolation, "one project's session cannot read another's"),
@@ -144,6 +167,7 @@ SUITES: dict[str, tuple] = {
     "installer-seed-prompt": (_test_installer_seed_prompt_answers, "every answer the provider/model picker accepts"),
     "installer-seed-optin": (_test_installer_seed_reports_unenforced_provider, "an unenforced provider names its opt-in variable"),
     "installer-seed-state": (_test_installer_check_reports_second_agent_default, "--check describes the seed without calling it drift"),
+    "installer-e2e": (_test_installer_e2e_deps_are_opt_in, "--with-e2e installs the Playwright extra and its browser; nothing without it"),
     "audit": (_test_audit_report, "the governance trail reads back and keeps a null provider visible"),
     "audit-torn": (_test_audit_survives_a_torn_row, "a partial final line does not hide the readable trail"),
     "audit-separate": (_test_audit_is_not_telemetry, "audit and usage stay separate readers over separate files"),

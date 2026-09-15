@@ -368,6 +368,13 @@ def main() -> int:
         "the repo and outlives it. Dry run unless --apply is also given",
     )
     parser.add_argument(
+        "--with-e2e",
+        action="store_true",
+        help="also install the optional browser-verification extra: pip install -r "
+        "requirements-e2e.txt, then python -m playwright install chromium (large download). "
+        "Only needed for /.verify-browser. Dry run unless --apply is also given",
+    )
+    parser.add_argument(
         "--provider",
         choices=sorted(PROVIDER_BUNDLES),
         help="which second agent config/second_agent.json should select, when that file "
@@ -441,7 +448,7 @@ def main() -> int:
         for name in sorted(missing_env):
             plan.warn(f"env value not set (dry run, would block --apply): {name}")
 
-    _install_deps(plan, apply)
+    _install_deps(plan, apply, args.with_e2e)
 
     for source, dest, key in _targets():
         _install_text(

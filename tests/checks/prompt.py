@@ -63,8 +63,27 @@ def _build(role: str, command: str, **kwargs) -> str:
 # added to that check and not to this one is a contract nobody asks for.
 _EVIDENCE_BRANCHES = (
     (ROLE_EXPLORATION, "explore"),
+    (ROLE_EXPLORATION, "e2e_spec"),
     (ROLE_REASONING, "plan"),
     (ROLE_REASONING, "analyze"),
+)
+
+# What the verify-browser runner parses out of an e2e_spec reply, and the policy the
+# scenario validator enforces. A prompt that stops asking for either gets a reply that is
+# refused as spec_invalid, or a scenario the user confirms without knowing why it fails.
+_E2E_SPEC_TOKENS = (
+    "[E2E SPEC]",
+    "scenario_json:",
+    "source_refs",
+    "selector_provenance",
+    "selector_candidates",
+    "base_url's origin",
+    "side_effect",
+    "test_environment_required",
+    "cleanup",
+    "${ENV_NAME}",
+    "allowed actions: goto, click, fill, select, press, wait_dom, expect_dom, expect_url, expect_title, probe",
+    "spec_uncertainties:",
 )
 
 # Branches with their own structured contract, checked by result_shaping rather than by
@@ -120,6 +139,20 @@ def _test_prompt_contract_blocks() -> None:
             f"{label}: no [DIGEST] requested — the executor's continuation path keys on "
             "that marker and would ask for a block it never asked for first",
         )
+
+    # --- e2e_spec asks for the spec block and states the scenario policy -------------
+    spec_prompt = _build(ROLE_EXPLORATION, "e2e_spec")
+    for token in _E2E_SPEC_TOKENS:
+        assert_true(
+            token in spec_prompt,
+            f"e2e_spec prompt lost {token!r} — the runner parses or enforces it, so the "
+            "reply would be refused without the provider ever being told why",
+        )
+    explore_prompt = _build(ROLE_EXPLORATION, "explore")
+    assert_true(
+        "[E2E SPEC]" not in explore_prompt and "side_effect" not in explore_prompt,
+        "the browser-spec contract leaked into plain explore",
+    )
 
     # --- the structured branches carry a digest too ---------------------------------
     for role, command in _STRUCTURED_BRANCHES:
