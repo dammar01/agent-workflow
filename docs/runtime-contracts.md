@@ -65,7 +65,9 @@ watchable headed run; 0..5000, counts against `total_timeout_s`), `nav_timeout_m
 `step_timeout_ms`, `idle_timeout_s`, `total_timeout_s`, `probe_max_elements`,
 `allow_remote`, `allowed_origins`, `allow_side_effects`, `allowed_mutation_paths` (write
 guard exceptions, see below: `/path` on `base_url`'s origin or a full `http(s)://host/path`,
-exact path, no wildcard or query, at most 20), `fail_on_console_error`,
+exact path, no wildcard or query, at most 20), `allowed_read_only_requests` (`"POST /path"`
+or `"POST http(s)://host/path"`, same exactness, at most 20; see below), `secrets_profile`
+(a `secrets.json` profile name; empty = the file's `default`), `fail_on_console_error`,
 `artifact_max_mb`, `existing_test_command` (an argv template run without a shell; `{files}`
 and `{base_url}` expand), `existing_test_allowlist`, `existing_test_timeout_s`. An unknown
 key or a wrong type is `request_invalid`, not a silent fallback. Hybrid review is not a
@@ -76,7 +78,7 @@ setting: it always runs.
 | both | request | — | — | missing or malformed → `incomplete: request_missing | request_invalid` (not recorded) |
 | both | preflight | — | — | `base_url` policy, Playwright, browser, or URL reachability fails → draft `blocked`, run `incomplete` with that reason |
 | draft | 1 | `e2e_spec` (internal route, role exploration; refused by `main.run()` and absent from the CLI) | standard `[EVIDENCE]` … `[DIGEST]` with an `[E2E SPEC]` section inside | a proxy failure (returned as-is); otherwise always — `[E2E DRAFT]` with status `ready` or `invalid` (spec missing after one targeted continuation, refused by policy, ungrounded) |
-| run | spec | the request's `scenario` | — | refused by validation → `incomplete: spec_invalid`; malformed secrets.env → `secrets_invalid`; an unresolved `${ENV}` → `env_missing` |
+| run | spec | the request's `scenario` | — | refused by validation → `incomplete: spec_invalid`; malformed secrets.json, an unknown profile, or several profiles and none selected → `secrets_invalid`; an unresolved `${ENV}` → `env_missing` |
 | run | existing tests | `settings.existing_test_command` over allow-listed files | exit code | never by itself — covered claims become proven (exit 0) or `unknown` (anything else) |
 | run | 2 | local player child process (`python -m core.evidence.e2e.player` → `browser.run_scenario`) | JSONL events (`progress`, `observation`, `artifact`, `harness`, `heartbeat`, `result`) | never by itself — its report decides; skipped when the scenario has no steps |
 | run | 3 | `verify` with an `[E2E EVIDENCE]` block in the prompt | ordinary `[VERIFICATION]` | skipped when the browser could not finish; a failed review is a declared gap, never a softer verdict |
@@ -88,10 +90,24 @@ and writes `draft.json` beside the request for the run to copy. A run's `meta.co
 `verify` with `meta.invocation: verify-browser`, so its verdict, exit code, and acceptance
 metrics are the ones every verification uses.
 
-Credentials: `${NAME}` placeholders resolve from `.workflow/e2e/secrets.env` (`KEY=VALUE`
-lines, `#` comments, optional quotes), then from the process environment. The same values
-reach the existing-test command's environment. A malformed line is reported by number
-only. The resolved values reach the player only inside the scenario on stdin.
+Credentials: `${NAME}` placeholders resolve from one profile of `.workflow/e2e/secrets.json`,
+then from the process environment:
+
+```json
+{"default": "qa", "profiles": {"qa": {"E2E_USER": "...", "E2E_PASS": "..."},
+                               "admin": {"E2E_USER": "...", "E2E_PASS": "..."}}}
+```
+
+The request selects a profile by name (`settings.secrets_profile`); empty means the file's
+`default`, or its only profile. Several profiles with neither is `secrets_invalid`, never a
+guess — trying another account is another run with another name. An empty string is an
+unfilled slot, not an empty credential. When a draft references a name and the file does not
+exist, the draft creates it with an empty slot per name (and says so); an existing file is
+never rewritten. Errors name a profile, a key position, or a JSON line — never a value, and
+never a key that failed validation (a value pasted into the key slot is what that error
+reports). The whole selected profile reaches the existing-test command's environment and is
+scrubbed from its output. The resolved values reach the player only inside the scenario on
+stdin.
 
 `[E2E SPEC]` sections: `claims` (`id | severity | description | source_refs`),
 `existing_tests` (`path | covers | confidence`), `coverage_gap`, `scenario_json` (a
@@ -116,7 +132,18 @@ fenced JSON scenario), `spec_uncertainties`. Validation runs in both phases, bef
   is false it aborts every request whose method is not `GET`, `HEAD` or `OPTIONS`, on any
   origin (an API on another port is still the app's data), unless the request's scheme,
   host, port and exact path match an `allowed_mutation_paths` entry (the query is
-  ignored). A refused write inside a step fails that step as `mutation_blocked` (harness,
+  ignored). A POST that only reads (a search, a GraphQL query) may pass as a confirmed read:
+  stage 1 proposes it under `read_only_requests` (`method | endpoint | source_refs | reason`,
+  the handler's `path:line` required and grounded, `req:` refused, an ungrounded proposal
+  makes the draft `invalid`), the draft lists it, the user confirms, and only an entry the
+  request's `allowed_read_only_requests` names is admitted. A proposal never writes itself
+  into settings. Even then the body is read: a GraphQL `mutation` or `subscription` (JSON,
+  batch, form `query=`, or raw), a persisted query whose operation is only a hash, or a body
+  that cannot be read as text is still refused, with the reason in the step's detail. String
+  literals and comments are blanked before that check; a field literally named `mutation`
+  taking arguments is refused too. Admitted reads become one `read_only_request_allowed`
+  observation per method and origin, with a count — a warning-class record, never an app
+  error. A refused write inside a step fails that step as `mutation_blocked` (harness,
   so the run is `incomplete`), whatever the step saw after it; a refused beacon (`ping`)
   or a write fired outside any step becomes a `mutation_blocked` warning observation.
   Records keep the method and origin only, never path, query or body. The guard is

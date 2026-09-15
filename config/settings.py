@@ -17,16 +17,14 @@ PROVIDER_CONFIG_FILE = BASE_DIR / "config" / "second_agent.json"
 # config.json may override it per project.
 DEFAULT_PROVIDER = os.getenv("AI_PROXY_PROVIDER", "opencode")
 
-TOOL_VERSION = "3.5.3"
+TOOL_VERSION = "3.6.0"
 MAIN_PY = BASE_DIR / "main.py"
 CHECK_PY = BASE_DIR / "check.py"
 
 # Component stamps allow lazy upgrades and may diverge when only one surface changes.
-# v3.5.3 is a runtime-only change (the opencode adapter now asks for the JSON event stream
-# and reads token counts out of it); no LLM-facing contract moved. The stamps still both
-# match TOOL_VERSION because they are what an installed workspace compares against, and
-# holding prompt_bundle back would only tell a workspace it is current when the bundle it
-# has was shipped under a different number.
+# v3.6.0 moves both surfaces: `/.verify-browser` ships a new skill and CLAUDE.md registry
+# entry (prompt_bundle) and a new background command, request file and optional Playwright
+# extra (runtime), so both stamps follow TOOL_VERSION.
 # The stamps no longer gate script regeneration — upgrade compares generated content
 # directly, so a generator change reaches existing workspaces whether or not this bumps.
 #   prompt_bundle : LLM-facing contract shipped to ~/.claude (CLAUDE.md, skills, AGENTS.md)

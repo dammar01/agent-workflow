@@ -10,7 +10,7 @@ Player event protocol (one JSON object per stdout line):
    "claim_id": str|None, "expected": any, "actual": any, "url_after": str|None,
    "duration_ms": int, "error": {"kind": str, "detail": str}|None,
    "selector_provenance": str|None, "page_stable": bool|None}
-  {"type": "observation", "kind": "http_5xx|page_error|console_error|mutation_blocked", "url": str,
+  {"type": "observation", "kind": "http_5xx|page_error|console_error|mutation_blocked|read_only_request_allowed", "url": str,
    "status": int|None, "detail": str, "same_origin": bool, "main_request": bool,
    "enforced": bool}   # console_error only: settings.fail_on_console_error
   {"type": "harness", "reason": str, "detail": str}

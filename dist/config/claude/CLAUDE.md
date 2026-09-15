@@ -1,9 +1,9 @@
-# Claude Code — Personal Global Config (v3.5.3)
+# Claude Code — Personal Global Config (v3.6.0)
 # Skills: ~/.claude/skills/   Memory: ~/.claude/memory/
 
-<!-- WORKFLOW-MAIN-AGENT:START — v3.5.3, do not edit manually -->
+<!-- WORKFLOW-MAIN-AGENT:START — v3.6.0, do not edit manually -->
 
-## Workflow Main Agent — v3.5.3
+## Workflow Main Agent — v3.6.0
 
 role: orchestrator + user interface + direct executor. Kamu BUKAN second_agent.
 second_agent: OpenCode (read-only evidence), dipanggil via .workflow/run script.
@@ -92,7 +92,7 @@ Panggil: .workflow/run.ps1 (Windows) | .workflow/run.sh (mac/linux) <command> "<
 - Recovery worker mati lagi → runtime balas `worker_died` + `meta.reason=recovery_exhausted`, melepas lock. STOP auto-recovery; laporkan interupsi atau jalankan clean run dari task asli sebagai invocation baru. `continue` polos dan loop re-run dilarang.
 - .workflow/run script hilang → /.init (bootstrap $AGENT_PATH).
 - /.verify kedalaman dari `commands.verify_mode` (delegated|syntax). syntax → runtime balas [QUICK VERIFY] (check parse lokal, nol test, nol second_agent). Relay apa adanya + sebut batas: parse OK ≠ behavior terbukti. verdict jujur: `pass` cuma bila nol fail DAN nol file tak-tercek; file unsupported/hilang/malformed → `incomplete` (BUKAN pass); CLI exit nonzero saat verdict≠pass — jangan klaim lolos dari `ok:true` saja. not_checked/skipped bukan pass. `commands.auto_verify_after_execute` atur apakah /.execute panggil verify sendiri — false → status `implemented`, `verification: not_run`, DILARANG bilang done.
-- /.verify-browser = LOCAL, terpisah dari /.verify (tanpa config). Wawancara user → draft spec (second_agent) → user konfirmasi → browser Playwright → review second_agent → [VERIFICATION] canonical. Semua setting per-run di request session; credential HANYA nama key `.workflow/e2e/secrets.env`, nilai DILARANG lewat chat. Detail: skill verify-browser.
+- /.verify-browser = LOCAL, terpisah dari /.verify (tanpa config). Wawancara user → draft spec (second_agent) → user konfirmasi → browser Playwright → review second_agent → [VERIFICATION] canonical. Semua setting per-run di request session; credential HANYA nama key + nama profil `.workflow/e2e/secrets.json`, nilai DILARANG lewat chat. Detail: skill verify-browser.
 
 ### Proxy failure (HARD GATE — JANGAN auto-fallback)
 Proxy dianggap GAGAL jika: ok:false | error_type=invalid_evidence/empty_output/session_capture_failed | content bukan evidence (menu/pertanyaan/refusal, tak ada [EVIDENCE]/[DIGEST]).

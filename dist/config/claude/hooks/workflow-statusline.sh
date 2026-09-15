@@ -25,6 +25,12 @@
 # session whose rows were all provider-counted carries no mark, because nothing in it is
 # a guess.
 #
+# A call that failed before any provider counted it (ok false, no actual_* counts: a rate
+# limit, a refused resume) is shown as "N failed" beside the calls and kept out of both
+# numbers. Its row holds only the prompt's char estimate, which says nothing about what
+# was processed - and folding it in used to put `~` on a session whose every completed
+# call was measured.
+#
 # Input: statusline JSON on stdin. Output: single line on stdout.
 # Never fails the prompt (always exit 0). JSON via python3 (bash 3.2 safe).
 RAW="$(cat)"
@@ -107,6 +113,7 @@ def main():
     # which is not a second call from where the user is sitting.
     seen = set()
     calls = 0
+    failed = 0
     try:
         with open(usage_path, "r", encoding="utf-8") as handle:
             for line in handle:
@@ -121,6 +128,14 @@ def main():
                     continue
 
                 if not main_id or row.get("session_id") != main_id:
+                    continue
+
+                if (
+                    row.get("ok") is False
+                    and not isinstance(row.get("actual_input_tokens"), int)
+                    and not isinstance(row.get("actual_output_tokens"), int)
+                ):
+                    failed += 1
                     continue
 
                 # This session only, like the token count beside it. A project-lifetime
@@ -179,6 +194,8 @@ def main():
     if cached > 0:
         text += " (" + fmt_tok(cached) + " cached)"
     text += " / " + str(calls) + " calls"
+    if failed > 0:
+        text += ", " + str(failed) + " failed"
     segments.append(color("214", text))
     # Rendered at zero too, like the count beside it. A segment that disappears reads as
     # broken rather than as empty, and the bar changing shape between sessions is exactly

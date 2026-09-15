@@ -13,12 +13,14 @@ before anything is stored or prompted.
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from pathlib import Path
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import parse_qs, urljoin, urlsplit
 
 from core.evidence.e2e.preflight import same_origin
+from core.evidence.e2e.request import read_only_request_target
 from core.evidence.e2e.spec import SELECTOR_RANK, navigation_error, selector_rank, step_selectors
 
 HEARTBEAT_EVERY_S = 2.0
@@ -116,6 +118,62 @@ def _mutation_allow_list(config: dict, base_url: str) -> frozenset:
     return frozenset(allowed)
 
 
+def _read_only_allow_list(config: dict, base_url: str) -> frozenset:
+    """(method, scheme, host, port, path) for every settings.allowed_read_only_requests entry."""
+    allowed = set()
+    for entry in config.get("allowed_read_only_requests") or []:
+        parsed = read_only_request_target(entry) if isinstance(entry, str) else None
+        if parsed is None:
+            continue
+        method, target = parsed
+        key = _endpoint(urljoin(base_url, target) if target.startswith("/") else target)
+        if key is not None:
+            allowed.add((method, *key))
+    return frozenset(allowed)
+
+
+# GraphQL serves reads and writes on ONE endpoint, so admitting the endpoint as a read
+# would admit its mutations too. The operation type is read from the body instead: string
+# literals and comments are blanked first so a search term cannot spell `mutation {`.
+# Conservative on purpose — a field literally named `mutation` taking arguments is refused
+# as well, and a refused read costs a retry where an admitted write costs data.
+_GRAPHQL_NOISE = re.compile(r'"""[\s\S]*?"""|"(?:\\.|[^"\\\n])*"|#[^\n]*')
+_GRAPHQL_WRITE = re.compile(r"\b(?:mutation|subscription)\b\s*(?:[_A-Za-z]\w*)?\s*[({@]")
+_GRAPHQL_REFUSAL = "a GraphQL mutation or subscription"
+
+
+def _graphql_write(query: str) -> bool:
+    return bool(_GRAPHQL_WRITE.search(_GRAPHQL_NOISE.sub(" ", query)))
+
+
+def read_only_refusal(body: str | None) -> str | None:
+    """Why a POST to a confirmed read-only endpoint must still be refused, or None.
+
+    Only the GraphQL shapes are inspected: a JSON document (or batch) with `query`, a form
+    or query-string `query=`, or a raw GraphQL body. A persisted query carries a hash where
+    the operation should be, so what it does cannot be read — refused. Any other body is
+    the endpoint's own business, which the user confirmed from the handler reference.
+    """
+    if not body:
+        return None
+    try:
+        data = json.loads(body)
+    except ValueError:
+        queries = parse_qs(body).get("query")
+        candidates = queries if queries else [body]
+        return _GRAPHQL_REFUSAL if any(_graphql_write(query) for query in candidates) else None
+    for document in data if isinstance(data, list) else [data]:
+        if not isinstance(document, dict):
+            continue
+        query = document.get("query")
+        if isinstance(query, str):
+            if _graphql_write(query):
+                return _GRAPHQL_REFUSAL
+        elif isinstance(document.get("extensions"), dict) and "persistedQuery" in document["extensions"]:
+            return "a persisted GraphQL query, whose operation cannot be read"
+    return None
+
+
 def _error_kind(exc: BaseException) -> str:
     """Playwright's own classes are not importable here (tests use a stand-in page), so
     the kind is read from the class name and the network error code in the message."""
@@ -160,9 +218,12 @@ class Session:
         self.blocked: list[str] = []
         self.allow_side_effects = bool(config.get("allow_side_effects"))
         self.mutation_allow = _mutation_allow_list(config, self.base_url)
-        # {method, origin, resource_type, attributed}. Origin only: a path or query can
-        # carry an id or a token, and this list ends up in events.
+        self.read_only_allow = _read_only_allow_list(config, self.base_url)
+        # {method, origin, resource_type, attributed[, refusal]}. Origin only: a path or
+        # query can carry an id or a token, and this list ends up in events.
         self.mutations_blocked: list[dict] = []
+        # {method, origin} of confirmed reads that went through; reported as a count.
+        self.read_only_allowed: list[dict] = []
         self._last_emit = clock()
 
     # ---- wire -----------------------------------------------------------------------
@@ -250,8 +311,10 @@ class Session:
         Then refuse writes. A step's `side_effect` is only what the scenario declares, so
         with allow_side_effects false every non-GET/HEAD/OPTIONS request is aborted, on any
         origin (an API on another port is still the app's data), unless its exact endpoint
-        is in allowed_mutation_paths. Method-only: a GET that mutates, a WebSocket message,
-        or a service worker's own fetch is not seen here."""
+        is in allowed_mutation_paths, or it is a POST to an endpoint the user confirmed as a
+        read (allowed_read_only_requests) whose body is not a GraphQL write. Method-only
+        otherwise: a GET that mutates, a WebSocket message, or a service worker's own fetch
+        is not seen here."""
         url = str(request.url)
         try:
             top_level = bool(request.is_navigation_request()) and request.frame == self.page.main_frame
@@ -262,15 +325,32 @@ class Session:
             route.abort("blockedbyclient")
             return
         method = str(getattr(request, "method", None) or "GET").upper()
-        if not self.allow_side_effects and method not in _SAFE_METHODS and _endpoint(url) not in self.mutation_allow:
-            self.mutations_blocked.append(
-                {
-                    "method": method,
-                    "origin": _origin(url),
-                    "resource_type": str(getattr(request, "resource_type", None) or ""),
-                    "attributed": False,
-                }
-            )
+        if not self.allow_side_effects and method not in _SAFE_METHODS:
+            endpoint = _endpoint(url)
+            if endpoint is not None and endpoint in self.mutation_allow:
+                route.continue_()
+                return
+            refusal = None
+            if endpoint is not None and (method, *endpoint) in self.read_only_allow:
+                try:
+                    body = getattr(request, "post_data", None)
+                except Exception:  # a body Playwright cannot decode as text (multipart upload)
+                    refusal = "a request body that cannot be read as text"
+                else:
+                    refusal = read_only_refusal(body if isinstance(body, str) else None)
+                if refusal is None:
+                    self.read_only_allowed.append({"method": method, "origin": _origin(url)})
+                    route.continue_()
+                    return
+            record = {
+                "method": method,
+                "origin": _origin(url),
+                "resource_type": str(getattr(request, "resource_type", None) or ""),
+                "attributed": False,
+            }
+            if refusal:
+                record["refusal"] = refusal
+            self.mutations_blocked.append(record)
             route.abort("blockedbyclient")
             return
         route.continue_()
@@ -516,10 +596,13 @@ class Session:
                 for mutation in fresh:
                     mutation["attributed"] = True
                 first = fresh[0]
-                outcome = {**outcome, "status": "failed",
-                           "error": {"kind": "mutation_blocked",
-                                     "detail": f"{first['method']} to {first['origin']} blocked: settings.allow_side_effects is false"
-                                               " and the endpoint is not in allowed_mutation_paths"}}
+                if first.get("refusal"):
+                    detail = (f"{first['method']} to {first['origin']} blocked: allowed_read_only_requests covers the endpoint,"
+                              f" but the body is {first['refusal']}")
+                else:
+                    detail = (f"{first['method']} to {first['origin']} blocked: settings.allow_side_effects is false"
+                              " and the endpoint is not in allowed_mutation_paths or allowed_read_only_requests")
+                outcome = {**outcome, "status": "failed", "error": {"kind": "mutation_blocked", "detail": detail}}
             duration_ms = int((self.clock() - started) * 1000)
             url_after = self._page_url()
             artifacts: list[dict] = []
@@ -532,6 +615,28 @@ class Session:
             for artifact in artifacts:
                 self.emit(artifact)
         self.report_unattributed_mutations()
+        self.report_read_only_requests()
+
+    def report_read_only_requests(self) -> None:
+        """Confirmed reads that went past the write guard: one observation per method and
+        origin, with a count. A warning-class record, so the run shows what it let through."""
+        counts: dict[tuple[str, str], int] = {}
+        for item in self.read_only_allowed:
+            key = (item["method"], item["origin"])
+            counts[key] = counts.get(key, 0) + 1
+        self.read_only_allowed = []
+        for (method, origin), count in counts.items():
+            self.emit(
+                {
+                    "type": "observation",
+                    "kind": "read_only_request_allowed",
+                    "url": origin,
+                    "status": None,
+                    "detail": f"{count} {method} request(s) passed as confirmed reads (settings.allowed_read_only_requests)",
+                    "same_origin": self._same(origin),
+                    "main_request": False,
+                }
+            )
 
     def report_unattributed_mutations(self) -> None:
         """Writes refused outside any step's window (beacons, or a request fired after the

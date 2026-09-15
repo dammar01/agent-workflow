@@ -102,9 +102,9 @@ def _pipe_fields(item: str) -> dict[str, str]:
 def parse_spec(content: str) -> dict:
     """Parse stage-1 output. Never raises: shape problems land in `errors`.
 
-    Returns {"present", "claims", "existing_tests", "coverage_gap", "scenario",
-    "uncertainties", "errors"}. `present` false means the section marker itself is
-    missing — the case that earns a targeted continuation rather than a verdict.
+    Returns {"present", "claims", "existing_tests", "coverage_gap", "read_only_requests",
+    "scenario", "uncertainties", "errors"}. `present` false means the section marker itself
+    is missing — the case that earns a targeted continuation rather than a verdict.
     """
     block = spec_block(content)
     out = {
@@ -112,6 +112,7 @@ def parse_spec(content: str) -> dict:
         "claims": [],
         "existing_tests": [],
         "coverage_gap": [],
+        "read_only_requests": [],
         "scenario": None,
         "uncertainties": [],
         "errors": [],
@@ -154,6 +155,18 @@ def parse_spec(content: str) -> dict:
     out["coverage_gap"] = [
         item for item in _section_lines(block, "coverage_gap") if not _NONE.match(item)
     ]
+    for item in _section_lines(block, "read_only_requests"):
+        if _NONE.match(item):
+            continue
+        fields = _pipe_fields(item)
+        out["read_only_requests"].append(
+            {
+                "method": fields.get("method", ""),
+                "endpoint": fields.get("endpoint", ""),
+                "source_refs": [ref.strip() for ref in fields.get("source_refs", "").split(",") if ref.strip()],
+                "reason": fields.get("reason", ""),
+            }
+        )
     out["uncertainties"] = [
         item for item in _section_lines(block, "spec_uncertainties") if not _NONE.match(item)
     ]
@@ -428,26 +441,62 @@ def ground_claims(scenario: object, project_root: Path) -> list[str]:
             ref = str(ref).strip()
             if ref.startswith("req:"):
                 continue
-            match = _REF_PARTS.match(ref)
-            if not match:
-                errors.append(f"claims[{index}]: source_ref '{ref[:80]}' is not `path[:line]`")
-                continue
-            target = (root / match.group("path").replace("\\", "/")).resolve()
-            if not target.is_relative_to(root):
-                errors.append(f"claims[{index}]: source_ref '{ref[:80]}' points outside the project")
-                continue
-            if not target.is_file():
-                errors.append(f"claims[{index}]: source_ref '{ref[:80]}' names no file in the project")
-                continue
-            if match.group("start"):
-                start = int(match.group("start"))
-                end = int(match.group("end") or start)
-                try:
-                    count = len(target.read_bytes().splitlines())
-                except OSError:
-                    count = 0
-                if start < 1 or end < start or end > count:
-                    errors.append(f"claims[{index}]: source_ref '{ref[:80]}' is outside the file ({count} lines)")
+            problem = _file_ref_problem(ref, root)
+            if problem:
+                errors.append(f"claims[{index}]: source_ref '{ref[:80]}' {problem}")
+    return errors
+
+
+def _file_ref_problem(ref: str, root: Path) -> str | None:
+    """Why `path[:line[-line]]` names no real place in the project, or None."""
+    match = _REF_PARTS.match(ref)
+    if not match:
+        return "is not `path[:line]`"
+    target = (root / match.group("path").replace("\\", "/")).resolve()
+    if not target.is_relative_to(root):
+        return "points outside the project"
+    if not target.is_file():
+        return "names no file in the project"
+    if match.group("start"):
+        start = int(match.group("start"))
+        end = int(match.group("end") or start)
+        try:
+            count = len(target.read_bytes().splitlines())
+        except OSError:
+            count = 0
+        if start < 1 or end < start or end > count:
+            return f"is outside the file ({count} lines)"
+    return None
+
+
+def validate_read_only_requests(entries: object, project_root: Path) -> list[str]:
+    """A proposed read-only POST must name an exact endpoint AND the handler that proves it.
+
+    The proposal is second_agent's word about someone else's code, and admitting it lets
+    a request past the write guard. So the reference has to be a real file and line — a
+    `req:` requirement is not accepted here, because a requirement says what a request
+    should do, not what its handler does.
+    """
+    from core.evidence.e2e.request import read_only_request_errors
+
+    if not isinstance(entries, list):
+        return ["read_only_requests: not a list"]
+    root = Path(project_root).resolve()
+    errors: list[str] = []
+    for index, item in enumerate(entries):
+        where = f"read_only_requests[{index}]"
+        if not isinstance(item, dict):
+            errors.append(f"{where}: not an object")
+            continue
+        entry = f"{str(item.get('method') or '').strip()} {str(item.get('endpoint') or '').strip()}"
+        errors += [error.replace("settings.allowed_read_only_requests[0]", where) for error in read_only_request_errors([entry])]
+        refs = [str(ref).strip() for ref in item.get("source_refs") or [] if str(ref).strip()]
+        if not refs:
+            errors.append(f"{where}: source_refs must name the handler (`path:line`) that shows the request writes nothing")
+        for ref in refs:
+            problem = "is a requirement, not the handler's file" if ref.startswith("req:") else _file_ref_problem(ref, root)
+            if problem:
+                errors.append(f"{where}: source_ref '{ref[:80]}' {problem}")
     return errors
 
 
@@ -558,6 +607,9 @@ def spec_continuation_prompt(gap: dict) -> str:
             "",
             "coverage_gap:",
             "- <claim ids not covered by existing tests> | none",
+            "",
+            "read_only_requests:",
+            "- method: POST | endpoint: </path or http(s)://host/path> | source_refs: <handler file:line> | reason: <why it writes nothing> | none",
             "",
             "scenario_json:",
             "```json",

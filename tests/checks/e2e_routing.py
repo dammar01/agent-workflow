@@ -425,27 +425,77 @@ def _test_e2e_routing() -> None:
         os.environ.pop("E2E_USER", None)
         draft, result = _flow(root, _adapter(), "pass")
         assert_true(_draft_info(draft).get("missing_env") == ["E2E_USER"] and "E2E_USER (not set)" in draft["content"], "an unset placeholder is flagged in the draft, not refused")
-        assert_true(result["meta"]["e2e"].get("reason") == "env_missing" and "secrets.env" in result["content"], f"an unset ${{ENV}} is env_missing: {result['meta']['e2e'].get('reason')}")
+        assert_true(result["meta"]["e2e"].get("reason") == "env_missing" and "secrets.json" in result["content"], f"an unset ${{ENV}} is env_missing: {result['meta']['e2e'].get('reason')}")
+        # Nothing used to create the file the user was told to fill. The draft now does.
+        template = json.loads(secrets_path(root).read_text(encoding="utf-8"))
+        assert_true(template == {"default": "default", "profiles": {"default": {"E2E_USER": ""}}}, f"the draft writes an empty slot per referenced name: {template}")
+        assert_true("created now with empty slots" in draft["content"] and draft["meta"]["e2e"]["secrets"].get("template_created") is True, "and says so in the draft")
+        assert_true(_draft(root, _adapter())["meta"]["e2e"]["secrets"].get("template_created") is None, "an existing file is never rewritten")
+        assert_true(_draft_info(_draft(root, _adapter())).get("missing_env") == ["E2E_USER"], "an empty slot is unfilled, not an empty credential")
 
-        # --- secrets.env supplies the value, which never leaves the run ------------------------
+        # --- secrets.json supplies one profile's values, which never leave the run --------------
         root = workspace("e2e-secrets-")
         from_file = "file.operator@internal.example"
+        other = "admin.operator@internal.example"
         target = secrets_path(root)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(f"# test account\nE2E_USER=\"{from_file}\"\n", encoding="utf-8")
+        target.write_text(json.dumps({"default": "qa", "profiles": {"qa": {"E2E_USER": from_file}, "admin": {"E2E_USER": other}}}), encoding="utf-8")
         adapter = _adapter()
         draft, result = _flow(root, adapter, "pass")
-        assert_true(_draft_info(draft).get("missing_env") == [], "a key in secrets.env counts as set")
-        assert_true(result["meta"].get("verdict") == "pass", f"the run resolves from secrets.env: {result['meta']['e2e'].get('reason')}")
-        assert_true(from_file not in json.dumps(result) and all(from_file not in c["prompt"] for c in adapter.calls), "the file's value reaches no prompt and no result")
+        assert_true(_draft_info(draft).get("missing_env") == [], "a key in the default profile counts as set")
+        assert_true(result["meta"].get("verdict") == "pass" and result["meta"]["e2e"]["secrets"].get("profile") == "qa", f"the run resolves from the default profile: {result['meta']['e2e'].get('secrets')}")
+        dumped = json.dumps(result)
+        assert_true(from_file not in dumped and other not in dumped and all(from_file not in c["prompt"] and other not in c["prompt"] for c in adapter.calls), "no profile's value reaches a prompt or the result")
+        _, chosen = _flow(root, _adapter(), "pass", settings={"secrets_profile": "admin"})
+        assert_true(chosen["meta"]["e2e"]["secrets"].get("profile") == "admin" and chosen["meta"].get("verdict") == "pass", f"the request picks another account by name: {chosen['meta']['e2e'].get('secrets')}")
+        absent = _run(root, _adapter(), _scenario(), settings={"secrets_profile": "nobody"})
+        assert_true(absent["meta"]["e2e"].get("reason") == "secrets_invalid" and "no profile 'nobody'" in absent["content"], f"an unknown profile is refused by name: {absent['content'][:400]}")
+        bad_name = settings_from({"secrets_profile": "a b"})[1]
+        assert_true(bad_name and "secrets_profile" in bad_name[0], f"a profile name is validated as a name: {bad_name}")
+
+        # --- read-only POSTs: validated as settings, proposed by the draft, confirmed by the user ----
+        bad_reads = settings_from({"allowed_read_only_requests": ["PUT /api/items", "POST /api/*", "POST"]})[1]
+        assert_true(len(bad_reads) == 3 and all("allowed_read_only_requests" in e for e in bad_reads), f"each malformed read-only entry is named: {bad_reads}")
+        assert_true(
+            settings_from({"allowed_read_only_requests": ["POST /api/search", "POST http://localhost:9000/graphql"]})[1] == [],
+            "a POST to an exact endpoint, on base_url or another origin, validates",
+        )
+        root = workspace("e2e-readonly-")
+        proposal = _SPEC_REPLY.replace(
+            "coverage_gap:\n- login-valid-user\n",
+            "coverage_gap:\n- login-valid-user\n\nread_only_requests:\n- method: POST | endpoint: /api/search | source_refs: src/pages/Login.tsx:3 | reason: the search handler only reads\n",
+        )
+        assert_true(proposal != _SPEC_REPLY, "fixture assumption: coverage_gap is where the replace expects it")
+        draft = _draft(root, _adapter(spec=proposal))
+        info = _draft_info(draft)
+        assert_true(
+            info.get("status") == "ready"
+            and info.get("read_only_requests") == [{"method": "POST", "endpoint": "/api/search", "source_refs": ["src/pages/Login.tsx:3"], "reason": "the search handler only reads"}],
+            f"a grounded proposal reaches the draft: {info.get('status')} {info.get('errors')} {info.get('read_only_requests')}",
+        )
+        assert_true("- POST /api/search | source_refs: src/pages/Login.tsx:3" in draft["content"] and "confirm each" in draft["content"], "and is listed for the user to confirm")
+        request_settings = json.loads(request_path(root, _SESSION_ID).read_text(encoding="utf-8")).get("settings") or {}
+        assert_true("allowed_read_only_requests" not in request_settings, "a proposal never writes itself into the request settings")
+        draft = _draft(root, _adapter(spec=proposal.replace("src/pages/Login.tsx:3 | reason", "src/routes/gone.ts:3 | reason")))
+        assert_true(
+            _draft_info(draft).get("status") == "invalid" and draft["meta"]["e2e"].get("reason") == "spec_invalid"
+            and any(e.startswith("read_only_requests[0]") for e in _draft_info(draft).get("errors") or []),
+            f"an ungrounded proposal makes the draft invalid: {_draft_info(draft).get('errors')}",
+        )
 
         root = workspace("e2e-secrets-bad-")
         target = secrets_path(root)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("E2E_USER=u\nthis line holds hunter2-secret\n", encoding="utf-8")
+        target.write_text(json.dumps({"profiles": {"qa": {"E2E_USER": 12345, "hunter2-secret as key": "x"}}}), encoding="utf-8")
         result = _run(root, _adapter(), _scenario())
-        assert_true(result["meta"]["e2e"].get("reason") == "secrets_invalid" and "secrets.env:2" in result["content"], f"a malformed line is named by number: {result['content'][:400]}")
-        assert_true("hunter2-secret" not in json.dumps(result), "and its content is never echoed")
+        assert_true(result["meta"]["e2e"].get("reason") == "secrets_invalid" and "profiles.qa.E2E_USER: must be a string" in result["content"] and "entry #2" in result["content"], f"a malformed entry is named by location: {result['content'][:400]}")
+        assert_true("hunter2-secret" not in json.dumps(result), "and neither a value nor a mistyped key is ever echoed")
+        target.write_text('{"profiles": {"qa": {"E2E_USER": "hunter2-secret",}}}', encoding="utf-8")
+        result = _run(root, _adapter(), _scenario())
+        assert_true("not valid JSON (line 1)" in result["content"] and "hunter2-secret" not in json.dumps(result), f"broken JSON is named by line only: {result['content'][:400]}")
+        target.write_text(json.dumps({"profiles": {"qa": {"E2E_USER": "a"}, "admin": {"E2E_USER": "b"}}}), encoding="utf-8")
+        result = _run(root, _adapter(), _scenario())
+        assert_true(result["meta"]["e2e"].get("reason") == "secrets_invalid" and "set settings.secrets_profile" in result["content"], "two profiles and no default must be chosen explicitly, never guessed")
 
         # --- request missing, malformed, or for another session -------------------------------
         root = workspace("e2e-norequest-")

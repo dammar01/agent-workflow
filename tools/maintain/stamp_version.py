@@ -95,7 +95,11 @@ EXEMPT: dict[str, tuple[str, ...]] = {
     ),
 }
 
-_SEMVER = re.compile(r"\d+\.\d+\.\d+")
+# Bounded on both sides: no digit or dot before, no further `.digit` or digit after. The
+# unbounded `\d+\.\d+\.\d+` read `127.0.0.1` in a shipped skill as version "127.0.0" and
+# failed `--check`; a lookahead for `.digit` alone still let the last group backtrack, so
+# `10.10.10.10` matched as "10.10.1". An IPv4 address is nobody's version.
+_SEMVER = re.compile(r"(?<![\d.])\d+\.\d+\.\d+(?!\.?\d)")
 
 
 def _restamp(text: str, anchors: tuple[str, ...]) -> tuple[str, int]:

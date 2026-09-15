@@ -16,6 +16,7 @@ from core.evidence.e2e.spec import (
     step_selectors,
     substitute_env,
     validate_existing_tests,
+    validate_read_only_requests,
     validate_scenario,
 )
 from tests.checks.support import assert_true
@@ -58,6 +59,38 @@ def _test_e2e_spec_contract() -> None:
     assert_true(parsed["uncertainties"] == ["password field label is inferred"], "spec_uncertainties are kept for the evidence block")
     assert_true(parsed["scenario"]["steps"][4]["claim_id"] == "login-valid-user", "the JSON scenario is the one the player gets")
     assert_true(validate_scenario(parsed["scenario"]) == [], "the sample scenario validates")
+    assert_true(parsed["read_only_requests"] == [], "no proposal section, no read-only proposals")
+
+    # Read-only POST proposals: parsed from the section, validated as endpoint + handler reference.
+    proposal = _reply(_SCENARIO).replace(
+        "\ncoverage_gap:\n- none\n",
+        "\ncoverage_gap:\n- none\n\nread_only_requests:\n- method: POST | endpoint: http://localhost:8000/api/search | source_refs: src/routes/search.ts:3 | reason: runs a SELECT only\n",
+    )
+    assert_true(proposal != _reply(_SCENARIO), "fixture assumption: coverage_gap is where the replace expects it")
+    proposed = parse_spec(proposal)["read_only_requests"]
+    assert_true(
+        proposed == [{"method": "POST", "endpoint": "http://localhost:8000/api/search", "source_refs": ["src/routes/search.ts:3"], "reason": "runs a SELECT only"}],
+        f"a proposal keeps method, full endpoint, handler reference and reason: {proposed}",
+    )
+    handler_root = Path(tempfile.mkdtemp(prefix="e2e-readonly-spec-"))
+    try:
+        handler = handler_root / "src" / "routes" / "search.ts"
+        handler.parent.mkdir(parents=True)
+        handler.write_text("export async function search(req) {\n  const q = req.body.q;\n  return db.select(q);\n}\n", encoding="utf-8")
+        assert_true(validate_read_only_requests(proposed, handler_root) == [], "a grounded proposal validates")
+        for change, fragment in (
+            ({"method": "PUT"}, "METHOD one of POST"),
+            ({"endpoint": "/api/*"}, "no wildcard"),
+            ({"source_refs": []}, "must name the handler"),
+            ({"source_refs": ["req:SEARCH-1"]}, "is a requirement"),
+            ({"source_refs": ["src/routes/gone.ts:3"]}, "names no file"),
+            ({"source_refs": ["src/routes/search.ts:40"]}, "outside the file"),
+        ):
+            errors = validate_read_only_requests([{**proposed[0], **change}], handler_root)
+            assert_true(errors and all(e.startswith("read_only_requests[0]") for e in errors) and any(fragment in e for e in errors), f"{change} is refused ({fragment}): {errors}")
+        assert_true(validate_read_only_requests("POST /x", handler_root) == ["read_only_requests: not a list"], "a non-list is refused")
+    finally:
+        shutil.rmtree(handler_root, ignore_errors=True)
 
     # Prose claims fill in when the JSON forgot them.
     bare = dict(_SCENARIO, claims=[])

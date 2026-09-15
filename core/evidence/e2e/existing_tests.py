@@ -110,7 +110,8 @@ def run(
             text=True,
             encoding="utf-8",
             errors="replace",
-            # the user's own command runs with the user's own environment, plus secrets.env
+            # the user's own command runs with the user's own environment, plus the selected
+            # secrets.json profile
             env={**os.environ, **(extra_env or {})},
             **hidden_run_kwargs(),
         )

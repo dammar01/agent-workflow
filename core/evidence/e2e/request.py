@@ -11,8 +11,14 @@ the scenario the user confirmed. Nothing is read from config.json: every knob ha
 default below and is overridden per run by `settings`, so two sessions verifying two apps
 on one project never share a setting. Hybrid review is not a knob — it always runs.
 
-Credentials never travel in the request. `${NAME}` placeholders resolve from
-`.workflow/e2e/secrets.env` (KEY=VALUE lines), then from the process environment.
+Credentials never travel in the request. `${NAME}` placeholders resolve from one profile of
+`.workflow/e2e/secrets.json`, then from the process environment:
+
+  {"default": "qa", "profiles": {"qa": {"E2E_USER": "...", "E2E_PASS": "..."},
+                                 "admin": {"E2E_USER": "...", "E2E_PASS": "..."}}}
+
+The request picks a profile by name (`settings.secrets_profile`), never by value, so trying
+another account is another run with another name.
 """
 
 from __future__ import annotations
@@ -26,8 +32,9 @@ from core.workspace.workspace_paths import workflow_paths
 
 REQUEST_VERSION = 1
 PHASES = ("draft", "run")
-SECRETS_FILE = "secrets.env"
-_SECRET_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
+SECRETS_FILE = "secrets.json"
+_PROFILE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_SECRET_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def default_settings() -> dict:
@@ -55,6 +62,14 @@ def default_settings() -> dict:
         # form: "/login" (path on base_url's origin) or "http://host:port/path" (any other
         # origin). Matched on scheme, host, port and exact path; the query is ignored.
         "allowed_mutation_paths": [],
+        # POSTs that only READ (a search, a filter, a GraphQL query), confirmed by the user
+        # from the draft's read_only_requests: "POST /api/search" or "POST http(s)://host/path".
+        # Exact endpoint, like allowed_mutation_paths, but reported as reads rather than
+        # writes, and a GraphQL body that asks for a mutation is still refused.
+        "allowed_read_only_requests": [],
+        # which secrets.json profile fills ${NAME}; empty = the file's `default`, or its only
+        # profile. A name, never a value.
+        "secrets_profile": "",
         "fail_on_console_error": False,
         # size budget for one run's player artifacts (trace, screenshots, HTML); the
         # heaviest class is pruned first.
@@ -105,10 +120,29 @@ def settings_from(overrides: object) -> tuple[dict, list[str]]:
             continue
         settings[key] = value
     errors += mutation_path_errors(settings["allowed_mutation_paths"])
+    errors += read_only_request_errors(settings["allowed_read_only_requests"])
+    if settings["secrets_profile"] and not _PROFILE_NAME.match(settings["secrets_profile"]):
+        errors.append("settings.secrets_profile: a profile name, [A-Za-z0-9_-], at most 64 characters")
     return settings, errors
 
 
 MAX_MUTATION_PATHS = 20
+MAX_READ_ONLY_REQUESTS = 20
+# A read that has to travel as a request body is a POST. PUT/PATCH/DELETE are writes by
+# their own definition, so no entry may name them.
+READ_ONLY_METHODS = ("POST",)
+
+
+def endpoint_error(entry: str) -> str | None:
+    """Why `entry` is not an exact endpoint (`/path` or `http(s)://host/path`), or None."""
+    if any(mark in entry for mark in ("*", "?", "#")) or any(ch.isspace() for ch in entry):
+        return "exact path only, no wildcard, query, fragment or whitespace"
+    if entry.startswith("/"):
+        return "'//' is a scheme-relative URL, write the full http(s) URL" if entry.startswith("//") else None
+    parts = urlsplit(entry)
+    if parts.scheme not in ("http", "https") or not parts.netloc or not parts.path.startswith("/"):
+        return "a path starting with '/' or a full http(s)://host/path URL"
+    return None
 
 
 def mutation_path_errors(entries: list) -> list[str]:
@@ -122,16 +156,38 @@ def mutation_path_errors(entries: list) -> list[str]:
         if not isinstance(entry, str) or not entry.strip():
             errors.append(f"{where}: must be a non-empty string")
             continue
-        if any(mark in entry for mark in ("*", "?", "#")) or any(ch.isspace() for ch in entry):
-            errors.append(f"{where}: exact path only, no wildcard, query, fragment or whitespace")
+        problem = endpoint_error(entry)
+        if problem:
+            errors.append(f"{where}: {problem}")
+    return errors
+
+
+def read_only_request_target(entry: str) -> tuple[str, str] | None:
+    """`"POST /api/search"` -> ("POST", "/api/search"); None when it is not that shape."""
+    method, _, target = entry.strip().partition(" ")
+    target = target.strip()
+    if method not in READ_ONLY_METHODS or not target:
+        return None
+    return method, target
+
+
+def read_only_request_errors(entries: list, where_root: str = "settings.allowed_read_only_requests") -> list[str]:
+    """Shape of read-only request entries: `<METHOD> <exact endpoint>`, METHOD POST."""
+    errors: list[str] = []
+    if len(entries) > MAX_READ_ONLY_REQUESTS:
+        errors.append(f"{where_root}: at most {MAX_READ_ONLY_REQUESTS} entries")
+    for index, entry in enumerate(entries):
+        where = f"{where_root}[{index}]"
+        if not isinstance(entry, str) or not entry.strip():
+            errors.append(f"{where}: must be a non-empty string")
             continue
-        if entry.startswith("/"):
-            if entry.startswith("//"):
-                errors.append(f"{where}: '//' is a scheme-relative URL, write the full http(s) URL")
+        parsed = read_only_request_target(entry)
+        if parsed is None:
+            errors.append(f"{where}: '<METHOD> <path or URL>' with METHOD one of {', '.join(READ_ONLY_METHODS)}")
             continue
-        parts = urlsplit(entry)
-        if parts.scheme not in ("http", "https") or not parts.netloc or not parts.path.startswith("/"):
-            errors.append(f"{where}: a path starting with '/' or a full http(s)://host/path URL")
+        problem = endpoint_error(parsed[1])
+        if problem:
+            errors.append(f"{where}: {problem}")
     return errors
 
 
@@ -175,30 +231,78 @@ def load_request(project_root: Path, session_id: str) -> tuple[dict | None, str 
     )
 
 
-def load_secrets(project_root: Path) -> tuple[dict[str, str], list[str]]:
-    """KEY=VALUE pairs from secrets.env; a missing file is no secrets, not an error.
+def load_secrets(project_root: Path, profile: str = "") -> tuple[dict[str, str], list[str], dict]:
+    """(values of the selected profile, errors, info). A missing file is no secrets, not an error.
 
-    Errors name the line number only — a malformed line may still hold the value.
+    Errors name a location — a profile, a key, a line — and never a value: a malformed
+    entry may still hold the password. An empty string is an unfilled template slot, so it
+    is dropped rather than resolved to an empty credential. `info` carries the path, the
+    profile names and the one selected; values never enter it.
     """
     path = secrets_path(project_root)
+    info: dict = {"file": str(path), "exists": False, "profile": None, "profiles": []}
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return {}, []
+        return {}, [], info
     except OSError as exc:
-        return {}, [f"{SECRETS_FILE}: unreadable ({type(exc).__name__})"]
-    values: dict[str, str] = {}
+        return {}, [f"{SECRETS_FILE}: unreadable ({type(exc).__name__})"], info
+    info["exists"] = True
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        return {}, [f"{SECRETS_FILE}: not valid JSON (line {getattr(exc, 'lineno', '?')})"], info
+    if not isinstance(data, dict) or not isinstance(data.get("profiles"), dict):
+        return {}, [f'{SECRETS_FILE}: expected {{"default": "<profile>", "profiles": {{"<profile>": {{"KEY": "value"}}}}}}'], info
+
+    profiles = data["profiles"]
     errors: list[str] = []
-    for number, line in enumerate(text.splitlines(), 1):
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+    for name, entries in profiles.items():
+        if not _PROFILE_NAME.match(str(name)):
+            errors.append(f"{SECRETS_FILE}: profile #{list(profiles).index(name) + 1}: name must match [A-Za-z0-9_-]")
             continue
-        match = _SECRET_LINE.match(line)
-        if not match:
-            errors.append(f"{SECRETS_FILE}:{number}: not a KEY=VALUE line")
+        if not isinstance(entries, dict):
+            errors.append(f"{SECRETS_FILE}: profiles.{name}: must be an object of KEY: value")
             continue
-        value = match.group(2).strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
-        values[match.group(1)] = value
-    return values, errors
+        for position, (key, value) in enumerate(entries.items(), 1):
+            if not _SECRET_KEY.match(str(key)):
+                # The key itself is not echoed: a value pasted into the key slot is the
+                # mistake this message exists to report.
+                errors.append(f"{SECRETS_FILE}: profiles.{name}: entry #{position}: key must match [A-Za-z_][A-Za-z0-9_]*")
+            elif not isinstance(value, str):
+                errors.append(f"{SECRETS_FILE}: profiles.{name}.{key}: must be a string")
+    info["profiles"] = [str(name) for name in profiles]
+    default = data.get("default")
+    if default is not None and (not isinstance(default, str) or default not in profiles):
+        errors.append(f"{SECRETS_FILE}: default names no profile in profiles")
+    if errors:
+        return {}, errors, info
+
+    chosen = profile or default or (next(iter(profiles)) if len(profiles) == 1 else None)
+    if profile and profile not in profiles:
+        return {}, [f"settings.secrets_profile: {SECRETS_FILE} has no profile '{profile}' (has: {', '.join(info['profiles']) or 'none'})"], info
+    if chosen is None:
+        if profiles:
+            return {}, [f"{SECRETS_FILE}: {len(profiles)} profiles and no default; set settings.secrets_profile"], info
+        return {}, [], info
+    info["profile"] = chosen
+    return {key: value for key, value in profiles[chosen].items() if value != ""}, [], info
+
+
+def ensure_secrets_template(project_root: Path, names: list[str], profile: str = "") -> bool:
+    """Create secrets.json with empty slots for `names` when it does not exist. True if created.
+
+    The user fills the values; nothing here ever writes one. An existing file is never
+    touched, not even to add a missing key: it is the user's, and a rewrite is how a
+    hand-kept file loses what it held.
+    """
+    path = secrets_path(project_root)
+    if not names or path.exists():
+        return False
+    slot = profile or "default"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = {"default": slot, "profiles": {slot: {name: "" for name in names}}}
+    temp = path.with_suffix(".tmp")
+    temp.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+    temp.replace(path)
+    return True

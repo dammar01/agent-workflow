@@ -27,6 +27,12 @@ $ErrorActionPreference = 'SilentlyContinue'
 # session whose rows were all provider-counted carries no mark, because nothing in it is
 # a guess.
 #
+# A call that failed before any provider counted it (ok false, no actual_* counts: a rate
+# limit, a refused resume) is shown as "N failed" beside the calls and kept out of both
+# numbers. Its row holds only the prompt's char estimate, which says nothing about what
+# was processed — and folding it in used to put `~` on a session whose every completed
+# call was measured.
+#
 # Input: statusline JSON on stdin. Output: single line on stdout.
 
 $raw = [Console]::In.ReadToEnd()
@@ -80,7 +86,7 @@ function Get-SecondAgentTokens([string]$root, [string]$mainId) {
     # one pass over the stream, everything scoped to this session
     # input/output kept apart so the headline can exclude cache read, which lives inside
     # the input count and never inside output.
-    $res = @{ input = [int64]0; output = [int64]0; cached = [int64]0; calls = 0;
+    $res = @{ input = [int64]0; output = [int64]0; cached = [int64]0; calls = 0; failed = 0;
               measured = $true; saved = [int64]0; savedMeasured = $true }
     # A continuation writes one row per provider invocation, all sharing the command's
     # prompt_id. Counting rows would make this number jump whenever a retry happened,
@@ -95,6 +101,11 @@ function Get-SecondAgentTokens([string]$root, [string]$mainId) {
             try { $rec = $line | ConvertFrom-Json } catch { continue }
 
             if (-not $mainId -or [string]$rec.session_id -ne $mainId) { continue }
+
+            if ($rec.ok -eq $false -and $null -eq $rec.actual_input_tokens -and $null -eq $rec.actual_output_tokens) {
+                $res.failed += 1
+                continue
+            }
 
             # This session only, like the token count beside it. A project-lifetime
             # figure next to a session one reads as a ratio that was never measured:
@@ -164,11 +175,12 @@ if (Test-Path $cacheFile) {
         # apart, and v4's `saved` was answer-minus-digest where v5's is what never reached
         # this context at all. Reading an older entry would put a stale number on screen
         # for 30s with nothing to mark it.
-        if ($c.v -eq 5 -and $c.sid -eq $claudeSid -and $c.proj -eq $projPath -and
+        # v6: failed calls moved out of the totals into their own count.
+        if ($c.v -eq 6 -and $c.sid -eq $claudeSid -and $c.proj -eq $projPath -and
             ((Get-Date) - [datetime]::Parse($c.at, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind)).TotalSeconds -lt 30) {
             if ($null -ne $c.sa_input) {
                 $sa = @{ input = [int64]$c.sa_input; output = [int64]$c.sa_output;
-                         cached = [int64]$c.sa_cached; calls = [int]$c.sa_calls;
+                         cached = [int64]$c.sa_cached; calls = [int]$c.sa_calls; failed = [int]$c.sa_failed;
                          measured = [bool]$c.sa_measured; saved = [int64]$c.sa_saved;
                          savedMeasured = [bool]$c.sa_saved_measured }
                 $fresh = $false
@@ -180,11 +192,11 @@ if (Test-Path $cacheFile) {
 if ($fresh) {
     $sa = Get-SecondAgentTokens $projPath (Get-MainSessionId $claudeSid)
     try {
-        $entry = [ordered]@{ v = 5; sid = $claudeSid; proj = $projPath; at = (Get-Date).ToString('o') }
+        $entry = [ordered]@{ v = 6; sid = $claudeSid; proj = $projPath; at = (Get-Date).ToString('o') }
         if ($sa) {
             $entry['sa_input'] = $sa.input; $entry['sa_output'] = $sa.output
             $entry['sa_cached'] = $sa.cached
-            $entry['sa_calls'] = $sa.calls; $entry['sa_measured'] = $sa.measured
+            $entry['sa_calls'] = $sa.calls; $entry['sa_failed'] = $sa.failed; $entry['sa_measured'] = $sa.measured
             $entry['sa_saved'] = $sa.saved
             $entry['sa_saved_measured'] = $sa.savedMeasured
         }
@@ -201,6 +213,7 @@ if ($sa) {
     $text = 'Second Agent ' + $mark + (Format-Tok ($sa.input + $sa.output)) + ' tok'
     if ($sa.cached -gt 0) { $text += ' (' + (Format-Tok $sa.cached) + ' cached)' }
     $text += ' / ' + $sa.calls + ' calls'
+    if ($sa.failed -gt 0) { $text += ', ' + $sa.failed + ' failed' }
     $segments += (C '214' $text)
     # Rendered at zero too, like the count beside it. A segment that disappears reads as
     # broken rather than as empty, and the bar changing shape between sessions is exactly

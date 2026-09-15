@@ -317,6 +317,104 @@ def _test_e2e_browser_session() -> None:
     assert_true(call("POST", "http://localhost:9000/login", allowed_mutation_paths=["/login"])[0] == ["abort:blockedbyclient"], "a bare path belongs to base_url's origin only")
     assert_true(call("POST", "http://localhost:9000/login", allowed_mutation_paths=["http://localhost:9000/login"])[0] == ["continue"], "a full URL entry covers another origin")
 
+    # --- confirmed reads: a POST the user confirmed as read-only passes; a GraphQL write never does ---
+    import json as _json
+
+    from core.evidence.e2e.browser import read_only_refusal
+
+    def post(url, body=None, **config):
+        seen: list[str] = []
+        hop = SimpleNamespace(abort=lambda code: seen.append(f"abort:{code}"), continue_=lambda: seen.append("continue"))
+        guarded, _, _ = _session(_Page(), **config)
+        guarded.guard(hop, SimpleNamespace(url=url, method="POST", resource_type="fetch", post_data=body,
+                                           is_navigation_request=lambda: False, frame=object()))
+        return seen, guarded
+
+    reads = {"allowed_read_only_requests": ["POST /api/search", "POST /graphql"]}
+    seen, guarded = post(BASE + "/api/search?page=2", '{"q": "laptop"}', **reads)
+    assert_true(
+        seen == ["continue"] and guarded.read_only_allowed == [{"method": "POST", "origin": BASE}] and guarded.mutations_blocked == [],
+        f"a confirmed read passes and is recorded as a read, origin only: {seen} {guarded.read_only_allowed}",
+    )
+    assert_true(post(BASE + "/api/search/export", "{}", **reads)[0] == ["abort:blockedbyclient"], "a confirmed read is exact, not a prefix")
+    assert_true(post("http://localhost:9000/api/search", "{}", **reads)[0] == ["abort:blockedbyclient"], "a bare path belongs to base_url's origin only")
+    assert_true(post(BASE + "/api/search", "{}")[0] == ["abort:blockedbyclient"], "nothing is a read until the request settings name it")
+    assert_true(post(BASE + "/graphql", _json.dumps({"query": "query Items { items { id } }"}), **reads)[0] == ["continue"], "a GraphQL query is a read")
+    seen, guarded = post(BASE + "/graphql", _json.dumps({"query": "mutation Drop { deleteItem(id: 7) { id } }"}), **reads)
+    assert_true(
+        seen == ["abort:blockedbyclient"] and guarded.mutations_blocked[0].get("refusal") == "a GraphQL mutation or subscription" and guarded.read_only_allowed == [],
+        f"a GraphQL mutation on a confirmed read endpoint is still refused: {seen} {guarded.mutations_blocked}",
+    )
+
+    class _BinaryBody:
+        url = BASE + "/api/search"
+        method = "POST"
+        resource_type = "fetch"
+        frame = object()
+
+        def is_navigation_request(self):
+            return False
+
+        @property
+        def post_data(self):
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    binary_hop: list[str] = []
+    binary_session, _, _ = _session(_Page(), **reads)
+    binary_session.guard(SimpleNamespace(abort=lambda code: binary_hop.append(code), continue_=lambda: binary_hop.append("continue")), _BinaryBody())
+    assert_true(binary_hop == ["blockedbyclient"] and "cannot be read" in binary_session.mutations_blocked[0]["refusal"], f"an unreadable body is refused, not guessed: {binary_hop}")
+
+    graphql_write = "a GraphQL mutation or subscription"
+    for body, expected in (
+        (None, None),
+        ('{"q": "mutation { x }"}', None),
+        ('{"query": "{ items(filter: \\"mutation {\\") { id } }"}', None),
+        ('{"query": "# mutation {\\n{ items { id } }"}', None),
+        ('[{"query": "{ a }"}, {"query": "mutation { b }"}]', graphql_write),
+        ('{"query": "subscription OnItem { item { id } }"}', graphql_write),
+        ('{"query": "mutation($id: ID!) { drop(id: $id) }"}', graphql_write),
+        ('{"extensions": {"persistedQuery": {"sha256Hash": "abc"}}}', "a persisted GraphQL query, whose operation cannot be read"),
+        ("query=mutation%20%7B%20x%20%7D", graphql_write),
+        ("mutation { x }", graphql_write),
+        ("q=laptop&page=2", None),
+    ):
+        assert_true(read_only_refusal(body) == expected, f"read_only_refusal({body!r}) = {read_only_refusal(body)!r}, expected {expected!r}")
+
+    # A confirmed read inside a step passes the step and surfaces once, as a counted observation.
+    page = _Page()
+    session, events, _ = _session(page, **reads)
+
+    def search(p: _Page) -> None:
+        for _ in range(2):
+            session.guard(route, SimpleNamespace(url=BASE + "/api/search?q=secret-term", method="POST", resource_type="fetch", post_data="{}",
+                                                 is_navigation_request=lambda: False, frame=object()))
+
+    page.elements = [{"role": "button", "name": "Search", "on_click": search}]
+    session.run({"steps": [{"action": "click", "selector": {"role": "button", "name": "Search"}, "claim_id": "login"}]})
+    assert_true(_progress(events)[0]["status"] == "passed", f"a confirmed read does not fail its step: {_progress(events)[0]}")
+    allowed = [e for e in events if e["type"] == "observation" and e["kind"] == "read_only_request_allowed"]
+    assert_true(
+        len(allowed) == 1 and allowed[0]["url"] == BASE and allowed[0]["detail"].startswith("2 POST") and "secret-term" not in _json.dumps(events),
+        f"one counted observation per method and origin, no path or query: {allowed}",
+    )
+    report = build_report([*events, {"type": "result", "status": "finished"}], {"claims": _CLAIMS})
+    assert_true(report["browser_verdict"] == "pass" and report["app_errors"] == [], f"a confirmed read is a warning-class record, never an app error: {report['browser_verdict']}")
+
+    page = _Page()
+    session, events, _ = _session(page, **reads)
+
+    def graphql_drop(p: _Page) -> None:
+        session.guard(route, SimpleNamespace(url=BASE + "/graphql", method="POST", resource_type="fetch", post_data=_json.dumps({"query": "mutation { drop }"}),
+                                             is_navigation_request=lambda: False, frame=object()))
+
+    page.elements = [{"role": "button", "name": "Drop", "on_click": graphql_drop}]
+    session.run({"steps": [{"action": "click", "selector": {"role": "button", "name": "Drop"}, "claim_id": "login"}]})
+    dropped = _progress(events)[0]
+    assert_true(
+        dropped["error"]["kind"] == "mutation_blocked" and "allowed_read_only_requests covers the endpoint" in dropped["error"]["detail"] and "GraphQL" in dropped["error"]["detail"],
+        f"the step names why a confirmed endpoint was still refused: {dropped['error']}",
+    )
+
     # A click whose write is refused fails that step as harness, whatever the step saw after it.
     page = _Page()
     session, events, _ = _session(page)

@@ -41,6 +41,7 @@ from core.evidence.runtime_io import (
     write_response_snapshot,
     write_usage_record,
 )
+from core.workspace.session_manager import bind_provider, record_provider_session
 from core.workspace.runtime_lock import (
     acquire_runtime_lock,
     release_runtime_lock,
@@ -694,16 +695,24 @@ class Executor:
         # Only the adapter's poll loop can emit liveness while opencode blocks.
         self.adapter.on_progress = on_progress
 
+        # Resume only a thread the selected provider issued. Bound here, after late adapter
+        # binding and before the session is copied for the adapter, because this is the
+        # first point that knows which provider the call goes to.
+        if session_manager is not None:
+            session_manager.bind_provider(session, route.get("provider"))
+        else:
+            bind_provider(session, route.get("provider"))
         adapter_session = dict(session)
         adapter_session["session_id"] = session_id
 
         def persist_new_session(provider_session_id: str) -> None:
             adapter_session["provider_session_id"] = provider_session_id
-            session["provider_session_id"] = provider_session_id
             if session_manager is not None:
                 session_manager.update_provider_session_id(
                     session, provider_session_id
                 )
+            else:
+                record_provider_session(session, provider_session_id)
 
         session_callback_bound = False
         try:
@@ -892,11 +901,12 @@ class Executor:
             and provider_session_id
             and not session.get("provider_session_id")
         ):
-            session["provider_session_id"] = provider_session_id
             if session_manager is not None:
                 session_manager.update_provider_session_id(
                     session, provider_session_id
                 )
+            else:
+                record_provider_session(session, provider_session_id)
 
         redactions = (result.get("meta") or {}).get("redactions")
         self._audit_redactions(

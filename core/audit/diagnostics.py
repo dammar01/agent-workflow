@@ -446,10 +446,16 @@ def run_doctor(
             f"Install/fix the server command, or remove the dead MCP entry from the {provider_command} config"
         )
 
-    # Session continuation: is the current main session linked to an opencode session?
-    # An unlinked session re-bootstraps opencode every call (breaks 1 main = 1 second).
+    # Session continuation: is the current main session linked to a thread of the provider
+    # that is selected NOW? An unlinked session re-bootstraps every call (breaks 1 main =
+    # 1 second); a thread issued by another provider cannot be resumed at all.
     import re as _re
-    from config.settings import SESSION_DIR
+    from config.settings import SESSION_DIR, resolve_provider_config_for
+
+    try:
+        active_provider = (resolve_provider_config_for(project_root).get("config") or {}).get("provider")
+    except Exception:
+        active_provider = None
 
     session_id = None
     try:
@@ -463,19 +469,38 @@ def run_doctor(
         checks["session_continuation"] = "no active session (state.json)"
     else:
         safe = _re.sub(r"[^A-Za-z0-9_.-]", "_", session_id)
-        session_file = Path(SESSION_DIR) / f"{safe}.json"
-        if not session_file.exists():
+        # The runtime reads the project-local store (`main._session_manager_for`); the
+        # global SESSION_DIR is only its fallback. Checking the fallback alone reported a
+        # healthy session as BROKEN and a broken one as linked.
+        candidates = [
+            Path(project_root) / ".workflow" / "provider-sessions" / f"{safe}.json",
+            Path(SESSION_DIR) / f"{safe}.json",
+        ]
+        session_file = next((path for path in candidates if path.exists()), None)
+        if session_file is None:
             checks["session_continuation"] = (
                 f"no session record for {session_id} (first delegated call will bootstrap)"
             )
         else:
             try:
-                linked_id = read_json_file(session_file).get("provider_session_id")
+                record = read_json_file(session_file)
             except (ValueError, OSError):
-                linked_id = None
+                record = {}
+            threads = record.get("provider_sessions")
+            if isinstance(threads, dict) and active_provider:
+                linked_id = threads.get(active_provider)
+            else:
+                linked_id = record.get("provider_session_id")
             if linked_id:
                 checks["session_continuation"] = (
-                    f"linked: {session_id} -> {linked_id}"
+                    f"linked: {session_id} -> {active_provider or 'provider'} {linked_id}"
+                )
+            elif isinstance(threads, dict) and threads:
+                # Not broken: the next call on this provider bootstraps its own thread and
+                # the other providers' threads stay resumable for when they are selected.
+                checks["session_continuation"] = (
+                    f"no {active_provider} thread yet for {session_id} "
+                    f"(threads held for: {', '.join(sorted(threads))}); next call bootstraps one"
                 )
             else:
                 checks["session_continuation"] = (

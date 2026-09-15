@@ -504,6 +504,7 @@ def _e2e_spec_constraints() -> list[str]:
         "- selectors: role+name > label > data-testid > stable text > css; tag each with provenance (source|existing_test|heuristic); alternatives go in selector_candidates, strongest first",
         "- navigation: relative paths under base_url; an absolute URL must share base_url's origin or it is refused",
         "- a step that creates, modifies or deletes data declares side_effect, test_environment_required: true and cleanup; it is refused unless the user enabled side effects, so prefer read-only flows",
+        "- the player aborts every POST/PUT/PATCH/DELETE unless the user allows it; a POST the flow needs that only READS (search, filter, GraphQL query) goes under read_only_requests with the handler's file:line showing it writes nothing — the user confirms each one; a login, a GraphQL mutation, or anything that writes never belongs there",
         "- credentials only as ${ENV_NAME} placeholders; never a literal value, never a production URL",
         "- allowed actions: goto, click, fill, select, press, wait_dom, expect_dom, expect_url, expect_title, probe — nothing else",
     ]
@@ -520,6 +521,9 @@ def _e2e_spec_format() -> list[str]:
         "",
         "coverage_gap:",
         "- <claim ids not covered by existing tests> | none",
+        "",
+        "read_only_requests:",
+        "- method: POST | endpoint: </path or http(s)://host/path> | source_refs: <handler file:line> | reason: <why it writes nothing> | none",
         "",
         "scenario_json:",
         "```json",

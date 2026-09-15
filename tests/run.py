@@ -90,9 +90,12 @@ from tests.checks.provider import (  # noqa: E402
     _test_provider_seam,
     _test_provider_selection,
 )
+from tests.checks.provider_sessions import _test_provider_threads_are_kept_per_provider  # noqa: E402
 from tests.checks.usage_tokens import _test_usage_token_accounting  # noqa: E402
 from tests.checks.redaction import _test_redaction_boundary  # noqa: E402
 from tests.checks.registry import _test_every_check_is_registered  # noqa: E402
+from tests.checks.stamp_version import _test_stamp_version_reads_versions_not_addresses  # noqa: E402
+from tests.checks.statusline import _test_statusline_failed_calls_are_not_estimates  # noqa: E402
 from tests.checks.verify_gaps import (  # noqa: E402
     _test_empty_section_is_not_a_finding,
     _test_quick_verify_gaps,
@@ -112,7 +115,10 @@ SUITES: dict[str, tuple] = {
     "registry": (_test_every_check_is_registered, "every check here is reachable from both entry points"),
     "bundle-sync": (_test_bundle_registry_bijection, "skills/ and intent-map.json agree with CLAUDE.md"),
     "hook-flavours": (_test_every_shipped_hook_has_both_os_flavours, "every shipped hook ships .ps1 and .sh"),
+    "stamp-version": (_test_stamp_version_reads_versions_not_addresses, "version stamping ignores IP addresses and --check passes"),
+    "statusline": (_test_statusline_failed_calls_are_not_estimates, "a failed call is counted beside the calls, never as an estimate"),
     "provider-seam": (_test_provider_seam, "adapter registry and provider resolution"),
+    "provider-threads": (_test_provider_threads_are_kept_per_provider, "a provider thread is resumed only by the provider that issued it"),
     "provider-selection": (_test_provider_selection, "interactive provider/model/effort write"),
     "agy": (_test_agy_provider, "agy parsing, argv, and its read-boundary guard"),
     "cli": (_test_cli_script_reaches_its_exit_code, "main.py run as a script prints JSON and exits through its exit-code mapping"),
@@ -128,7 +134,7 @@ SUITES: dict[str, tuple] = {
     "e2e-spec": (_test_e2e_spec_contract, "[E2E SPEC] parses, validates, and knows when only the section is missing"),
     "e2e-normalize": (_test_e2e_classification_and_verdicts, "app/harness/unknown origins and the fail-closed verdict matrix"),
     "e2e-supervisor": (_test_e2e_supervisor, "the player child process: protocol, idle/total timeouts, tree kill"),
-    "e2e-routing": (_test_e2e_routing, "verify-browser: draft then confirmed run under one lock, request and secrets.env only, /.verify back to delegated|syntax"),
+    "e2e-routing": (_test_e2e_routing, "verify-browser: draft then confirmed run under one lock, request and secrets.json profiles only, /.verify back to delegated|syntax"),
     "e2e-browser": (_test_e2e_browser_session, "the real player's step semantics, origin guard, and observers against a stand-in page"),
     "e2e-redact": (_test_e2e_redaction_variants, "resolved ${ENV} values scrubbed raw, URL-encoded, and escaped, in events and text artifacts"),
     "e2e-smoke": (_test_e2e_real_browser_smoke, "real Chromium against the fixture app through the full runner (opt-in: WORKFLOW_E2E_SMOKE=1)"),

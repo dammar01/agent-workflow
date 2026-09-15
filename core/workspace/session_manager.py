@@ -5,6 +5,66 @@ from pathlib import Path
 
 from config.settings import SESSION_DIR
 
+# A provider thread id belongs to the provider that issued it. opencode ids carry a `ses_`
+# prefix; codex and agy issue opaque ids that never do. That is the only provenance a
+# record written before `provider_sessions` existed can offer, so it is used exactly once,
+# to adopt a legacy id, and never to route a live call.
+_OPENCODE_ID_PREFIX = "ses_"
+
+
+def _legacy_id_fits(provider: str, provider_session_id: str) -> bool:
+    if provider == "opencode":
+        return provider_session_id.startswith(_OPENCODE_ID_PREFIX)
+    return not provider_session_id.startswith(_OPENCODE_ID_PREFIX)
+
+
+def bind_provider(session: dict, provider: str | None) -> bool:
+    """Point `provider_session_id` at the thread THIS provider issued. True if changed.
+
+    One record used to hold one thread id whoever had issued it, so switching the second
+    agent mid-session handed the new provider the old one's id to resume, and it refused
+    (opencode: "Session not found") before doing any work. Threads are now kept per
+    provider in `provider_sessions`; `provider_session_id` stays as the active provider's
+    entry because every reader of the record (adapters, recovery, the e2e continuation)
+    already reads that key.
+
+    A bare id on a record that was never bound to a provider — a pre-3.6.0 record, or one
+    written before its first call (recovery stores the captured id that way) — is adopted
+    only when its shape fits the provider now selected, otherwise dropped: a fresh thread
+    costs one bootstrap, a foreign resume costs the call. Once bound, a record never
+    adopts again, so a switch cannot inherit the previous provider's id. codex and agy ids
+    are indistinguishable by shape, so an unbound id from one can still be offered to the
+    other once.
+    """
+    if not provider:
+        return False
+    before = (
+        dict(session.get("provider_sessions") or {}),
+        session.get("provider_session_id"),
+        session.get("provider"),
+    )
+    threads = session.get("provider_sessions")
+    if not isinstance(threads, dict):
+        threads = session["provider_sessions"] = {}
+    if session.get("provider") is None and provider not in threads:
+        unbound = session.get("provider_session_id")
+        if isinstance(unbound, str) and unbound and _legacy_id_fits(provider, unbound):
+            threads[provider] = unbound
+    session["provider"] = provider
+    session["provider_session_id"] = threads.get(provider)
+    return before != (threads, session["provider_session_id"], provider)
+
+
+def record_provider_session(session: dict, provider_session_id: str) -> None:
+    """Store a captured thread id under the provider the record is bound to."""
+    session["provider_session_id"] = provider_session_id
+    provider = session.get("provider")
+    if provider:
+        threads = session.get("provider_sessions")
+        if not isinstance(threads, dict):
+            threads = session["provider_sessions"] = {}
+        threads[provider] = provider_session_id
+
 
 class SessionManager:
     def __init__(self, session_dir: Path = SESSION_DIR) -> None:
@@ -27,6 +87,7 @@ class SessionManager:
         session = {
             "session_id": session_id,
             "provider_session_id": None,
+            "provider_sessions": {},
             "history": {
                 "created_at": now,
                 "updated_at": now,
@@ -55,8 +116,12 @@ class SessionManager:
         return True
 
     def update_provider_session_id(self, session: dict, provider_session_id: str) -> None:
-        session["provider_session_id"] = provider_session_id
+        record_provider_session(session, provider_session_id)
         self._save(session)
+
+    def bind_provider(self, session: dict, provider: str | None) -> None:
+        if bind_provider(session, provider):
+            self._save(session)
 
     def record_run(self, session: dict, command: str) -> None:
         history = session.setdefault("history", {})

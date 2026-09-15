@@ -1,4 +1,4 @@
-# agent-workflow v3.5.3
+# agent-workflow v3.6.0
 
 Runtime orkestrasi mandiri untuk alur kerja dua-agent. Tanpa dependency pihak ketiga.
 
@@ -70,7 +70,7 @@ git --version
 
 ---
 
-## Install (v3.5.3)
+## Install (v3.6.0)
 
 ### Anggota tim baru — urutan lengkap dari nol
 
@@ -459,6 +459,7 @@ Second_agent hanya memasok evidence dan reasoning. Runtime tidak membuat atau me
 | `plan` | terdelegasi | ya | evidence + jejak dependency terbalik |
 | `analyze` | terdelegasi | ya | analisis mendalam, nol perubahan kode |
 | `verify` | terdelegasi¹ | ya | verifikasi; kedalaman diatur `verify_mode` |
+| `verify-browser` | terdelegasi³ | ya | verifikasi lewat browser Playwright dari request per sesi; tahap `draft` lalu `run` |
 | `sweep` | lokal | — | pindai staged, unstaged, dan untracked diff tanpa OpenCode |
 | `promote-validate` | lokal | ya² | validasi dokumen knowledge; nol tulisan |
 | `promote-verify` | lokal | ya² | freshness tiap klaim + rekonsiliasi lawan dokumen existing |
@@ -472,6 +473,8 @@ Second_agent hanya memasok evidence dan reasoning. Runtime tidak membuat atau me
 ¹ `verify` melewati OpenCode sepenuhnya ketika `verify_mode` bernilai `syntax`.
 
 ² Ketiga tahap `promote-*` menerima **path ke file JSON** lewat `--prompt`, bukan dokumennya sendiri: satu dokumen knowledge melewati batas argv 8191 karakter Windows dengan mudah. Tahapnya dipisah karena persetujuan user terjadi di antaranya — CLI tak bisa bertanya apa pun, jadi verifikasi berhenti pada vonis, main_agent yang menjalankan review, dan penulisan adalah panggilan terpisah yang hanya bisa terjadi sesudahnya. `promote-write` menolak di luar `policies.production_branch`.
+
+³ `verify-browser` membaca **request per sesi** (`.workflow/sessions/<session>/e2e/request.json`), bukan `config.json`: wawancara dan konfirmasi terjadi di main_agent, browser dijalankan proses lokal, dan hanya draft spec serta review hasil yang memakai second_agent. Tahap `draft` tidak membawa vonis; tahap `run` diselesaikan sebagai `verify` sehingga vonis dan exit code-nya sama dengan verifikasi lain. Kontrak lengkap: `docs/runtime-contracts.md`, bagian `/.verify-browser`.
 
 Tidak ada command Python `execute`. `/.execute -y` tetap tersedia sebagai command user-facing di main_agent; menulis kode sengaja tidak didelegasikan ke runtime atau second_agent.
 
@@ -588,7 +591,7 @@ Artinya second_agent codex bisa membaca tiap file di project yang kamu tunjuk, `
 
 Pakai `codex` bila project-nya memang tak menyimpan rahasia, atau bila kamu menerima risikonya. Untuk project yang rahasianya harus tetap tak terbaca second_agent, pakai `opencode`.
 
-Kunci reliability (v3.5.3):
+Kunci reliability (v3.6.0):
 
 | Kunci | Default | Arti |
 | --- | --- | --- |
@@ -802,7 +805,7 @@ pernah tercatat, runtime gagal sebagai `session_capture_failed` dan clean run di
 Request berbeda pada session yang masih terkunci tetap ditolak sebagai
 `job_already_running`.
 
-### Liveness worker (v3.5.3)
+### Liveness worker (v3.6.0)
 
 PID yang hidup **tidak** berarti sedang bekerja. Worker karena itu melaporkan heartbeat sekaligus usia output stream, lalu job diklasifikasi tiga keadaan:
 
@@ -1014,7 +1017,7 @@ dengan baris bergerbang penuh.
 
 ## Referensi
 
-- Catatan rilis: [`prompt/v3.5.3/changelog.md`](../prompt/v3.5.3/changelog.md)
+- Catatan rilis: [`prompt/v3.6.0/changelog.md`](../prompt/v3.6.0/changelog.md)
 - Kontrak canonical main_agent: [`dist/config/claude/CLAUDE.md`](../dist/config/claude/CLAUDE.md)
 - Kontrak canonical second_agent: [`dist/config/opencode/AGENTS.md`](../dist/config/opencode/AGENTS.md)
 - Runtime entry point: [`main.py`](main.py)

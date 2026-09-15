@@ -105,6 +105,9 @@ from tests.checks.bundle_sync import (
     _test_bundle_registry_bijection,
     _test_every_shipped_hook_has_both_os_flavours,
 )
+from tests.checks.stamp_version import _test_stamp_version_reads_versions_not_addresses
+from tests.checks.provider_sessions import _test_provider_threads_are_kept_per_provider
+from tests.checks.statusline import _test_statusline_failed_calls_are_not_estimates
 from tests.checks.adapters import (
     _test_adapter_error_normalization,
     _test_stdin_failure_reaches_call_meta,
@@ -128,7 +131,10 @@ def run_tests() -> None:
     _test_every_check_is_registered()
     _test_bundle_registry_bijection()
     _test_every_shipped_hook_has_both_os_flavours()
+    _test_stamp_version_reads_versions_not_addresses()
+    _test_statusline_failed_calls_are_not_estimates()
     _test_provider_seam()
+    _test_provider_threads_are_kept_per_provider()
     _test_provider_selection()
     _test_agy_provider()
     _test_no_code_in_messages()

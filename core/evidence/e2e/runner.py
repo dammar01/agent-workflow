@@ -48,6 +48,7 @@ from core.evidence.e2e.spec import (
     validate_existing_tests,
     validate_scenario,
 )
+from core.evidence.e2e.spec import validate_read_only_requests
 from core.evidence.e2e.supervisor import run_player
 from core.provider.result_prep import _sanitize_result
 from core.evidence.contracts import correlation_id_for
@@ -254,6 +255,7 @@ def _draft_result(
         "scenario": scenario,
         "existing_tests": parsed.get("existing_tests") or [],
         "spec_notes": parsed.get("uncertainties") or [],
+        "read_only_requests": parsed.get("read_only_requests") or [],
         "errors": list(errors),
         "env": list(env_names),
         "missing_env": list(missing_env),
@@ -282,6 +284,20 @@ def _draft_result(
     lines += ["", "existing_tests:"]
     lines += [f"- {t.get('path')} covers {', '.join(map(str, t.get('covers') or []))}" for t in draft["existing_tests"] if isinstance(t, dict)] or ["- none"]
     lines += ["", "env_placeholders:", *([f"- {name}" + (" (not set)" if name in missing_env else "") for name in env_names] or ["- none"])]
+    secrets = e2e_meta.get("secrets") or {}
+    if env_names and secrets.get("file"):
+        state = (
+            "created now with empty slots — fill the values"
+            if secrets.get("template_created")
+            else f"profile {secrets.get('profile')}" if secrets.get("profile") else "missing" if not secrets.get("exists") else "no profile selected"
+        )
+        lines += [f"secrets_file: {secrets['file']} ({state})"]
+    lines += ["", "read_only_requests (proposals; confirm each before adding it to settings.allowed_read_only_requests):"]
+    lines += [
+        f"- {r.get('method')} {r.get('endpoint')} | source_refs: {', '.join(map(str, r.get('source_refs') or [])) or 'none'} | reason: {r.get('reason') or 'none'}"
+        for r in draft["read_only_requests"]
+        if isinstance(r, dict)
+    ] or ["- none"]
     lines += ["", "errors:", *([f"- {e}" for e in draft["errors"]] or ["- none"])]
     lines += ["", "spec_uncertainties:", *([f"- {u}" for u in draft["spec_notes"]] or ["- none"])]
     meta = {"command": INVOCATION, "invocation": INVOCATION, "phase": "draft", "e2e": e2e_meta}
@@ -342,7 +358,8 @@ def run(
             return _draft_result(project_root, session_id, e2e_meta, status="blocked", errors=[f"{pre['reason']}: {pre['detail']}"])
         return _finish(to_verification({"claims": {}, "browser_verdict": None}, preflight=pre))
 
-    secrets, secret_errors = e2e_request.load_secrets(project_root)
+    secrets, secret_errors, secret_info = e2e_request.load_secrets(project_root, config.get("secrets_profile") or "")
+    e2e_meta["secrets"] = {key: secret_info[key] for key in ("file", "exists", "profile", "profiles")}
     lookup = {**os.environ, **secrets}
 
     if phase == "draft":
@@ -382,7 +399,10 @@ def run(
                 preflight={
                     "ok": False,
                     "reason": "env_missing",
-                    "detail": f"not set in .workflow/e2e/{e2e_request.SECRETS_FILE} or the environment: {', '.join(missing)}",
+                    "detail": (
+                        f"not set in .workflow/e2e/{e2e_request.SECRETS_FILE} "
+                        f"(profile: {secret_info.get('profile') or 'none'}) or the environment: {', '.join(missing)}"
+                    ),
                 },
             )
         )
@@ -400,7 +420,9 @@ def run(
     existing_result: dict | None = None
     existing_rows: list[dict] = list(skipped_tests)
     if runnable_tests:
-        existing_result = e2e_existing.run(runnable_tests, config, project_root, resolved_values, extra_env=secrets)
+        # The command gets the whole selected profile, so its output is scrubbed of all of
+        # it, not only of the names the scenario happened to reference.
+        existing_result = e2e_existing.run(runnable_tests, config, project_root, {**secrets, **resolved_values}, extra_env=secrets)
         redaction_hits += existing_result.get("redactions") or []
         redaction_hits += e2e_redact.write_text(e2e_dir / "existing_tests.log", existing_result["output_tail"])
         result_label = {"passed": "pass", "failed": "fail", "timeout": "timeout"}.get(existing_result["status"], "not run (launch failed)")
@@ -610,11 +632,21 @@ def _draft(
     e2e_meta["spec_source"] = "e2e_spec"
     scenario = parsed["scenario"]
     spec_errors, _runnable, _skipped = _spec_errors(scenario, parsed.get("existing_tests") or [], config, project_root)
-    errors = [*spec_errors, *secret_errors]
+    # A proposed read-only POST is only a proposal: the draft lists it for the user to
+    # confirm, and nothing reaches the guard until the request's settings name it. An
+    # ungrounded proposal still makes the draft invalid, like an ungrounded claim.
+    read_only_errors = validate_read_only_requests(parsed.get("read_only_requests") or [], project_root)
+    errors = [*spec_errors, *read_only_errors, *secret_errors]
     names = env_references(scenario)
-    # Not an error at draft time: the user may fill secrets.env after reading the draft.
+    # Not an error at draft time: the user may fill secrets.json after reading the draft.
+    # Nothing ever created that file, so a user asked to "fill it" had nowhere to start;
+    # the draft now writes it with an empty slot per referenced name.
     missing = [name for name in names if name not in lookup]
-    if spec_errors:
+    if missing and not (e2e_meta.get("secrets") or {}).get("exists"):
+        e2e_meta.setdefault("secrets", {})["template_created"] = e2e_request.ensure_secrets_template(
+            project_root, names, config.get("secrets_profile") or ""
+        )
+    if spec_errors or read_only_errors:
         e2e_meta["reason"] = "spec_invalid"
     elif secret_errors:
         e2e_meta["reason"] = "secrets_invalid"

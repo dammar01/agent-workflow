@@ -79,6 +79,8 @@ class _AppHandler(http.server.BaseHTTPRequestHandler):
             self.rfile.read(length)
         if path == "/items/delete":
             return _send(self, 200, b"<!doctype html><title>Deleted</title><p>deleted</p>", "text/html; charset=utf-8")
+        if path == "/search":
+            return _send(self, 200, b"<!doctype html><title>Results</title><p>1 result</p>", "text/html; charset=utf-8")
         return _send(self, 404, b"not found", "text/plain")
 
     def do_GET(self) -> None:
@@ -309,6 +311,23 @@ def _test_e2e_real_browser_smoke() -> None:
         _AppHandler.writes.clear()
         _, report, _, _ = case(delete, allow_side_effects=True)
         assert_true(_AppHandler.writes == ["/items/delete"] and report["browser_verdict"] == "pass", f"allow_side_effects lifts the guard: {_AppHandler.writes} {report['reason']}")
+
+        # --- a search form POSTs to read: refused by default, sent once when confirmed as a read ----
+        search = [
+            {"action": "goto", "url": "/search.html"},
+            {"action": "click", "selector": {"role": "button", "name": "Search"}, "selector_provenance": {"type": "source"}},
+            {"action": "expect_title", "equals": "Results", "claim_id": "login"},
+        ]
+        _AppHandler.writes.clear()
+        _, report, _, _ = case(search)
+        assert_true(_AppHandler.writes == [] and report["browser_verdict"] == "incomplete", f"an unconfirmed read-shaped POST is still refused: {_AppHandler.writes} {report['browser_verdict']}")
+        _AppHandler.writes.clear()
+        _, report, _, _ = case(search, allowed_read_only_requests=["POST /search"])
+        assert_true(_AppHandler.writes == ["/search"] and report["browser_verdict"] == "pass", f"a confirmed read reaches the app once and the flow completes: {_AppHandler.writes} {report['reason']} {report['failures']}")
+        assert_true(
+            any(o["kind"] == "read_only_request_allowed" for o in report["observations"]),
+            f"and the run reports what it let through: {[o['kind'] for o in report['observations']]}",
+        )
 
         # --- a hung navigation: idle timeout, process tree killed, no browser left behind -----------
         _, report, _, _ = case([
