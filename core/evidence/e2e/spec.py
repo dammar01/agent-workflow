@@ -42,14 +42,28 @@ SIDE_EFFECTS = frozenset({"none", "creates_test_data", "modifies_test_data", "de
 # stronger one: the player tries candidates in order, so the order IS the fallback rule.
 SELECTOR_RANK = ("role", "label", "testid", "text", "css")
 MAX_SELECTOR_CANDIDATES = 5
+# Readiness a step waits for before its action (after navigation, for goto). Declared per
+# step from the app's own indicators — a spinner gone, a button enabled, fetched rows shown
+# — because `load` and `networkidle` say nothing on a page that polls.
+READY_SELECTOR_KEYS = ("hidden", "visible", "enabled")
+READY_TEXT_KEYS = ("text", "url")
+READY_KEYS = (*READY_SELECTOR_KEYS, *READY_TEXT_KEYS)
+MAX_READY_CONDITIONS = 5
+WRITE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
 _ACTIONS_WITH_SELECTOR = frozenset({"click", "fill", "select", "press", "wait_dom", "expect_dom"})
-_SIDE_EFFECT_FIELDS = ("test_environment_required", "cleanup")
+_ACTIONS_WITH_REQUEST = frozenset({"goto", "click", "fill", "select", "press"})
+_SIDE_EFFECT_FIELDS = ("test_environment_required", "test_data", "no_cleanup_reason")
+_STEP_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+_REQUEST_PATH = re.compile(r"^/[^\s?#*\\]*$")
 # `path[:line[-line]]` relative to the project, or `req:<id>` for a written requirement.
 _SOURCE_REF = re.compile(r"^(?:req:\S.{0,198}|[^\s|,:\\]{1,200}(?::\d+(?:-\d+)?)?)$")
 _REF_PARTS = re.compile(r"^(?P<path>[^:]+?)(?::(?P<start>\d+)(?:-(?P<end>\d+))?)?$")
 _UNSAFE_URL_CHARS = re.compile(r"[\\\s\x00-\x1f]")
 _CLAIM_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _ENV_REF = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
+# Anything shaped like a placeholder, so `${e2e_user}` or `${E2E USER}` is named as a
+# mistake instead of travelling to the player as literal text.
+_ANY_ENV_REF = re.compile(r"\$\{([^}]*)\}")
 _JSON_FENCE = re.compile(r"```(?:json)?\s*\n(.*?)\n\s*```", re.DOTALL | re.IGNORECASE)
 _NONE = re.compile(r"^(?:none|n/?a)\b", re.IGNORECASE)
 
@@ -223,6 +237,60 @@ def _provenance_errors(where: str, provenance: object) -> list[str]:
     kind = provenance.get("type") if isinstance(provenance, dict) else None
     if kind not in PROVENANCE:
         return [f"{where}: selector_provenance '{kind}' not in {sorted(PROVENANCE)}"]
+    ref = provenance.get("ref")
+    if ref is not None and (not isinstance(ref, str) or not _SOURCE_REF.match(ref.strip())):
+        return [f"{where}: selector_provenance.ref must be `path[:line]`, the source or test the selector comes from"]
+    return []
+
+
+def _ready_errors(where: str, ready: object) -> list[str]:
+    if ready is None:
+        return []
+    if not isinstance(ready, list) or not 1 <= len(ready) <= MAX_READY_CONDITIONS:
+        return [f"{where}: ready must list 1..{MAX_READY_CONDITIONS} conditions"]
+    errors: list[str] = []
+    for index, condition in enumerate(ready):
+        at = f"{where}.ready[{index}]"
+        if not isinstance(condition, dict) or len(condition) != 1 or next(iter(condition)) not in READY_KEYS:
+            errors.append(f"{at}: an object with exactly one of {'|'.join(READY_KEYS)}")
+            continue
+        key, value = next(iter(condition.items()))
+        if key in READY_SELECTOR_KEYS:
+            errors.extend(_selector_errors(f"{at}.{key}", value))
+        elif not isinstance(value, str) or not value.strip():
+            errors.append(f"{at}.{key}: a non-empty string")
+    return errors
+
+
+def _request_errors(where: str, spec: object) -> list[str]:
+    """`request`: the write a step is expected to send, matched against what it actually sent."""
+    if spec is None:
+        return []
+    if not isinstance(spec, dict) or set(spec) - {"method", "path"}:
+        return [f"{where}: request is an object with method and path only"]
+    errors: list[str] = []
+    if spec.get("method") not in WRITE_METHODS:
+        errors.append(f"{where}: request.method one of {'|'.join(WRITE_METHODS)}")
+    path = spec.get("path")
+    if not isinstance(path, str) or not _REQUEST_PATH.match(path):
+        errors.append(f"{where}: request.path starts with '/', no query, wildcard or whitespace (':name' matches one segment)")
+    return errors
+
+
+def request_path_matches(template: str, path: str) -> bool:
+    """`/items/:id` matches `/items/7`; every other segment matches exactly."""
+    want = (template or "/").rstrip("/").split("/")
+    got = (path or "/").rstrip("/").split("/")
+    return len(want) == len(got) and all((w.startswith(":") and bool(g)) or w == g for w, g in zip(want, got))
+
+
+def _id_errors(where: str, step: Mapping, seen: set[str]) -> list[str]:
+    sid = step.get("id")
+    if not isinstance(sid, str) or not _STEP_ID.match(sid):
+        return [f"{where}: id '{sid}' must be a kebab identifier, stable across edits of the draft"]
+    if sid in seen:
+        return [f"{where}: duplicate step id '{sid}'"]
+    seen.add(sid)
     return []
 
 
@@ -230,7 +298,10 @@ def step_selectors(step: Mapping) -> list[dict]:
     """The selectors a step may use, in the order the player must try them.
 
     One shape for both spellings, so the player never re-implements the choice:
-    `[{"selector": {...}, "provenance": "source" | ... | None}, ...]`.
+    `[{"selector": {...}, "provenance": "source" | ... | None, "ref": "path:line" | None}, ...]`.
+
+    `ref` travels with the candidate rather than being looked up later: which candidate won
+    is only known at runtime, and the tagging pass needs the address of THAT one.
     """
     candidates = step.get("selector_candidates")
     if isinstance(candidates, list):
@@ -242,7 +313,11 @@ def step_selectors(step: Mapping) -> list[dict]:
     else:
         pairs = [(step.get("selector"), step.get("selector_provenance"))]
     return [
-        {"selector": selector, "provenance": (provenance or {}).get("type") if isinstance(provenance, dict) else None}
+        {
+            "selector": selector,
+            "provenance": (provenance or {}).get("type") if isinstance(provenance, dict) else None,
+            "ref": (provenance or {}).get("ref") if isinstance(provenance, dict) else None,
+        }
         for selector, provenance in pairs
         if isinstance(selector, dict) and selector
     ]
@@ -283,6 +358,11 @@ def navigation_error(url: str, policy: Mapping | None) -> str | None:
 
 def _side_effect_errors(where: str, step: Mapping, policy: Mapping) -> list[str]:
     effect = step.get("side_effect")
+    if "cleanup" in step:
+        return [
+            f"{where}: cleanup is no longer a description on the step; declare executable steps in "
+            "scenario.cleanup, each with cleans: '<this step id>'"
+        ]
     if effect is None:
         stray = [field for field in _SIDE_EFFECT_FIELDS if field in step]
         return [f"{where}: {', '.join(stray)} declared without side_effect"] if stray else []
@@ -293,11 +373,172 @@ def _side_effect_errors(where: str, step: Mapping, policy: Mapping) -> list[str]
     errors = []
     if step.get("test_environment_required") is not True:
         errors.append(f"{where}: side_effect '{effect}' needs test_environment_required: true")
-    cleanup = step.get("cleanup")
-    if not isinstance(cleanup, str) or not cleanup.strip():
-        errors.append(f"{where}: side_effect '{effect}' needs a cleanup description")
+    test_data = step.get("test_data")
+    if not isinstance(test_data, dict) or not isinstance(test_data.get("marker"), str) or not test_data["marker"].strip():
+        errors.append(f"{where}: side_effect '{effect}' needs test_data.marker, the value that tells this run's data apart from existing data")
+    reason = step.get("no_cleanup_reason")
+    if reason is not None and (effect == "creates_test_data" or not isinstance(reason, str) or not reason.strip()):
+        errors.append(f"{where}: no_cleanup_reason is a non-empty string, for modifies/deletes only (created data is always cleaned up)")
     if not policy.get("allow_side_effects"):
         errors.append(f"{where}: side_effect '{effect}' refused: settings.allow_side_effects is false")
+    return errors
+
+
+def _step_errors(where: str, step: Mapping, policy: Mapping, claim_ids: set[str], *, cleanup: bool) -> tuple[list[str], str | None]:
+    """One step's rules. Returns (errors, the claim id it asserts or None).
+
+    A cleanup step shares every rule a test step has, except that it proves the cleanup, not
+    a claim, and its write is covered by the side effect of the step it cleans.
+    """
+    errors: list[str] = []
+    asserted = None
+    action = step.get("action")
+    if action not in ALLOWED_ACTIONS:
+        return [f"{where}: action '{action}' not allowed"], None
+    if action in ASSERTION_ACTIONS:
+        cid = step.get("claim_id")
+        if cleanup:
+            if cid is not None:
+                errors.append(f"{where}: a cleanup assertion proves the cleanup, not a claim; drop claim_id")
+        elif not cid:
+            errors.append(f"{where}: {action} needs a claim_id")
+        elif cid not in claim_ids:
+            errors.append(f"{where}: claim_id '{cid}' names no claim")
+        else:
+            asserted = cid
+    if action == "goto":
+        url = step.get("url")
+        if not isinstance(url, str) or not url:
+            errors.append(f"{where}: goto needs a url")
+        else:
+            refused = navigation_error(url, policy)
+            if refused:
+                errors.append(f"{where}: {refused}")
+    if cleanup:
+        declared = [field for field in ("side_effect", "cleanup", *_SIDE_EFFECT_FIELDS) if field in step]
+        if declared:
+            errors.append(f"{where}: a cleanup step declares no {', '.join(declared)} of its own")
+    else:
+        errors.extend(_side_effect_errors(where, step, policy))
+    if action in _ACTIONS_WITH_SELECTOR:
+        candidates = step.get("selector_candidates")
+        if candidates is not None and "selector" in step:
+            errors.append(f"{where}: use selector or selector_candidates, not both")
+        elif candidates is not None:
+            if not isinstance(candidates, list) or not 1 <= len(candidates) <= MAX_SELECTOR_CANDIDATES:
+                errors.append(f"{where}: selector_candidates must list 1..{MAX_SELECTOR_CANDIDATES} entries")
+            else:
+                ranks: list[int] = []
+                seen: list[dict] = []
+                for position, item in enumerate(candidates):
+                    at = f"{where}.selector_candidates[{position}]"
+                    if not isinstance(item, dict):
+                        errors.append(f"{at}: not an object")
+                        continue
+                    found = _selector_errors(at, item.get("selector"))
+                    found += _provenance_errors(at, item.get("selector_provenance"))
+                    errors.extend(found)
+                    if found:
+                        continue
+                    if item["selector"] in seen:
+                        errors.append(f"{at}: duplicate selector")
+                    seen.append(item["selector"])
+                    ranks.append(selector_rank(item["selector"]))
+                if ranks != sorted(ranks):
+                    errors.append(
+                        f"{where}: selector_candidates must run strongest first ({' > '.join(SELECTOR_RANK)})"
+                    )
+        else:
+            errors.extend(_selector_errors(where, step.get("selector")))
+            errors.extend(_provenance_errors(where, step.get("selector_provenance")))
+    if "within" in step:
+        if action not in _ACTIONS_WITH_SELECTOR:
+            errors.append(f"{where}: within scopes a selector, and {action} has none")
+        else:
+            errors.extend(_selector_errors(f"{where}.within", step["within"]))
+    errors.extend(_ready_errors(where, step.get("ready")))
+    if "request" in step:
+        if action not in _ACTIONS_WITH_REQUEST:
+            errors.append(f"{where}: request names the write an action sends; {action} sends none")
+        else:
+            errors.extend(_request_errors(where, step.get("request")))
+    if action == "fill" and not isinstance(step.get("value"), str):
+        errors.append(f"{where}: fill needs a string value")
+    if action == "expect_url" and not any(k in step for k in ("contains", "equals", "matches")):
+        errors.append(f"{where}: expect_url needs contains|equals|matches")
+    return errors, asserted
+
+
+def _cleanup_errors(scenario: Mapping, step_ids: dict[str, tuple[int, Mapping]], policy: Mapping, claim_ids: set[str], seen_ids: set[str]) -> list[str]:
+    """scenario.cleanup: executable steps, grouped by the side-effect step each one cleans."""
+    errors: list[str] = []
+    cleanup = scenario.get("cleanup")
+    cleaned: dict[str, list[Mapping]] = {}
+    if cleanup is not None and not isinstance(cleanup, list):
+        errors.append("cleanup: a list of steps")
+        cleanup = []
+    for index, step in enumerate(cleanup or []):
+        where = f"cleanup[{index}]"
+        if not isinstance(step, dict):
+            errors.append(f"{where}: not an object")
+            continue
+        errors.extend(_id_errors(where, step, seen_ids))
+        found, _ = _step_errors(where, step, policy, claim_ids, cleanup=True)
+        errors.extend(found)
+        target = step.get("cleans")
+        if target not in step_ids:
+            errors.append(f"{where}: cleans '{target}' names no step")
+        elif step_ids[target][1].get("side_effect") in (None, "none"):
+            errors.append(f"{where}: cleans '{target}', a step that declares no side_effect")
+        else:
+            cleaned.setdefault(str(target), []).append(step)
+    for target, group in cleaned.items():
+        if not any(s.get("action") in ASSERTION_ACTIONS for s in group):
+            errors.append(
+                f"cleanup: the steps cleaning '{target}' need an assertion (expect_dom|expect_url|expect_title) "
+                "showing the data is gone or restored"
+            )
+    for sid, (index, step) in step_ids.items():
+        effect = step.get("side_effect")
+        if effect not in SIDE_EFFECTS or effect == "none":
+            continue
+        if sid in cleaned:
+            if step.get("no_cleanup_reason") is not None:
+                errors.append(f"steps[{index}]: has cleanup steps and a no_cleanup_reason; keep one")
+            continue
+        if effect == "creates_test_data":
+            errors.append(f"steps[{index}]: side_effect '{effect}' needs a cleanup step (scenario.cleanup with cleans: '{sid}')")
+        elif step.get("no_cleanup_reason") is None:
+            errors.append(f"steps[{index}]: side_effect '{effect}' needs a cleanup step (scenario.cleanup with cleans: '{sid}') or no_cleanup_reason")
+    return errors
+
+
+def placeholder_errors(scenario: object) -> list[str]:
+    """Every placeholder must be a registered credential name, spelled exactly."""
+    from core.evidence.e2e.request import CREDENTIAL_KEYS
+
+    errors: list[str] = []
+    seen: set[str] = set()
+
+    def visit(item):
+        if isinstance(item, str):
+            for name in _ANY_ENV_REF.findall(item):
+                if name in CREDENTIAL_KEYS or name in seen:
+                    continue
+                seen.add(name)
+                shown = name[:40]
+                if name.upper() in CREDENTIAL_KEYS:
+                    errors.append(f"placeholder '${{{shown}}}' must be written '${{{name.upper()}}}': names are case-sensitive")
+                else:
+                    errors.append(f"placeholder '${{{shown}}}' is not a registered credential ({', '.join(CREDENTIAL_KEYS)})")
+        elif isinstance(item, dict):
+            for child in item.values():
+                visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+
+    visit(scenario)
     return errors
 
 
@@ -352,67 +593,23 @@ def validate_scenario(scenario: object, policy: Mapping | None = None, *, covere
         steps = []
     elif not steps and not (claim_ids and claim_ids <= set(covered)):
         errors.append("steps: at least one step is required (only claims covered by a runnable existing test may go without)")
+    seen_ids: set[str] = set()
+    step_ids: dict[str, tuple[int, Mapping]] = {}
     for index, step in enumerate(steps):
         where = f"steps[{index}]"
         if not isinstance(step, dict):
             errors.append(f"{where}: not an object")
             continue
-        action = step.get("action")
-        if action not in ALLOWED_ACTIONS:
-            errors.append(f"{where}: action '{action}' not allowed")
-            continue
-        if action in ASSERTION_ACTIONS:
-            cid = step.get("claim_id")
-            if not cid:
-                errors.append(f"{where}: {action} needs a claim_id")
-            elif cid not in claim_ids:
-                errors.append(f"{where}: claim_id '{cid}' names no claim")
-            else:
-                asserted.add(cid)
-        if action == "goto":
-            url = step.get("url")
-            if not isinstance(url, str) or not url:
-                errors.append(f"{where}: goto needs a url")
-            else:
-                refused = navigation_error(url, policy)
-                if refused:
-                    errors.append(f"{where}: {refused}")
-        errors.extend(_side_effect_errors(where, step, policy))
-        if action in _ACTIONS_WITH_SELECTOR:
-            candidates = step.get("selector_candidates")
-            if candidates is not None and "selector" in step:
-                errors.append(f"{where}: use selector or selector_candidates, not both")
-            elif candidates is not None:
-                if not isinstance(candidates, list) or not 1 <= len(candidates) <= MAX_SELECTOR_CANDIDATES:
-                    errors.append(f"{where}: selector_candidates must list 1..{MAX_SELECTOR_CANDIDATES} entries")
-                else:
-                    ranks: list[int] = []
-                    seen: list[dict] = []
-                    for position, item in enumerate(candidates):
-                        at = f"{where}.selector_candidates[{position}]"
-                        if not isinstance(item, dict):
-                            errors.append(f"{at}: not an object")
-                            continue
-                        found = _selector_errors(at, item.get("selector"))
-                        found += _provenance_errors(at, item.get("selector_provenance"))
-                        errors.extend(found)
-                        if found:
-                            continue
-                        if item["selector"] in seen:
-                            errors.append(f"{at}: duplicate selector")
-                        seen.append(item["selector"])
-                        ranks.append(selector_rank(item["selector"]))
-                    if ranks != sorted(ranks):
-                        errors.append(
-                            f"{where}: selector_candidates must run strongest first ({' > '.join(SELECTOR_RANK)})"
-                        )
-            else:
-                errors.extend(_selector_errors(where, step.get("selector")))
-                errors.extend(_provenance_errors(where, step.get("selector_provenance")))
-        if action == "fill" and not isinstance(step.get("value"), str):
-            errors.append(f"{where}: fill needs a string value")
-        if action == "expect_url" and not any(k in step for k in ("contains", "equals", "matches")):
-            errors.append(f"{where}: expect_url needs contains|equals|matches")
+        id_problems = _id_errors(where, step, seen_ids)
+        errors.extend(id_problems)
+        if not id_problems:
+            step_ids[step["id"]] = (index, step)
+        found, cid = _step_errors(where, step, policy, claim_ids, cleanup=False)
+        errors.extend(found)
+        if cid:
+            asserted.add(cid)
+    errors.extend(_cleanup_errors(scenario, step_ids, policy, claim_ids, seen_ids))
+    errors.extend(placeholder_errors(scenario))
     unasserted = claim_ids - asserted - set(covered)
     if unasserted and not errors:
         # A claim no assertion points at can never be proven, so a run that ends clean
@@ -613,7 +810,7 @@ def spec_continuation_prompt(gap: dict) -> str:
             "",
             "scenario_json:",
             "```json",
-            '{"version": 1, "feature": "<name>", "claims": [...], "steps": [...]}',
+            '{"version": 1, "feature": "<name>", "claims": [...], "steps": [{"id": "<kebab-id>", "action": "...", ...}], "cleanup": [...]}',
             "```",
             "",
             "spec_uncertainties:",

@@ -6,8 +6,9 @@ without starting a browser or recording a run; a run executes the confirmed scen
 always ends in stage 3 (`verify` with the compact evidence), both reached through
 `_run_delegated` under the ONE lock; the result is a canonical `[VERIFICATION]` the shared
 validator agrees with; every way the run can fail short ends `incomplete` with a named
-reason; nothing is read from or written to config.json; and `/.verify` itself is back to
-delegated | syntax.
+reason; config.json's `e2e` section supplies the defaults a request may override and is
+never written by a run; an environmental incomplete is retried and an application failure
+is not; and `/.verify` itself is back to delegated | syntax.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from urllib.parse import quote
 
 from core.evidence.contract import validate_verification_contract
 from core.evidence.e2e import preflight as e2e_preflight
-from core.evidence.e2e.request import draft_path, request_path, secrets_path, settings_from
+from core.evidence.e2e.request import draft_path, ensure_secrets_template, load_secrets, request_path, secrets_path, settings_from
 from core.evidence.e2e.runner import FAKE_ENV
 from core.evidence.e2e.spec import parse_spec
 from core.evidence.result_shaping import _finalize_verify_result, _verify_exit_code
@@ -71,10 +72,10 @@ scenario_json:
 {"version": 1, "feature": "login",
  "claims": [{"id": "login-valid-user", "severity": "blocking", "description": "valid login opens dashboard"}],
  "steps": [
-   {"action": "goto", "url": "/login"},
-   {"action": "fill", "selector": {"role": "textbox", "name": "Email"}, "selector_provenance": {"type": "source"}, "value": "${E2E_USER}"},
-   {"action": "click", "selector": {"role": "button", "name": "Masuk"}, "selector_provenance": {"type": "source"}},
-   {"action": "expect_url", "contains": "/dashboard", "claim_id": "login-valid-user"}
+   {"id": "open-login", "action": "goto", "url": "/login"},
+   {"id": "fill-email", "action": "fill", "selector": {"role": "textbox", "name": "Email"}, "selector_provenance": {"type": "source"}, "value": "${E2E_USER}"},
+   {"id": "submit", "action": "click", "selector": {"role": "button", "name": "Masuk"}, "selector_provenance": {"type": "source"}},
+   {"id": "assert-dashboard", "action": "expect_url", "contains": "/dashboard", "claim_id": "login-valid-user"}
  ]}
 ```
 
@@ -347,7 +348,125 @@ def _test_e2e_routing() -> None:
             _finalize_verify_result("verify", json.loads(json.dumps(result))).get("meta", {}).get("verdict") == "pass",
             "finalising twice (worker + await) must not change the verdict",
         )
-        assert_true(workflow_paths(root)["config"].read_bytes() == config_before, "config.json is neither read for settings nor written")
+        assert_true(workflow_paths(root)["config"].read_bytes() == config_before, "a run never writes config.json")
+
+        # --- config.json e2e section: the project's pinned defaults ---------------------
+        root = workspace("e2e-config-")
+        config_path = workflow_paths(root)["config"]
+        shipped = json.loads(config_path.read_text(encoding="utf-8"))
+        assert_true(
+            shipped["e2e"]["headless"] is False and shipped["e2e"]["max_retries"] == 2,
+            f"a fresh workspace ships headed with a retry budget: {shipped.get('e2e')}",
+        )
+
+        def _pin(**values) -> None:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            config["e2e"] = {**config.get("e2e", {}), **values}
+            config_path.write_text(json.dumps(config), encoding="utf-8")
+
+        _pin(headless=True, slow_mo_ms=250)
+        result = _run(root, _adapter(), _scenario(), env={"E2E_USER": "u"})
+        pinned = result["meta"]["e2e"]["config"]
+        assert_true(
+            pinned["headless"] is True and pinned["slow_mo_ms"] == 250,
+            f"a request with no settings inherits the pinned section: {pinned}",
+        )
+        result = _run(root, _adapter(), _scenario(), settings={"headless": False}, env={"E2E_USER": "u"})
+        pinned = result["meta"]["e2e"]["config"]
+        assert_true(
+            pinned["headless"] is False and pinned["slow_mo_ms"] == 250,
+            f"the request overrides one knob without discarding the rest: {pinned}",
+        )
+        # A bad knob in config.json warns and falls back; the same knob in a request is an
+        # error. config.json is shared by every command, so one typo here must not be able
+        # to stop work that never reads it.
+        _pin(headless="no", nope=1)
+        result = _run(root, _adapter(), _scenario(), env={"E2E_USER": "u"})
+        warnings = result["meta"]["e2e"].get("config_warnings") or []
+        assert_true(
+            result["meta"].get("verdict") == "pass" and result["meta"]["e2e"]["config"]["headless"] is False,
+            f"a malformed pinned value falls back to the shipped default instead of failing the run: {result['meta']['e2e']['config']}",
+        )
+        assert_true(
+            any("e2e.headless: str, expected bool" in w for w in warnings) and any("e2e.nope: unknown key" in w for w in warnings),
+            f"and both the wrong type and the unknown key are named, not silent: {warnings}",
+        )
+        _pin(headless=True, nope=None, allowed_read_only_requests=["PUT /api/items"])
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        del config["e2e"]["nope"]
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        result = _run(root, _adapter(), _scenario(), env={"E2E_USER": "u"})
+        warnings = result["meta"]["e2e"].get("config_warnings") or []
+        assert_true(
+            any("e2e.allowed_read_only_requests" in w for w in warnings),
+            f"a structurally wrong pinned list is dropped with its reason: {warnings}",
+        )
+
+        # --- tag proposals: recorded by the run, applied by nobody -----------------------
+        root = workspace("e2e-tags-")
+        template = root / "templates" / "login.html"
+        template.parent.mkdir(parents=True, exist_ok=True)
+        template.write_text('<form>\n  <input name="email">\n</form>\n', encoding="utf-8")
+        cited = _scenario()
+        cited["steps"][1]["selector_provenance"] = {"type": "source", "ref": "templates/login.html:2"}
+        result = _run(root, _adapter(), cited, env={"E2E_USER": "u"})
+        tags = result["meta"]["e2e"].get("tags") or {}
+        assert_true(tags.get("ready") == 1, f"a step whose selector the draft cited becomes one ready proposal: {tags}")
+        events = (Path(result["meta"]["e2e"]["artifacts"]) / "events.jsonl").read_text(encoding="utf-8")
+        assert_true(
+            '"selector_keys"' in events and '"selector":' not in events,
+            "the event stream records which KIND of selector won, never its values — a value can be a credential too short to scrub",
+        )
+        recorded = json.loads(Path(tags["file"]).read_text(encoding="utf-8"))
+        entry = next(e for e in recorded if e["status"] == "ready")
+        assert_true(
+            entry["path"] == "templates/login.html" and entry["line"] == 2 and 'data-e2e="fill-email"' in entry["new_line"],
+            f"the plan names the exact line and the exact replacement: {entry}",
+        )
+        assert_true(
+            template.read_text(encoding="utf-8") == '<form>\n  <input name="email">\n</form>\n',
+            "and the runner changes nothing: the user has not been asked yet",
+        )
+        uncited = _run(workspace("e2e-tags-none-"), _adapter(), _scenario(), env={"E2E_USER": "u"})
+        assert_true(
+            not (uncited["meta"]["e2e"].get("tags") or {}).get("ready"),
+            "a scenario that cites no line proposes no tag rather than guessing one",
+        )
+
+        # --- retry: environmental incomplete only, never an app failure -----------------
+        root = workspace("e2e-retry-")
+        result = _run(root, _adapter(), _scenario(), fake="harness_fail", env={"E2E_USER": "u"})
+        meta = result["meta"]["e2e"]
+        attempts = meta.get("attempts") or []
+        assert_true(
+            result["meta"].get("verdict") == "incomplete" and len(attempts) == 2 and attempts[-1].get("stable") is True,
+            f"a harness incomplete is retried once and stops when it repeats step for step: {attempts}",
+        )
+        assert_true(
+            Path(attempts[1]["artifacts"]).name == "retry1" and Path(attempts[0]["artifacts"]) == Path(meta["artifacts"]),
+            f"the retry gets its own directory instead of overwriting what it is retrying: {attempts}",
+        )
+        result = _run(root, _adapter(review=_REVIEW_PASS_DESPITE_FAIL), _scenario(), fake="app_fail", env={"E2E_USER": "u"})
+        assert_true(
+            result["meta"].get("verdict") == "fail" and not (result["meta"]["e2e"].get("attempts") or []),
+            f"an application failure is never re-rolled: {result['meta']['e2e'].get('attempts')}",
+        )
+        result = _run(root, _adapter(), _scenario(), fake="launch_fail", env={"E2E_USER": "u"})
+        assert_true(
+            result["meta"]["e2e"].get("reason") == "browser_missing" and not (result["meta"]["e2e"].get("attempts") or []),
+            f"a missing browser is not a flake: rerunning it changes nothing: {result['meta']['e2e'].get('attempts')}",
+        )
+        result = _run(root, _adapter(), _scenario(), fake="harness_fail", settings={"max_retries": 0}, env={"E2E_USER": "u"})
+        assert_true(not (result["meta"]["e2e"].get("attempts") or []), "max_retries 0 turns retries off")
+        writes = _run(
+            workspace("e2e-retry-writes-"), _adapter(), _scenario(), fake="harness_fail",
+            settings={"base_url": "http://127.0.0.1:8000", "allow_side_effects": True, "max_retries": 2},
+            env={"E2E_USER": "u"},
+        )
+        assert_true(
+            not (writes["meta"]["e2e"].get("attempts") or []),
+            "allow_side_effects turns retries off outright: the first attempt's write may already have landed",
+        )
 
         # --- app fail: browser fail outranks a reviewer that says DONE -------------------
         root = workspace("e2e-fail-")
@@ -428,7 +547,10 @@ def _test_e2e_routing() -> None:
         assert_true(result["meta"]["e2e"].get("reason") == "env_missing" and "secrets.json" in result["content"], f"an unset ${{ENV}} is env_missing: {result['meta']['e2e'].get('reason')}")
         # Nothing used to create the file the user was told to fill. The draft now does.
         template = json.loads(secrets_path(root).read_text(encoding="utf-8"))
-        assert_true(template == {"default": "default", "profiles": {"default": {"E2E_USER": ""}}}, f"the draft writes an empty slot per referenced name: {template}")
+        assert_true(
+            template == {"default": "default", "profiles": [{"name": "default", "credentials": {"E2E_USER": "", "E2E_PASS": ""}}]},
+            f"the draft writes the registry's shape and names, whatever the scenario referenced: {template}",
+        )
         assert_true("created now with empty slots" in draft["content"] and draft["meta"]["e2e"]["secrets"].get("template_created") is True, "and says so in the draft")
         assert_true(_draft(root, _adapter())["meta"]["e2e"]["secrets"].get("template_created") is None, "an existing file is never rewritten")
         assert_true(_draft_info(_draft(root, _adapter())).get("missing_env") == ["E2E_USER"], "an empty slot is unfilled, not an empty credential")
@@ -439,7 +561,10 @@ def _test_e2e_routing() -> None:
         other = "admin.operator@internal.example"
         target = secrets_path(root)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps({"default": "qa", "profiles": {"qa": {"E2E_USER": from_file}, "admin": {"E2E_USER": other}}}), encoding="utf-8")
+        target.write_text(json.dumps({"default": "qa", "profiles": [
+            {"name": "qa", "credentials": {"E2E_USER": from_file, "E2E_PASS": ""}},
+            {"name": "admin", "credentials": {"E2E_USER": other}},
+        ]}), encoding="utf-8")
         adapter = _adapter()
         draft, result = _flow(root, adapter, "pass")
         assert_true(_draft_info(draft).get("missing_env") == [], "a key in the default profile counts as set")
@@ -486,16 +611,91 @@ def _test_e2e_routing() -> None:
         root = workspace("e2e-secrets-bad-")
         target = secrets_path(root)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(json.dumps({"profiles": {"qa": {"E2E_USER": 12345, "hunter2-secret as key": "x"}}}), encoding="utf-8")
+        target.write_text(json.dumps({"profiles": [{"name": "qa", "credentials": {"E2E_USER": 12345, "hunter2-secret as key": "x", "e2e_pass": "y"}}]}), encoding="utf-8")
         result = _run(root, _adapter(), _scenario())
-        assert_true(result["meta"]["e2e"].get("reason") == "secrets_invalid" and "profiles.qa.E2E_USER: must be a string" in result["content"] and "entry #2" in result["content"], f"a malformed entry is named by location: {result['content'][:400]}")
+        assert_true(
+            result["meta"]["e2e"].get("reason") == "secrets_invalid" and "profile 'qa': E2E_USER must be a string" in result["content"]
+            and "credential #2: not a registered name" in result["content"],
+            f"a malformed entry is named by location: {result['content'][:600]}",
+        )
+        assert_true(
+            any("credential #3" in e and "did you mean E2E_PASS" in e for e in load_secrets(root)[1]),
+            f"a mis-cased name is pointed at its registered spelling: {load_secrets(root)[1]}",
+        )
         assert_true("hunter2-secret" not in json.dumps(result), "and neither a value nor a mistyped key is ever echoed")
-        target.write_text('{"profiles": {"qa": {"E2E_USER": "hunter2-secret",}}}', encoding="utf-8")
+        target.write_text('{"profiles": [{"name": "qa", "credentials": {"E2E_USER": "hunter2-secret",}}]}', encoding="utf-8")
         result = _run(root, _adapter(), _scenario())
         assert_true("not valid JSON (line 1)" in result["content"] and "hunter2-secret" not in json.dumps(result), f"broken JSON is named by line only: {result['content'][:400]}")
-        target.write_text(json.dumps({"profiles": {"qa": {"E2E_USER": "a"}, "admin": {"E2E_USER": "b"}}}), encoding="utf-8")
+        target.write_text(json.dumps({"profiles": [{"name": "qa", "credentials": {"E2E_USER": "a"}}, {"name": "admin", "credentials": {"E2E_USER": "b"}}]}), encoding="utf-8")
         result = _run(root, _adapter(), _scenario())
         assert_true(result["meta"]["e2e"].get("reason") == "secrets_invalid" and "set settings.secrets_profile" in result["content"], "two profiles and no default must be chosen explicitly, never guessed")
+        old_format = json.dumps({"default": "qa", "profiles": {"qa": {"E2E_USER": "hunter2-secret"}}})
+        target.write_text(old_format, encoding="utf-8")
+        result = _run(root, _adapter(), _scenario())
+        assert_true(
+            result["meta"]["e2e"].get("reason") == "secrets_invalid" and "the old format" in result["content"] and '"credentials"' in result["content"]
+            and "hunter2-secret" not in json.dumps(result),
+            f"the old object format is refused with the new shape, never read: {result['content'][:500]}",
+        )
+        assert_true(target.read_text(encoding="utf-8") == old_format, "and the file is left exactly as the user wrote it")
+        for body, fragment in (
+            ({"profiles": [{"name": "qa", "credentials": {}}, {"name": "qa", "credentials": {}}]}, "duplicate profile name 'qa'"),
+            ({"default": "prod", "profiles": [{"name": "qa", "credentials": {}}]}, "default names no profile"),
+            ({"profiles": [{"name": "q a", "credentials": {}}]}, "name must match"),
+            ({"profiles": [{"name": "qa", "credentials": ["E2E_USER"]}]}, "credentials must be an object"),
+            ({"profiles": "qa"}, "must be a list"),
+        ):
+            target.write_text(json.dumps(body), encoding="utf-8")
+            values, errors, _ = load_secrets(root)
+            assert_true(values == {} and any(fragment in e for e in errors), f"{fragment}: {errors}")
+
+        # The generator: registry shape, profile names from the settings, never a second writer.
+        root = workspace("e2e-secrets-template-")
+        target = secrets_path(root)
+        assert_true(ensure_secrets_template(root, ["qa", "admin"]) is True, "a missing file is created")
+        written = json.loads(target.read_text(encoding="utf-8"))
+        assert_true(
+            written["default"] == "qa" and [p["name"] for p in written["profiles"]] == ["qa", "admin"]
+            and all(p["credentials"] == {"E2E_USER": "", "E2E_PASS": ""} for p in written["profiles"]),
+            f"one profile per requested name, first is default, every registered name empty: {written}",
+        )
+        target.write_text("user's own file", encoding="utf-8")
+        assert_true(ensure_secrets_template(root, ["other"]) is False and target.read_text(encoding="utf-8") == "user's own file", "an existing file is never rewritten")
+        assert_true(not [p for p in target.parent.iterdir() if p.suffix == ".tmp"], "no temporary file is left behind")
+        target.unlink()
+        import threading
+
+        outcomes: list[bool] = []
+        barrier = threading.Barrier(8)
+
+        def race(name: str) -> None:
+            barrier.wait()
+            outcomes.append(ensure_secrets_template(root, [name]))
+
+        threads = [threading.Thread(target=race, args=(f"p{i}",)) for i in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        survivor = json.loads(target.read_text(encoding="utf-8"))
+        assert_true(
+            outcomes.count(True) == 1 and len(survivor["profiles"]) == 1 and survivor["default"] == survivor["profiles"][0]["name"],
+            f"eight concurrent drafts: exactly one creates the file, the rest leave it alone: {outcomes} {survivor}",
+        )
+        assert_true(not [p for p in target.parent.iterdir() if p.suffix == ".tmp"], "and none leaves a temporary file")
+        assert_true(
+            settings_from({"secrets_template_profiles": ["qa", "qa", "a b"]})[1] == [
+                "settings.secrets_template_profiles[1]: duplicate profile 'qa'",
+                "settings.secrets_template_profiles[2]: a profile name, [A-Za-z0-9_-], at most 64 characters",
+            ],
+            "template profile names are validated as names",
+        )
+        from core.evidence.e2e.request import template_profiles
+
+        assert_true(
+            template_profiles({"secrets_profile": "admin", "secrets_template_profiles": ["qa"]}) == ["admin", "qa"] and template_profiles({}) == ["default"],
+            "the selected profile leads the template; with nothing named, one `default`",
+        )
 
         # --- request missing, malformed, or for another session -------------------------------
         root = workspace("e2e-norequest-")
@@ -510,23 +710,15 @@ def _test_e2e_routing() -> None:
             result["meta"]["e2e"].get("reason") == "request_invalid" and "settings.spec_path: unknown key" in result["content"] and "settings.headless: str, expected bool" in result["content"],
             f"a typo or a wrong type stops the run: {result['content'][:400]}",
         )
-        settings, errors = settings_from({"allowed_mutation_paths": ["/login", "https://api.test:8443/session"]})
-        assert_true(errors == [] and settings["allowed_mutation_paths"] == ["/login", "https://api.test:8443/session"], f"a path and a full URL are both accepted: {errors}")
-        assert_true(settings_from(None)[0]["allowed_mutation_paths"] == [], "no entry by default: every write is refused")
-        for bad, why in (
-            ("/api/*", "wildcard"),
-            ("/login?next=1", "query"),
-            ("//evil.example/x", "scheme-relative"),
-            ("login", "relative"),
-            ("ftp://host/x", "scheme"),
-            ("https://host", "URL without a path"),
-            ("", "empty"),
-            (7, "not a string"),
-        ):
-            _, errors = settings_from({"allowed_mutation_paths": [bad]})
-            assert_true(len(errors) == 1 and "allowed_mutation_paths[0]" in errors[0], f"{why} is refused: {errors}")
-        _, errors = settings_from({"allowed_mutation_paths": [f"/p{i}" for i in range(21)]})
-        assert_true(any("at most" in e for e in errors), f"the allow-list is bounded: {errors}")
+        settings, errors = settings_from({"allowed_mutation_paths": ["/login"]})
+        assert_true(
+            len(errors) == 1 and "settings.allowed_mutation_paths: removed" in errors[0] and "loopback" in errors[0] and "allowed_read_only_requests" in errors[0],
+            f"the removed allow-list is a migration error naming the way forward, not a silent no-op: {errors}",
+        )
+        assert_true("allowed_mutation_paths" not in settings_from(None)[0], "and it is gone from the defaults")
+        _write_request(root, "draft", settings={"allowed_mutation_paths": ["/login"]})
+        result = _execute(root, adapter, "verify-browser")
+        assert_true(result["meta"]["e2e"].get("reason") == "request_invalid" and "allowed_mutation_paths: removed" in result["content"], "a request still using it stops before anything runs")
         _write_request(root, "run")
         result = _execute(root, adapter, "verify-browser")
         assert_true(result["meta"]["e2e"].get("reason") == "request_invalid" and "needs the confirmed scenario" in result["content"], "a run without a scenario is refused")
@@ -534,21 +726,85 @@ def _test_e2e_routing() -> None:
         result = _execute(root, adapter, "verify-browser", session_id="another-session")
         assert_true(result["meta"]["e2e"].get("reason") == "request_missing" and adapter.calls == [], "one session never reads another session's request")
 
-        # --- remote base_url: refused without both policy fields, admitted with them ------------
+        # --- base_url policy: a real domain needs the opt-in, a .test name does not --------------
         root = workspace("e2e-remote-")
         adapter = _adapter()
-        draft = _draft(root, adapter, settings={"base_url": "http://app.test"})
-        assert_true(draft["meta"]["e2e"].get("reason") == "spec_invalid" and adapter.calls == [], "a non-loopback base_url is refused before any call")
-        draft = _draft(root, adapter, settings={"base_url": "http://app.test", "allow_remote": True})
+        draft = _draft(root, adapter, settings={"base_url": "http://staging.example.com"})
+        assert_true(draft["meta"]["e2e"].get("reason") == "spec_invalid" and adapter.calls == [], "a real domain is refused before any call")
+        draft = _draft(root, adapter, settings={"base_url": "http://staging.example.com", "allow_remote": True})
         assert_true(draft["meta"]["e2e"].get("reason") == "spec_invalid" and adapter.calls == [], "allow_remote alone is not enough")
-        remote = {"base_url": "http://app.test", "allow_remote": True, "allowed_origins": ["http://app.test"]}
+        remote = {"base_url": "http://staging.example.com", "allow_remote": True, "allowed_origins": ["http://staging.example.com"]}
         draft = _draft(root, adapter, settings=remote)
         policy = next(c for c in draft["meta"]["e2e"]["preflight"] if c["name"] == "base_url_policy")
-        assert_true(_draft_info(draft).get("status") == "ready" and policy["detail"] == "remote origin allow-listed", f"a confirmed virtual host is admitted: {policy}")
+        assert_true(_draft_info(draft).get("status") == "ready" and policy["detail"] == "remote origin allow-listed", f"a confirmed remote origin is admitted: {policy}")
+        virtual = _draft(root, adapter, settings={"base_url": "http://app.test"})
+        policy = next(c for c in virtual["meta"]["e2e"]["preflight"] if c["name"] == "base_url_policy")
+        assert_true(
+            _draft_info(virtual).get("status") == "ready" and policy["detail"] == "virtual dev host",
+            f"a .test name is admitted on its own: {policy}",
+        )
+
+        # --- writes off loopback: judged by the ADDRESS, and pinned to it -----------------
+        # `.test` cannot exist on the public internet, but the name still says nothing about
+        # where it points, so every write host is resolved here and refused unless every
+        # address it has is loopback or private.
+        import core.evidence.e2e.preflight as _pf
+
+        saved_resolver = _pf.host_addresses
+        try:
+            calls_before = len(adapter.calls)
+            _pf.host_addresses = lambda host: ["93.184.216.34"]
+            writes = {"base_url": "http://app.test", "allow_side_effects": True}
+            draft = _draft(root, adapter, settings=writes)
+            assert_true(
+                draft["meta"]["e2e"].get("reason") == "spec_invalid"
+                and "resolves to public address 93.184.216.34" in draft["content"]
+                and len(adapter.calls) == calls_before,
+                f"a write host that resolves to a public address is refused before any call: {draft['content'][:300]}",
+            )
+            _pf.host_addresses = lambda host: ["192.168.1.40", "8.8.8.8"]
+            draft = _draft(root, adapter, settings=writes)
+            assert_true(
+                draft["meta"]["e2e"].get("reason") == "spec_invalid" and "public address 8.8.8.8" in draft["content"],
+                "one public address among private ones still refuses the whole name",
+            )
+            _pf.host_addresses = lambda host: ["169.254.169.254"]
+            draft = _draft(root, adapter, settings=writes)
+            assert_true(
+                draft["meta"]["e2e"].get("reason") == "spec_invalid" and "169.254.169.254" in draft["content"],
+                "link-local is not 'private enough': that address is the cloud metadata service",
+            )
+            _pf.host_addresses = lambda host: ["192.168.1.40"]
+            draft = _draft(root, adapter, settings=writes)
+            assert_true(_draft_info(draft).get("status") == "ready", f"a private address admits the write: {_draft_info(draft).get('errors')}")
+            network = draft["meta"]["e2e"].get("network") or {}
+            assert_true(
+                network.get("pins") == {"app.test": "192.168.1.40"} and network.get("write_hosts") == ["app.test"],
+                f"and the decision travels as a pin, so the guard never asks DNS again: {network}",
+            )
+            draft = _draft(root, adapter, settings={**writes, "browser": "firefox"})
+            assert_true(
+                draft["meta"]["e2e"].get("reason") == "spec_invalid" and "resolver pinned" in draft["content"],
+                f"a browser whose resolver cannot be pinned may not write off loopback: {draft['content'][:300]}",
+            )
+            _pf.host_addresses = lambda host: (_ for _ in ()).throw(OSError("Name or service not known"))
+            draft = _draft(root, adapter, settings=writes)
+            assert_true(draft["meta"]["e2e"].get("reason") == "spec_invalid" and "OSError" in draft["content"], "a name that does not resolve is not approved by default")
+        finally:
+            _pf.host_addresses = saved_resolver
+
+        result = _run(root, adapter, _scenario(), settings={"base_url": "http://app.test", "allow_side_effects": True}, env={"E2E_USER": "u"})
+        assert_true(result["meta"].get("verdict") == "incomplete" and result["meta"]["e2e"].get("reason") == "spec_invalid", "a run is judged by the same check")
+        local_writes = _draft(workspace("e2e-local-writes-"), _adapter(), settings={"base_url": "http://127.0.0.1:8000", "allow_side_effects": True})
+        assert_true(_draft_info(local_writes).get("status") == "ready", f"a loopback app may take writes: {_draft_info(local_writes).get('errors')}")
+        assert_true(
+            not ((local_writes["meta"]["e2e"].get("network") or {}).get("pins")),
+            "and a loopback name needs no lookup and no pin",
+        )
 
         # --- a stage-1 spec that navigates off-origin: invalid draft, refused run -------------------
         root = workspace("e2e-offorigin-")
-        off_origin = _SPEC_REPLY.replace('{"action": "goto", "url": "/login"}', '{"action": "goto", "url": "https://evil.example/login"}')
+        off_origin = _SPEC_REPLY.replace('{"id": "open-login", "action": "goto", "url": "/login"}', '{"id": "open-login", "action": "goto", "url": "https://evil.example/login"}')
         assert_true(off_origin != _SPEC_REPLY, "fixture assumption: the goto step is where the replace expects it")
         adapter = _adapter(spec=off_origin)
         draft = _draft(root, adapter)
@@ -576,7 +832,7 @@ def _test_e2e_routing() -> None:
         covered_spec = _SPEC_REPLY.replace(
             "existing_tests:\n- none", "existing_tests:\n- path: e2e/login.spec.ts | covers: login-valid-user | confidence: high"
         ).replace(
-            '"source"}},\n   {"action": "expect_url", "contains": "/dashboard", "claim_id": "login-valid-user"}\n ]}',
+            '"source"}},\n   {"id": "assert-dashboard", "action": "expect_url", "contains": "/dashboard", "claim_id": "login-valid-user"}\n ]}',
             '"source"}}\n ]}',
         )
         assert_true(covered_spec.count("existing_tests:\n- path:") == 1 and '"expect_url"' not in covered_spec, "fixture assumption: existing test listed, assertion removed")

@@ -63,25 +63,125 @@ def _send(handler: http.server.BaseHTTPRequestHandler, status: int, body: bytes,
         pass  # the player was killed mid-request; nothing to answer
 
 
+# A fetch-driven CRUD page, served inline: a loader shown while data loads (with a delay, so
+# readiness has something to wait for), a list rendered from the API, and a poll that keeps
+# the network busy forever — the page `networkidle` never settles on.
+_CRUD_PAGE = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Items</title></head>
+<body>
+  <div data-testid="loader">Loading...</div>
+  <p data-testid="count"></p>
+  <ul data-testid="items"></ul>
+  <form id="add"><label>Name <input name="name"></label><button type="submit">Add item</button></form>
+  <script>
+    const loader = document.querySelector('[data-testid=loader]');
+    const list = document.querySelector('[data-testid=items]');
+    const count = document.querySelector('[data-testid=count]');
+    async function call(method, path, body) {
+      loader.hidden = false;
+      await fetch(path, {method, headers: {'Content-Type': 'application/json'}, body: body ? JSON.stringify(body) : undefined});
+      await refresh();
+    }
+    async function refresh() {
+      loader.hidden = false;
+      const items = await (await fetch('/api/items')).json();
+      await new Promise((done) => setTimeout(done, 600));
+      list.innerHTML = '';
+      for (const item of items) {
+        const row = document.createElement('li');
+        row.dataset.testid = 'row-' + item.name;
+        row.textContent = item.name + ' ' + item.status + ' ';
+        for (const [label, method, body] of [['Mark done', 'PATCH', {status: 'done'}], ['Reset', 'PUT', {name: item.name, status: 'open'}], ['Delete', 'DELETE', null]]) {
+          const button = document.createElement('button');
+          button.textContent = label;
+          button.onclick = () => call(method, '/api/items/' + item.id, body);
+          row.append(button);
+        }
+        list.append(row);
+      }
+      count.textContent = items.length + ' items';
+      loader.hidden = true;
+    }
+    document.querySelector('#add').onsubmit = (event) => { event.preventDefault(); call('POST', '/api/items', {name: event.target.name.value, status: 'open'}); };
+    setInterval(() => fetch('/api/ping'), 250);
+    refresh();
+  </script>
+</body></html>
+"""
+_SLOW_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Slow</title></head>
+<body><form method="post" action="/items/slow"><button type="submit">Send slowly</button></form></body></html>
+"""
+
+
 class _AppHandler(http.server.BaseHTTPRequestHandler):
     third_party = ""
     writes: list[str] = []
+    items: dict[int, dict] = {}
+    next_id = [1]
+    fail_delete = [False]
 
     def log_message(self, *args) -> None:
         pass
+
+    def _body(self) -> dict:
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length) if length else b""
+        try:
+            return json.loads(raw or b"{}")
+        except ValueError:
+            return {}
+
+    def _item_id(self, path: str) -> int | None:
+        head, _, tail = path.rpartition("/")
+        return int(tail) if head == "/api/items" and tail.isdigit() else None
 
     def do_POST(self) -> None:
         # Counted before anything else: the write guard's proof is that this list stays empty.
         path = self.path.split("?", 1)[0]
         self.writes.append(path)
-        length = int(self.headers.get("Content-Length") or 0)
-        if length:
-            self.rfile.read(length)
+        if path == "/api/items":
+            body = self._body()
+            item_id = self.next_id[0]
+            self.next_id[0] += 1
+            self.items[item_id] = {"id": item_id, "name": str(body.get("name")), "status": str(body.get("status") or "open")}
+            return _send(self, 201, json.dumps(self.items[item_id]).encode("utf-8"), "application/json")
+        self._body()
         if path == "/items/delete":
             return _send(self, 200, b"<!doctype html><title>Deleted</title><p>deleted</p>", "text/html; charset=utf-8")
+        if path == "/items/slow":
+            time.sleep(4)
+            return _send(self, 200, b"<!doctype html><title>Sent</title><p>sent</p>", "text/html; charset=utf-8")
         if path == "/search":
             return _send(self, 200, b"<!doctype html><title>Results</title><p>1 result</p>", "text/html; charset=utf-8")
         return _send(self, 404, b"not found", "text/plain")
+
+    def _update(self, method: str) -> None:
+        path = self.path.split("?", 1)[0]
+        self.writes.append(f"{method} {path}")
+        body = self._body()
+        item_id = self._item_id(path)
+        if item_id not in self.items:
+            return _send(self, 404, b"not found", "text/plain")
+        if method == "PUT":
+            self.items[item_id] = {"id": item_id, "name": str(body.get("name")), "status": str(body.get("status"))}
+        else:
+            self.items[item_id].update({k: str(v) for k, v in body.items() if k in ("name", "status")})
+        return _send(self, 200, json.dumps(self.items[item_id]).encode("utf-8"), "application/json")
+
+    def do_PUT(self) -> None:
+        self._update("PUT")
+
+    def do_PATCH(self) -> None:
+        self._update("PATCH")
+
+    def do_DELETE(self) -> None:
+        path = self.path.split("?", 1)[0]
+        self.writes.append(f"DELETE {path}")
+        item_id = self._item_id(path)
+        if self.fail_delete[0] or item_id not in self.items:
+            return _send(self, 500, b"cannot delete", "text/plain")
+        del self.items[item_id]
+        return _send(self, 204, b"", "text/plain")
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
@@ -90,6 +190,14 @@ class _AppHandler(http.server.BaseHTTPRequestHandler):
         if path == "/hang":
             time.sleep(20)
             return _send(self, 200, b"late", "text/plain")
+        if path == "/api/items":
+            return _send(self, 200, json.dumps(list(self.items.values())).encode("utf-8"), "application/json")
+        if path == "/api/ping":
+            return _send(self, 200, b"{}", "application/json")
+        if path == "/crud.html":
+            return _send(self, 200, _CRUD_PAGE.encode("utf-8"), "text/html; charset=utf-8")
+        if path == "/slow.html":
+            return _send(self, 200, _SLOW_PAGE.encode("utf-8"), "text/html; charset=utf-8")
         page = FIXTURE_DIR / path.lstrip("/")
         if path.endswith(".html") and page.parent == FIXTURE_DIR and page.is_file():
             body = page.read_text(encoding="utf-8").replace(THIRD_PARTY_TOKEN, self.third_party)
@@ -154,17 +262,18 @@ def _test_e2e_real_browser_smoke() -> None:
         print(f"  e2e-smoke: skipped ({detail})")
         return
 
-    saved = {name: os.environ.get(name) for name in (FAKE_ENV, "E2E_SMOKE_USER", "E2E_SMOKE_PASS")}
+    saved = {name: os.environ.get(name) for name in (FAKE_ENV, "E2E_USER", "E2E_PASS")}
     third, third_url = _serve(_ThirdPartyHandler)
     app, base = _serve(type("FixtureApp", (_AppHandler,), {"third_party": third_url}))
     roots: list[Path] = []
     try:
         os.environ.pop(FAKE_ENV, None)
-        os.environ["E2E_SMOKE_USER"] = USER
-        os.environ["E2E_SMOKE_PASS"] = PASSWORD
+        os.environ["E2E_USER"] = USER
+        os.environ["E2E_PASS"] = PASSWORD
         before = _playwright_browser_processes()
 
-        def case(steps: list[dict], **e2e) -> tuple[dict, dict, set[str], Path]:
+        def case(steps: list[dict], cleanup: list[dict] | None = None, **e2e) -> tuple[dict, dict, set[str], Path]:
+            steps = [dict(step, id=step.get("id") or f"step-{n}") for n, step in enumerate(steps, 1)]
             root = Path(tempfile.mkdtemp(prefix="e2e-smoke-"))
             roots.append(root)
             ensure_workflow_workspace(root, os.getenv("AGENT_PATH"))
@@ -175,8 +284,8 @@ def _test_e2e_real_browser_smoke() -> None:
                     {
                         "version": 1,
                         "phase": "run",
-                        "settings": {"base_url": base, "step_timeout_ms": 3000, "nav_timeout_ms": 10000, **e2e},
-                        "scenario": {"version": 1, "feature": "smoke", "claims": _CLAIMS, "steps": steps},
+                        "settings": {"base_url": base, "step_timeout_ms": 3000, "nav_timeout_ms": 10000, "headless": True, **e2e},
+                        "scenario": {"version": 1, "feature": "smoke", "claims": _CLAIMS, "steps": steps, **({"cleanup": cleanup} if cleanup else {})},
                     }
                 ),
                 encoding="utf-8",
@@ -190,8 +299,8 @@ def _test_e2e_real_browser_smoke() -> None:
 
         login = [
             {"action": "goto", "url": "/login.html"},
-            {"action": "fill", "selector": {"label": "Email"}, "selector_provenance": {"type": "source"}, "value": "${E2E_SMOKE_USER}"},
-            {"action": "fill", "selector": {"label": "Password"}, "selector_provenance": {"type": "source"}, "value": "${E2E_SMOKE_PASS}"},
+            {"action": "fill", "selector": {"label": "Email"}, "selector_provenance": {"type": "source"}, "value": "${E2E_USER}"},
+            {"action": "fill", "selector": {"label": "Password"}, "selector_provenance": {"type": "source"}, "value": "${E2E_PASS}"},
             {"action": "click", "selector_candidates": [
                 {"selector": {"role": "button", "name": "Sign in"}, "selector_provenance": {"type": "heuristic"}},
                 {"selector": {"role": "button", "name": "Masuk"}, "selector_provenance": {"type": "source"}},
@@ -213,7 +322,7 @@ def _test_e2e_real_browser_smoke() -> None:
         result, report, files, directory = case([*login, {"action": "expect_url", "contains": "/settings", "claim_id": "login"}])
         assert_true(report["browser_verdict"] == "fail" and _verify_exit_code("verify", result) == 2, f"a failed assertion fails: {report['reason']}")
         assert_true("step05.html" in files and "step05.png" not in files and "trace.zip" not in files, f"with credentials in play only text is kept: {sorted(files)}")
-        assert_true("${E2E_SMOKE_USER}" in (directory / "step05.html").read_text(encoding="utf-8"), "the rendered address is a placeholder in the kept HTML")
+        assert_true("${E2E_USER}" in (directory / "step05.html").read_text(encoding="utf-8"), "the rendered address is a placeholder in the kept HTML")
         assert_true(_leaks(result, directory) == [], f"no raw or encoded credential anywhere: {_leaks(result, directory)}")
         assert_true("screenshot skipped" in (directory / "evidence.md").read_text(encoding="utf-8"), "the skip is stated in the evidence")
 
@@ -301,16 +410,85 @@ def _test_e2e_real_browser_smoke() -> None:
             f"a refused write is a harness stop, not an app failure: {report['browser_verdict']} {report['failures']}",
         )
 
-        # --- the same POST passes when its exact path is allow-listed (the login-form case) ----------
-        _AppHandler.writes.clear()
-        _, report, _, _ = case(delete, allowed_mutation_paths=["/items/delete"])
-        assert_true(_AppHandler.writes == ["/items/delete"], f"an allow-listed write is sent once: {_AppHandler.writes}")
-        assert_true(report["browser_verdict"] == "pass", f"and the flow completes: {report['reason']} {report['failures']}")
+        blocked = [r for r in report["requests"] if r["blocked"]]
+        assert_true(
+            len(blocked) == 1 and blocked[0]["method"] == "POST" and blocked[0]["endpoint"].endswith("/items/delete") and blocked[0]["step_id"] == "step-2",
+            f"and the refused write is in the ledger, on its step: {report['requests']}",
+        )
 
-        # --- or when side effects are allowed outright ----------------------------------------------
+        # --- side effects on against a loopback app: the write is sent once --------------------------
         _AppHandler.writes.clear()
         _, report, _, _ = case(delete, allow_side_effects=True)
-        assert_true(_AppHandler.writes == ["/items/delete"] and report["browser_verdict"] == "pass", f"allow_side_effects lifts the guard: {_AppHandler.writes} {report['reason']}")
+        assert_true(_AppHandler.writes == ["/items/delete"] and report["browser_verdict"] == "pass", f"allow_side_effects sends a write to a loopback app: {_AppHandler.writes} {report['reason']}")
+
+        # --- CRUD on a fetch-driven page: readiness, scoped selectors, ledger, cleanup ----------------
+        name = "e2e-smoke-item"
+        row = {"testid": f"row-{name}"}
+        loaded = [{"hidden": {"testid": "loader"}}]
+        crud_steps = [
+            {"id": "open", "action": "goto", "url": "/crud.html", "ready": [*loaded, {"text": "0 items"}]},
+            {"id": "fill-name", "action": "fill", "selector": {"label": "Name"}, "selector_provenance": {"type": "source"}, "value": name},
+            {"id": "create", "action": "click", "selector": {"role": "button", "name": "Add item"}, "selector_provenance": {"type": "source"},
+             "side_effect": "creates_test_data", "test_environment_required": True, "test_data": {"marker": name}, "request": {"method": "POST", "path": "/api/items"}},
+            {"id": "assert-created", "action": "expect_dom", "selector": row, "text": f"{name} open", "claim_id": "login", "ready": [{"visible": row}, *loaded]},
+            {"id": "mark-done", "action": "click", "selector": {"role": "button", "name": "Mark done"}, "within": row,
+             "side_effect": "modifies_test_data", "test_environment_required": True, "test_data": {"marker": name},
+             "no_cleanup_reason": "the row is deleted by the cleanup of create", "request": {"method": "PATCH", "path": "/api/items/:id"}},
+            {"id": "assert-done", "action": "expect_dom", "selector": row, "text": f"{name} done", "claim_id": "login"},
+            {"id": "reset", "action": "click", "selector": {"role": "button", "name": "Reset"}, "within": row, "ready": loaded,
+             "side_effect": "modifies_test_data", "test_environment_required": True, "test_data": {"marker": name},
+             "no_cleanup_reason": "the row is deleted by the cleanup of create", "request": {"method": "PUT", "path": "/api/items/:id"}},
+            {"id": "assert-open", "action": "expect_dom", "selector": row, "text": f"{name} open", "claim_id": "login"},
+        ]
+        crud_cleanup = [
+            {"id": "reopen", "cleans": "create", "action": "goto", "url": "/crud.html", "ready": loaded},
+            {"id": "delete", "cleans": "create", "action": "click", "selector": {"role": "button", "name": "Delete"}, "within": row,
+             "request": {"method": "DELETE", "path": "/api/items/:id"}},
+            {"id": "assert-deleted", "cleans": "create", "action": "expect_dom", "selector": {"testid": "count"}, "text": "0 items", "ready": loaded},
+        ]
+        _AppHandler.writes.clear()
+        _AppHandler.items.clear()
+        result, report, _, _ = case(crud_steps, crud_cleanup, allow_side_effects=True, step_timeout_ms=6000)
+        writes = [w for w in _AppHandler.writes if not w.startswith("GET")]
+        assert_true(report["browser_verdict"] == "pass" and report["cleanup"]["status"] == "passed", f"CRUD passes and cleans up: {report['reason']} {report['failures']} {report['cleanup']}")
+        assert_true(
+            writes == ["/api/items", "PATCH /api/items/1", "PUT /api/items/1", "DELETE /api/items/1"] and _AppHandler.items == {},
+            f"each write reached the app exactly once and the data is gone: {writes} {_AppHandler.items}",
+        )
+        ledger = [(r["method"], r["step_id"], r["status"], r["planned"], r["attribution"]) for r in report["requests"]]
+        assert_true(
+            ledger == [("POST", "create", 201, True, "step"), ("PATCH", "mark-done", 200, True, "step"), ("PUT", "reset", 200, True, "step"), ("DELETE", "delete", 204, True, "step")],
+            f"the ledger ties every write to its step, planned, with its status; polls are not writes: {ledger}",
+        )
+        assert_true(all(r["endpoint"].endswith(("/api/items", "/api/items/:id")) and r["duration_ms"] is not None for r in report["requests"]), f"endpoints sanitised, durations measured: {report['requests']}")
+        assert_true(result["meta"]["verdict"] == "pass" and _verify_exit_code("verify", result) == 0, f"a clean CRUD run is a pass: {result['meta']['verdict']}")
+
+        _AppHandler.writes.clear()
+        _AppHandler.items.clear()
+        _AppHandler.fail_delete[0] = True
+        try:
+            result, report, _, directory = case(crud_steps, crud_cleanup, allow_side_effects=True, step_timeout_ms=6000)
+        finally:
+            _AppHandler.fail_delete[0] = False
+        assert_true(
+            report["browser_verdict"] == "pass" and report["cleanup"]["status"] == "failed" and result["meta"]["verdict"] == "incomplete"
+            and _verify_exit_code("verify", result) == 2,
+            f"a cleanup that could not delete keeps a passing test from passing, non-zero: {report['cleanup']} {result['meta']['verdict']}",
+        )
+        assert_true("e2e cleanup: 'create' failed" in result["content"] and "cleanup: failed" in (directory / "evidence.md").read_text(encoding="utf-8"), "and says so in the contract and the evidence")
+        _AppHandler.items.clear()
+
+        # --- a write whose response outlives the step is sent once, never again ---------------------
+        _AppHandler.writes.clear()
+        _, report, _, _ = case([
+            {"action": "goto", "url": "/slow.html"},
+            {"action": "click", "selector": {"role": "button", "name": "Send slowly"}, "selector_provenance": {"type": "source"},
+             "side_effect": "modifies_test_data", "test_environment_required": True, "test_data": {"marker": "slow"}, "no_cleanup_reason": "the fixture keeps nothing"},
+            {"action": "expect_title", "equals": "Sent", "claim_id": "login"},
+        ], allow_side_effects=True, step_timeout_ms=1000)
+        time.sleep(5)
+        assert_true(_AppHandler.writes == ["/items/slow"], f"the slow write reached the app exactly once: {_AppHandler.writes}")
+        assert_true(report["browser_verdict"] != "pass", f"and the step that timed out is not a pass: {report['browser_verdict']} {report['failures']}")
 
         # --- a search form POSTs to read: refused by default, sent once when confirmed as a read ----
         search = [

@@ -59,6 +59,7 @@ from tests.checks.e2e_smoke import _test_e2e_real_browser_smoke  # noqa: E402
 from tests.checks.e2e_routing import _test_e2e_routing  # noqa: E402
 from tests.checks.e2e_spec import _test_e2e_spec_contract  # noqa: E402
 from tests.checks.e2e_supervisor import _test_e2e_supervisor  # noqa: E402
+from tests.checks.e2e_tagging import _test_e2e_tagging  # noqa: E402
 from tests.checks.deps import _test_runtime_is_stdlib_only  # noqa: E402
 from tests.checks.governance import _test_governance_controls  # noqa: E402
 from tests.checks.graph_verification import _test_graph_verification  # noqa: E402
@@ -139,6 +140,7 @@ SUITES: dict[str, tuple] = {
     "e2e-redact": (_test_e2e_redaction_variants, "resolved ${ENV} values scrubbed raw, URL-encoded, and escaped, in events and text artifacts"),
     "e2e-smoke": (_test_e2e_real_browser_smoke, "real Chromium against the fixture app through the full runner (opt-in: WORKFLOW_E2E_SMOKE=1)"),
     "e2e-existing-tests": (_test_e2e_existing_tests, "the project's own tests: user command and allowlist only, no shell, bounded, scrubbed, not trusted blindly"),
+    "e2e-tagging": (_test_e2e_tagging, "data-e2e is written only to a cited template line inside the project that Git carries"),
     "e2e-metrics": (_test_e2e_metrics, "e2e runs as quality rows: rates per run kind, token join, reproducibility, delegated baseline"),
     "e2e-doctor": (_test_e2e_doctor_readiness, "doctor reports verify-browser readiness from package metadata and probes nothing"),
     "jobs": (_test_submit_admission, "job admission, capacity, and lock"),

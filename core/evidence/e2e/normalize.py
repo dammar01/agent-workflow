@@ -28,12 +28,49 @@ from core.evidence.contract import (
 
 EVIDENCE_MARKER = "[E2E EVIDENCE]"
 _VERIFICATION_SECTIONS = ("blocking_findings", "escalations", "notes", "checks_run", "not_verified")
+MAX_TRAIL_LINES = 40
+# Cleanup results that leave the target possibly dirty: the run cannot be a pass.
+CLEANUP_UNSETTLED = frozenset({"failed", "not_run"})
 
 
 def _short(value, limit: int = 160) -> str:
     text = str(value) if value is not None else ""
     text = " ".join(text.split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _trail_detail(row: dict) -> str:
+    parts = []
+    selection = row.get("selection") or {}
+    if selection:
+        counts = ",".join("?" if c is None else str(c) for c in selection.get("match_counts") or [])
+        chosen = selection.get("candidate")
+        used = "none matched" if chosen is None else f"candidate {chosen}" + (" (fallback)" if selection.get("fallback_used") else "")
+        parts.append(f"selector: {used}, matches [{counts}], {row.get('selector_provenance') or 'no provenance'}")
+    ready = row.get("ready") or {}
+    if ready:
+        unmet = f", unmet: {'; '.join(ready.get('unmet') or [])}" if ready.get("unmet") else ""
+        parts.append(f"ready: {ready.get('conditions')} condition(s) in {ready.get('waited_ms')}ms{unmet}")
+    if row.get("requests"):
+        parts.append(f"requests: {', '.join(row['requests'])}")
+    parts.append(f"result: {row.get('status')}" + (f" ({row['error']})" if row.get("error") else ""))
+    return _short(" | ".join(parts), 300)
+
+
+def _request_line(item: dict) -> str:
+    where = f"step {item.get('step_id')}" if item.get("attribution") == "step" else f"uncertain (after {item.get('after_step') or 'no step'})"
+    if item.get("blocked"):
+        outcome = _short(item.get("failure"), 120)
+    elif item.get("failure"):
+        outcome = f"failed: {_short(item.get('failure'), 80)}"
+    else:
+        outcome = f"HTTP {item.get('status')}"
+    planned = {True: "planned", False: "not planned", None: "unattributed"}.get(item.get("planned"), "unattributed")
+    read = " read-only" if item.get("read_only") else ""
+    return (
+        f"{item.get('id')} {item.get('method')}{read} {item.get('endpoint')} | {item.get('phase')} {where} | "
+        f"{outcome} | {item.get('duration_ms')}ms | {planned}"
+    )
 
 
 def _probe_summary(probe: object) -> str:
@@ -123,6 +160,29 @@ def evidence_block(report: dict, *, artifacts: str | None = None, spec_notes: li
     if probes:
         lines.append("probes:")
         lines.extend(f"- step {p.get('step')}: {_probe_summary(p.get('probe'))}" for p in probes)
+    trail = report.get("trail") or []
+    if trail:
+        # step -> selector -> readiness -> action -> requests -> result, one bounded line each
+        lines.append("trail:")
+        for row in trail[:MAX_TRAIL_LINES]:
+            lines.append(f"- {row.get('step_id') or row.get('step')} {row.get('action')} | {_trail_detail(row)}")
+        if len(trail) > MAX_TRAIL_LINES:
+            lines.append(f"- … {len(trail) - MAX_TRAIL_LINES} more in report.json")
+    requests = report.get("requests") or []
+    if requests:
+        lines.append("requests:")
+        for item in requests[:MAX_TRAIL_LINES]:
+            lines.append(f"- {_request_line(item)}")
+        if len(requests) > MAX_TRAIL_LINES:
+            lines.append(f"- … {len(requests) - MAX_TRAIL_LINES} more in report.json")
+    cleanup = report.get("cleanup") or {}
+    if (cleanup.get("status") and cleanup.get("status") != "not_planned") or cleanup.get("unplanned"):
+        lines.append(f"cleanup: {cleanup.get('status')}")
+        for group in cleanup.get("groups") or []:
+            detail = f" — {_short(group.get('detail'))}" if group.get("detail") else ""
+            lines.append(f"- cleans {group.get('cleans')}: {group.get('status')}{detail}")
+        for item in cleanup.get("unplanned") or []:
+            lines.append(f"- {item.get('step_id')} ({item.get('side_effect')}): no cleanup planned — {_short(item.get('reason'))}")
     files = report.get("artifacts") or []
     if files:
         lines.append("artifact_files:")
@@ -318,6 +378,26 @@ def to_verification(
     if report.get("reason") and browser == "incomplete" and not any(report["reason"] in g for g in gaps):
         gaps.append(f"e2e run: {report['reason']}")
 
+    # The cleanup is judged apart from the test: a proven claim stays proven, but a target
+    # that may still hold this run's data is not a clean pass.
+    cleanup = report.get("cleanup") or {}
+    cleanup_unsettled = False
+    if browser is not None and not (preflight and not preflight.get("ok")):
+        for group in cleanup.get("groups") or []:
+            if group.get("status") in CLEANUP_UNSETTLED:
+                cleanup_unsettled = True
+                gaps.append(
+                    f"e2e cleanup: '{group.get('cleans')}' {group.get('status')} — "
+                    f"{_short(group.get('detail') or 'no detail')}; test data may remain"
+                )
+            elif group.get("status") == "passed":
+                checks.append(f"e2e cleanup: '{group.get('cleans')}' cleaned and asserted")
+        for item in cleanup.get("unplanned") or []:
+            notes.append(
+                f"severity: low | origin: unknown | scope_relation: in_scope — step {item.get('step_id')} "
+                f"({item.get('side_effect')}) has no cleanup by plan: {_short(item.get('reason'))}"
+            )
+
     checks.extend(sections["checks_run"])
     gaps.extend(sections["not_verified"])
 
@@ -348,6 +428,10 @@ def to_verification(
     if declared == "NEEDS FIX" and not blocking:
         # Cannot happen for a browser fail (it always adds a finding), kept as a guard so
         # the contract never carries a NEEDS FIX the validator would reject.
+        declared, verdict = "INCOMPLETE", "incomplete"
+    if cleanup_unsettled and verdict != "fail":
+        # Declared INCOMPLETE, never DONE-with-a-gap: the gap-only exit 0 is for a judgement
+        # nobody made, not for data left behind in the target.
         declared, verdict = "INCOMPLETE", "incomplete"
 
     def section(name: str, items: list[str]) -> list[str]:

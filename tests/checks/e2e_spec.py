@@ -26,13 +26,18 @@ _SCENARIO = {
     "feature": "login",
     "claims": [{"id": "login-valid-user", "severity": "blocking", "description": "login opens dashboard", "source_refs": ["src/pages/Login.tsx:12"]}],
     "steps": [
-        {"action": "goto", "url": "/login"},
-        {"action": "fill", "selector": {"role": "textbox", "name": "Email"}, "selector_provenance": {"type": "source"}, "value": "${E2E_USER}"},
-        {"action": "fill", "selector": {"testid": "password"}, "value": "${E2E_PASS}"},
-        {"action": "click", "selector": {"role": "button", "name": "Masuk"}},
-        {"action": "expect_url", "contains": "/dashboard", "claim_id": "login-valid-user"},
+        {"id": "open-login", "action": "goto", "url": "/login"},
+        {"id": "fill-email", "action": "fill", "selector": {"role": "textbox", "name": "Email"}, "selector_provenance": {"type": "source"}, "value": "${E2E_USER}"},
+        {"id": "fill-password", "action": "fill", "selector": {"testid": "password"}, "value": "${E2E_PASS}"},
+        {"id": "submit", "action": "click", "selector": {"role": "button", "name": "Masuk"}},
+        {"id": "assert-dashboard", "action": "expect_url", "contains": "/dashboard", "claim_id": "login-valid-user"},
     ],
 }
+
+
+def _with_ids(steps: list[dict], prefix: str = "s") -> list[dict]:
+    """Test steps without an id get one, so a rule under test is not hidden behind the id rule."""
+    return [dict(step, id=step.get("id") or f"{prefix}{n}") if isinstance(step, dict) else step for n, step in enumerate(steps)]
 
 
 def _reply(scenario: dict, *, with_section: bool = True) -> str:
@@ -111,6 +116,8 @@ def _test_e2e_spec_contract() -> None:
     def errors(**changes) -> list[str]:
         scenario = json.loads(json.dumps(_SCENARIO))
         scenario.update(changes)
+        if isinstance(scenario.get("steps"), list):
+            scenario["steps"] = _with_ids(scenario["steps"])
         return validate_scenario(scenario)
 
     assert_true(any("version" in e for e in errors(version=2)), "version is pinned")
@@ -141,9 +148,11 @@ def _test_e2e_spec_contract() -> None:
     # --- Policy (plan §9, §10, §18): navigation origin, side effects, selector candidates ---------
     local = {"base_url": "http://localhost:8000"}
 
-    def step_errors(steps: list[dict], policy: dict = local) -> list[str]:
+    def step_errors(steps: list[dict], policy: dict = local, cleanup: list[dict] | None = None) -> list[str]:
         scenario = json.loads(json.dumps(_SCENARIO))
-        scenario["steps"] = [*steps, _SCENARIO["steps"][4]]
+        scenario["steps"] = [*_with_ids(steps), _SCENARIO["steps"][4]]
+        if cleanup is not None:
+            scenario["cleanup"] = cleanup
         return [e for e in validate_scenario(scenario, policy) if e.startswith("steps[0]")]
 
     assert_true(step_errors([{"action": "goto", "url": "/login"}]) == [], "a relative path resolves under base_url")
@@ -160,44 +169,126 @@ def _test_e2e_spec_contract() -> None:
     no_policy = json.loads(json.dumps(_SCENARIO))
     no_policy["steps"][0]["url"] = "http://localhost:8000/login"
     assert_true(any("cross-origin" in e for e in validate_scenario(no_policy)), "without a policy no absolute URL is trusted")
-    listed = {**local, "allowed_origins": ["https://sso.example.test"]}
+    listed = {**local, "allowed_origins": ["https://sso.example.com"]}
     assert_true(
-        any("allow_remote" in e for e in step_errors([{"action": "goto", "url": "https://sso.example.test/login"}], listed)),
+        any("allow_remote" in e for e in step_errors([{"action": "goto", "url": "https://sso.example.com/login"}], listed)),
         "an allow-listed remote origin still needs allow_remote",
     )
     assert_true(
-        step_errors([{"action": "goto", "url": "https://sso.example.test/login"}], {**listed, "allow_remote": True}) == [],
+        step_errors([{"action": "goto", "url": "https://sso.example.com/login"}], {**listed, "allow_remote": True}) == [],
         "allow_remote + allowed_origins opens exactly that origin",
+    )
+    # A `.test` name is reserved for local development, so it passes the base-URL policy on
+    # its own — but it is still a different ORIGIN, and crossing to one is still a decision
+    # the user has to have written down.
+    assert_true(
+        any("allowed_origins" in e for e in step_errors([{"action": "goto", "url": "http://app.test/login"}], local)),
+        "a .test origin nobody listed is still cross-origin navigation",
+    )
+    assert_true(
+        step_errors([{"action": "goto", "url": "http://app.test/login"}], {**local, "allowed_origins": ["http://app.test"]}) == [],
+        "listed, a .test origin opens without allow_remote",
     )
     assert_true(
         step_errors([{"action": "goto", "url": "http://localhost:9000/"}], {**local, "allowed_origins": ["http://localhost:9000"]}) == [],
         "a second local origin can be allow-listed",
     )
 
-    submit = {"action": "click", "selector": {"role": "button", "name": "Simpan"}}
-    declared = dict(submit, side_effect="creates_test_data", test_environment_required=True, cleanup="fixture reset between runs")
-    assert_true(any("allow_side_effects" in e for e in step_errors([declared])), "a declared side effect is refused while the config forbids it")
-    assert_true(step_errors([declared], {**local, "allow_side_effects": True}) == [], "declared and enabled: runnable")
-    half = step_errors([dict(submit, side_effect="deletes_test_data")], {**local, "allow_side_effects": True})
-    assert_true(any("test_environment_required" in e for e in half) and any("cleanup" in e for e in half), f"the metadata is required, not decorative: {half}")
+    submit = {"id": "create-item", "action": "click", "selector": {"role": "button", "name": "Simpan"}}
+    declared = dict(submit, side_effect="creates_test_data", test_environment_required=True, test_data={"marker": "e2e-item-1"})
+    cleans = [
+        {"id": "open-items", "cleans": "create-item", "action": "goto", "url": "/items"},
+        {"id": "delete-item", "cleans": "create-item", "action": "click", "selector": {"role": "button", "name": "Hapus e2e-item-1"}},
+        {"id": "assert-gone", "cleans": "create-item", "action": "expect_url", "contains": "/items"},
+    ]
+    enabled = {**local, "allow_side_effects": True}
+    assert_true(any("allow_side_effects" in e for e in step_errors([declared], cleanup=cleans)), "a declared side effect is refused while the config forbids it")
+    assert_true(step_errors([declared], enabled, cleans) == [], "declared, cleaned and enabled: runnable")
+    half = step_errors([dict(submit, side_effect="deletes_test_data")], enabled)
+    assert_true(
+        any("test_environment_required" in e for e in half) and any("test_data.marker" in e for e in half) and any("cleanup step" in e for e in half),
+        f"the metadata and a cleanup plan are required, not decorative: {half}",
+    )
     assert_true(any("not in" in e for e in step_errors([dict(submit, side_effect="drops_tables")])), "side_effect is an enum")
     assert_true(step_errors([dict(submit, side_effect="none")]) == [], "side_effect none is the explicit read-only marker")
-    assert_true(any("without side_effect" in e for e in step_errors([dict(submit, cleanup="x")])), "cleanup alone is a half-declared side effect")
+    assert_true(any("without side_effect" in e for e in step_errors([dict(submit, test_data={"marker": "x"})])), "test data alone is a half-declared side effect")
+    assert_true(
+        any("no longer a description" in e and "scenario.cleanup" in e for e in step_errors([dict(declared, cleanup="fixture reset between runs")], enabled, cleans)),
+        "the old descriptive cleanup string is refused with the new shape named",
+    )
+    assert_true(any("needs a cleanup step" in e for e in step_errors([declared], enabled)), "created data without a cleanup step is refused")
+    modified = dict(declared, side_effect="modifies_test_data", no_cleanup_reason="the fixture resets the row every run")
+    assert_true(step_errors([modified], enabled) == [], "modified data may name why it needs no cleanup instead")
+    assert_true(any("no_cleanup_reason" in e for e in step_errors([dict(declared, no_cleanup_reason="later")], enabled, cleans)), "created data always gets a cleanup")
+
+    def cleanup_errors(cleanup: list[dict], steps: list[dict] | None = None) -> list[str]:
+        scenario = json.loads(json.dumps(_SCENARIO))
+        scenario["steps"] = [*(steps or [declared]), _SCENARIO["steps"][4]]
+        scenario["cleanup"] = cleanup
+        return [e for e in validate_scenario(scenario, enabled) if e.startswith("cleanup")]
+
+    assert_true(cleanup_errors(cleans) == [], "a cleanup group with an assertion validates")
+    assert_true(any("need an assertion" in e for e in cleanup_errors(cleans[:2])), "a cleanup that never asserts the data is gone is refused")
+    assert_true(any("names no step" in e for e in cleanup_errors([dict(cleans[0], cleans="ghost"), *cleans[1:]])), "cleans names a real step")
+    assert_true(
+        any("declares no side_effect" in e for e in cleanup_errors([dict(c, cleans="read-only") for c in cleans], [declared, dict(submit, id="read-only")])),
+        "only a step that writes can be cleaned",
+    )
+    assert_true(any("drop claim_id" in e for e in cleanup_errors([*cleans[:2], dict(cleans[2], claim_id="login-valid-user")])), "a cleanup assertion proves no claim")
+    assert_true(any("of its own" in e for e in cleanup_errors([dict(cleans[0], side_effect="deletes_test_data"), *cleans[1:]])), "a cleanup step declares no side effect itself")
+    assert_true(any("duplicate step id" in e for e in cleanup_errors([dict(cleans[0], id="create-item"), *cleans[1:]])), "ids are unique across steps and cleanup")
+
+    # --- stable ids, scoped selectors, readiness, expected requests ------------------------------
+    assert_true(any("kebab identifier" in e for e in step_errors([{"action": "goto", "url": "/", "id": "Open Page"}])), "a step id is an identifier")
+    no_id = json.loads(json.dumps(_SCENARIO))
+    no_id["steps"][0].pop("id")
+    assert_true(any(e.startswith("steps[0]: id") for e in validate_scenario(no_id, local)), "every step needs an id")
+    twice = json.loads(json.dumps(_SCENARIO))
+    twice["steps"][1]["id"] = "open-login"
+    assert_true(any("duplicate step id 'open-login'" in e for e in validate_scenario(twice, local)), "ids are unique")
+    modal = {"role": "dialog", "name": "Tambah barang"}
+    assert_true(step_errors([dict(submit, within=modal)]) == [], "a selector scoped to a modal validates")
+    assert_true(any("within" in e for e in step_errors([dict(submit, within={"xpath": "//div"})])), "within is a selector too")
+    assert_true(any("within scopes a selector" in e for e in step_errors([{"action": "goto", "url": "/", "within": modal}])), "a goto has nothing to scope")
+    ready = [{"hidden": {"testid": "loader"}}, {"enabled": {"role": "button", "name": "Simpan"}}, {"text": "3 items"}, {"url": "/items"}]
+    assert_true(step_errors([dict(submit, ready=ready)]) == [], "every readiness kind validates")
+    for bad, why in (([], "empty"), ([{"networkidle": True}], "unknown kind"), ([{"hidden": {"testid": "x"}, "text": "y"}], "two kinds in one"), ([{"text": ""}], "empty text"), ([{"visible": {"name": "x"}}], "selector without a locating key")):
+        assert_true(any(".ready" in e or "ready must" in e for e in step_errors([dict(submit, ready=bad)])), f"readiness refuses {why}: {step_errors([dict(submit, ready=bad)])}")
+    assert_true(step_errors([dict(submit, request={"method": "POST", "path": "/items/:id"})]) == [], "an expected write validates")
+    for bad in ({"method": "GET", "path": "/items"}, {"method": "POST", "path": "items"}, {"method": "POST", "path": "/items?x=1"}, {"method": "POST", "path": "/items", "body": "{}"}):
+        assert_true(any("request" in e for e in step_errors([dict(submit, request=bad)])), f"a malformed expected request is refused: {bad}")
+    assert_true(any("sends none" in e for e in step_errors([{"action": "expect_url", "contains": "/", "claim_id": "login-valid-user", "request": {"method": "POST", "path": "/x"}}])), "an assertion sends no request")
+    from core.evidence.e2e.spec import request_path_matches
+
+    assert_true(request_path_matches("/items/:id", "/items/7") and request_path_matches("/items", "/items/"), "`:id` matches one segment, a trailing slash is the same path")
+    assert_true(not request_path_matches("/items/:id", "/items") and not request_path_matches("/items/:id", "/items/7/edit") and not request_path_matches("/items", "/users"), "and nothing else")
+    assert_true(any("selector_provenance.ref" in e for e in step_errors([dict(submit, selector_provenance={"type": "source", "ref": "see the form"})])), "a provenance ref is a file reference")
+
+    # --- placeholders: registered names only, spelled exactly ------------------------------------
+    assert_true(
+        any("must be written '${E2E_USER}'" in e for e in errors(steps=[*_SCENARIO["steps"][:1], dict(_SCENARIO["steps"][1], value="${e2e_user}"), *_SCENARIO["steps"][2:]])),
+        "a placeholder in the wrong case is named with its right spelling",
+    )
+    assert_true(
+        any("not a registered credential" in e for e in errors(steps=[*_SCENARIO["steps"][:1], dict(_SCENARIO["steps"][1], value="${HOME}"), *_SCENARIO["steps"][2:]])),
+        "a name outside the registry is refused, even one the environment has",
+    )
 
     strong_first = [
         {"selector": {"role": "button", "name": "Masuk"}, "selector_provenance": {"type": "source"}},
         {"selector": {"testid": "login-submit"}, "selector_provenance": {"type": "existing_test"}},
         {"selector": {"css": "form button"}, "selector_provenance": {"type": "heuristic"}},
     ]
-    candidates_step = {"action": "click", "selector_candidates": strong_first}
+    candidates_step = {"id": "submit", "action": "click", "selector_candidates": strong_first}
     assert_true(step_errors([candidates_step]) == [], "ordered candidates validate")
     assert_true(
         [s["provenance"] for s in step_selectors(candidates_step)] == ["source", "existing_test", "heuristic"],
         "the player receives candidates in declared order, provenance attached",
     )
+    single = step_selectors(_SCENARIO["steps"][1])
     assert_true(
-        step_selectors(_SCENARIO["steps"][1]) == [{"selector": {"role": "textbox", "name": "Email"}, "provenance": "source"}],
-        "a single selector is a one-candidate list",
+        single == [{"selector": {"role": "textbox", "name": "Email"}, "provenance": "source", "ref": _SCENARIO["steps"][1]["selector_provenance"].get("ref")}],
+        "a single selector is a one-candidate list, carrying the reference it came from",
     )
     assert_true(any("strongest first" in e for e in step_errors([{"action": "click", "selector_candidates": strong_first[::-1]}])), "a css candidate may not outrank a role")
     assert_true(any("not both" in e for e in step_errors([dict(candidates_step, selector={"css": "a"})])), "selector and selector_candidates are exclusive")

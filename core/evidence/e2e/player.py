@@ -47,15 +47,28 @@ def _fake_run(mode: str, scenario: dict, artifacts_dir: str = "") -> int:
         action = step.get("action")
         cid = step.get("claim_id")
         provenance = (step.get("selector_provenance") or {}).get("type")
+        ref = (step.get("selector_provenance") or {}).get("ref")
         base = {
             "type": "progress",
             "step": index,
+            "step_id": step.get("id"),
             "action": action,
             "claim_id": cid,
             "duration_ms": 5,
             "selector_provenance": provenance,
             "page_stable": True,
         }
+        if step.get("selector"):
+            # The real player reports which candidate won and, for one the codebase named,
+            # where it came from. The fake reports it too: the tagging pass downstream reads
+            # this field, so a fake that omitted it would exercise the lifecycle around the
+            # feature without ever exercising the feature.
+            base["selection"] = {
+                "candidate": 0,
+                "match_counts": [1],
+                "fallback_used": False,
+                **({"source_ref": str(ref), "selector_keys": sorted(step["selector"])} if provenance == "source" and ref else {}),
+            }
         if action == "goto":
             url = step.get("url") or "/"
         if mode == "stall" and index == 2:

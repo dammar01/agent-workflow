@@ -146,6 +146,28 @@ def _test_e2e_classification_and_verdicts() -> None:
     norm = to_verification({"claims": {"login": {"severity": "blocking", "status": "unproven"}}, "browser_verdict": None}, preflight={"ok": False, "reason": "playwright_missing", "detail": "pip install playwright"})
     assert_true(norm["declared"] == "INCOMPLETE" and "playwright_missing" in norm["content"] and "e2e:login: not run" in norm["content"] and _agrees(norm), "preflight reasons reach the contract")
 
+    # Cleanup is judged apart: an unsettled cleanup keeps a pass from being a pass, never a fail from a fail.
+    def with_cleanup(report: dict, status: str, **extra) -> dict:
+        group = {"cleans": "create-item", "status": status, "detail": "delete button missing" if status in ("failed", "not_run") else None}
+        return {**report, "cleanup": {"status": status, "groups": [group], "steps": [], "unplanned": []}, **extra}
+
+    for status, verdict, declared in (("passed", "pass", "DONE"), ("not_needed", "pass", "DONE"), ("failed", "incomplete", "INCOMPLETE"), ("not_run", "incomplete", "INCOMPLETE")):
+        norm = to_verification(with_cleanup(passing, status), reviewer_content=clean_review)
+        assert_true(norm["verdict"] == verdict and norm["declared"] == declared and _agrees(norm), f"pass + cleanup {status}: {norm['verdict']}/{norm['declared']}\n{norm['content']}")
+        if status in ("failed", "not_run"):
+            assessment = validate_verification_contract(norm["content"])
+            assert_true(verify_exit_status(norm["verdict"], assessment) != 0, f"cleanup {status} exits non-zero, never the gap-only 0")
+            assert_true(f"e2e cleanup: 'create-item' {status}" in norm["content"] and "test data may remain" in norm["content"], "and says what may remain")
+    norm = to_verification(with_cleanup(failing, "failed"), reviewer_content=clean_review)
+    assert_true(norm["verdict"] == "fail" and _agrees(norm), "a failed test with a failed cleanup is still a fail")
+    norm = to_verification(with_cleanup(passing, "failed"))
+    assert_true(norm["declared"] == "INCOMPLETE" and _agrees(norm), "without a reviewer the cleanup still forbids DONE")
+    unplanned = {**passing, "cleanup": {"status": "not_planned", "groups": [], "steps": [], "unplanned": [{"step_id": "mark-done", "side_effect": "modifies_test_data", "reason": "fixture resets the row"}]}}
+    norm = to_verification(unplanned, reviewer_content=clean_review)
+    assert_true(norm["verdict"] == "pass" and "has no cleanup by plan: fixture resets the row" in norm["content"] and _agrees(norm), f"a declared no-cleanup is a note, not a gap: {norm['verdict']}\n{norm['content']}")
+    block = evidence_block(with_cleanup(passing, "failed"))
+    assert_true("cleanup: failed" in block and "- cleans create-item: failed — delete button missing" in block, f"the reviewer sees the cleanup apart from the test:\n{block}")
+
     # The compact evidence block: bounded, structured, no secrets by construction.
     block = evidence_block(failing, artifacts="/tmp/run/e2e", spec_notes=["label inferred"])
     for needle in ("[E2E EVIDENCE]", "browser_verdict: fail", "login | blocking | status: failed | origin: app", "assertion_failed:", "artifacts: /tmp/run/e2e", "spec_uncertainties:"):

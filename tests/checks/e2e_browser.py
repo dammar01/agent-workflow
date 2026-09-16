@@ -38,6 +38,12 @@ class _Clock:
         self.now += seconds
 
 
+def _flag(page, element: dict, key: str) -> bool:
+    """An element flag, or a callable of the page for one that changes over (fake) time."""
+    value = element.get(key, True)
+    return bool(value(page) if callable(value) else value)
+
+
 class _Locator:
     def __init__(self, page, predicate) -> None:
         self.page = page
@@ -49,8 +55,33 @@ class _Locator:
     def count(self) -> int:
         return len(self._matches())
 
+    def nth(self, index: int) -> "_Locator":
+        return _Locator(self.page, lambda el, index=index: el is self._matches()[index])
+
     def is_visible(self) -> bool:
-        return self._matches()[0].get("visible", True)
+        return _flag(self.page, self._matches()[0], "visible")
+
+    def is_enabled(self) -> bool:
+        return _flag(self.page, self._matches()[0], "enabled")
+
+    def _inside(self, predicate) -> "_Locator":
+        # A child is an element whose "in" names a matched container.
+        return _Locator(self.page, lambda el: predicate(el) and any(el.get("in") is not None and el.get("in") == c.get("name") for c in self._matches()))
+
+    def get_by_role(self, role, name=None):
+        return self._inside(lambda el: el.get("role") == role and (name is None or el.get("name") == name))
+
+    def get_by_label(self, label):
+        return self._inside(lambda el: el.get("label") == label)
+
+    def get_by_test_id(self, testid):
+        return self._inside(lambda el: el.get("testid") == testid)
+
+    def get_by_text(self, text):
+        return self._inside(lambda el: el.get("text") == text)
+
+    def locator(self, css):
+        return self._inside(lambda el: el.get("css") == css)
 
     def _one(self) -> dict:
         element = self._matches()[0]
@@ -90,6 +121,7 @@ class _Page:
         self.calls: list[str] = []
         self.html = "<html><body><p>page</p></body></html>"
         self.handlers: dict = {}
+        self.load_states: list[str] = []
 
     def goto(self, url, wait_until=None, timeout=None):
         self.gotos.append(url)
@@ -122,8 +154,9 @@ class _Page:
         self.handlers[name] = handler
 
     def wait_for_load_state(self, state, timeout=None) -> None:
+        self.load_states.append(state)
         if not self.settled:
-            raise FakeTimeout("networkidle not reached")
+            raise FakeTimeout(f"{state} not reached")
 
     def get_by_role(self, role, name=None):
         return _Locator(self, lambda el: el.get("role") == role and (name is None or el.get("name") == name))
@@ -193,6 +226,11 @@ def _test_e2e_browser_session() -> None:
     assert_true([e["status"] for e in progress] == ["passed"] * 7, f"every step passes: {[(e['action'], e['status'], e.get('error')) for e in progress]}")
     assert_true(page.gotos == [BASE + "/login"], f"a relative goto resolves under base_url: {page.gotos}")
     assert_true(progress[2]["selector_provenance"] == "existing_test", "the candidate that matched reports its own provenance")
+    assert_true(
+        progress[2]["selection"] == {"candidate": 1, "match_counts": [0, 1], "fallback_used": True},
+        f"the runtime mapping names the candidate used, each candidate's match count, and the fallback: {progress[2]['selection']}",
+    )
+    assert_true([e["step_id"] for e in progress][:2] == ["step-1", "step-2"], "a step without an id still gets a stable one in events")
     assert_true("typed-secret-value" not in json.dumps(events), "a typed value never comes back on the wire")
     assert_true(progress[6]["actual"]["probe"]["limit"] == 7, "the probe is capped by settings.probe_max_elements")
     report = build_report([*events, {"type": "result", "status": "finished"}], scenario)
@@ -231,6 +269,58 @@ def _test_e2e_browser_session() -> None:
     session, events, _ = _session(_Page([{"role": "button", "name": "Save"}, {"role": "button", "name": "Save"}]))
     session.run({"steps": [{"action": "click", "selector": {"role": "button", "name": "Save"}}]})
     assert_true(_progress(events)[0]["error"]["kind"] == "selector_ambiguous", "two matches are ambiguous, not a coin flip")
+    assert_true(_progress(events)[0]["selection"] == {"candidate": None, "match_counts": [2], "fallback_used": False}, f"and the report says how many matched: {_progress(events)[0]['selection']}")
+
+    # --- `within` scopes a selector: the modal's Simpan, not the page's ---------------------------
+    page = _Page([
+        {"role": "button", "name": "Simpan"},
+        {"role": "dialog", "name": "Tambah barang"},
+        {"role": "button", "name": "Simpan", "in": "Tambah barang", "testid": "modal-save"},
+    ])
+    session, events, _ = _session(page)
+    session.run({"steps": [{"id": "save", "action": "click", "selector": {"role": "button", "name": "Simpan"}, "within": {"role": "dialog", "name": "Tambah barang"}}]})
+    assert_true(_progress(events)[0]["status"] == "passed" and page.clicks == ["modal-save"], f"the scoped selector clicks the modal's button only: {page.clicks} {_progress(events)[0].get('error')}")
+
+    # --- a timed-out write action is never sent twice ----------------------------------------------
+    def dispatched_then_timeout(p: _Page) -> None:
+        raise FakeTimeout("Timeout 500ms exceeded waiting for navigation after click")
+
+    page = _Page([{"role": "button", "name": "Kirim", "on_click": dispatched_then_timeout}])
+    session, events, _ = _session(page)
+    session.run({"steps": [{"id": "send", "action": "click", "selector": {"role": "button", "name": "Kirim"}}, {"id": "after", "action": "expect_url", "contains": "/", "claim_id": "login"}]})
+    assert_true(page.clicks == ["Kirim"] and _progress(events)[0]["status"] == "failed", f"one dispatch, then a failed step with evidence: {page.clicks}")
+    assert_true(_progress(events)[1]["status"] == "skipped", "and nothing after it runs")
+
+    # --- readiness: wait for the app's own indicator, then act once --------------------------------
+    page = _Page()
+    session, events, clock = _session(page, step_timeout_ms=2000)
+    page.elements = [
+        {"testid": "loader", "visible": lambda p: clock.now < 0.5},
+        {"role": "button", "name": "Simpan", "enabled": lambda p: clock.now >= 0.3},
+        {"text": "3 items"},
+    ]
+    button = {"role": "button", "name": "Simpan"}
+    session.run({"steps": [
+        {"id": "open", "action": "goto", "url": "/items", "ready": [{"text": "3 items"}]},
+        {"id": "save", "action": "click", "selector": button, "ready": [{"hidden": {"testid": "loader"}}, {"enabled": button}]},
+    ]})
+    opened, saved = _progress(events)
+    assert_true(opened["status"] == "passed" and opened["ready"]["unmet"] == [], f"a goto waits for its content after navigating: {opened}")
+    assert_true(
+        saved["status"] == "passed" and saved["ready"]["waited_ms"] >= 500 and saved["ready"]["unmet"] == [] and page.clicks == ["Simpan"],
+        f"the click waited for the loader to go and the button to enable, then ran once: {saved.get('ready')} {page.clicks}",
+    )
+    page = _Page()
+    session, events, clock = _session(page, step_timeout_ms=1000)
+    page.elements = [{"testid": "loader"}, {"role": "button", "name": "Simpan"}]
+    session.run({"steps": [{"id": "save", "action": "click", "selector": button, "ready": [{"hidden": {"testid": "loader"}}]}]})
+    stuck = _progress(events)[0]
+    assert_true(
+        stuck["error"]["kind"] == "not_ready" and "hidden" in stuck["error"]["detail"] and stuck["page_stable"] is False and page.clicks == [],
+        f"a loader that never goes fails the step before any action, naming the condition: {stuck}",
+    )
+    assert_true(classify_step(stuck) == ORIGIN_UNKNOWN, "a page that never became ready is unknown, not the app's")
+    assert_true("networkidle" not in page.load_states, f"stability never waits for network idle (a polling page never reaches it): {page.load_states}")
     session, events, _ = _session(_Page([{"testid": "toast", "visible": False}]))
     session.run({"steps": [{"action": "expect_dom", "selector": {"testid": "toast"}, "claim_id": "login"}]})
     assert_true(_progress(events)[0]["error"]["kind"] == "not_visible", "an element that stays hidden fails expect_dom as not_visible")
@@ -293,29 +383,54 @@ def _test_e2e_browser_session() -> None:
     def call(method, url, *, resource_type="fetch", navigation=False, **config):
         seen: list[str] = []
         hop = SimpleNamespace(abort=lambda code: seen.append(f"abort:{code}"), continue_=lambda: seen.append("continue"))
-        guarded, _, _ = _session(_Page(), **config)
+        guarded, emitted, _ = _session(_Page(), **config)
         guarded.guard(hop, SimpleNamespace(url=url, method=method, resource_type=resource_type,
                                            is_navigation_request=lambda: navigation, frame=object()))
+        guarded.ledger = emitted
         return seen, guarded
 
     for method in ("GET", "HEAD", "OPTIONS", "get"):
-        assert_true(call(method, BASE + "/api/items")[0] == ["continue"], f"{method} is a read and passes")
+        seen, guarded = call(method, BASE + "/api/items")
+        assert_true(seen == ["continue"] and guarded.ledger == [], f"{method} is a read, passes, and is not a ledger entry")
     for method in ("POST", "PUT", "PATCH", "DELETE"):
         seen, guarded = call(method, BASE + "/api/items/7?token=abc")
         assert_true(seen == ["abort:blockedbyclient"], f"{method} is refused while allow_side_effects is false: {seen}")
         assert_true(
-            guarded.mutations_blocked == [{"method": method, "origin": BASE, "resource_type": "fetch", "attributed": False}],
+            guarded.mutations_blocked == [{"method": method, "origin": BASE, "resource_type": "fetch", "attributed": False, "reason": "side_effects_off"}],
             f"the record keeps the origin, never the path or query: {guarded.mutations_blocked}",
+        )
+        record = guarded.ledger[0]
+        assert_true(
+            record["type"] == "request" and record["blocked"] and record["endpoint"] == BASE + "/api/items/:id" and "token" not in json.dumps(record)
+            and record["attribution"] == "uncertain" and record["planned"] is None and record["duration_ms"] == 0,
+            f"a refused write enters the ledger at once, route kept, id and query gone: {record}",
         )
     assert_true(call("POST", "http://localhost:9000/api/items")[0] == ["abort:blockedbyclient"], "an API on another port is still refused")
     assert_true(call("POST", "https://analytics.example/collect", resource_type="ping")[0] == ["abort:blockedbyclient"], "a third-party beacon is refused too")
-    assert_true(call("POST", BASE + "/api/items", allow_side_effects=True)[0] == ["continue"], "allow_side_effects true lifts the guard")
-    assert_true(call("POST", BASE + "/login", navigation=True, allowed_mutation_paths=["/login"])[0] == ["continue"], "an allow-listed path on base_url passes")
-    assert_true(call("POST", BASE + "/login?next=/home", allowed_mutation_paths=["/login"])[0] == ["continue"], "the query does not take part in the match")
-    assert_true(call("POST", "http://localhost:80/session", allowed_mutation_paths=["http://localhost/session"])[0] == ["continue"], "a default port matches its implicit form")
-    assert_true(call("POST", BASE + "/login/delete", allowed_mutation_paths=["/login"])[0] == ["abort:blockedbyclient"], "an allow-list entry is exact, not a prefix")
-    assert_true(call("POST", "http://localhost:9000/login", allowed_mutation_paths=["/login"])[0] == ["abort:blockedbyclient"], "a bare path belongs to base_url's origin only")
-    assert_true(call("POST", "http://localhost:9000/login", allowed_mutation_paths=["http://localhost:9000/login"])[0] == ["continue"], "a full URL entry covers another origin")
+    assert_true(call("POST", BASE + "/api/items", allow_side_effects=True)[0] == ["continue"], "allow_side_effects true sends a write to a loopback host")
+    for url in ("http://127.0.0.1:9000/api/items", "http://[::1]:8080/x", "http://app.localhost/x", "http://127.0.0.2/x"):
+        assert_true(call("DELETE", url, allow_side_effects=True)[0] == ["continue"], f"every loopback form counts: {url}")
+    seen, guarded = call("POST", "https://api.example/items", allow_side_effects=True)
+    assert_true(
+        seen == ["abort:blockedbyclient"] and guarded.mutations_blocked[0]["reason"] == "non_loopback" and "loopback" in guarded.ledger[0]["failure"],
+        f"with side effects on, a write to a remote host is still refused — the request's host decides, not base_url's: {seen} {guarded.mutations_blocked}",
+    )
+    assert_true(call("POST", BASE + "/login", allowed_mutation_paths=["/login"])[0] == ["abort:blockedbyclient"], "a leftover allowed_mutation_paths opens nothing")
+    # A host preflight resolved to a private address and pinned the browser to may take a
+    # write. Only that host: the approval is a list of names, not a relaxed rule.
+    assert_true(
+        call("POST", "http://app.test/api/items", allow_side_effects=True, write_hosts=["app.test"])[0] == ["continue"],
+        "a write host preflight approved and pinned may take a write",
+    )
+    seen, guarded = call("POST", "http://other.test/api/items", allow_side_effects=True, write_hosts=["app.test"])
+    assert_true(
+        seen == ["abort:blockedbyclient"] and guarded.mutations_blocked[0]["reason"] == "non_loopback",
+        f"a sibling name nobody approved is not covered by it: {seen}",
+    )
+    assert_true(
+        call("POST", "http://app.test/api/items", allow_side_effects=True)[0] == ["abort:blockedbyclient"],
+        "and without the approval the same name is refused: the guard trusts the decision, not the suffix",
+    )
 
     # --- confirmed reads: a POST the user confirmed as read-only passes; a GraphQL write never does ---
     import json as _json
@@ -451,6 +566,140 @@ def _test_e2e_browser_session() -> None:
     report = build_report([*events, {"type": "result", "status": "finished"}], {"claims": _CLAIMS})
     assert_true(report["browser_verdict"] == "pass" and report["app_errors"] == [], f"the beacon stays a warning: {report['browser_verdict']} {report['app_errors']}")
 
+    # --- request ledger: attributed to the step's window, status and duration from the lifecycle ----
+    from core.evidence.e2e.redact import sanitize_endpoint
+
+    for url, expected in (
+        ("http://localhost:8000/items/42?token=abc#x", "http://localhost:8000/items/:id"),
+        ("https://user:pw@api.example:443/v1/reset/3f2a9c1e0b7d4e5f6a7b8c9d", "https://api.example/v1/reset/:id"),
+        ("http://127.0.0.1/users/someone%40internal.example/avatar", "http://127.0.0.1/users/:id/avatar"),
+        ("http://[::1]:9000/orders/0b8e6a5c-2f4d-4e1a-9c3b-7d6e5f4a3b2c", "http://[::1]:9000/orders/:id"),
+        ("http://localhost/api/v2/items", "http://localhost/api/v2/items"),
+        ("http://localhost:bad/x", "[unparseable url]"),
+    ):
+        assert_true(sanitize_endpoint(url) == expected, f"sanitize_endpoint({url!r}) = {sanitize_endpoint(url)!r}, expected {expected!r}")
+
+    page = _Page()
+    session, events, clock = _session(page, allow_side_effects=True)
+    created = SimpleNamespace(url=BASE + "/items/42?csrf=abc", method="POST", resource_type="fetch", is_navigation_request=lambda: False, frame=object(), failure=None)
+    extra = SimpleNamespace(url=BASE + "/audit", method="POST", resource_type="fetch", is_navigation_request=lambda: False, frame=object(), failure=None)
+    late = SimpleNamespace(url=BASE + "/autosave", method="PATCH", resource_type="xhr", is_navigation_request=lambda: False, frame=object(), failure="net::ERR_ABORTED")
+    hanging = SimpleNamespace(url=BASE + "/export", method="POST", resource_type="fetch", is_navigation_request=lambda: False, frame=object(), failure=None)
+
+    def save(p: _Page) -> None:
+        for sent, status in ((created, 201), (extra, 204)):
+            session.guard(route, sent)
+            clock.advance(0.25)
+            session.on_response(SimpleNamespace(status=status, url=sent.url, request=sent, frame=p.main_frame))
+            session.on_request_finished(sent)
+
+    page.elements = [{"role": "button", "name": "Simpan", "on_click": save}]
+    session.run({"steps": [{"id": "create-item", "action": "click", "selector": {"role": "button", "name": "Simpan"},
+                            "request": {"method": "POST", "path": "/items/:id"}}]})
+    session.guard(route, late)
+    session.on_request_failed(late)
+    session.guard(route, hanging)
+    session.flush_requests()
+    ledger = [e for e in events if e["type"] == "request"]
+    first, second, third, fourth = ledger
+    assert_true(
+        first["step_id"] == "create-item" and first["attribution"] == "step" and first["planned"] is True
+        and first["status"] == 201 and first["duration_ms"] == 250 and first["endpoint"] == BASE + "/items/:id" and "csrf" not in json.dumps(ledger),
+        f"the planned write: its step, planned, status, duration, sanitised endpoint: {first}",
+    )
+    assert_true(second["planned"] is False and second["status"] == 204, f"an extra write in the same window is recorded as not planned: {second}")
+    assert_true(
+        third["attribution"] == "uncertain" and third["step_id"] is None and third["after_step"] == "create-item" and third["planned"] is None and "ERR_ABORTED" in third["failure"],
+        f"a write after the window is uncertain, never pinned to the last step: {third}",
+    )
+    assert_true(fourth["failure"] == "no response before the run ended", f"a write still waiting at the end is reported, not dropped: {fourth}")
+    report = build_report([*events, {"type": "result", "status": "finished"}], {"claims": []})
+    assert_true(
+        report["trail"][0]["requests"] == [first["id"], second["id"]] and len(report["requests"]) == 4,
+        f"the trail ties the step to its requests: {report['trail']}",
+    )
+    block = evidence_block(report)
+    assert_true("trail:" in block and "requests:" in block and "HTTP 201" in block and "uncertain (after create-item)" in block, f"the reviewer sees the trail and the ledger:\n{block}")
+
+    # --- cleanup: runs after the steps, pass or fail, reported apart ---------------------------------
+    from core.evidence.e2e.normalize import to_verification
+
+    def cleanup_page(*, delete_button: bool = True) -> _Page:
+        page = _Page()
+
+        def to_items(p: _Page) -> None:
+            p.url = BASE + "/items"
+
+        page.elements = [{"role": "button", "name": "Simpan", "on_click": to_items}, {"testid": "row", "inner_text": "e2e-item-1"}]
+        if delete_button:
+            page.elements.append({"role": "button", "name": "Hapus e2e-item-1", "on_click": to_items})
+        return page
+
+    crud = {
+        "claims": _CLAIMS,
+        "steps": [
+            {"id": "create-item", "action": "click", "selector": {"role": "button", "name": "Simpan"}, "side_effect": "creates_test_data"},
+            {"id": "assert-row", "action": "expect_dom", "selector": {"testid": "row"}, "text": "e2e-item-1", "claim_id": "login"},
+        ],
+        "cleanup": [
+            {"id": "delete-item", "cleans": "create-item", "action": "click", "selector": {"role": "button", "name": "Hapus e2e-item-1"}},
+            {"id": "assert-gone", "cleans": "create-item", "action": "expect_url", "contains": "/items"},
+        ],
+    }
+    clean_review = "[VERIFICATION]\nverdict: DONE\n\nblocking_findings:\n- none\n\nescalations:\n- none\n\nnotes:\n- none\n\nchecks_run:\n- read the code\n\nnot_verified:\n- none\n\nconfidence: high — fine\n"
+
+    def crud_run(page: _Page, scenario: dict = crud, **config) -> tuple[list[dict], dict]:
+        session, events, _ = _session(page, **config)
+        session.run(scenario)
+        return events, build_report([*events, {"type": "result", "status": "finished"}], scenario)
+
+    events, report = crud_run(cleanup_page())
+    cleanup_events = [e for e in events if e["type"] == "cleanup"]
+    assert_true([e["status"] for e in cleanup_events] == ["passed", "passed"] and report["cleanup"]["status"] == "passed", f"a clean cleanup: {cleanup_events}")
+    assert_true(report["browser_verdict"] == "pass" and to_verification(report, reviewer_content=clean_review)["verdict"] == "pass", "test and cleanup both clean: pass")
+    assert_true(events.index(next(e for e in events if e["type"] == "cleanup")) > max(i for i, e in enumerate(events) if e["type"] == "progress"), "cleanup runs after every test step")
+
+    events, report = crud_run(cleanup_page(delete_button=False))
+    assert_true(
+        [e["status"] for e in events if e["type"] == "cleanup"] == ["failed", "skipped"] and report["cleanup"]["status"] == "failed",
+        f"a failed cleanup step stops its group: {[e['status'] for e in events if e['type'] == 'cleanup']}",
+    )
+    assert_true(report["browser_verdict"] == "pass" and report["claims"]["login"]["status"] == "proven", "the test's own result is untouched by its cleanup")
+    from core.evidence.contract import validate_verification_contract, verify_exit_status
+
+    norm = to_verification(report, reviewer_content=clean_review)
+    assert_true(
+        norm["verdict"] == "incomplete" and norm["declared"] == "INCOMPLETE" and "e2e cleanup: 'create-item' failed" in norm["content"]
+        and verify_exit_status(norm["verdict"], validate_verification_contract(norm["content"])) != 0,
+        f"a failed cleanup makes a passing test incomplete with a non-zero exit: {norm['verdict']}/{norm['declared']}\n{norm['content']}",
+    )
+    assert_true("e2e:login: pass" in norm["content"], "and the proven claim is still reported as proven")
+
+    failing_test = json.loads(json.dumps(crud))
+    failing_test["steps"][1]["text"] = "something else"
+    events, report = crud_run(cleanup_page(), failing_test)
+    assert_true(report["browser_verdict"] == "fail" and report["cleanup"]["status"] == "passed", f"a failed test still cleans up: {report['browser_verdict']} {report['cleanup']['status']}")
+    assert_true(to_verification(report, reviewer_content=clean_review)["verdict"] == "fail", "and a fail stays a fail")
+
+    never = json.loads(json.dumps(crud))
+    never["steps"].insert(0, {"id": "gate", "action": "expect_url", "contains": "/nowhere", "claim_id": "login"})
+    events, report = crud_run(cleanup_page(), never)
+    assert_true(report["cleanup"]["status"] == "not_needed", f"nothing was created, nothing to clean: {report['cleanup']}")
+
+    killed = [e for e in crud_run(cleanup_page())[0] if e["type"] != "cleanup"]
+    report = build_report([*killed, {"type": "result", "status": "finished"}], crud)
+    assert_true(report["cleanup"]["status"] == "not_run" and to_verification(report, reviewer_content=clean_review)["verdict"] == "incomplete", "a cleanup the player never reached is not_run, never a pass")
+
+    slow = cleanup_page()
+    slow.elements[0]["on_click"] = lambda p: session_clock.advance(6)
+    session, events, session_clock = _session(slow, total_timeout_s=10, step_timeout_ms=2000)
+    session.run(crud)
+    steps_seen = _progress(events)
+    assert_true(
+        steps_seen[1]["status"] == "skipped" and "for cleanup" in steps_seen[1].get("detail", "") and [e["status"] for e in events if e["type"] == "cleanup"] == ["passed", "passed"],
+        f"test steps stop early to leave cleanup its share of total_timeout_s: {[(e['step_id'], e['status']) for e in steps_seen]}",
+    )
+
     # --- observers: shapes the classifier reads, third-party kept apart ----------------------------
     page = _Page()
     page.url = BASE + "/dashboard"
@@ -542,6 +791,17 @@ def _test_e2e_browser_session() -> None:
         artifacts = [e for e in events if e["type"] == "artifact"]
         assert_true([a["kind"] for a in artifacts] == ["html", "skipped"] and "screenshot" not in page.calls, "with resolved ${ENV} values no screenshot is taken")
         assert_true("${ENV}" in artifacts[1]["detail"], "and the skip says why")
+
+        page = _Page()
+        page.url = BASE + "/login?error=1"
+        short_events: list[dict] = []
+        short_clock = _Clock()
+        Session(page, {"base_url": BASE, "step_timeout_ms": 300, "capture_html": False}, short_events.append, clock=short_clock, sleep=short_clock.advance,
+                artifacts_dir=str(art), has_secrets=True).run({"steps": [{"action": "expect_url", "contains": "/dashboard", "claim_id": "login"}]})
+        assert_true(
+            [a["kind"] for a in short_events if a["type"] == "artifact"] == ["skipped", "skipped"] and "content" not in page.calls,
+            "a value too short to scrub keeps no HTML either",
+        )
 
         page = _login_page()
         _, events = captured(page, [{"action": "click", "selector": {"css": "#nope"}, "selector_provenance": {"type": "heuristic"}}])
@@ -645,6 +905,26 @@ def _test_e2e_browser_session() -> None:
         # slow_mo_ms reaches the launch, clamped; absent or unreadable runs at full speed
         for given, expected in ((None, 0), (700, 700), (-5, 0), (99999, 5000), ("slow", 0)):
             real_run([{"action": "goto", "url": "/login"}], secrets=False, **({} if given is None else {"slow_mo_ms": given}))
-            assert_true(launch_calls[-1] == {"headless": True, "slow_mo": expected}, f"slow_mo_ms={given!r} launches with {launch_calls[-1]}")
+            assert_true(
+                launch_calls[-1] == {"headless": False, "slow_mo": expected, "args": []},
+                f"slow_mo_ms={given!r} launches with {launch_calls[-1]}",
+            )
+        # headed is the shipped default; a config that asks for headless still gets it
+        real_run([{"action": "goto", "url": "/login"}], secrets=False, headless=True)
+        assert_true(launch_calls[-1]["headless"] is True, f"headless: true reaches the launch: {launch_calls[-1]}")
+
+        # preflight's write decision reaches the browser as a resolver pin, so the name it
+        # approved cannot come back pointing somewhere else mid-run
+        real_run([{"action": "goto", "url": "/login"}], secrets=False, host_pins={"app.test": "192.168.1.40"})
+        assert_true(
+            launch_calls[-1]["args"] == ["--host-resolver-rules=MAP app.test 192.168.1.40"],
+            f"an approved write host is pinned at launch: {launch_calls[-1]}",
+        )
+        from core.evidence.e2e.browser import _launch_args
+
+        assert_true(
+            _launch_args({"host_pins": {"app.test": "192.168.1.40"}, "browser": "firefox"}) == [] and _launch_args({"browser": "chromium"}) == [],
+            "a browser that cannot take the flag is never handed it, and no pin means no flag",
+        )
     finally:
         shutil.rmtree(art, ignore_errors=True)

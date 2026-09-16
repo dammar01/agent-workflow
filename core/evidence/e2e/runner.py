@@ -1,7 +1,7 @@
 """Stage orchestration for /.verify-browser, called from `Executor.execute()`.
 
-Every run reads one request (`core/evidence/e2e/request.py`); nothing comes from
-config.json. The request's phase decides how far it goes:
+Every run reads one request (`core/evidence/e2e/request.py`), which itself starts from the
+project's pinned `e2e` section in config.json. The request's phase decides how far it goes:
 
   draft  preflight  → a draft with status `blocked` and the failing check
          stage 1    → second_agent writes `[E2E SPEC]`; a proxy failure is returned as-is
@@ -9,7 +9,9 @@ config.json. The request's phase decides how far it goes:
                       to `draft.json` for the user to confirm. No browser starts.
   run    preflight  → `incomplete` with the failing check as reason
          spec       → the confirmed scenario from the request, validated again
-         stage 2    → the supervised player; never ends the run by itself, its report does
+         stage 2    → the supervised player; never ends the run by itself, its report does.
+                      An environmental `incomplete` is retried up to settings.max_retries,
+                      never a `fail` and never while allow_side_effects is true
          stage 3    → hybrid review over the compact evidence (skipped only when the
                       browser could not finish — nothing a reviewer says changes `incomplete`)
          normalise  → one canonical `[VERIFICATION]`, verdict set on meta before the shared
@@ -35,6 +37,7 @@ from pathlib import Path
 from core.evidence.e2e import existing_tests as e2e_existing
 from core.evidence.e2e import redact as e2e_redact
 from core.evidence.e2e import request as e2e_request
+from core.evidence.e2e import tagging as e2e_tagging
 from core.evidence.e2e.classify import build_report
 from core.evidence.e2e.normalize import evidence_block, to_verification
 from core.evidence.e2e.preflight import preflight
@@ -62,6 +65,19 @@ SMOKE_ENV = "WORKFLOW_E2E_SMOKE"
 # real changes under study, and the run's quality row carries it.
 LABEL_ENV = "WORKFLOW_E2E_LABEL"
 INVOCATION = "verify-browser"
+# Hard ceiling on browsers started for one run, whatever settings.max_retries says. A
+# retry only ever buys another sample of an environment that may be flaky; past a few
+# samples the answer is not "run it again", it is that the environment is the finding.
+MAX_RETRIES = 5
+# Incomplete reasons a second attempt could plausibly resolve: the browser or the machine
+# misbehaved. Deliberately excluded are playwright_missing, browser_missing,
+# base_url_unreachable, spec_invalid, env_missing and player_unavailable — nothing about
+# rerunning those changes, so a retry would only spend the user's time. `fail` is never
+# retried at all: that verdict means the application broke the claim, and re-rolling a
+# real bug until it hides is the one outcome this whole package exists to prevent.
+RETRYABLE_REASONS = frozenset(
+    {"harness_error", "unknown_origin", "stuck", "timeout", "output_truncated", "launch_failed"}
+)
 _AGENT_ROOT = Path(__file__).resolve().parents[3]
 # What the player child may inherit. Credentials reach it only inside the resolved
 # scenario on stdin; the parent's environment is otherwise not its business.
@@ -159,6 +175,13 @@ def _record_run(
             "steps": report.get("steps") or {},
             "browser_runs": sum(1 for s in stages if s.get("stage") == 2 and s.get("returncode") is not None),
             "probes": len(report.get("probes") or []) + sum(1 for f in failures if f.get("probe")),
+            "cleanup": (report.get("cleanup") or {}).get("status"),
+            "requests": {
+                "total": len(report.get("requests") or []),
+                "blocked": sum(1 for r in report.get("requests") or [] if r.get("blocked")),
+                "unplanned": sum(1 for r in report.get("requests") or [] if r.get("planned") is False),
+                "uncertain": sum(1 for r in report.get("requests") or [] if r.get("attribution") == "uncertain"),
+            },
             "artifacts": {
                 "kept": len(kept),
                 "screenshots": sum(1 for a in kept if a.get("kind") == "screenshot"),
@@ -281,6 +304,13 @@ def _draft_result(
     lines += ["", "steps:"]
     steps = scenario.get("steps") if isinstance(scenario, dict) else None
     lines += [f"- {n}. {json.dumps(step, ensure_ascii=False)[:240]}" for n, step in enumerate(steps or [], 1)] or ["- none"]
+    lines += ["", "cleanup (runs after the steps, pass or fail; reported apart from the test):"]
+    cleanup_steps = scenario.get("cleanup") if isinstance(scenario, dict) else None
+    lines += [
+        f"- {n}. cleans {step.get('cleans')}: {json.dumps(step, ensure_ascii=False)[:240]}"
+        for n, step in enumerate(cleanup_steps or [], 1)
+        if isinstance(step, dict)
+    ] or ["- none"]
     lines += ["", "existing_tests:"]
     lines += [f"- {t.get('path')} covers {', '.join(map(str, t.get('covers') or []))}" for t in draft["existing_tests"] if isinstance(t, dict)] or ["- none"]
     lines += ["", "env_placeholders:", *([f"- {name}" + (" (not set)" if name in missing_env else "") for name in env_names] or ["- none"])]
@@ -302,6 +332,25 @@ def _draft_result(
     lines += ["", "spec_uncertainties:", *([f"- {u}" for u in draft["spec_notes"]] or ["- none"])]
     meta = {"command": INVOCATION, "invocation": INVOCATION, "phase": "draft", "e2e": e2e_meta}
     return _sanitize_result({"ok": True, "content": "\n".join(lines) + "\n", "meta": meta})[0]
+
+
+def _retryable(report: dict) -> bool:
+    """Whether this report describes a run worth attempting again."""
+    return report["browser_verdict"] == "incomplete" and report["reason"] in RETRYABLE_REASONS
+
+
+def _run_signature(report: dict) -> tuple:
+    """What "the same failure twice" means: same verdict, same reason, same step outcomes.
+
+    Compared between consecutive attempts only. Two matching signatures say the run is
+    reproducible rather than flaky, which is the one piece of information a retry was
+    there to get.
+    """
+    return (
+        report["browser_verdict"],
+        report["reason"],
+        tuple((row.get("step_id"), row.get("status"), row.get("error")) for row in report["trail"]),
+    )
 
 
 def run(
@@ -338,7 +387,12 @@ def run(
     phase = request["phase"]
     config = request["settings"]
     e2e_meta["phase"] = phase
-    e2e_meta["config"] = {k: config[k] for k in ("base_url", "browser", "headless", "slow_mo_ms", "allow_remote", "allow_side_effects")}
+    e2e_meta["config"] = {k: config[k] for k in ("base_url", "browser", "headless", "slow_mo_ms", "allow_remote", "allow_side_effects", "max_retries")}
+    # Pinned defaults that were dropped for being malformed. A warning, not an error (see
+    # request.config_settings), but silent would mean a knob the user set and the runtime
+    # ignored, which reads from the outside exactly like the knob not working.
+    if request.get("config_warnings"):
+        e2e_meta["config_warnings"] = request["config_warnings"]
     run_state: dict = {"report": None, "scenario": None}
 
     def _finish(norm: dict) -> dict:
@@ -352,6 +406,9 @@ def run(
 
     pre = preflight(config, fake=bool(fake))
     e2e_meta["preflight"] = pre["checks"]
+    network = pre.get("network") or {"write_hosts": [], "pins": {}, "hosts": []}
+    if network.get("hosts"):
+        e2e_meta["network"] = network
     if not pre["ok"]:
         e2e_meta["reason"] = pre["reason"]
         if phase == "draft":
@@ -360,7 +417,9 @@ def run(
 
     secrets, secret_errors, secret_info = e2e_request.load_secrets(project_root, config.get("secrets_profile") or "")
     e2e_meta["secrets"] = {key: secret_info[key] for key in ("file", "exists", "profile", "profiles")}
-    lookup = {**os.environ, **secrets}
+    # Registered names only: the process environment is a fallback for a credential, not a
+    # way for a scenario to read any variable the runtime happens to have.
+    lookup = {**{name: os.environ[name] for name in e2e_request.CREDENTIAL_KEYS if name in os.environ}, **secrets}
 
     if phase == "draft":
         return _draft(executor, project_root, session_id, session, task, work_dir, on_progress, session_manager, lock_claim, config, e2e_meta, stages, lookup, secret_errors)
@@ -408,6 +467,12 @@ def run(
         )
     resolved, _ = substitute_env(scenario, lookup)
     resolved_values = {name: lookup[name] for name in names}
+    # A value shorter than the scrubber's minimum cannot be put back to its placeholder by
+    # substring, so the player keeps no page HTML for this run (screenshots and traces are
+    # already off whenever values resolve). Named, never shown.
+    unscrubbable = [name for name, value in resolved_values.items() if len(value) < e2e_redact.MIN_SCRUB_CHARS]
+    if unscrubbable:
+        e2e_meta["secrets"]["unscrubbable"] = unscrubbable
 
     # ---- artifacts ----------------------------------------------------------------
     run_id = time.strftime("%Y%m%d_%H%M%S") + "_e2e"
@@ -452,19 +517,40 @@ def run(
             }
         )
 
-    payload = json.dumps(
-        {
-            "scenario": resolved,
-            "config": config,
-            "artifacts_dir": str(e2e_dir),
-            "fake": fake,
-            # The player takes no screenshot and no trace once real values are in play:
-            # binary captures cannot be scrubbed afterwards.
-            "has_secrets": bool(resolved_values),
-        }
-    )
-    if scenario.get("steps"):
-        supervised = run_player(
+    def _play(attempt_dir: Path) -> dict:
+        if not scenario.get("steps"):
+            # Every claim is covered by an existing test the project ran: no browser to start.
+            return {
+                "events": [{"type": "result", "status": "finished"}],
+                "stderr_tail": [],
+                "malformed": [],
+                "launch_error": None,
+                "timed_out": False,
+                "stalled": False,
+                "truncated": False,
+                "returncode": None,
+                "duration_seconds": 0.0,
+            }
+        payload = json.dumps(
+            {
+                "scenario": resolved,
+                # The write decision preflight made, not the settings it made it from: the
+                # player is told which hosts were approved and at which addresses, and never
+                # repeats the lookup that approved them.
+                "config": {
+                    **config,
+                    "capture_html": not unscrubbable,
+                    "write_hosts": network.get("write_hosts") or [],
+                    "host_pins": network.get("pins") or {},
+                },
+                "artifacts_dir": str(attempt_dir),
+                "fake": fake,
+                # The player takes no screenshot and no trace once real values are in play:
+                # binary captures cannot be scrubbed afterwards.
+                "has_secrets": bool(resolved_values),
+            }
+        )
+        return run_player(
             [sys.executable, "-m", "core.evidence.e2e.player"],
             stdin_payload=payload,
             env=_child_env(str(_AGENT_ROOT)),
@@ -473,55 +559,79 @@ def run(
             total_timeout_s=float(config["total_timeout_s"]),
             on_progress=progress,
         )
-    else:
-        # Every claim is covered by an existing test the project ran: no browser to start.
-        supervised = {
-            "events": [{"type": "result", "status": "finished"}],
-            "stderr_tail": [],
-            "malformed": [],
-            "launch_error": None,
-            "timed_out": False,
-            "stalled": False,
-            "truncated": False,
-            "returncode": None,
-            "duration_seconds": 0.0,
-        }
-    # Everything the child sent back is scrubbed of resolved values BEFORE it is used
-    # for anything: classification, artifacts, the reviewer prompt, or the result.
-    events = e2e_redact.scrub_resolved(list(supervised["events"]), resolved_values)
-    stderr_tail = e2e_redact.scrub_resolved(list(supervised["stderr_tail"]), resolved_values)
-    malformed = e2e_redact.scrub_resolved(list(supervised["malformed"]), resolved_values)
-    if supervised.get("launch_error"):
-        events.append(
+
+    # How many more browsers this run may start. `allow_side_effects` turns retries off
+    # outright: the first attempt's write may already have reached the server, so a second
+    # would either double it or run against the state the first one left behind. That is
+    # the same reason the skill tells the user never to re-run a timed-out write by hand.
+    budget = 0 if config["allow_side_effects"] else max(0, min(int(config["max_retries"]), MAX_RETRIES))
+    attempts: list[dict] = []
+    previous_signature: tuple | None = None
+    attempt = 0
+    while True:
+        attempt += 1
+        # Attempt 1 owns e2e_dir so a run that never retried looks exactly as it did
+        # before; each retry gets its own directory rather than overwriting the evidence
+        # of what it is retrying.
+        final_dir = e2e_dir if attempt == 1 else e2e_dir / f"retry{attempt - 1}"
+        supervised = _play(final_dir)
+        # Everything the child sent back is scrubbed of resolved values BEFORE it is used
+        # for anything: classification, artifacts, the reviewer prompt, or the result.
+        events = e2e_redact.scrub_resolved(list(supervised["events"]), resolved_values)
+        stderr_tail = e2e_redact.scrub_resolved(list(supervised["stderr_tail"]), resolved_values)
+        malformed = e2e_redact.scrub_resolved(list(supervised["malformed"]), resolved_values)
+        if supervised.get("launch_error"):
+            events.append(
+                {
+                    "type": "harness",
+                    "reason": "launch_failed",
+                    "detail": e2e_redact.scrub_resolved(supervised["launch_error"], resolved_values),
+                }
+            )
+        # Player-written files: text scrubbed exactly like the events were, then the run's
+        # size budget. Both before the report names them, so what it lists is what exists.
+        redaction_hits += e2e_redact.scrub_text_files(final_dir, resolved_values)
+        pruned = _enforce_artifact_budget(final_dir, int(config["artifact_max_mb"]))
+        if pruned:
+            e2e_meta["artifacts_pruned"] = pruned
+            events = [
+                {**event, "pruned": True} if event.get("type") == "artifact" and event.get("name") in pruned else event
+                for event in events
+            ]
+        report = build_report(
+            events,
+            scenario,
+            run_meta={
+                "timed_out": supervised["timed_out"],
+                "stalled": supervised["stalled"],
+                "truncated": supervised["truncated"],
+                "malformed": bool(malformed),
+                "existing_tests": existing_result,
+            },
+        )
+        signature = _run_signature(report)
+        attempts.append(
             {
-                "type": "harness",
-                "reason": "launch_failed",
-                "detail": e2e_redact.scrub_resolved(supervised["launch_error"], resolved_values),
+                "attempt": attempt,
+                "artifacts": str(final_dir),
+                "browser_verdict": report["browser_verdict"],
+                "reason": report["reason"],
+                "duration_seconds": supervised["duration_seconds"],
             }
         )
-    # Player-written files: text scrubbed exactly like the events were, then the run's
-    # size budget. Both before the report names them, so what it lists is what exists.
-    redaction_hits += e2e_redact.scrub_text_files(e2e_dir, resolved_values)
-    pruned = _enforce_artifact_budget(e2e_dir, int(config["artifact_max_mb"]))
-    if pruned:
-        e2e_meta["artifacts_pruned"] = pruned
-        events = [
-            {**event, "pruned": True} if event.get("type") == "artifact" and event.get("name") in pruned else event
-            for event in events
-        ]
-    report = build_report(
-        events,
-        scenario,
-        run_meta={
-            "timed_out": supervised["timed_out"],
-            "stalled": supervised["stalled"],
-            "truncated": supervised["truncated"],
-            "malformed": bool(malformed),
-            "existing_tests": existing_result,
-        },
-    )
+        if attempt > budget or not _retryable(report):
+            break
+        if signature == previous_signature:
+            # Two attempts in a row ended the same way, step for step. The flake theory is
+            # spent: another browser would cost a minute and prove the same thing again.
+            attempts[-1]["stable"] = True
+            break
+        previous_signature = signature
+
     report["existing_tests"] = existing_rows
     run_state["report"] = report
+    if len(attempts) > 1:
+        e2e_meta["attempts"] = attempts
     stages.append(
         {
             "stage": 2,
@@ -529,6 +639,7 @@ def run(
             "returncode": supervised["returncode"],
             "duration_seconds": supervised["duration_seconds"],
             "events": len(events),
+            "attempts": len(attempts),
             "timed_out": supervised["timed_out"],
             "stalled": supervised["stalled"],
             "malformed": len(malformed),
@@ -539,12 +650,29 @@ def run(
         e2e_dir / "report.json",
         {**report, "stderr_tail": stderr_tail, "malformed": malformed},
     )
+    # ---- tag proposals: recorded, never applied -----------------------------------
+    # The runner's half of the tagging pass ends here. It knows which elements were driven
+    # and whether each one could be tagged; it does not edit a template, because that is a
+    # write to code the user owns and the user has not been asked yet.
+    try:
+        tag_entries = e2e_tagging.plan(project_root, e2e_tagging.proposals(report))
+    except Exception as exc:  # observing the run must never be able to fail it
+        tag_entries = []
+        e2e_meta["tags"] = {"error": f"{type(exc).__name__}: {exc}"}
+    if tag_entries:
+        redaction_hits += e2e_redact.write_json(e2e_dir / "tag-proposals.json", tag_entries)
+        e2e_meta["tags"] = {
+            "file": str(e2e_dir / "tag-proposals.json"),
+            "ready": len(e2e_tagging.ready(tag_entries)),
+            "skipped": len(tag_entries) - len(e2e_tagging.ready(tag_entries)),
+        }
     e2e_meta["browser_verdict"] = report["browser_verdict"]
     e2e_meta["reason"] = report["reason"]
+    e2e_meta["cleanup"] = {key: report["cleanup"][key] for key in ("status", "groups")}
 
     # ---- stage 3: hybrid review ---------------------------------------------------
     block, block_hits = e2e_redact.redact_text(
-        evidence_block(report, artifacts=str(e2e_dir), spec_notes=parsed.get("uncertainties") or [])
+        evidence_block(report, artifacts=str(final_dir), spec_notes=parsed.get("uncertainties") or [])
     )
     redaction_hits += block_hits
     redaction_hits += e2e_redact.write_text(e2e_dir / "evidence.md", block)
@@ -640,11 +768,12 @@ def _draft(
     names = env_references(scenario)
     # Not an error at draft time: the user may fill secrets.json after reading the draft.
     # Nothing ever created that file, so a user asked to "fill it" had nowhere to start;
-    # the draft now writes it with an empty slot per referenced name.
+    # the draft writes it — shape and names from the credential registry, profile names from
+    # the request settings, never from the scenario second_agent proposed.
     missing = [name for name in names if name not in lookup]
     if missing and not (e2e_meta.get("secrets") or {}).get("exists"):
         e2e_meta.setdefault("secrets", {})["template_created"] = e2e_request.ensure_secrets_template(
-            project_root, names, config.get("secrets_profile") or ""
+            project_root, e2e_request.template_profiles(config)
         )
     if spec_errors or read_only_errors:
         e2e_meta["reason"] = "spec_invalid"

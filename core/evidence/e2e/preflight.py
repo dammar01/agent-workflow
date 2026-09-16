@@ -4,12 +4,21 @@ Each check names the `incomplete` reason it produces, so a run that cannot happe
 why in one word the user can act on. None of this touches Playwright at import time;
 `browser_available` imports it inside the call and only after `playwright_available`
 said it was there.
+
+Where a run may point and what it may write to are two different questions. Navigation
+policy is about names: loopback, a `.test` name (reserved for local development, so it
+cannot be a public host), or an origin the user typed into `allowed_origins` behind
+`allow_remote`. Write policy is about addresses: whatever the name says, every host that
+may receive a write has to resolve to loopback or a private range, and the addresses it
+resolved to here are pinned into the browser so the answer cannot change afterwards.
 """
 
 from __future__ import annotations
 
 import importlib.util
+import ipaddress
 import re
+import socket
 import sys
 import urllib.error
 import urllib.request
@@ -18,13 +27,147 @@ from urllib.parse import urlsplit
 
 _LOOPBACK = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 _SCHEMES = frozenset({"http", "https"})
+# Reserved for local testing by RFC 6761 §6.2: `.test` never resolves on the public
+# internet, so a name under it can only be something the user pointed at their own
+# machine. That is what makes it usable without the explicit opt-in a real domain needs —
+# it is not a claim that the name is safe, which is why it still has to resolve to a
+# loopback or private address before anything writes to it.
+_VIRTUAL_DEV_SUFFIXES = (".test",)
+# Browsers whose resolver this runtime can pin to the addresses preflight approved.
+# Without pinning, the name could resolve to something else between the check and the
+# write, which is the whole DNS-rebinding move.
+_PINNABLE_BROWSERS = frozenset({"chromium"})
 # The installer's pin (install.py --with-e2e). Read, never imported: doctor reports it next
 # to what is actually installed so a drifted Playwright is visible before a run misbehaves.
 E2E_REQUIREMENTS = Path(__file__).resolve().parents[3] / "requirements-e2e.txt"
 
 
+def is_loopback_host(host: str | None) -> bool:
+    """localhost, *.localhost, and any loopback address (127.0.0.0/8, ::1)."""
+    host = (host or "").lower().strip("[]")
+    if not host:
+        return False
+    if host in _LOOPBACK or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def is_virtual_dev_host(host: str | None) -> bool:
+    """A name under a suffix reserved for local development (`.test`)."""
+    host = (host or "").lower().strip("[]").rstrip(".")
+    return bool(host) and any(host.endswith(suffix) and len(host) > len(suffix) for suffix in _VIRTUAL_DEV_SUFFIXES)
+
+
+def host_addresses(host: str) -> list[str]:
+    """Every address `host` resolves to right now.
+
+    A module-level function on purpose: it is the one place this package touches DNS, so
+    it is also the one place a test has to replace to describe a network it does not have.
+    """
+    infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    return sorted({str(info[4][0]) for info in infos})
+
+
+def address_class(address: str) -> str:
+    """loopback | private | public for one address.
+
+    `ipaddress.is_private` alone would answer "private" for loopback, link-local and a
+    handful of reserved ranges, so the order matters: loopback first, then the ranges no
+    app should be reachable on (link-local carries cloud metadata services), then private.
+    """
+    try:
+        ip = ipaddress.ip_address(address.split("%", 1)[0])
+    except ValueError:
+        return "public"
+    if ip.is_loopback:
+        return "loopback"
+    if ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+        return "public"
+    return "private" if ip.is_private else "public"
+
+
+def classify_host(host: str) -> dict:
+    """{"host", "addresses", "class", "detail"} — class is loopback|private|public|unresolved.
+
+    A loopback NAME needs no lookup; anything else is judged by what it actually resolves
+    to, because a hostname says nothing about where the packets go. One public address is
+    enough to classify the whole name public: a name that resolves to both is a name that
+    can hand the browser the public one.
+    """
+    if is_loopback_host(host):
+        return {"host": host, "addresses": [], "class": "loopback", "detail": "loopback name"}
+    try:
+        addresses = host_addresses(host)
+    except (OSError, UnicodeError) as exc:
+        return {"host": host, "addresses": [], "class": "unresolved", "detail": f"{type(exc).__name__}: {exc}"}
+    if not addresses:
+        return {"host": host, "addresses": [], "class": "unresolved", "detail": "no address"}
+    classes = {address: address_class(address) for address in addresses}
+    public = [address for address, kind in classes.items() if kind == "public"]
+    if public:
+        return {"host": host, "addresses": addresses, "class": "public", "detail": f"resolves to public address {public[0]}"}
+    kind = "loopback" if set(classes.values()) == {"loopback"} else "private"
+    return {"host": host, "addresses": addresses, "class": kind, "detail": f"resolves to {', '.join(addresses)}"}
+
+
+def _origin_hosts(config: dict) -> list[str]:
+    """base_url's host first, then every allow-listed origin's, without repeats."""
+    hosts: list[str] = []
+    for url in [str(config.get("base_url") or ""), *[str(o) for o in config.get("allowed_origins") or []]]:
+        try:
+            host = (urlsplit(url).hostname or "").lower()
+        except ValueError:
+            continue
+        if host and host not in hosts:
+            hosts.append(host)
+    return hosts
+
+
+def write_network(config: dict) -> tuple[str | None, dict]:
+    """Which hosts may receive a write this run, and why the settings are refused if they are.
+
+    Returns `(error, decision)`. The decision is computed ONCE, here, and travels to the
+    player; the guard never re-resolves a name. That is deliberate: re-checking at request
+    time would ask DNS a second question and accept a second answer, which is exactly the
+    rebinding this is meant to stop.
+
+    With `allow_side_effects` false there is nothing to approve — the guard still refuses
+    every write on its own.
+    """
+    decision: dict = {"hosts": [], "write_hosts": [], "pins": {}}
+    if not config.get("allow_side_effects"):
+        return None, decision
+    hosts = _origin_hosts(config)
+    if not hosts:
+        return "settings.allow_side_effects is true but base_url names no host", decision
+    for host in hosts:
+        verdict = classify_host(host)
+        decision["hosts"].append(verdict)
+        if verdict["class"] in ("public", "unresolved"):
+            return (
+                f"settings.allow_side_effects is true but host '{host}' {verdict['detail']}: "
+                "a data-changing run reaches only loopback or private addresses"
+            ), decision
+        decision["write_hosts"].append(host)
+        if verdict["class"] != "loopback":
+            decision["pins"][host] = verdict["addresses"][0]
+    if decision["pins"]:
+        browser = str(config.get("browser") or "chromium")
+        if browser not in _PINNABLE_BROWSERS:
+            return (
+                f"settings.browser '{browser}' cannot have its resolver pinned, so "
+                f"{', '.join(sorted(decision['pins']))} could resolve elsewhere between this check and the write: "
+                f"use {' or '.join(sorted(_PINNABLE_BROWSERS))}, or a loopback base_url"
+            ), decision
+    return None, decision
+
+
 def safe_base_url(url: str, config: dict) -> tuple[bool, str]:
-    """Local by default; anything else needs `allow_remote` AND an allowed origin."""
+    """Local by default. A `.test` name is local by convention. Anything else needs
+    `allow_remote` AND an allowed origin — the deliberate, typed-out opt-in."""
     try:
         parts = urlsplit(url)
     except ValueError:
@@ -32,10 +175,12 @@ def safe_base_url(url: str, config: dict) -> tuple[bool, str]:
     if parts.scheme not in _SCHEMES or not parts.hostname:
         return False, f"base_url '{url}' must be http(s)://host[:port]"
     host = parts.hostname.lower()
-    if host in _LOOPBACK or host.endswith(".localhost"):
+    if is_loopback_host(host):
         return True, "loopback"
+    if is_virtual_dev_host(host):
+        return True, "virtual dev host"
     if not config.get("allow_remote"):
-        return False, f"base_url host '{host}' is not loopback and settings.allow_remote is false"
+        return False, f"base_url host '{host}' is not loopback or a .test name, and settings.allow_remote is false"
     origin = f"{parts.scheme}://{parts.netloc}".lower()
     allowed = {str(o).lower().rstrip("/") for o in config.get("allowed_origins") or []}
     if origin not in allowed:
@@ -161,8 +306,17 @@ def preflight(config: dict, *, fake: bool = False) -> dict:
     checks.append({"name": "base_url_policy", "ok": ok, "detail": detail})
     if not ok:
         return {"ok": False, "reason": "spec_invalid", "detail": detail, "checks": checks}
+    refused, network = write_network(config)
+    detail = refused or (
+        f"writes pinned to {', '.join(f'{h}={ip}' for h, ip in sorted(network['pins'].items()))}"
+        if network["pins"]
+        else "no writes, or writes to a loopback app"
+    )
+    checks.append({"name": "write_policy", "ok": refused is None, "detail": detail})
+    if refused:
+        return {"ok": False, "reason": "spec_invalid", "detail": refused, "checks": checks, "network": network}
     if fake:
-        return {"ok": True, "reason": None, "detail": "fake player: dependency checks skipped", "checks": checks}
+        return {"ok": True, "reason": None, "detail": "fake player: dependency checks skipped", "checks": checks, "network": network}
 
     ok, detail = playwright_available()
     if not ok:
@@ -178,4 +332,4 @@ def preflight(config: dict, *, fake: bool = False) -> dict:
     if not ok:
         return fail("base_url_unreachable", detail)
     checks.append({"name": "base_url", "ok": True, "detail": detail})
-    return {"ok": True, "reason": None, "detail": "ready", "checks": checks}
+    return {"ok": True, "reason": None, "detail": "ready", "checks": checks, "network": network}

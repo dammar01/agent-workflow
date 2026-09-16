@@ -61,6 +61,27 @@ def default_policies() -> dict:
         "subagent_fanout_enabled": True,
     }
 
+def default_e2e() -> dict:
+    """Project-level defaults for /.verify-browser, mirroring the request contract.
+
+    Single source: the shipped values live in `core/evidence/e2e/request.py`, and this
+    section is what a project pins so a run needs no interview. The import is lazy
+    because request.py reads this file's section back — module-level it would cycle.
+    """
+    from core.evidence.e2e.request import default_settings
+
+    return default_settings()
+
+
+def _tunable_sections() -> tuple[tuple[str, dict], ...]:
+    """The user-tunable config sections and the defaults each is checked against."""
+    return (
+        ("commands", default_commands()),
+        ("policies", default_policies()),
+        ("e2e", default_e2e()),
+    )
+
+
 def _rewrite_superseded_keys(config: dict) -> bool:
     """Carry a config written by an earlier build onto the current key names.
 
@@ -89,10 +110,7 @@ def merge_config_defaults(config: dict) -> tuple[dict, bool]:
     this an already-initialized project would never see keys added by a later version.
     """
     changed = _rewrite_superseded_keys(config)
-    for section, defaults in (
-        ("commands", default_commands()),
-        ("policies", default_policies()),
-    ):
+    for section, defaults in _tunable_sections():
         current = config.get(section)
         if not isinstance(current, dict):
             current = {}
@@ -133,10 +151,7 @@ def diverged_defaults(config: dict) -> list[dict]:
     between builds otherwise reaches only projects that never ran the old one.
     """
     out: list[dict] = []
-    for section, defaults in (
-        ("commands", default_commands()),
-        ("policies", default_policies()),
-    ):
+    for section, defaults in _tunable_sections():
         current = config.get(section)
         if not isinstance(current, dict):
             continue
@@ -158,13 +173,10 @@ def validate_config(config: dict) -> list[str]:
     yet reads as "configured"), and a TYPE mismatch (a bool knob set to a string is ignored
     by the reader that expects a bool, again silently). Reported, never fatal or rewritten —
     same posture as diverged_defaults; the runtime readers all fall back safely. Only
-    commands/ and policies/ are user knobs; version/project/runtime are structural.
+    commands/, policies/ and e2e/ are user knobs; version/project/runtime are structural.
     """
     warnings: list[str] = []
-    for section, section_defaults in (
-        ("commands", default_commands()),
-        ("policies", default_policies()),
-    ):
+    for section, section_defaults in _tunable_sections():
         current = config.get(section)
         if current is None:
             continue  # an absent section is backfilled by merge_config_defaults, not an error
@@ -328,6 +340,7 @@ def default_config(project_root: Path, agent_workflow_path: str | None) -> dict:
         },
         "commands": default_commands(),
         "policies": default_policies(),
+        "e2e": default_e2e(),
     }
 
 def default_state(project_root: Path) -> dict:

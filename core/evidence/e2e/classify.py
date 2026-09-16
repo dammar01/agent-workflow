@@ -6,10 +6,19 @@ the evidence cannot tell — and `unknown` is never promoted to `harness`, becau
 is exactly the move that would hide a regression behind a flaky-selector story.
 
 Player event protocol (one JSON object per stdout line):
-  {"type": "progress", "step": n, "action": str, "status": "passed|failed|skipped",
+  {"type": "progress", "step": n, "step_id": str, "action": str, "status": "passed|failed|skipped",
    "claim_id": str|None, "expected": any, "actual": any, "url_after": str|None,
    "duration_ms": int, "error": {"kind": str, "detail": str}|None,
-   "selector_provenance": str|None, "page_stable": bool|None}
+   "selector_provenance": str|None, "page_stable": bool|None,
+   "selection": {"candidate": int|None, "match_counts": [int|None], "fallback_used": bool},
+   "ready": {"conditions": int, "waited_ms": int, "unmet": [str]}}   # selection/ready when used
+  {"type": "request", "id": str, "phase": "steps|cleanup", "step_id": str|None,
+   "after_step": str|None, "attribution": "step|uncertain", "method": str,
+   "endpoint": str (sanitised), "resource_type": str, "read_only": bool, "blocked": bool,
+   "planned": bool|None, "status": int|None, "failure": str|None, "duration_ms": int|None}
+  {"type": "cleanup", "step_id": str, "cleans": str, "action": str,
+   "status": "passed|failed|skipped|not_needed", "expected": any, "actual": any,
+   "error": {...}|None, "duration_ms": int, "detail": str|None}
   {"type": "observation", "kind": "http_5xx|page_error|console_error|mutation_blocked|read_only_request_allowed", "url": str,
    "status": int|None, "detail": str, "same_origin": bool, "main_request": bool,
    "enforced": bool}   # console_error only: settings.fail_on_console_error
@@ -70,7 +79,9 @@ def classify_step(event: dict) -> str:
             # could be either, and guessing costs a hidden regression.
             return ORIGIN_APP if stable is True else ORIGIN_UNKNOWN
         return ORIGIN_UNKNOWN
-    if kind == "timeout":
+    if kind in {"timeout", "not_ready"}:
+        # not_ready: the app's own indicator never said "ready" — a slow app and a broken
+        # one look the same from here.
         return ORIGIN_UNKNOWN
     if action in {"expect_url", "expect_title"}:
         return ORIGIN_APP
@@ -92,6 +103,11 @@ def build_report(events: list[dict], scenario: dict | None, *, run_meta: dict | 
       failures: [{step, action, claim_id, origin, expected, actual, detail}]
       observations: [{kind, url, status, detail, same_origin, main_request}]
       harness: [{reason, detail}]
+      requests: [the request ledger records, in order]
+      trail: [{step_id, action, status, selection, ready, requests, error}] — step to
+             selector to readiness to action to request to result, one row per step
+      cleanup: {"status": not_planned|not_needed|passed|failed|not_run, "groups": [...],
+                "steps": [...], "unplanned": [{step_id, reason}]}
     """
     run_meta = run_meta or {}
     claims: dict[str, dict] = {}
@@ -111,11 +127,32 @@ def build_report(events: list[dict], scenario: dict | None, *, run_meta: dict | 
     harness: list[dict] = []
     artifacts: list[dict] = []
     probes: list[dict] = []
+    requests: list[dict] = []
+    trail: list[dict] = []
+    cleanup_events: dict[str, dict] = {}
     finished = False
 
     for event in events:
         kind = event.get("type")
+        if kind == "request":
+            requests.append({key: event.get(key) for key in _REQUEST_FIELDS})
+            continue
+        if kind == "cleanup":
+            cleanup_events[str(event.get("step_id"))] = {key: event.get(key) for key in _CLEANUP_FIELDS}
+            continue
         if kind == "progress":
+            trail.append(
+                {
+                    "step": event.get("step"),
+                    "step_id": event.get("step_id"),
+                    "action": event.get("action"),
+                    "status": event.get("status"),
+                    "selector_provenance": event.get("selector_provenance"),
+                    "selection": event.get("selection"),
+                    "ready": event.get("ready"),
+                    "error": (event.get("error") or {}).get("kind"),
+                }
+            )
             steps["total"] += 1
             status = event.get("status")
             cid = event.get("claim_id")
@@ -133,6 +170,7 @@ def build_report(events: list[dict], scenario: dict | None, *, run_meta: dict | 
                 failures.append(
                     {
                         "step": event.get("step"),
+                        "step_id": event.get("step_id"),
                         "action": event.get("action"),
                         "claim_id": cid,
                         "origin": origin,
@@ -244,6 +282,9 @@ def build_report(events: list[dict], scenario: dict | None, *, run_meta: dict | 
     else:
         verdict = "pass"
 
+    for row in trail:
+        row["requests"] = [r["id"] for r in requests if r.get("attribution") == "step" and r.get("step_id") == row["step_id"] and r.get("phase") == "steps"]
+
     return {
         "browser_verdict": verdict,
         "reason": reason,
@@ -256,4 +297,66 @@ def build_report(events: list[dict], scenario: dict | None, *, run_meta: dict | 
         "artifacts": artifacts,
         "probes": probes,
         "finished": finished,
+        "requests": requests,
+        "trail": trail,
+        "cleanup": cleanup_report(scenario, cleanup_events, requests, {str(row["step_id"]): row["status"] for row in trail}),
     }
+
+
+_REQUEST_FIELDS = (
+    "id", "phase", "step_id", "after_step", "attribution", "method", "endpoint", "resource_type",
+    "read_only", "blocked", "planned", "status", "failure", "duration_ms",
+)
+_CLEANUP_FIELDS = ("step_id", "cleans", "action", "status", "expected", "actual", "error", "duration_ms", "detail", "selection", "ready")
+
+
+def cleanup_report(scenario: dict | None, events: dict[str, dict], requests: list[dict], step_statuses: dict[str, str] | None = None) -> dict:
+    """The cleanup's own result, separate from the test's.
+
+    A planned cleanup step with no event means the player never got there (killed, timed
+    out, crashed): `not_run`, which the normaliser treats like a failure — data may remain.
+    The exception is a target the report shows as `skipped`: it never ran, so it wrote
+    nothing. A target with no progress event at all may have been killed mid-write, and
+    stays `not_run`.
+    Per target: all steps `not_needed` → not_needed; any failed → failed; any missing →
+    not_run; otherwise passed. Overall: failed beats not_run beats passed beats not_needed.
+    """
+    scenario = scenario or {}
+    planned = [s for s in scenario.get("cleanup") or [] if isinstance(s, dict)]
+    unplanned = [
+        {"step_id": s.get("id"), "side_effect": s.get("side_effect"), "reason": s.get("no_cleanup_reason")}
+        for s in scenario.get("steps") or []
+        if isinstance(s, dict) and s.get("no_cleanup_reason")
+    ]
+    if not planned:
+        return {"status": "not_planned", "groups": [], "steps": [], "unplanned": unplanned}
+    rows: list[dict] = []
+    groups: dict[str, list[dict]] = {}
+    for index, step in enumerate(planned, start=1):
+        step_id = str(step.get("id") or f"cleanup-{index}")
+        row = events.get(step_id)
+        if row is None:
+            never_ran = (step_statuses or {}).get(str(step.get("cleans"))) == "skipped"
+            row = {"step_id": step_id, "cleans": step.get("cleans"), "action": step.get("action"), "status": "not_needed" if never_ran else "not_run"}
+        row = {**row, "requests": [r["id"] for r in requests if r.get("phase") == "cleanup" and r.get("step_id") == step_id]}
+        rows.append(row)
+        groups.setdefault(str(step.get("cleans") or ""), []).append(row)
+    summary = []
+    for target, group in groups.items():
+        statuses = [row.get("status") for row in group]
+        if all(status == "not_needed" for status in statuses):
+            status = "not_needed"
+        elif "failed" in statuses:
+            status = "failed"
+        elif "not_run" in statuses:
+            status = "not_run"
+        else:
+            status = "passed"
+        failing = next((row for row in group if row.get("status") in ("failed", "not_run")), None)
+        detail = None
+        if failing is not None:
+            detail = ((failing.get("error") or {}).get("detail") if failing.get("status") == "failed" else "the player never reached this cleanup step")
+        summary.append({"cleans": target, "status": status, "detail": detail})
+    order = ("failed", "not_run", "passed", "not_needed")
+    overall = next(status for status in order if any(g["status"] == status for g in summary))
+    return {"status": overall, "groups": summary, "steps": rows, "unplanned": unplanned}

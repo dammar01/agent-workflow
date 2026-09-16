@@ -20,7 +20,7 @@ import json
 import re
 from html import escape
 from pathlib import Path
-from urllib.parse import quote, quote_plus
+from urllib.parse import quote, quote_plus, unquote, urlsplit
 
 from core.workspace.workspace_paths import atomic_write_text
 from utils.redact import redact_value
@@ -34,6 +34,32 @@ MIN_SCRUB_CHARS = 4
 # this list misses is stored with whatever resolved value it holds. Binaries (PNG, ZIP)
 # stay out — a byte-level replace would corrupt them, so secret runs never capture them.
 TEXT_ARTIFACT_SUFFIXES = (".html", ".htm", ".txt", ".log", ".json", ".jsonl", ".md")
+
+
+# A path segment that is an identifier, not a route: a number, a UUID, a long hex or token
+# string, or anything with an `@` (an address used as a key). A reset link's token lives
+# exactly here, so the request ledger keeps the route and never the value.
+_ID_SEGMENT = re.compile(
+    r"^(?:\d+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{16,}|[A-Za-z0-9_\-]{24,}|.*@.*)$"
+)
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def sanitize_endpoint(url: str) -> str:
+    """`scheme://host[:port]/route` for the request ledger: query, fragment and credentials in
+    the authority dropped, identifier-shaped path segments replaced by `:id`."""
+    try:
+        parts = urlsplit(str(url))
+        scheme = parts.scheme.lower()
+        host = (parts.hostname or "").lower()
+        port = parts.port
+    except ValueError:
+        return "[unparseable url]"
+    if ":" in host:
+        host = f"[{host}]"
+    netloc = host if port in (None, _DEFAULT_PORTS.get(scheme)) else f"{host}:{port}"
+    segments = [":id" if segment and _ID_SEGMENT.match(unquote(segment)) else segment for segment in (parts.path or "/").split("/")]
+    return f"{scheme}://{netloc}{'/'.join(segments) or '/'}"
 
 
 def _variants(value: str) -> set[str]:

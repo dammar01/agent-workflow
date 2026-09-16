@@ -7,27 +7,35 @@ The skill interviews the user, then writes one JSON file for the session:
    "scenario": {...}, "existing_tests": [...], "spec_notes": [...]}
 
 `draft` asks second_agent for a spec and stops before any browser starts; `run` executes
-the scenario the user confirmed. Nothing is read from config.json: every knob has a
-default below and is overridden per run by `settings`, so two sessions verifying two apps
-on one project never share a setting. Hybrid review is not a knob — it always runs.
+the scenario the user confirmed. Settings resolve in three layers, each overriding the one
+before it: the shipped defaults below, the project's `e2e` section in `.workflow/config.json`
+(so a configured project runs without being interviewed again), then the request's own
+`settings` for what this one run does differently. Two sessions verifying two apps on one
+project still diverge freely — they just start from the same pinned base. Hybrid review is
+not a knob — it always runs.
 
 Credentials never travel in the request. `${NAME}` placeholders resolve from one profile of
 `.workflow/e2e/secrets.json`, then from the process environment:
 
-  {"default": "qa", "profiles": {"qa": {"E2E_USER": "...", "E2E_PASS": "..."},
-                                 "admin": {"E2E_USER": "...", "E2E_PASS": "..."}}}
+  {"default": "qa",
+   "profiles": [{"name": "qa", "credentials": {"E2E_USER": "...", "E2E_PASS": "..."}},
+                {"name": "admin", "credentials": {"E2E_USER": "...", "E2E_PASS": "..."}}]}
 
 The request picks a profile by name (`settings.secrets_profile`), never by value, so trying
-another account is another run with another name.
+another account is another run with another name. Which NAMES exist is decided here, in
+CREDENTIAL_KEYS — not by the scenario, and not by whatever second_agent wrote.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from core.workspace.workspace_paths import read_json_file
 from core.workspace.workspace_paths import workflow_paths
 
 REQUEST_VERSION = 1
@@ -35,6 +43,19 @@ PHASES = ("draft", "run")
 SECRETS_FILE = "secrets.json"
 _PROFILE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _SECRET_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# The only credential names a scenario may reference, a secrets.json profile may hold, and
+# the template generator writes. Another credential (an OTP seed, a tenant) is a new entry
+# here, reviewed like code — never a name a scenario invents.
+CREDENTIAL_KEYS = ("E2E_USER", "E2E_PASS")
+MAX_TEMPLATE_PROFILES = 20
+# Settings a newer contract removed. Named with the way forward instead of the generic
+# "unknown key", so a request written for the old contract says what to change.
+REMOVED_SETTINGS = {
+    "allowed_mutation_paths": (
+        "removed: writes run only with settings.allow_side_effects true against a loopback base_url; "
+        "a POST that only reads goes in settings.allowed_read_only_requests"
+    ),
+}
 
 
 def default_settings() -> dict:
@@ -42,7 +63,10 @@ def default_settings() -> dict:
     return {
         "base_url": "http://localhost:8000",
         "browser": "chromium",
-        "headless": True,
+        # headed by default: a browser the user can watch is the point of this command,
+        # and a run nobody sees is the one whose failure gets argued about. CI pins
+        # `headless: true` in the project's config.json e2e section.
+        "headless": False,
         # pause after every Playwright action so a headed run can be watched; 0 = full
         # speed. Clamped to 0..5000 ms, and the pauses count against total_timeout_s.
         "slow_mo_ms": 0,
@@ -55,22 +79,29 @@ def default_settings() -> dict:
         "allow_remote": False,
         "allowed_origins": [],
         # steps that declare side_effect (creates/modifies/deletes test data) are refused
-        # unless this is true — plan §18: data-changing actions need explicit opt-in.
+        # unless this is true — plan §18: data-changing actions need explicit opt-in. True
+        # needs a loopback base_url, and even then a write reaches only a loopback host.
         "allow_side_effects": False,
         # while allow_side_effects is false the player aborts every request whose method is
-        # not GET/HEAD/OPTIONS, on any origin. These are the exceptions, typically a login
-        # form: "/login" (path on base_url's origin) or "http://host:port/path" (any other
-        # origin). Matched on scheme, host, port and exact path; the query is ignored.
-        "allowed_mutation_paths": [],
-        # POSTs that only READ (a search, a filter, a GraphQL query), confirmed by the user
-        # from the draft's read_only_requests: "POST /api/search" or "POST http(s)://host/path".
-        # Exact endpoint, like allowed_mutation_paths, but reported as reads rather than
-        # writes, and a GraphQL body that asks for a mutation is still refused.
+        # not GET/HEAD/OPTIONS, on any origin, except POSTs that only READ (a search, a
+        # filter, a GraphQL query), confirmed by the user from the draft's
+        # read_only_requests: "POST /api/search" or "POST http(s)://host/path". Exact
+        # endpoint, and a GraphQL body that asks for a mutation is still refused.
         "allowed_read_only_requests": [],
         # which secrets.json profile fills ${NAME}; empty = the file's `default`, or its only
         # profile. A name, never a value.
         "secrets_profile": "",
+        # profile names the draft writes into a NEW secrets.json (empty slots only); empty =
+        # one profile named after secrets_profile, or "default". An existing file is never
+        # touched.
+        "secrets_template_profiles": [],
         "fail_on_console_error": False,
+        # how many times a run that ended WITHOUT a verdict may start the browser again.
+        # Only an environmental incomplete is retried (stuck, timeout, harness_error,
+        # unknown_origin, output_truncated, launch_failed); an `app` failure is a real bug
+        # and retrying it would only hide it, and a run with allow_side_effects true is
+        # never retried at all because its first attempt may already have written.
+        "max_retries": 2,
         # size budget for one run's player artifacts (trace, screenshots, HTML); the
         # heaviest class is pruned first.
         "artifact_max_mb": 25,
@@ -95,38 +126,128 @@ def secrets_path(project_root: Path) -> Path:
     return workflow_paths(project_root)["workflow_dir"] / "e2e" / SECRETS_FILE
 
 
-def settings_from(overrides: object) -> tuple[dict, list[str]]:
-    """Defaults with the request's overrides applied. A wrong key or type is an error,
-    not a silent fallback: the user confirmed these values, so a typo must stop the run."""
+def _type_ok(fallback: object, value: object) -> bool:
+    """Whether `value` may stand in for `fallback`.
+
+    `bool` subclasses `int`, so a plain isinstance would let `true` through where a
+    timeout is expected and hand the runtime a 1 ms budget. The int case has to exclude
+    bool explicitly; nothing else can.
+    """
+    if isinstance(fallback, bool):
+        return isinstance(value, bool)
+    if isinstance(fallback, int):
+        return isinstance(value, int) and not isinstance(value, bool)
+    return isinstance(value, type(fallback))
+
+
+def config_settings(project_root: Path) -> tuple[dict, list[str]]:
+    """The project's pinned defaults: the `e2e` section of `.workflow/config.json`.
+
+    This is what lets a configured project run without being interviewed again — the
+    section is written once, by hand, and every later /.verify-browser starts from it.
+
+    A bad knob here WARNS and falls back, where the same knob in a request is an error.
+    The asymmetry is deliberate: config.json is shared by every command, so one mistyped
+    e2e value must not be able to stop work that never reads it, while a request value is
+    something the user confirmed for this run and a typo there must not be papered over.
+    Unreadable config = no pinned defaults, not a failure.
+    """
     settings = default_settings()
+    try:
+        config = read_json_file(workflow_paths(project_root)["config"])
+    except (OSError, ValueError):
+        return settings, []
+    section = config.get("e2e")
+    if section is None:
+        return settings, []
+    if not isinstance(section, dict):
+        return settings, [f"config.json e2e: {type(section).__name__}, expected object; ignored"]
+    warnings: list[str] = []
+    for key, value in section.items():
+        if key in REMOVED_SETTINGS:
+            warnings.append(f"config.json e2e.{key}: {REMOVED_SETTINGS[key]}; ignored")
+            continue
+        if key not in settings:
+            warnings.append(f"config.json e2e.{key}: unknown key, ignored")
+            continue
+        if not _type_ok(settings[key], value):
+            warnings.append(
+                f"config.json e2e.{key}: {type(value).__name__}, "
+                f"expected {type(settings[key]).__name__}; ignored"
+            )
+            continue
+        settings[key] = value
+    # A pinned value can be structurally wrong in ways a type check cannot see. Same
+    # posture: name it, drop it, keep the shipped default.
+    for key, checker in (
+        ("allowed_read_only_requests", read_only_request_errors),
+        ("secrets_template_profiles", template_profile_errors),
+    ):
+        problems = checker(settings[key])
+        if problems:
+            warnings += [f"config.json e2e.{key}: {problem.split(': ', 1)[-1]}; ignored" for problem in problems]
+            settings[key] = default_settings()[key]
+    if settings["secrets_profile"] and not _PROFILE_NAME.match(settings["secrets_profile"]):
+        warnings.append("config.json e2e.secrets_profile: a profile name, [A-Za-z0-9_-], at most 64 characters; ignored")
+        settings["secrets_profile"] = ""
+    return settings, warnings
+
+
+def settings_from(overrides: object, base: dict | None = None) -> tuple[dict, list[str]]:
+    """`base` (the project's pinned defaults) with the request's overrides applied.
+
+    A wrong key or type is an error, not a silent fallback: the user confirmed these
+    values, so a typo must stop the run."""
+    settings = dict(base) if base is not None else default_settings()
     if overrides is None:
         return settings, []
     if not isinstance(overrides, dict):
         return settings, ["settings must be an object"]
     errors: list[str] = []
     for key, value in overrides.items():
+        if key in REMOVED_SETTINGS:
+            errors.append(f"settings.{key}: {REMOVED_SETTINGS[key]}")
+            continue
         if key not in settings:
             errors.append(f"settings.{key}: unknown key")
             continue
-        fallback = settings[key]
-        if isinstance(fallback, bool):
-            acceptable = isinstance(value, bool)
-        elif isinstance(fallback, int):
-            acceptable = isinstance(value, int) and not isinstance(value, bool)
-        else:
-            acceptable = isinstance(value, type(fallback))
-        if not acceptable:
+        fallback = default_settings()[key]
+        if not _type_ok(fallback, value):
             errors.append(f"settings.{key}: {type(value).__name__}, expected {type(fallback).__name__}")
             continue
         settings[key] = value
-    errors += mutation_path_errors(settings["allowed_mutation_paths"])
     errors += read_only_request_errors(settings["allowed_read_only_requests"])
     if settings["secrets_profile"] and not _PROFILE_NAME.match(settings["secrets_profile"]):
         errors.append("settings.secrets_profile: a profile name, [A-Za-z0-9_-], at most 64 characters")
+    errors += template_profile_errors(settings["secrets_template_profiles"])
     return settings, errors
 
 
-MAX_MUTATION_PATHS = 20
+def template_profile_errors(entries: list) -> list[str]:
+    where_root = "settings.secrets_template_profiles"
+    errors: list[str] = []
+    if len(entries) > MAX_TEMPLATE_PROFILES:
+        errors.append(f"{where_root}: at most {MAX_TEMPLATE_PROFILES} profiles")
+    seen: set[str] = set()
+    for index, name in enumerate(entries):
+        if not isinstance(name, str) or not _PROFILE_NAME.match(name):
+            errors.append(f"{where_root}[{index}]: a profile name, [A-Za-z0-9_-], at most 64 characters")
+        elif name in seen:
+            errors.append(f"{where_root}[{index}]: duplicate profile '{name}'")
+        else:
+            seen.add(name)
+    return errors
+
+
+def template_profiles(settings: dict) -> list[str]:
+    """The profile names a new secrets.json gets, the selected profile first."""
+    chosen = str(settings.get("secrets_profile") or "")
+    names = [str(n) for n in settings.get("secrets_template_profiles") or []]
+    if chosen and chosen not in names:
+        names.insert(0, chosen)
+    return names or ["default"]
+
+
 MAX_READ_ONLY_REQUESTS = 20
 # A read that has to travel as a request body is a POST. PUT/PATCH/DELETE are writes by
 # their own definition, so no entry may name them.
@@ -143,23 +264,6 @@ def endpoint_error(entry: str) -> str | None:
     if parts.scheme not in ("http", "https") or not parts.netloc or not parts.path.startswith("/"):
         return "a path starting with '/' or a full http(s)://host/path URL"
     return None
-
-
-def mutation_path_errors(entries: list) -> list[str]:
-    """Shape of settings.allowed_mutation_paths. Exact paths only: a wildcard or a query
-    would let one confirmed login entry quietly cover every write under it."""
-    errors: list[str] = []
-    if len(entries) > MAX_MUTATION_PATHS:
-        errors.append(f"settings.allowed_mutation_paths: at most {MAX_MUTATION_PATHS} entries")
-    for index, entry in enumerate(entries):
-        where = f"settings.allowed_mutation_paths[{index}]"
-        if not isinstance(entry, str) or not entry.strip():
-            errors.append(f"{where}: must be a non-empty string")
-            continue
-        problem = endpoint_error(entry)
-        if problem:
-            errors.append(f"{where}: {problem}")
-    return errors
 
 
 def read_only_request_target(entry: str) -> tuple[str, str] | None:
@@ -208,7 +312,8 @@ def load_request(project_root: Path, session_id: str) -> tuple[dict | None, str 
     phase = data.get("phase")
     if phase not in PHASES:
         errors.append(f"phase must be one of: {', '.join(PHASES)}")
-    settings, setting_errors = settings_from(data.get("settings"))
+    base, config_warnings = config_settings(project_root)
+    settings, setting_errors = settings_from(data.get("settings"), base=base)
     errors += setting_errors
     if phase == "run" and not isinstance(data.get("scenario"), dict):
         errors.append("phase run needs the confirmed scenario object")
@@ -225,6 +330,7 @@ def load_request(project_root: Path, session_id: str) -> tuple[dict | None, str 
             "existing_tests": data.get("existing_tests") or [],
             "spec_notes": data.get("spec_notes") or [],
             "path": str(path),
+            "config_warnings": config_warnings,
         },
         None,
         [],
@@ -252,26 +358,48 @@ def load_secrets(project_root: Path, profile: str = "") -> tuple[dict[str, str],
         data = json.loads(text)
     except ValueError as exc:
         return {}, [f"{SECRETS_FILE}: not valid JSON (line {getattr(exc, 'lineno', '?')})"], info
-    if not isinstance(data, dict) or not isinstance(data.get("profiles"), dict):
-        return {}, [f'{SECRETS_FILE}: expected {{"default": "<profile>", "profiles": {{"<profile>": {{"KEY": "value"}}}}}}'], info
+    if not isinstance(data, dict):
+        return {}, [f"{SECRETS_FILE}: top level must be an object ({_SECRETS_SHAPE})"], info
+    if isinstance(data.get("profiles"), dict):
+        # STRICT: the pre-list shape is refused, never converted. A conversion would rewrite
+        # the user's file, and the user's file is the one thing this module never writes.
+        return {}, [f"{SECRETS_FILE}: `profiles` is an object (the old format, no longer read); rewrite it as {_SECRETS_SHAPE}"], info
+    if not isinstance(data.get("profiles"), list):
+        return {}, [f"{SECRETS_FILE}: `profiles` must be a list ({_SECRETS_SHAPE})"], info
 
-    profiles = data["profiles"]
     errors: list[str] = []
-    for name, entries in profiles.items():
-        if not _PROFILE_NAME.match(str(name)):
-            errors.append(f"{SECRETS_FILE}: profile #{list(profiles).index(name) + 1}: name must match [A-Za-z0-9_-]")
+    profiles: dict[str, dict] = {}
+    for position, entry in enumerate(data["profiles"], 1):
+        where = f"{SECRETS_FILE}: profiles[{position - 1}]"
+        if not isinstance(entry, dict):
+            errors.append(f"{where}: must be an object with name and credentials")
             continue
-        if not isinstance(entries, dict):
-            errors.append(f"{SECRETS_FILE}: profiles.{name}: must be an object of KEY: value")
+        name = entry.get("name")
+        if not isinstance(name, str) or not _PROFILE_NAME.match(name):
+            errors.append(f"{where}: name must match [A-Za-z0-9_-], at most 64 characters")
             continue
-        for position, (key, value) in enumerate(entries.items(), 1):
-            if not _SECRET_KEY.match(str(key)):
+        if name in profiles:
+            errors.append(f"{where}: duplicate profile name '{name}'")
+            continue
+        credentials = entry.get("credentials")
+        if not isinstance(credentials, dict):
+            errors.append(f"{SECRETS_FILE}: profile '{name}': credentials must be an object of KEY: value")
+            continue
+        for key_position, (key, value) in enumerate(credentials.items(), 1):
+            if key not in CREDENTIAL_KEYS:
                 # The key itself is not echoed: a value pasted into the key slot is the
-                # mistake this message exists to report.
-                errors.append(f"{SECRETS_FILE}: profiles.{name}: entry #{position}: key must match [A-Za-z_][A-Za-z0-9_]*")
+                # mistake this message exists to report. A near-miss in case is named,
+                # because the registered spelling is not a secret.
+                upper = str(key).upper() if _SECRET_KEY.match(str(key)) else ""
+                hint = f" (did you mean {upper}? names are case-sensitive)" if upper in CREDENTIAL_KEYS else ""
+                errors.append(
+                    f"{SECRETS_FILE}: profile '{name}': credential #{key_position}: not a registered name "
+                    f"({', '.join(CREDENTIAL_KEYS)}){hint}"
+                )
             elif not isinstance(value, str):
-                errors.append(f"{SECRETS_FILE}: profiles.{name}.{key}: must be a string")
-    info["profiles"] = [str(name) for name in profiles]
+                errors.append(f"{SECRETS_FILE}: profile '{name}': {key} must be a string")
+        profiles[name] = credentials
+    info["profiles"] = list(profiles)
     default = data.get("default")
     if default is not None and (not isinstance(default, str) or default not in profiles):
         errors.append(f"{SECRETS_FILE}: default names no profile in profiles")
@@ -289,20 +417,56 @@ def load_secrets(project_root: Path, profile: str = "") -> tuple[dict[str, str],
     return {key: value for key, value in profiles[chosen].items() if value != ""}, [], info
 
 
-def ensure_secrets_template(project_root: Path, names: list[str], profile: str = "") -> bool:
-    """Create secrets.json with empty slots for `names` when it does not exist. True if created.
+_SECRETS_SHAPE = '{"default": "<profile>", "profiles": [{"name": "<profile>", "credentials": {"E2E_USER": "", "E2E_PASS": ""}}]}'
+
+
+def secrets_template(profiles: list[str]) -> dict:
+    """The document a new secrets.json starts as. Shape and key names come from this module;
+    the only input is the profile names, validated by the caller's settings."""
+    names = list(dict.fromkeys(profiles)) or ["default"]
+    return {
+        "default": names[0],
+        "profiles": [{"name": name, "credentials": {key: "" for key in CREDENTIAL_KEYS}} for name in names],
+    }
+
+
+def ensure_secrets_template(project_root: Path, profiles: list[str] | None = None) -> bool:
+    """Create secrets.json with empty slots when it does not exist. True if THIS call created it.
 
     The user fills the values; nothing here ever writes one. An existing file is never
     touched, not even to add a missing key: it is the user's, and a rewrite is how a
-    hand-kept file loses what it held.
+    hand-kept file loses what it held. That holds under concurrency too: two drafts that
+    both find the file missing write their own temporary file and publish it with a hard
+    link, which fails when the name already exists — so the loser, and a file the user
+    saved in between, both survive. `os.replace` would overwrite either.
     """
     path = secrets_path(project_root)
-    if not names or path.exists():
+    if path.exists():
         return False
-    slot = profile or "default"
     path.parent.mkdir(parents=True, exist_ok=True)
-    body = {"default": slot, "profiles": {slot: {name: "" for name in names}}}
-    temp = path.with_suffix(".tmp")
-    temp.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
-    temp.replace(path)
-    return True
+    text = json.dumps(secrets_template(profiles or ["default"]), indent=2) + "\n"
+    fd, temp_name = tempfile.mkstemp(prefix=f".{SECRETS_FILE}.", suffix=".tmp", dir=str(path.parent))
+    temp = Path(temp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+        try:
+            os.link(temp, path)
+            return True
+        except FileExistsError:
+            return False
+        except (OSError, NotImplementedError):
+            # A filesystem without hard links: exclusive create still never overwrites; a
+            # reader may briefly see a partly written file, which it reports as invalid JSON.
+            try:
+                exclusive = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            except FileExistsError:
+                return False
+            with os.fdopen(exclusive, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(text)
+            return True
+    finally:
+        try:
+            temp.unlink()
+        except OSError:
+            pass

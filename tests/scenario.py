@@ -75,6 +75,7 @@ from tests.checks.e2e_smoke import _test_e2e_real_browser_smoke
 from tests.checks.e2e_routing import _test_e2e_routing
 from tests.checks.e2e_spec import _test_e2e_spec_contract
 from tests.checks.e2e_supervisor import _test_e2e_supervisor
+from tests.checks.e2e_tagging import _test_e2e_tagging
 from tests.checks.installer import (
     _test_installer_check_reports_second_agent_default,
     _test_installer_drift_check,
@@ -1123,6 +1124,7 @@ confidence: high — all requested checks ran
         _test_e2e_redaction_variants()
         _test_e2e_doctor_readiness()
         _test_e2e_existing_tests()
+        _test_e2e_tagging()
         _test_e2e_metrics()
         _test_e2e_real_browser_smoke()
         _test_submit_admission()
