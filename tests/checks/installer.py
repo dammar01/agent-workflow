@@ -524,7 +524,7 @@ def _seed_fixture(root: Path) -> Path:
         Path(__file__).resolve().parents[2] / "config" / "second_agent.example.json",
         root / "config" / "second_agent.example.json",
     )
-    return root / "config" / "second_agent.json"
+    return root / "config" / "second_agent.seed.json"
 
 
 @contextlib.contextmanager
@@ -560,7 +560,7 @@ def _seed_repo(stdin_text: str | None = None):
 
 
 def _test_installer_seeds_second_agent_config() -> None:
-    """A missing config/second_agent.json is created; an existing one is never touched."""
+    """The seed is rebuilt every run; the selection is kept, the rest follows the example."""
     with _seed_repo() as (install_mod, dest):
         plan = Plan()
         install_mod._seed_second_agent_config(plan, True, "codex", "gpt-5.6-sol")
@@ -582,16 +582,48 @@ def _test_installer_seeds_second_agent_config() -> None:
         )
 
     with _seed_repo() as (install_mod, dest):
-        dest.write_text('{"provider": "opencode", "default_model": "mine"}', "utf-8")
-        plan = Plan()
-        install_mod._seed_second_agent_config(plan, True, "codex", "gpt-5.6-sol")
+        # A previous seed from an older release: its selection survives, its other keys do not.
+        dest.write_text(
+            '{"provider": "codex", "default_model": "mine", "stale_knob": 1, '
+            '"routes": {"plan": {"model": "planner"}}}',
+            "utf-8",
+        )
+        install_mod._seed_second_agent_config(Plan(), True, None, None)
+        written = json.loads(dest.read_text(encoding="utf-8"))
         assert_true(
-            json.loads(dest.read_text(encoding="utf-8"))["default_model"] == "mine",
-            "an existing second_agent.json is the user's selection and must survive",
+            written["provider"] == "codex"
+            and written["default_model"] == "mine"
+            and written["routes"]["plan"]["model"] == "planner"
+            and written["routes"]["explore"]["model"] == "mine",
+            f"the previous seed's selection is carried onto the new example: {written}",
         )
         assert_true(
-            any("ignored" in warning for warning in plan.warnings),
-            "flags that could not be honoured have to say so",
+            "stale_knob" not in written and "probe_timeout_seconds" in written,
+            "everything but the selection is rebuilt from the example, so nothing stale survives",
+        )
+        install_mod._seed_second_agent_config(Plan(), True, "codex", "gpt-5.6-sol")
+        assert_true(
+            json.loads(dest.read_text(encoding="utf-8"))["default_model"] == "gpt-5.6-sol",
+            "flags override the previous selection",
+        )
+
+    with _seed_repo() as (install_mod, dest):
+        # The retired tool-level file: renamed aside, never read into the seed.
+        legacy = dest.parent / "second_agent.json"
+        legacy.write_text('{"provider": "opencode", "default_model": "opencode/mimo-v2.5-free"}', "utf-8")
+        plan = Plan()
+        install_mod._seed_second_agent_config(plan, True, None, None)
+        assert_true(
+            not legacy.exists() and (dest.parent / "second_agent.json.retired").exists(),
+            "the old config/second_agent.json is retired by --apply",
+        )
+        assert_true(
+            "mimo" not in dest.read_text(encoding="utf-8"),
+            "the retired selection must not be carried into the seed — it is the stale state",
+        )
+        assert_true(
+            any("mimo" in warning and "retired" in warning for warning in plan.warnings),
+            f"and the user is told what was not carried over: {plan.warnings}",
         )
 
     with _seed_repo() as (install_mod, dest):

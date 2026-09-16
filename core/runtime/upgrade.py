@@ -294,9 +294,21 @@ def ensure_root_gitignore_entry(project_root: Path) -> bool:
     return True
 
 def resolve_agent_workflow_path(project_root: Path) -> dict:
+    """The main.py a workspace should point at, newest evidence first.
+
+    The build running this call wins: it is the one being installed or invoked right now.
+    Then `$AGENT_PATH`, which the user sets. The path recorded in config.json comes last —
+    it names whatever build wrote the workspace, and preferring it kept an upgraded
+    workspace pointing at an old clone for as long as that clone still existed.
+    """
+    from config.settings import MAIN_PY
+
     paths = workflow_paths(project_root)
     config_path = paths["config"]
-    candidates = []
+    candidates = [{"source": "running_build", "path": str(MAIN_PY)}]
+    env_candidate = os.getenv("AGENT_PATH")
+    if env_candidate:
+        candidates.append({"source": "env", "path": env_candidate})
 
     config_candidate = None
     if config_path.exists():
@@ -309,10 +321,6 @@ def resolve_agent_workflow_path(project_root: Path) -> dict:
             config_candidate = None
     if config_candidate:
         candidates.append({"source": "workflow_config", "path": config_candidate})
-
-    env_candidate = os.getenv("AGENT_PATH")
-    if env_candidate:
-        candidates.append({"source": "env", "path": env_candidate})
 
     for candidate in candidates:
         path = Path(candidate["path"]).expanduser()

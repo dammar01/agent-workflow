@@ -186,6 +186,47 @@ class Executor:
 
         return Router(load_provider_config_for(project_root))
 
+    def _provider_config_refusal(self, project_root, command: str) -> dict | None:
+        """A structured error when the project has no usable second_agent.json, else None.
+
+        An injected router carries its own config, so there is nothing on disk to refuse.
+        """
+        if self._router_override:
+            return None
+        try:
+            from config.settings import resolve_provider_config_for
+
+            resolved = resolve_provider_config_for(project_root)
+        except Exception:
+            return None
+        source = resolved.get("source")
+        if source == "missing":
+            return make_error(
+                "provider_config_missing",
+                f"no second agent config for this project: {resolved.get('path')} does not exist",
+                next_action=(
+                    "Run /.init to create it from the tool seed, then /.provider to choose "
+                    "the provider and model. The runtime no longer falls back to a "
+                    "machine-wide config."
+                ),
+                meta={"command": command, "config_path": resolved.get("path")},
+            )
+        if source == "invalid":
+            return make_error(
+                "provider_config_invalid",
+                f"{resolved.get('path')} cannot be read: {resolved.get('error')}",
+                next_action=(
+                    "Fix the file so it is one JSON object, or delete it and run /.init. "
+                    "Nothing is substituted for an unreadable config."
+                ),
+                meta={
+                    "command": command,
+                    "config_path": resolved.get("path"),
+                    "config_error": resolved.get("error"),
+                },
+            )
+        return None
+
     def _config_provenance(self, project_root) -> dict:
         """Which provider config the route's values actually came from.
 
@@ -1005,6 +1046,7 @@ class Executor:
         has_leads: bool = False,
         fanout: bool = False,
         e2e_evidence: str | None = None,
+        has_e2e_knowledge: bool = False,
     ) -> tuple[str, dict]:
         """The prompt for one delegated call, sized to the provider's transport.
 
@@ -1053,6 +1095,7 @@ class Executor:
             has_leads=has_leads,
             subagent_fanout=fanout,
             e2e_evidence=e2e_evidence,
+            has_e2e_knowledge=has_e2e_knowledge,
             declared_tools=route.get("declared_tools"),
             meta_sink=prompt_meta,
             # Sized from the transport, not from one constant shared by every provider.
@@ -1102,6 +1145,9 @@ class Executor:
             return _sanitize_result(result)[0]
 
         if _resolved_route is None:
+            refusal = self._provider_config_refusal(project_root, normalized_command)
+            if refusal is not None:
+                return refusal
             try:
                 route = self._router_for(project_root).route(
                     normalized_command, model_override=model

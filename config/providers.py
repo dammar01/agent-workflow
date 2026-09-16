@@ -349,21 +349,20 @@ def effort_args(provider: str, effort: str | None) -> list[str]:
 # stays at the policy default until that failure is measurable. See CodexAdapter's
 # stdin write path.
 # `newline_cost` is the extra characters each `\n` costs once the adapter serializes the
-# prompt into argv. opencode rewrites every newline as ` \n ` before handing it over, so a
-# newline is four characters on the command line and one in Python — measuring raw length
-# there under-counts a newline-heavy task by hundreds of characters and hands back a cap
-# whose prompt the adapter then refuses. agy passes the prompt through unchanged.
+# prompt into argv — measuring raw length would under-count a newline-heavy task and hand
+# back a cap whose prompt the adapter then refuses. agy passes the prompt through unchanged,
+# so its cost is 0; the field stays for any argv provider that rewrites newlines.
 #
 # `headroom` mirrors each adapter's own `_CMD_LINE_HEADROOM`, because the number a cap has
 # to stay under is the adapter's threshold, not the OS limit above it.
+#
+# opencode declares `file`: the prompt is written to the session runtime dir and attached
+# with `-f`, and argv carries one static sentence. It used to be `argv` with newlines
+# rewritten as ` \n `, which ran every prompt through cmd.exe's parser (the npm `.cmd`
+# shim) — a quoted JSON example in the scaffolding was enough to become a redirect, and an
+# odd quote in a task was command injection. Like stdin, a file has no argv-derived cap.
 PROVIDER_TRANSPORT: dict[str, dict] = {
-    "opencode": {
-        "kind": "argv",
-        "limit": 8191,
-        "headroom": 400,
-        "newline_cost": 3,
-        "reserved": 512,
-    },
+    "opencode": {"kind": "file", "limit": None, "headroom": 0, "newline_cost": 0, "reserved": 0},
     "agy": {
         "kind": "argv",
         "limit": 32767,

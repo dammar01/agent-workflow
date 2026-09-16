@@ -75,12 +75,14 @@ def default_settings() -> dict:
         "idle_timeout_s": 30,
         "total_timeout_s": 300,
         "probe_max_elements": 200,
-        # a non-loopback base_url (a virtual host such as http://app.test) needs both.
+        # a base_url that is neither loopback nor a .test name needs both; http://app.test
+        # is local development and opens on its own, like localhost.
         "allow_remote": False,
         "allowed_origins": [],
         # steps that declare side_effect (creates/modifies/deletes test data) are refused
-        # unless this is true — plan §18: data-changing actions need explicit opt-in. True
-        # needs a loopback base_url, and even then a write reaches only a loopback host.
+        # unless this is true — plan §18: data-changing actions need explicit opt-in. Writes
+        # then reach loopback and .test hosts, plus any other host preflight resolved to a
+        # private address and pinned.
         "allow_side_effects": False,
         # while allow_side_effects is false the player aborts every request whose method is
         # not GET/HEAD/OPTIONS, on any origin, except POSTs that only READ (a search, a

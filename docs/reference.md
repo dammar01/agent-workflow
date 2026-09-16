@@ -138,42 +138,43 @@ Receipt mencakup target instalasi global dan bundle. Init/upgrade stateful pada 
 serta penambahan `.workflow/` ke `.gitignore` tidak masuk rollback installer karena dapat
 memuat session dan state project yang tidak aman dihapus otomatis.
 
-#### Seed `config/second_agent.json`
+#### Seed `config/second_agent.seed.json`
 
-`config/second_agent.json` ada di `.gitignore`, jadi clone baru cuma punya
-`second_agent.example.json`. Installer mengisi kekosongan itu sekali per mesin — file
-inilah yang disalin `init` ke tiap `.workflow/second_agent.json` berikutnya
-(`adapters/install/opencode_install._copy_provider_config`, dengan example sebagai
-fallback terakhir).
+`config/second_agent.seed.json` ada di `.gitignore`. Installer **membangunnya ulang setiap
+`--apply`** dari `second_agent.example.json` — file inilah yang disalin `init` ke tiap
+`.workflow/second_agent.json` baru (`adapters/install/opencode_install._copy_provider_config`,
+dengan example sebagai fallback terakhir). Runtime sendiri tidak pernah membacanya: project
+tanpa `.workflow/second_agent.json` ditolak `provider_config_missing`, file yang rusak ditolak
+`provider_config_invalid`. Tidak ada lagi fallback diam-diam ke config level mesin.
 
-Urutan penentuan isinya:
+Yang dibawa dari seed sebelumnya hanya PILIHAN (`provider`, `default_model`, model per
+route); semua key lain dibangun ulang dari example, jadi tak ada key basi yang terbawa.
+Urutan penentuan pilihan:
 
 | Kondisi | Yang terjadi |
 |---|---|
 | `--provider NAME` (opsional `--model ID`) | dipakai apa adanya, nol pertanyaan |
-| `--apply` dari terminal | installer **bertanya** provider lalu model |
-| non-interaktif (CI, pipe, dry run) | `second_agent.example.json` disalin apa adanya — perilaku lama |
+| seed sebelumnya ada | pilihan lamanya dipakai lagi di atas example baru |
+| `--apply` dari terminal, belum ada seed | installer **bertanya** provider lalu model |
+| non-interaktif, belum ada seed | `second_agent.example.json` disalin apa adanya |
 
-Jalur ketiga bukan kelalaian: `tools/e2e/e2e_installer.py` dan CI memanggil `install.py`
-tanpa stdin, dan prompt di sana akan **menggantung** run, bukan menggagalkannya.
+`config/second_agent.json` lama (ditulis sekali, tak pernah di-refresh — sumber
+`opencode/mimo-v2.5-free` yang ikut tersalin ke project baru) di-rename jadi
+`second_agent.json.retired`; pilihannya **tidak** dibawa dan disebut di warning.
+
+Jalur non-interaktif bukan kelalaian: `tools/e2e/e2e_installer.py` dan CI memanggil
+`install.py` tanpa stdin, dan prompt di sana akan **menggantung** run, bukan menggagalkannya.
 
 Prompt menampilkan tiap provider beserta apakah CLI-nya ada di `PATH` dan apakah ia butuh
 opt-in (`AI_PROXY_<PROVIDER>_OPT_IN`), lalu shortlist model provider terpilih beserta
-reasoning effort yang diterima masing-masing. Blank adalah jawaban sah di dua langkah:
-blank pada provider membatalkan pemilihan (example disalin), blank pada model membiarkan
-`default_model` kosong sehingga CLI provider memakai default-nya sendiri. Id model di luar
-shortlist tetap diterima dengan warning — shortlist itu menu picker, bukan daftar model
-yang ada (`config/providers.model_is_listed`).
+reasoning effort yang diterima masing-masing. Blank pada provider membatalkan pemilihan
+(example disalin). Blank pada model membiarkan `default_model` kosong — untuk opencode itu
+ditolak saat call (`model_unset`), karena tanpa `-m` opencode memakai model terakhir yang
+dipakai di mesin itu. Id model di luar shortlist tetap diterima dengan warning.
 
-File hasil seed dibangun **di atas** example, jadi key example yang bertambah kemudian
-ikut terwarisi; hanya `provider`, `provider_command`, `default_model`, dan `routes` yang
-diganti. Model dipin ke `SELECTABLE_ROUTES` (`explore`, `plan`, `analyze`, `verify`);
+Model dipin ke `SELECTABLE_ROUTES` (`explore`, `plan`, `analyze`, `verify`, `e2e_spec`);
 `sweep` dibiarkan. `routes` diedit per-key lewat `_merge_routes` supaya `timeout_seconds`
 dan `agent` per-route tidak ikut terbuang.
-
-File yang sudah ada **tidak pernah** ditimpa — isinya pilihan user. `--provider`/`--model`
-yang diberikan saat file sudah ada diabaikan dengan warning; ubah lewat editor atau
-command `provider` pada workspace.
 
 Seed **tidak** masuk install receipt, alasan sama dengan `--set-env`: entry receipt tanpa
 backup akan DIHAPUS saat `--rollback`, sedangkan file ini menampung editan user setelah
@@ -549,7 +550,7 @@ Key pensiun `commands.autoverify` dimigrasikan saat upgrade. Salah ketik key lai
 
 File adapter project-local ini boleh diubah per project. Namanya mengikuti PERAN, bukan vendor — sejak v3.4.3 provider second_agent dipilih lewat config, jadi file ini tidak lagi mengasumsikan OpenCode. Workspace v3.4.2 yang masih memakai `.workflow/opencode.json` dimigrasi sekali saat `upgrade` (nilainya dipindah, kunci lama dihapus). Jangan dikelirukan dengan `<project_root>/opencode.json` dan `~/.config/opencode/opencode.json`, yang memang milik OpenCode sendiri dan tetap bernama begitu.
 
-Saat `init`, source-nya adalah `config/second_agent.json` bila file lokal itu ada, atau `config/second_agent.example.json` pada clone bersih. Loader melengkapi key yang belum tersimpan dengan default source secara in-memory; `upgrade` menuliskannya ke file secara additive. Bentuk efektifnya:
+Saat `init`, source-nya adalah `config/second_agent.seed.json` bila ada, atau `config/second_agent.example.json` pada clone bersih. File ini WAJIB ada per project: tanpanya (atau bila tak ter-parse) command delegated ditolak, tanpa fallback ke config level mesin. Loader melengkapi key yang belum tersimpan dengan default source secara in-memory; `upgrade` menuliskannya ke file secara additive. Bentuk efektifnya:
 
 ```json
 {

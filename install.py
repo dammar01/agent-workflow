@@ -29,6 +29,7 @@ import os
 import shutil
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 # Split out in v3.4.3; re-exported so `main()` below and any external caller keep
 # addressing install.py exactly as before.
@@ -65,6 +66,7 @@ from installer.base import (  # noqa: E402,F401
 # rather than run directly (tools/e2e/e2e.py does exactly that).
 from config.providers import PROVIDER_BUNDLES  # noqa: E402
 from installer.check import (  # noqa: E402,F401
+    _bundle_stale,
     _detect_project_root,
     _provider_config_would_change,
     _run_check,
@@ -93,14 +95,20 @@ _ENV_BLOCK_MARKER = "# >>> agent-workflow AGENT_PATH >>>"
 _ENV_BLOCK_END = "# <<< agent-workflow AGENT_PATH <<<"
 
 
-def _second_agent_config(template: dict, provider: str, model: str | None) -> dict:
+def _second_agent_config(
+    template: dict,
+    provider: str,
+    model: str | None,
+    route_models: dict | None = None,
+) -> dict:
     """The example config with one provider and model selected into it.
 
     Built ON the example rather than from scratch so every key the example gains later —
     timeouts, probe windows — is inherited by a seeded file instead of silently missing.
-    Only the four keys a selection owns are replaced; `_merge_routes` edits `model` inside
-    each route entry rather than replacing the entry, because a route also carries
-    `timeout_seconds` and `agent`.
+    Only the keys a selection owns are replaced; `_merge_routes` edits `model` inside each
+    route entry rather than replacing the entry, because a route also carries
+    `timeout_seconds` and `agent`. `route_models` carries per-route picks forward from the
+    previous seed; a route it does not name follows `model`.
     """
     from config.providers import provider_agent_default, provider_command_default
     from core.provider.provider_select import SELECTABLE_ROUTES, _merge_routes
@@ -109,13 +117,40 @@ def _second_agent_config(template: dict, provider: str, model: str | None) -> di
     config["provider"] = provider
     config["provider_command"] = provider_command_default(provider, os.getenv)
     config["default_model"] = model
-    config["routes"] = _merge_routes(
-        template.get("routes"), {name: model for name in SELECTABLE_ROUTES}
-    )
+    picks = {name: model for name in SELECTABLE_ROUTES}
+    for name, value in (route_models or {}).items():
+        if name in picks and value:
+            picks[name] = value
+    config["routes"] = _merge_routes(template.get("routes"), picks)
     agent = provider_agent_default(provider, os.getenv)
     if agent:
         config["provider_agent"] = agent
     return config
+
+
+def _seed_selection(path: Path) -> dict | None:
+    """`{provider, model, routes}` from an existing seed, or None when there is none to keep.
+
+    Only the SELECTION is read. Everything else in the file is rebuilt from the example, so
+    a key the release changed can never be carried forward from an older seed.
+    """
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(loaded, dict) or not isinstance(loaded.get("provider"), str):
+        return None
+    routes = loaded.get("routes") if isinstance(loaded.get("routes"), dict) else {}
+    model = loaded.get("default_model")
+    return {
+        "provider": loaded["provider"],
+        "model": model if isinstance(model, str) else None,
+        "routes": {
+            name: entry.get("model")
+            for name, entry in routes.items()
+            if isinstance(entry, dict) and isinstance(entry.get("model"), str)
+        },
+    }
 
 
 def _ask(prompt: str) -> str:
@@ -145,7 +180,7 @@ def _prompt_second_agent() -> tuple[str | None, str | None]:
 
     providers = sorted(bundled_providers())
     print()
-    print("  config/second_agent.json does not exist yet. Which second agent should it use?")
+    print("  config/second_agent.seed.json has no selection yet. Which second agent should new projects use?")
     for index, name in enumerate(providers, start=1):
         command = provider_command_default(name, os.getenv)
         notes = ["on PATH" if shutil.which(command) else f"{command} not on PATH"]
@@ -179,26 +214,27 @@ def _prompt_second_agent() -> tuple[str | None, str | None]:
 def _seed_second_agent_config(
     plan, apply: bool, provider: str | None = None, model: str | None = None
 ) -> None:
-    """Create config/second_agent.json when it is missing, choosing a provider for it.
+    """Rebuild config/second_agent.seed.json, the template every `init` copies.
 
-    The file is gitignored, so a fresh clone has only second_agent.example.json. Init then
-    falls back to the example (adapters/install/opencode_install._copy_provider_config),
-    which works — but leaves nothing in the tool directory to edit, so the provider/model
-    choice has to be made per project instead of once per machine.
+    Rebuilt on EVERY run, from the shipped example, so the seed can never outlive the
+    release that wrote it. Its predecessor, config/second_agent.json, was created once and
+    left alone forever after; init copied it into each new project, and one pick made on
+    one day — `opencode/mimo-v2.5-free` — kept arriving in projects nobody chose it for.
 
-    How the choice is made, in order:
-      --provider/--model    taken as given, no questions;
+    The selection the seed carries (provider, default_model, per-route models) comes from,
+    in order:
+      --provider/--model     taken as given;
+      the previous seed      the last deliberate choice, re-applied to the new example;
       a terminal on --apply  asked interactively, with skipping as a valid answer;
-      anything else          the example is copied verbatim, exactly as before.
+      anything else          the example, verbatim.
 
-    That last case is what keeps CI and tools/e2e/e2e_installer.py working: they run this
-    with no stdin, and a prompt there would hang the run rather than fail it.
+    The old file is retired rather than read: it is exactly the state that went stale.
+    It is renamed aside and its selection printed, so re-choosing it is one flag away.
 
-    Never overwrites: an existing file is the user's own provider and model selection.
+    Nothing here touches a project's own .workflow/second_agent.json — that is the user's.
 
     Deliberately NOT recorded in the install receipt, for the same reason as
-    _persist_agent_path: a receipt entry without a backup is DELETED on rollback, and this
-    file accumulates the user's own edits after we create it. The undo is printed instead.
+    _persist_agent_path: a receipt entry without a backup is DELETED on rollback.
     """
     from config.providers import (
         model_is_listed,
@@ -206,42 +242,60 @@ def _seed_second_agent_config(
         provider_opt_in_env,
         provider_requires_opt_in,
     )
-    from core.workspace.workspace_paths import JSON_INDENT, PROVIDER_CONFIG_NAME
+    from core.workspace.workspace_paths import (
+        JSON_INDENT,
+        PROVIDER_CONFIG_NAME,
+        PROVIDER_SEED_NAME,
+    )
 
-    dest = REPO_ROOT / "config" / PROVIDER_CONFIG_NAME
-    if dest.exists():
-        plan.add("same", dest, "second_agent config already present — left alone")
-        if provider or model:
-            plan.warn(
-                f"--provider/--model ignored: {dest.name} already exists "
-                "(edit it, or use `provider` on a workspace)"
-            )
-        return
+    dest = REPO_ROOT / "config" / PROVIDER_SEED_NAME
+    legacy = REPO_ROOT / "config" / PROVIDER_CONFIG_NAME
     src = REPO_ROOT / "config" / "second_agent.example.json"
     if not src.exists():
         plan.warn(f"cannot seed {dest.name}: {src} is missing from the checkout")
         return
     template = json.loads(src.read_text(encoding="utf-8"))
 
-    if provider is None:
+    if legacy.exists():
+        retired = legacy.with_name(f"{legacy.name}.retired")
+        old = _seed_selection(legacy)
+        described = (
+            f"provider={old['provider']}, model={old['model'] or 'unset'}"
+            if old
+            else "unreadable"
+        )
+        plan.add(
+            "retire",
+            legacy,
+            f"renamed to {retired.name}; its selection ({described}) is not carried into "
+            f"{dest.name}",
+        )
+        plan.warn(
+            f"{legacy.name} is retired: init now copies {dest.name}. Its selection "
+            f"({described}) was not carried over — re-select with --provider/--model if "
+            "you still want it. Existing projects keep their own .workflow/second_agent.json."
+        )
+        if apply:
+            os.replace(legacy, retired)
+
+    route_models: dict = {}
+    previous = _seed_selection(dest)
+    if provider is None and previous is not None:
+        provider, model, route_models = previous["provider"], previous["model"], previous["routes"]
+    elif provider is None:
         if apply and sys.stdin.isatty():
             provider, model = _prompt_second_agent()
         elif not apply:
             plan.add(
                 "create",
                 dest,
-                "seeded from the example; --apply from a terminal asks which provider "
+                "rebuilt from the example; --apply from a terminal asks which provider "
                 "and model, or pass --provider/--model",
             )
             return
 
     if provider is None:
-        plan.add(
-            "create",
-            dest,
-            f"seeded from {src.name} (provider=opencode, model unset; "
-            "pass --provider to choose)",
-        )
+        detail = f"from {src.name} (provider=opencode, model unset; pass --provider to choose)"
         payload = src.read_text(encoding="utf-8")
     else:
         if provider_requires_opt_in(provider) and not opt_in_granted(provider):
@@ -254,18 +308,25 @@ def _seed_second_agent_config(
                 f"{model!r} is not on {provider}'s shortlist — pinned anyway, but "
                 "verify the id is one the CLI accepts"
             )
-        plan.add(
-            "create",
-            dest,
-            f"provider={provider}, model={model or 'provider default'}",
-        )
+        if not model and provider == "opencode":
+            plan.warn(
+                "opencode without a model is refused at call time (model_unset): without "
+                "-m it would answer with whatever model it used last. Pass --model."
+            )
+        detail = f"provider={provider}, model={model or 'unset'}"
         payload = (
             json.dumps(
-                _second_agent_config(template, provider, model), indent=JSON_INDENT
+                _second_agent_config(template, provider, model, route_models),
+                indent=JSON_INDENT,
             )
             + "\n"
         )
 
+    current = dest.read_text(encoding="utf-8") if dest.exists() else None
+    if current == payload:
+        plan.add("same", dest, detail)
+        return
+    plan.add("replace" if current is not None else "create", dest, detail)
     if apply:
         dest.write_text(payload, encoding="utf-8")
 
@@ -377,14 +438,14 @@ def main() -> int:
     parser.add_argument(
         "--provider",
         choices=sorted(PROVIDER_BUNDLES),
-        help="which second agent config/second_agent.json should select, when that file "
-        "does not exist yet. Without it, --apply from a terminal asks; a non-interactive "
-        "run copies the example unchanged. Ignored if the file is already there",
+        help="which second agent config/second_agent.seed.json (the template new projects "
+        "copy) should select. Without it the previous seed's selection is kept; with none, "
+        "--apply from a terminal asks and a non-interactive run copies the example",
     )
     parser.add_argument(
         "--model",
         metavar="ID",
-        help="pin this model in the seeded config/second_agent.json. Requires --provider. "
+        help="pin this model in config/second_agent.seed.json. Requires --provider. "
         "An id outside the provider's shortlist is accepted with a warning",
     )
     parser.add_argument(
@@ -420,6 +481,16 @@ def main() -> int:
     if args.check:
         return _run_check(manifest, project_root)
 
+    stale_bundle = _bundle_stale(manifest)
+    if stale_bundle and apply:
+        # Installing a dist/ that no longer matches its manifest ships files nobody
+        # stamped and records a version that does not describe them.
+        print("[INSTALL] ABORTED — dist/ does not match dist/manifest.json:")
+        for key in stale_bundle:
+            print(f"  !! {key}")
+        print("Run: python tools/maintain/gen_manifest.py, then rerun. Nothing was written.")
+        return 1
+
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     backup_root = HOME / ".claude" / "backups" / f"install_{stamp}"
 
@@ -448,12 +519,20 @@ def main() -> int:
         for name in sorted(missing_env):
             plan.warn(f"env value not set (dry run, would block --apply): {name}")
 
+    for key in stale_bundle:
+        plan.warn(f"dist/ does not match the manifest for {key} (dry run; --apply refuses)")
+
     _install_deps(plan, apply, args.with_e2e)
 
-    for source, dest, key in _targets():
+    targets = _targets()
+    for source, dest, key in targets:
         _install_text(
             source, dest, key, plan, apply, backup_root, project_root, args.only_command
         )
+    # Before settings: the hook commands for scripts removed here are dropped there.
+    from installer.stale import prune as _prune_stale, write_ledger as _write_ledger
+
+    _prune_stale({str(dest) for _src, dest, _key in targets}, plan, apply, backup_root)
 
     settings_src = DIST_CONFIG / "claude" / "settings.template.json"
     if settings_src.exists():
@@ -510,6 +589,7 @@ def main() -> int:
                 plan.warn(f"workspace not upgraded: {exc}")
 
     _store_only_command(args.only_command, plan, apply, backup_root)
+    _write_ledger(targets, apply)
 
     # Receipt goes down with the backups, not beside the code: it is only meaningful
     # paired with them, and --rollback refuses to act without it.

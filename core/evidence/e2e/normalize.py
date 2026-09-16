@@ -292,6 +292,7 @@ def to_verification(
     reviewer_error: str | None = None,
     preflight: dict | None = None,
     existing_tests: list[dict] | None = None,
+    attempts: list[dict] | None = None,
 ) -> dict:
     """Compose the canonical contract. Returns {content, verdict, declared, warnings}.
 
@@ -400,6 +401,18 @@ def to_verification(
 
     checks.extend(sections["checks_run"])
     gaps.extend(sections["not_verified"])
+
+    # A run that needed a retry to finish is not a clean pass. The retry exists for a flaky
+    # environment, but `timeout` and `not_ready` are also what an intermittently broken app
+    # looks like, and a pass on the second try is exactly a bug hiding behind a re-roll.
+    earlier = [a for a in (attempts or [])[:-1] if a.get("browser_verdict") != "pass"]
+    if earlier and browser == "pass":
+        reasons = ", ".join(sorted({str(a.get("reason") or a.get("browser_verdict")) for a in earlier}))
+        gaps.append(
+            f"e2e run: passed only on attempt {len(attempts)} of {len(attempts)} — the earlier "
+            f"attempt(s) ended {reasons}; a flaky environment or an intermittent application "
+            "failure, not a clean pass"
+        )
 
     if reviewer_content is None:
         if reviewer_error:

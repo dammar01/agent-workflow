@@ -50,22 +50,30 @@ def _provider_config_would_change(
 
 
 def _second_agent_state() -> str:
-    """One line describing config/second_agent.json — the default every `init` copies.
+    """One line describing config/second_agent.seed.json — the template every `init` copies.
 
     Informational on purpose; see the call site in `_run_check` for why it stays out of
     the drift tally. Reads the file rather than trusting it exists, because a hand-edited
-    one that no longer parses is the failure this line is worth printing for.
+    one that no longer parses is the failure this line is worth printing for. A retired
+    config/second_agent.json still on disk is named too: --apply renames it, and until then
+    it is a stale selection sitting next to the one init actually copies.
     """
     import json
 
-    from core.workspace.workspace_paths import PROVIDER_CONFIG_NAME
+    from core.workspace.workspace_paths import PROVIDER_CONFIG_NAME, PROVIDER_SEED_NAME
 
-    path = REPO_ROOT / "config" / PROVIDER_CONFIG_NAME
+    path = REPO_ROOT / "config" / PROVIDER_SEED_NAME
+    legacy = REPO_ROOT / "config" / PROVIDER_CONFIG_NAME
+    retire_note = (
+        f"; {PROVIDER_CONFIG_NAME} is retired and will be renamed by --apply"
+        if legacy.exists()
+        else ""
+    )
     if not path.exists():
         return (
-            f"NOT SET — {PROVIDER_CONFIG_NAME} absent; init falls back to "
+            f"NOT SET — {PROVIDER_SEED_NAME} absent; init falls back to "
             "second_agent.example.json (opencode, no model pinned). "
-            "`python install.py --apply` asks, or pass --provider"
+            f"`python install.py --apply` asks, or pass --provider{retire_note}"
         )
     try:
         config = json.loads(path.read_text(encoding="utf-8"))
@@ -74,8 +82,8 @@ def _second_agent_state() -> str:
     if not isinstance(config, dict):
         return f"UNREADABLE — {path} (root is not a JSON object)"
     provider = config.get("provider") or "unset"
-    model = config.get("default_model") or "provider default"
-    return f"{provider}, model={model}"
+    model = config.get("default_model") or "unset"
+    return f"{provider}, model={model}{retire_note}"
 
 
 def _detect_project_root() -> Path | None:
@@ -91,6 +99,31 @@ def _detect_project_root() -> Path | None:
         if (candidate / ".workflow" / "config.json").exists():
             return candidate
     return None
+
+
+def _bundle_stale(manifest: dict) -> list[str]:
+    """Manifest keys whose dist/ file no longer matches, or that dist/ has but the manifest lacks.
+
+    Shared by `--check` and by `--apply`, which refuses to install a bundle nobody stamped:
+    a dist/ edited without regenerating the manifest is exactly the half-finished state that
+    must not reach ~/.claude.
+    """
+    by_path = {f["path"]: f for f in manifest.get("files", [])}
+    stale: list[str] = []
+    sources = [(source, key) for source, _dest, key in _targets()]
+    settings_src = DIST_CONFIG / "claude" / "settings.template.json"
+    if settings_src.exists():
+        sources.append((settings_src, "claude/settings.template.json"))
+    for provider, bundle in PROVIDER_BUNDLES.items():
+        for template in (bundle["global_config"][0], bundle["project_config"][0]):
+            source = DIST_CONFIG / provider / template
+            if source.exists():
+                sources.append((source, f"{provider}/{template}"))
+    for source, key in sources:
+        entry = by_path.get(key)
+        if not entry or _hash(source.read_text(encoding="utf-8")) != entry.get("sha256"):
+            stale.append(key)
+    return stale
 
 
 def _run_check(manifest: dict, project_root: Path | None = None) -> int:
@@ -190,6 +223,10 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
                 "Run init there first."
             )
 
+    from installer.stale import stale_files
+
+    stale_removable, stale_edited = stale_files({str(dest) for _src, dest, _key in _targets()})
+
     print("[INSTALL CHECK]")
     print(
         f"  bundle (dist vs manifest): {'OK' if not bundle_stale else f'STALE ({len(bundle_stale)})'}"
@@ -208,6 +245,15 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
             print(f"    - DRIFTED {key}")
         for key in installed_missing:
             print(f"    - MISSING {key}")
+    if stale_removable or stale_edited:
+        print(
+            f"  leftovers (installed by an earlier release, no longer shipped): "
+            f"{len(stale_removable)} removable, {len(stale_edited)} edited since"
+        )
+        for path, _entry in stale_removable:
+            print(f"    - STALE {path}")
+        for path in stale_edited:
+            print(f"    - STALE (edited, --apply keeps it) {path}")
     if project_scope_note:
         print(f"  project scope: SKIPPED — {project_scope_note}")
 
@@ -237,7 +283,7 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
 
     if bundle_stale:
         status = "STALE"
-    elif installed_issues:
+    elif installed_issues or stale_removable:
         status = "DRIFTED"
     else:
         status = "READY"

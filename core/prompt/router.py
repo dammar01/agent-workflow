@@ -5,7 +5,7 @@ from config.settings import (
     DEFAULT_BOOTSTRAP_TIMEOUT_SECONDS,
     DEFAULT_POLL_INTERVAL_SECONDS,
     DEFAULT_TIMEOUT_SECONDS,
-    load_provider_config,
+    default_provider_config,
 )
 
 
@@ -17,7 +17,7 @@ class Router:
     """
 
     def __init__(self, config: dict | None = None) -> None:
-        self.config = config or load_provider_config()
+        self.config = config or default_provider_config()
 
     def _effort_for(self, model: str | None) -> str | None:
         """The configured effort, dropped when the model on this route takes none.

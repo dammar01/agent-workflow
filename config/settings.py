@@ -12,7 +12,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SESSION_DIR = BASE_DIR / "storage" / "sessions"
 CACHE_FILE = BASE_DIR / "storage" / "cache.json"
 JOB_DIR = BASE_DIR / "storage" / "jobs"
-PROVIDER_CONFIG_FILE = BASE_DIR / "config" / "second_agent.json"
+# The template `init` copies into a workspace. Only installer and init read it; the
+# runtime resolves a project's own .workflow/second_agent.json or refuses.
+PROVIDER_SEED_FILE = BASE_DIR / "config" / "second_agent.seed.json"
 # Which adapter serves as second_agent. Read by adapters.contract.registry; a workspace
 # config.json may override it per project.
 DEFAULT_PROVIDER = os.getenv("AI_PROXY_PROVIDER", "opencode")
@@ -508,7 +510,7 @@ def _load_provider_config_checked(path) -> tuple[dict, str | None, list[str], bo
     return config, None, warnings, bool(explicit)
 
 
-def load_provider_config(path: Path = PROVIDER_CONFIG_FILE) -> dict:
+def load_provider_config(path: Path) -> dict:
     config, _, _, _ = _load_provider_config_checked(path)
     return config
 
@@ -524,27 +526,28 @@ def resolve_provider_config_for(project_root) -> dict:
     # top-level import here would close the cycle. Same pattern as _tool_paths.
     from core.workspace.workspace_paths import resolve_provider_config
 
+    from core.workspace.workspace_paths import PROVIDER_CONFIG_NAME, WORKFLOW_DIRNAME
+
     path, source = resolve_provider_config(project_root)
     if path is None:
-        config, error, warnings, explicit = _load_provider_config_checked(
-            PROVIDER_CONFIG_FILE
-        )
+        # Built-in defaults give readers (doctor, the provider picker) a shape to report
+        # on. They are NOT a config to run on: the executor refuses `missing` before any
+        # provider is called. `path` names the file the user has to create.
         return {
-            "config": config,
-            "source": source,
-            "path": str(PROVIDER_CONFIG_FILE),
-            "error": error,
-            "warnings": warnings,
-            "provider_explicit": explicit,
+            "config": default_provider_config(),
+            "source": "missing",
+            "path": str(Path(project_root) / WORKFLOW_DIRNAME / PROVIDER_CONFIG_NAME),
+            "error": None,
+            "warnings": [],
+            "provider_explicit": False,
         }
 
     config, error, warnings, explicit = _load_provider_config_checked(path)
     if error is not None:
-        # Keep the runtime alive on tool defaults — refusing to run would turn a typo
-        # into an outage — but record that the substitution happened. `path` stays on
-        # the file we tried, because that is the one the user has to fix.
-        config, _, _, explicit = _load_provider_config_checked(PROVIDER_CONFIG_FILE)
-        source = "tool_default"
+        # Refused downstream, not substituted. Running a typo'd project on a machine-wide
+        # file looked like resilience and was how a model nobody picked kept spending.
+        # `path` stays on the file we tried, because that is the one the user has to fix.
+        source = "invalid"
     return {
         "config": config,
         "source": source,
@@ -556,5 +559,6 @@ def resolve_provider_config_for(project_root) -> dict:
 
 
 def load_provider_config_for(project_root) -> dict:
-    """Prefer the project-local .workflow/second_agent.json, falling back to the tool default."""
+    """The project-local .workflow/second_agent.json, or built-in defaults when it is
+    missing or unreadable — see `resolve_provider_config_for` for why those are refused."""
     return resolve_provider_config_for(project_root)["config"]

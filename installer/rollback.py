@@ -123,7 +123,11 @@ def _run_rollback(which: str | None, apply: bool) -> int:
         backup = Path(item["backup"]) if item.get("backup") else None
         expected_post = item.get("post_sha256")
         actual_post = _file_sha256(dest)
-        if not isinstance(expected_post, str) or actual_post != expected_post:
+        if item.get("action") == "remove":
+            # A stale file the install deleted: undoing it means the path is still free.
+            if actual_post is not None:
+                conflicts.append(f"{dest}: removed by that install, but a file is there again")
+        elif not isinstance(expected_post, str) or actual_post != expected_post:
             conflicts.append(
                 f"{dest}: destination changed "
                 f"(expected {expected_post or 'missing hash'}, found {actual_post or 'missing'})"

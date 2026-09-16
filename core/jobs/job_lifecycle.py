@@ -541,6 +541,21 @@ def run_worker(job_id: str) -> dict:
     try:
         effective_task = job["task"]
         require_provider_session = int(job.get("recovery_attempt") or 0) > 0
+        if require_provider_session and job.get("command") == "verify-browser":
+            # A browser run has no "rest of the task" to continue: recovering it replays the
+            # whole scenario, including every write the user allowed, on top of whatever the
+            # dead attempt already sent. Refused, and the lock released with the job.
+            refused = make_error(
+                "worker_died",
+                f"job {job_id} was a browser run; it is not resumed after its worker died",
+                next_action=(
+                    "Check the application's state first — steps may already have written. "
+                    "Then start /.verify-browser again as a clean run."
+                ),
+                meta={"job_id": job_id, "reason": "not_recoverable", "command": "verify-browser"},
+            )
+            _main().JOB_MANAGER.fail_job(job_id, refused["content"], output=refused)
+            return refused
         if require_provider_session:
             effective_task = (
                 f"Continue the interrupted task for job {job_id}.\n"

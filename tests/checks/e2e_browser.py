@@ -416,20 +416,111 @@ def _test_e2e_browser_session() -> None:
         f"with side effects on, a write to a remote host is still refused — the request's host decides, not base_url's: {seen} {guarded.mutations_blocked}",
     )
     assert_true(call("POST", BASE + "/login", allowed_mutation_paths=["/login"])[0] == ["abort:blockedbyclient"], "a leftover allowed_mutation_paths opens nothing")
-    # A host preflight resolved to a private address and pinned the browser to may take a
-    # write. Only that host: the approval is a list of names, not a relaxed rule.
+    # `.test` is local development, like localhost: it takes a write with no approval.
+    for url in ("http://app.test/api/items", "http://other.test:8080/x"):
+        assert_true(call("POST", url, allow_side_effects=True)[0] == ["continue"], f"a .test host writes like localhost: {url}")
+    # Any other host preflight resolved to a private address and pinned may take a write.
+    # Only that host: the approval is a list of names, not a relaxed rule.
     assert_true(
-        call("POST", "http://app.test/api/items", allow_side_effects=True, write_hosts=["app.test"])[0] == ["continue"],
+        call("POST", "http://devbox.lan/api/items", allow_side_effects=True, write_hosts=["devbox.lan"])[0] == ["continue"],
         "a write host preflight approved and pinned may take a write",
     )
-    seen, guarded = call("POST", "http://other.test/api/items", allow_side_effects=True, write_hosts=["app.test"])
+    seen, guarded = call("POST", "http://api.devbox.lan/api/items", allow_side_effects=True, write_hosts=["devbox.lan"])
     assert_true(
         seen == ["abort:blockedbyclient"] and guarded.mutations_blocked[0]["reason"] == "non_loopback",
         f"a sibling name nobody approved is not covered by it: {seen}",
     )
     assert_true(
-        call("POST", "http://app.test/api/items", allow_side_effects=True)[0] == ["abort:blockedbyclient"],
+        call("POST", "http://devbox.lan/api/items", allow_side_effects=True)[0] == ["abort:blockedbyclient"],
         "and without the approval the same name is refused: the guard trusts the decision, not the suffix",
+    )
+
+    # --- redirects: a write's redirect is followed by the guard, never by the browser ----------
+    # Measured against Playwright 1.60: a POST answered 307 is re-sent WITH its body to the
+    # new address, and the route handler never sees that second request. So an approved write
+    # is fetched with max_redirects=0 and each hop judged before it goes out.
+    def redirected(url, answers, *, navigation=False, **config):
+        """`answers` maps a URL to (status, location). Returns (route calls, fetch calls, session)."""
+        seen: list[str] = []
+        fetched: list[dict] = []
+
+        def fetch(**kwargs):
+            target = kwargs.get("url") or url
+            fetched.append({"url": target, **{k: v for k, v in kwargs.items() if k != "url"}})
+            status, location = answers.get(target, (200, None))
+            return SimpleNamespace(status=status, headers={"location": location} if location else {})
+
+        hop = SimpleNamespace(
+            abort=lambda code: seen.append(f"abort:{code}"),
+            continue_=lambda: seen.append("continue"),
+            fetch=fetch,
+            fulfill=lambda response: seen.append(f"fulfill:{response.status}"),
+        )
+        guarded, emitted, _ = _session(_Page(), **config)
+        guarded.guard(
+            hop,
+            SimpleNamespace(url=url, method="POST", resource_type="fetch", post_data="x=1", post_data_buffer=b"x=1",
+                            is_navigation_request=lambda: navigation, frame=guarded.page.main_frame if navigation else object(),
+                            all_headers=lambda: {"cookie": "sid=1"}),
+        )
+        guarded.ledger = emitted
+        return seen, fetched, guarded
+
+    seen, fetched, guarded = redirected(BASE + "/api/items", {BASE + "/api/items": (307, "https://evil.example/collect")}, allow_side_effects=True)
+    assert_true(
+        seen == ["abort:blockedbyclient"] and len(fetched) == 1 and guarded.mutations_blocked[0]["reason"] == "redirect"
+        and "evil.example" in guarded.mutations_blocked[0]["refusal"],
+        f"a 307 that would re-send the body off the write policy is refused, not followed: {seen} {fetched} {guarded.mutations_blocked}",
+    )
+    assert_true(guarded.ledger and guarded.ledger[0]["blocked"], f"and the ledger records the write as blocked: {guarded.ledger}")
+    seen, fetched, _ = redirected(BASE + "/api/items", {BASE + "/api/items": (307, "/api/items/v2")}, allow_side_effects=True)
+    assert_true(
+        seen == ["fulfill:200"] and [f["url"] for f in fetched] == [BASE + "/api/items", BASE + "/api/items/v2"]
+        and fetched[1]["method"] == "POST" and fetched[1]["post_data"] == b"x=1",
+        f"a 307 to an allowed target is followed by the guard with the same method and body: {seen} {fetched}",
+    )
+    loop = {BASE + f"/r{i}": (308, f"/r{i + 1}") for i in range(10)}
+    seen, fetched, guarded = redirected(BASE + "/r0", loop, allow_side_effects=True)
+    assert_true(seen == ["abort:blockedbyclient"] and len(fetched) == 6, f"a redirect loop stops at the hop limit: {seen} {len(fetched)}")
+    seen, fetched, _ = redirected(BASE + "/login", {BASE + "/login": (303, "/dashboard")}, allow_side_effects=True, navigation=True)
+    assert_true(seen == ["fulfill:303"] and len(fetched) == 1, f"a 303 to an allowed page is handed back to the browser as a GET: {seen}")
+    seen, _, _ = redirected(BASE + "/login", {BASE + "/login": (303, "https://evil.example/")}, allow_side_effects=True, navigation=True)
+    assert_true(seen == ["abort:blockedbyclient"], f"a 303 that navigates off policy is refused: {seen}")
+    confirmed = {"allowed_read_only_requests": ["POST /api/search"]}
+    seen, _, guarded = redirected(BASE + "/api/search", {BASE + "/api/search": (307, "/api/items")}, **confirmed)
+    assert_true(
+        seen == ["abort:blockedbyclient"] and "not a confirmed read" in guarded.mutations_blocked[0]["refusal"],
+        f"a confirmed read redirected with its body to an unconfirmed endpoint is refused: {seen} {guarded.mutations_blocked}",
+    )
+    seen, fetched, _ = redirected("http://devbox.lan/api/items", {}, allow_side_effects=True, write_hosts=["devbox.lan"], host_pins={"devbox.lan": "192.168.1.40"})
+    assert_true(
+        seen == ["fulfill:200"] and fetched[0]["url"] == "http://192.168.1.40/api/items" and fetched[0]["headers"]["host"] == "devbox.lan"
+        and fetched[0]["headers"]["cookie"] == "sid=1",
+        f"a pinned host is fetched at its pinned address, outside Chromium's resolver rules: {fetched}",
+    )
+    seen, fetched, guarded = redirected("https://devbox.lan/api/items", {}, allow_side_effects=True, write_hosts=["devbox.lan"], host_pins={"devbox.lan": "192.168.1.40"})
+    assert_true(
+        seen == ["abort:blockedbyclient"] and not fetched and "https" in guarded.mutations_blocked[0]["refusal"],
+        f"an https write to a pinned host cannot be held to the pin, so it is refused unsent: {seen} {fetched}",
+    )
+
+    # A top-level navigation redirected off policy never reached the guard; it is caught from
+    # the request event and fails the step, saying the browser had already followed it.
+    watcher, watched, _ = _session(_login_page())
+    watcher.on_request(SimpleNamespace(url="https://evil.example/landing", redirected_from=object(),
+                                       is_navigation_request=lambda: True, frame=watcher.page.main_frame))
+    watcher.on_request(SimpleNamespace(url=BASE + "/dashboard", redirected_from=object(),
+                                       is_navigation_request=lambda: True, frame=watcher.page.main_frame))
+    assert_true(watcher.redirected_off_policy == ["https://evil.example/landing"], f"only the off-policy redirect is recorded: {watcher.redirected_off_policy}")
+    stepper, _, _ = _session(_login_page())
+    off_policy = SimpleNamespace(url="https://evil.example/landing", redirected_from=object(),
+                                 is_navigation_request=lambda: True, frame=stepper.page.main_frame)
+    stepper.perform = lambda step: (stepper.on_request(off_policy), {"status": "passed"})[1]
+    outcome = stepper._execute({"id": "submit", "action": "click", "selector": {"text": "Masuk"}}, "submit")
+    assert_true(
+        outcome["status"] == "failed" and outcome["error"]["kind"] == "navigation_blocked"
+        and "followed by the browser" in outcome["error"]["detail"],
+        f"the step whose action redirected off policy fails, and says the redirect was already followed: {outcome}",
     )
 
     # --- confirmed reads: a POST the user confirmed as read-only passes; a GraphQL write never does ---
@@ -854,6 +945,9 @@ def _test_e2e_browser_session() -> None:
             def route(self, pattern, handler):
                 pass
 
+            def on(self, event, handler):
+                pass
+
             def close(self):
                 tracing_calls.append(("close_context", None))
 
@@ -915,16 +1009,20 @@ def _test_e2e_browser_session() -> None:
 
         # preflight's write decision reaches the browser as a resolver pin, so the name it
         # approved cannot come back pointing somewhere else mid-run
-        real_run([{"action": "goto", "url": "/login"}], secrets=False, host_pins={"app.test": "192.168.1.40"})
+        real_run([{"action": "goto", "url": "/login"}], secrets=False, host_pins={"devbox.lan": "192.168.1.40"})
         assert_true(
-            launch_calls[-1]["args"] == ["--host-resolver-rules=MAP app.test 192.168.1.40"],
+            launch_calls[-1]["args"] == ["--host-resolver-rules=MAP devbox.lan 192.168.1.40"],
             f"an approved write host is pinned at launch: {launch_calls[-1]}",
         )
         from core.evidence.e2e.browser import _launch_args
 
         assert_true(
-            _launch_args({"host_pins": {"app.test": "192.168.1.40"}, "browser": "firefox"}) == [] and _launch_args({"browser": "chromium"}) == [],
+            _launch_args({"host_pins": {"devbox.lan": "192.168.1.40"}, "browser": "firefox"}) == [] and _launch_args({"browser": "chromium"}) == [],
             "a browser that cannot take the flag is never handed it, and no pin means no flag",
+        )
+        assert_true(
+            _launch_args({"host_pins": {"devbox.lan": "fd00::40"}}) == ["--host-resolver-rules=MAP devbox.lan [fd00::40]"],
+            "an IPv6 pin is bracketed, or Chromium reads its colons as a port",
         )
     finally:
         shutil.rmtree(art, ignore_errors=True)

@@ -15,6 +15,7 @@ LOCAL command: tak ada pre-flight gate. Draft yang `ready` LANGSUNG dilanjut ke 
 Section `e2e` di `<project>/.workflow/config.json` = default terpasang milik project. Isinya key yang sama dengan settings request.
 - Section ada dan `base_url`-nya sesuai target → **LEWATI STEP 1 sepenuhnya**. Jangan wawancara. Tulis request minimal (STEP 2) dan lanjut.
 - Section tidak ada / base_url beda dari yang user sebut → STEP 1, lalu tawarkan menuliskan hasilnya ke `config.json` supaya run berikutnya nol wawancara.
+- `upgrade` mengisi section ini dengan default bawaan (`base_url: http://localhost:8000`). Section yang ADA belum tentu dikonfigurasi user: base_url default yang tak cocok dengan app user = belum dikonfigurasi → STEP 1.
 Nilai config yang salah tipe/tak dikenal TIDAK menggagalkan run: dibuang, dipakai default bawaan, dan namanya muncul di `meta.e2e.config_warnings`. Relay peringatan itu — knob yang diabaikan terbaca sama seperti knob yang rusak.
 Credential TIDAK PERNAH masuk config.json — tetap di `.workflow/e2e/secrets.json`.
 
@@ -24,7 +25,7 @@ Isi dari konteks dulu (diff, pesan user); tanya HANYA yang belum pasti. Max 4 pe
 2. base_url: `http://localhost:8000` | `http://127.0.0.1:8000` | virtual host (mis. `http://app.test`) → user isi lewat "Other".
    Tiga kelas, jangan dicampur:
    - loopback (localhost/127.0.0.1/::1/*.localhost) → lolos apa adanya.
-   - nama `.test` (suffix cadangan RFC 6761 untuk development lokal) → lolos TANPA `allow_remote`. Ini pelonggaran yang sengaja: `.test` tak bisa ada di internet publik.
+   - nama `.test` (suffix cadangan RFC 6761 untuk development lokal) → diperlakukan PERSIS seperti localhost: lolos TANPA `allow_remote`, dan write ke sana tanpa lookup DNS maupun patokan.
    - domain sungguhan (`staging.example.com`) → WAJIB `allow_remote: true` + `allowed_origins: ["<scheme://host[:port]> persis"]`. Itu opt-in yang harus diketik user, bukan default.
    Navigasi ke origin LAIN (termasuk `.test` lain) tetap butuh entri di `allowed_origins`, apa pun kelas base_url-nya.
 3. Perlu login? tidak | ya, akun sudah ada.
@@ -37,9 +38,10 @@ Isi dari konteks dulu (diff, pesan user); tanya HANYA yang belum pasti. Max 4 pe
    Format lama (`"profiles": {"qa": {...}}`) DITOLAK (`secrets_invalid`), tak dikonversi → minta user tulis ulang ke format list di atas.
    User menempel password di chat → JANGAN dipakai/diulang/ditulis ke file; minta taruh di secrets.json.
 4. Tampilan: **default headed** (`headless: false`) — tanya hanya bila user tampak ingin lain. headed + slow_mo_ms 700 (bisa ditonton) | headed tanpa jeda | headless (CI/tanpa display). Ini knob config, bukan pertanyaan wajib tiap run.
-5. Side effect data (buat/ubah/hapus data test)? tidak (default) | boleh — hanya app LOKAL (base_url loopback), tiap perubahan wajib punya cleanup yang bisa dijalankan.
+5. Side effect data (buat/ubah/hapus data test)? tidak (default) | boleh — hanya app LOKAL (loopback, `.test`, atau host privat), tiap perubahan wajib punya cleanup yang bisa dijalankan.
    `tidak` DITEGAKKAN runtime: player abort semua request selain GET/HEAD/OPTIONS (origin mana pun, termasuk API beda port) — login lewat form POST ikut keblok; flow yang butuh login POST berarti perlu `boleh` di app lokal. POST yang cuma BACA (search, filter, GraphQL query): second_agent mengusulkannya di draft (`read_only_requests`, wajib bukti handler file:line), user konfirmasi di STEP 4, lalu masuk `allowed_read_only_requests`. Body GraphQL `mutation`/`subscription`/persisted query tetap diblok runtime.
-   `boleh` → settings `allow_side_effects: true`. Write dinilai dari ALAMAT, bukan nama: preflight me-resolve base_url dan tiap origin di `allowed_origins`, dan menolak run (`spec_invalid`) kalau salah satu punya alamat publik, link-local (`169.254.0.0/16` = metadata service cloud), atau tak bisa di-resolve. Semua alamat loopback/privat → host itu boleh menerima write, dan alamatnya DIPATOK ke browser (`--host-resolver-rules`) supaya nama itu tak bisa berpindah IP di tengah run. Patokan cuma didukung chromium → browser lain + write non-loopback DITOLAK. Tidak ada allow-list path lagi: `allowed_mutation_paths` DIHAPUS → `request_invalid` bila masih ditulis.
+   `boleh` → settings `allow_side_effects: true`. Loopback dan `.test` langsung boleh menerima write. Host LAIN dinilai dari ALAMAT, bukan nama: preflight me-resolve base_url dan tiap origin di `allowed_origins`, dan menolak run (`spec_invalid`) kalau salah satu punya alamat publik, link-local (`169.254.0.0/16` = metadata service cloud), atau tak bisa di-resolve. Semua alamat loopback/privat → host itu boleh menerima write, dan alamatnya DIPATOK (`--host-resolver-rules`) supaya nama itu tak bisa berpindah IP di tengah run — termasuk nama yang resolve ke loopback seperti `127.0.0.1.nip.io`. Patokan cuma didukung chromium → browser lain + write ke host terpatok DITOLAK; write https ke host terpatok juga ditolak. Tidak ada allow-list path lagi: `allowed_mutation_paths` DIHAPUS → `request_invalid` bila masih ditulis.
+   Redirect: write yang dijawab 307/308 diikuti guard sendiri, tiap hop dinilai dulu — redirect ke tujuan yang tak boleh ditulis → diblok sebelum body terkirim ulang.
    Batas: GET yang mengubah data, WebSocket, service worker tidak terlihat guard maupun ledger request.
 6. Existing test project (opsional): argv command tanpa shell (`{files}`, `{base_url}`) + allowlist glob. Tak ada → lewati.
 Hybrid review SELALU jalan (codex menilai bukti browser) — bukan pertanyaan. Sebut: tiap run = 2 panggilan second_agent (draft + review).
@@ -48,8 +50,7 @@ Hybrid review SELALU jalan (codex menilai bukti browser) — bukan pertanyaan. S
 File: `<project>/.workflow/sessions/<MAIN_SESSION_ID>/e2e/request.json` (Write tool, buat folder bila perlu).
 ```json
 {"version": 1, "phase": "draft",
- "settings": {"base_url": "http://app.test", "allow_remote": true, "allowed_origins": ["http://app.test"],
-              "headless": false, "slow_mo_ms": 700, "allow_side_effects": false}}
+ "settings": {"base_url": "http://app.test", "headless": false, "slow_mo_ms": 700, "allow_side_effects": false}}
 ```
 `settings` = SELISIH terhadap config project, bukan salinannya. Project sudah punya section `e2e` → tulis `{"version": 1, "phase": "draft"}` saja; apa pun yang ditulis di sini menang atas config, dan menyalin nilai yang sama cuma bikin dua tempat yang bisa berbeda diam-diam.
 Key settings sah: base_url browser headless slow_mo_ms nav_timeout_ms step_timeout_ms idle_timeout_s total_timeout_s probe_max_elements allow_remote allowed_origins allow_side_effects allowed_read_only_requests secrets_profile secrets_template_profiles fail_on_console_error max_retries artifact_max_mb existing_test_command existing_test_allowlist existing_test_timeout_s. Key lain/tipe salah → `request_invalid` (`allowed_mutation_paths` → error migrasi). Key yang sama di config.json: salah tipe → diabaikan + warning, bukan error.
@@ -64,11 +65,12 @@ Hasil `meta.phase=draft`, `content` = [E2E DRAFT], detail di `meta.e2e.draft` + 
 - status `blocked` → preflight gagal (playwright_missing | browser_missing | base_url_unreachable | spec_invalid policy URL). Laporkan + fix, STOP.
 - status `invalid` → tampilkan `errors`; tawarkan: perbaiki scenario bersama (main_agent edit JSON sesuai error) | ulang draft dengan task lebih jelas | batal.
 - status `ready` → STEP 4.
+- `meta.e2e.knowledge.offered` > 0 → draft membaca `e2e_knowledge.json` (hasil run sebelumnya untuk origin yang sama: alur login/logout, route, readiness, selector yang cocok). Sebut satu baris di rencana: "memakai N knowledge dari run sebelumnya". Draft tetap wajib mencocokkan selector ke kode.
 
 ## STEP 4 — Rencana (tampilkan, JANGAN minta izin jalan)
 Cetak rencana supaya user tahu apa yang sedang berjalan, lalu LANGSUNG ke STEP 5. Tidak ada AskUserQuestion "Jalankan | Batal" — user yang memanggil /.verify-browser sudah menyatakan mau menjalankannya.
 [BROWSER TEST PLAN]
-target: <base_url> (loopback | remote allow-listed: <origin>)
+target: <base_url> (loopback | .test | remote allow-listed: <origin>)
 tampilan: headless | headed slow_mo <n> ms
 auth: <nama key> — secrets.json profil <nama>: set | BELUM (missing_env; `secrets_file` di draft menyebut path + apakah template baru dibuat)
 claims: - <id> | <severity> | <description> | <source_refs>
@@ -80,6 +82,7 @@ read_only_requests: <usulan draft: METHOD endpoint | source_refs | reason> | tid
 risiko: <data berubah (hanya app lokal), akun nyata, URL remote, missing_env, spec_uncertainties, cleanup tanpa rencana>
 biaya: 1 panggilan review second_agent
 retry: <n> percobaan maksimum bila run berakhir incomplete karena lingkungan | mati (allow_side_effects true)
+knowledge: <N entri dari run sebelumnya dipakai draft> | belum ada
 Dua hal — dan hanya dua — yang masih menghentikan langkah ini. Keduanya soal IZIN atau bahan yang belum ada, bukan soal "yakin mau jalan":
 - missing_env tak kosong → minta user isi secrets.json (profil yang dipakai) dulu; jangan run sampai user bilang sudah. Tanpa credential, run pasti `env_missing`.
 - read_only_requests tak kosong DAN belum tercakup `allowed_read_only_requests` dari config/request → AskUserQuestion multiSelect satu entri per opsi (description = source_refs + reason). HANYA yang dicentang ditulis ke `allowed_read_only_requests` saat STEP 5 sebagai `"POST <endpoint>"`. Tak dicentang = tetap diblok. DILARANG menambah entri yang tak diusulkan draft atau tak dikonfirmasi user. Sudah tercakup config → jangan tanya lagi.
@@ -99,6 +102,14 @@ Alur:
 4. Setelah tertulis → tawarkan /.promote dengan satu claim per tag (`e2e-tag-<tag>`, anchor `path:line` baru). `/.promote` yang memverifikasi anchor dan gate branch; jangan tulis ke knowledge dari sini.
 Nol entri `ready` → lewati STEP 6 diam-diam, jangan tanya.
 
+## Knowledge browser (otomatis, setara fact)
+Tiap run mencatat apa yang TERBUKTI ke `.workflow/e2e-knowledge.jsonl`, per origin base_url: `auth.login` (goto halaman login s/d assertion pertama setelah `${E2E_PASS}`), `auth.logout`, `navigation`, `page_ready`, `selector` (cocok tepat satu elemen). Tanpa konfirmasi, seperti facts — tidak ter-Git.
+- Yang dicatat: step `passed`, bukan write, dari run yang lolos di percobaan PERTAMA. Pass hasil retry tidak dicatat sebagai bukti.
+- Step gagal melemahkan entri yang cocok; 2 kali beruntun → entri pensiun (tak ditawarkan lagi). `--command clean` membuang entri pensiun dan yang anchor `path:line`-nya hilang; anchor yang cuma bergeser ikut pindah.
+- Isi selalu bentuk placeholder (`${E2E_USER}`), nilai `fill` literal dibuang. Nol credential.
+- Relay `meta.e2e.knowledge` hasil run: `added | confirmed | weakened | retired`. Jangan klaim knowledge "dipakai" bila `offered` 0.
+- Promote: entri ber-anchor yang terbukti ≥3 run bisa diangkat jadi knowledge ter-Git lewat `/.promote` (claim `e2e-<kind>-<id>`). Tawarkan hanya bila user minta dokumentasi alur; `/.promote` yang memverifikasi anchor dan gate branch.
+
 ## Output (RELAY)
 Hasil run = [VERIFICATION] canonical (meta.command=verify, meta.invocation=verify-browser). Relay apa adanya:
 verdict (pass | fail | incomplete) | browser_verdict | reason | cleanup (`meta.e2e.cleanup.status`: passed | not_needed | not_planned | failed | not_run) | blocking_findings | not_verified | artifacts (`meta.e2e.artifacts`: report.json, events.jsonl, evidence.md, verification.md; saat gagal stepNN.html/png, trace.zip).
@@ -112,7 +123,8 @@ verdict (pass | fail | incomplete) | browser_verdict | reason | cleanup (`meta.e
 - `allow_side_effects: true` → retry MATI total. Aksi write tak diulang saat timeout (request pertama mungkin sudah diproses server). Jangan sarankan "jalankan ulang otomatis"; periksa data dulu.
 - Screenshot + trace tak diambil bila scenario pakai `${ENV}` (tak bisa di-scrub); HTML juga tak disimpan bila nilai credential < 4 karakter (`meta.e2e.secrets.unscrubbable`). Jangan minta buka screenshot bila bukti terstruktur cukup.
 - fail origin=app → bug app, tawarkan /.analyze atau fix. origin harness/unknown → masalah scenario/lingkungan, bukan bukti bug.
-- Failure `mutation_blocked` (harness) → write diblok guard. Bukan bug app. Detail `allow_side_effects is false` → tawarkan: POST yang cuma baca → ulang draft agar diusulkan di `read_only_requests` dengan bukti handler | aktifkan side effect (hanya app lokal) | ubah alur jadi read-only. Detail `writes go only to a loopback host` → write menuju host non-lokal; tak bisa diizinkan. Detail `allowed_read_only_requests covers the endpoint, but the body is ...` → body GraphQL write; bukan kandidat read-only. Observation `mutation_blocked` (beacon/async) = warning saja.
+- Failure `mutation_blocked` (harness) → write diblok guard. Bukan bug app. Detail `allow_side_effects is false` → tawarkan: POST yang cuma baca → ulang draft agar diusulkan di `read_only_requests` dengan bukti handler | aktifkan side effect (hanya app lokal) | ubah alur jadi read-only. Detail `writes go only to a loopback or .test host, or one preflight approved and pinned` → write menuju host non-lokal; tak bisa diizinkan. Detail `redirect re-sends the body to ...` / `redirect navigates off policy` → server me-redirect write ke tujuan terlarang; body TIDAK terkirim ulang. Failure `navigation_blocked` dengan `followed by the browser` → redirect navigasi keluar origin sudah diikuti browser sebelum terdeteksi; step digagalkan, bukan dicegah.
+- Verdict `incomplete` dengan gap `passed only on attempt N` → lolos hanya setelah retry. JANGAN relay sebagai pass: bisa lingkungan flaky atau bug app yang sesekali muncul. Detail `allowed_read_only_requests covers the endpoint, but the body is ...` → body GraphQL write; bukan kandidat read-only. Observation `mutation_blocked` (beacon/async) = warning saja.
 
 ## Batas
 - Config project hanya memindahkan DEFAULT; tak satu pun knob di `config.json` melonggarkan policy origin atau write. Domain sungguhan tetap butuh `allow_remote` + `allowed_origins` persis, dan write tetap dinilai dari alamat hasil resolve, di mana pun nilainya ditulis.

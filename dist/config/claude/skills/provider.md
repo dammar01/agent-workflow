@@ -39,9 +39,10 @@ Renderer = AskUserQuestion, satu pertanyaan per call, jawaban sebelumnya memoton
    - **tidak** → STEP 2b.
 
 ## STEP 2b — Model per route (hanya bila user jawab "tidak")
-Satu call AskUserQuestion berisi satu pertanyaan untuk TIAP route di `meta.selectable_routes`
-(explore, plan, analyze, verify — empat, pas di batas tool). Opsi tiap pertanyaan = `models[]`
-provider terpilih, model dari STEP 2 ditandai sebagai default di `description`.
+Satu pertanyaan untuk TIAP route di `meta.selectable_routes` (explore, plan, analyze, verify,
+e2e_spec — lima). Batas tool 4 pertanyaan per call, jadi pecah jadi DUA call: call pertama
+explore/plan/analyze/verify, call kedua e2e_spec (draft spec `/.verify-browser`). Opsi tiap
+pertanyaan = `models[]` provider terpilih, model dari STEP 2 ditandai sebagai default di `description`.
 
 Effort TIDAK ditanya per route: runtime memakai satu effort global, dan model yang tak menerima
 effort sudah dijatuhkan sendiri oleh Router.
@@ -53,13 +54,14 @@ Jangan bikin opsi "lainnya" sendiri — "Other" sudah otomatis.
     & "<work_dir>\.workflow\run.ps1" provider "<provider>|<model>|<effort>|<routes>" "<MAIN_SESSION_ID>"
 
 Pemisah `|` — bukan `/`, karena id model opencode mengandung `/`.
-Model atau effort dikosongkan → field itu di-clear, provider kembali ke default-nya sendiri.
+Model atau effort dikosongkan → field itu di-clear. Untuk opencode, model kosong DITOLAK saat
+call (`model_unset`): tanpa `-m` opencode memakai model terakhir yang dipakai di mesin ini.
 
 Field `<routes>`:
 - `same` (atau dikosongkan) → semua route memakai `<model>`.
-- `explore=A,plan=B,analyze=C,verify=D` → per route. Pemisah pasangan `,`, penetapan `=`.
+- `explore=A,plan=B,analyze=C,verify=D,e2e_spec=E` → per route. Pemisah pasangan `,`, penetapan `=`.
   Route yang tak disebut ikut `<model>`. Nilai kosong (`explore=`) → route itu di-clear.
-- Nama route di luar explore/plan/analyze/verify → ditolak, nol yang ditulis.
+- Nama route di luar explore/plan/analyze/verify/e2e_spec → ditolak, nol yang ditulis.
 
 Runtime menulis lima field plus `routes` sekaligus (`provider`, `provider_command`,
 `provider_agent`, `default_model`, `effort`, `routes`) dan menyinkronkan hint

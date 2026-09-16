@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlsplit
 
-from core.evidence.e2e.preflight import is_loopback_host, same_origin
+from core.evidence.e2e.preflight import is_local_dev_host, same_origin
 from core.evidence.e2e.redact import sanitize_endpoint
 from core.evidence.e2e.request import read_only_request_target
 from core.evidence.e2e.spec import SELECTOR_RANK, navigation_error, request_path_matches, selector_rank, step_selectors
@@ -34,6 +34,11 @@ STABLE_WAIT_MS = 2000
 _BROWSERS = ("chromium", "firefox", "webkit")
 _ELEMENT_ACTIONS = frozenset({"click", "fill", "select", "press"})
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+# A 307/308 repeats the method and the body at the new address; the others turn a POST
+# into a GET, which is a navigation question rather than a write question.
+_BODY_KEEPING_REDIRECTS = frozenset({307, 308})
+_REDIRECTS = frozenset({301, 302, 303, 307, 308})
+MAX_WRITE_REDIRECTS = 5
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 _SLOW_MO_MAX_MS = 5000
 
@@ -114,7 +119,8 @@ def _endpoint(url: str) -> tuple | None:
 # Why a write was refused, as the step detail and the warning observation phrase it.
 _REFUSAL_TEXT = {
     "side_effects_off": "settings.allow_side_effects is false and the endpoint is not in allowed_read_only_requests",
-    "non_loopback": "writes go only to a loopback host, and this one is not",
+    "non_loopback": "writes go only to a loopback or .test host, or one preflight approved and pinned, and this one is not",
+    "redirect": "the server redirected the write somewhere the guard does not allow",
 }
 _LEDGER_UNFINISHED = "no response before the run ended"
 MAX_HIDDEN_CHECK = 20
@@ -202,8 +208,19 @@ class Session:
         sleep=time.sleep,
         artifacts_dir: str = "",
         has_secrets: bool = False,
+        display_scenario: dict | None = None,
     ) -> None:
         self.page = page
+        # The same scenario in placeholder form, by step id. What a step EXPECTED is reported
+        # from here, never from the resolved step: a selector or text may hold a resolved
+        # ${E2E_*} value, and one shorter than redact.MIN_SCRUB_CHARS cannot be put back to
+        # its placeholder by substring afterwards.
+        self._display: dict[str, dict] = {}
+        if isinstance(display_scenario, dict):
+            for key in ("steps", "cleanup"):
+                for shown in display_scenario.get(key) or []:
+                    if isinstance(shown, dict) and shown.get("id") is not None:
+                        self._display[str(shown["id"])] = shown
         self.artifacts_dir = Path(artifacts_dir) if artifacts_dir else None
         self.has_secrets = has_secrets
         # False when a resolved value is too short to scrub by substring (the runner decides):
@@ -227,6 +244,11 @@ class Session:
         # Nothing here asks DNS again: a second question could get a second answer, and the
         # gap between the check and the write is the whole rebinding move.
         self.write_hosts = {str(h).lower() for h in config.get("write_hosts") or []}
+        self.host_pins = {str(h).lower(): str(a) for h, a in (config.get("host_pins") or {}).items()}
+        # Top-level navigations the browser followed through a redirect to an origin the
+        # policy refuses. A redirect never reaches the route handler, so this is detected
+        # from the `request` event, after the fact, and reported as exactly that.
+        self.redirected_off_policy: list[str] = []
         self.read_only_allow = _read_only_allow_list(config, self.base_url)
         try:
             self.total_timeout_s = float(config.get("total_timeout_s") or 0)
@@ -329,9 +351,12 @@ class Session:
         )
 
     def guard(self, route, request) -> None:
-        """Refuse top-level navigation the spec policy would refuse — including redirects
-        and clicks, which `validate_scenario` cannot see. Subresources and iframes pass:
-        third-party noise is observed, not blocked.
+        """Refuse top-level navigation the spec policy would refuse — including clicks, which
+        `validate_scenario` cannot see. Subresources and iframes pass: third-party noise is
+        observed, not blocked. A redirect is NOT seen here: Chromium follows it without
+        calling the route handler again (measured against Playwright 1.60), so a redirected
+        navigation is caught by `on_request` after the fact, and a write is sent through
+        `_send_write`, which follows its redirects itself.
 
         Then refuse writes. A step's `side_effect` is only what the scenario declares, so the
         player does not rely on it. With allow_side_effects true a non-GET/HEAD/OPTIONS
@@ -359,9 +384,8 @@ class Session:
         endpoint = _endpoint(url)
         refusal = None
         if self.allow_side_effects:
-            if endpoint is not None and (is_loopback_host(endpoint[1]) or endpoint[1] in self.write_hosts):
-                self._ledger_open(request, url, method)
-                route.continue_()
+            if endpoint is not None and self._write_host_allowed(endpoint[1]):
+                self._send_write(route, request, url, method, read_only=False)
                 return
             reason = "non_loopback"
         else:
@@ -375,8 +399,7 @@ class Session:
                     refusal = read_only_refusal(body if isinstance(body, str) else None)
                 if refusal is None:
                     self.read_only_allowed.append({"method": method, "origin": _origin(url)})
-                    self._ledger_open(request, url, method, read_only=True)
-                    route.continue_()
+                    self._send_write(route, request, url, method, read_only=True)
                     return
         record = {
             "method": method,
@@ -390,6 +413,152 @@ class Session:
         self.mutations_blocked.append(record)
         self._ledger_open(request, url, method, blocked=refusal or _REFUSAL_TEXT[reason])
         route.abort("blockedbyclient")
+
+    def _write_host_allowed(self, host: str) -> bool:
+        return is_local_dev_host(host) or host in self.write_hosts
+
+    def _redirect_refusal(self, target: str, status: int, method: str, *, read_only: bool, top_level: bool) -> str | None:
+        """Why a write's redirect to `target` must not be followed, or None."""
+        if status in _BODY_KEEPING_REDIRECTS:
+            endpoint = _endpoint(target)
+            if endpoint is None:
+                return f"a {status} redirect to an unparseable address"
+            if read_only:
+                if (method, *endpoint) not in self.read_only_allow:
+                    return f"a {status} redirect re-sends the body to {sanitize_endpoint(target)}, which is not a confirmed read"
+                return None
+            if not self._write_host_allowed(endpoint[1]):
+                return f"a {status} redirect re-sends the body to {_origin(target)}, which may not take writes"
+            return None
+        # 301/302/303: the browser follows with a GET. Only a top-level navigation has a
+        # policy for where a GET may go.
+        if top_level:
+            refused = navigation_error(target, self.config)
+            if refused:
+                return f"a {status} redirect navigates off policy: {refused}"
+        return None
+
+    def _pinned_fetch_args(self, target: str, request) -> tuple[dict | None, str | None]:
+        """`route.fetch` keyword arguments that keep a pinned host at its pinned address.
+
+        `route.fetch` runs in Playwright's own network stack, where Chromium's
+        `--host-resolver-rules` does not apply, so a pinned name would be looked up afresh —
+        the rebinding the pin exists to stop. Over http the address goes in the URL and the
+        name in `Host`. Over https that would break certificate validation, so it is refused.
+        """
+        try:
+            parts = urlsplit(target)
+        except ValueError:
+            return None, "an unparseable address"
+        host = (parts.hostname or "").lower()
+        pin = self.host_pins.get(host)
+        if not pin:
+            return {}, None
+        if parts.scheme.lower() != "http":
+            return None, f"{host} is pinned to {pin}, and an https write cannot be held to a pinned address outside the browser"
+        address = f"[{pin}]" if ":" in pin else pin
+        netloc = f"{address}:{parts.port}" if parts.port else address
+        try:
+            headers = dict(request.all_headers())
+        except Exception:
+            headers = {}
+        headers["host"] = parts.netloc
+        return {"url": parts._replace(netloc=netloc).geturl(), "headers": headers}, None
+
+    def _refuse_sent_write(self, route, request, method: str, url: str, refusal: str) -> None:
+        """Close an opened ledger record as blocked, count it, and abort the request."""
+        opened = self._open_requests.pop(id(request), None)
+        if opened is not None:
+            record, started, _ = opened
+            record.update({"blocked": True, "failure": f"blocked: {_cut(refusal, 200)}", "duration_ms": int((self.clock() - started) * 1000)})
+            self.emit(record)
+        self.mutations_blocked.append(
+            {
+                "method": method,
+                "origin": _origin(url),
+                "resource_type": str(getattr(request, "resource_type", None) or ""),
+                "attributed": False,
+                "reason": "redirect",
+                "refusal": refusal,
+            }
+        )
+        route.abort("blockedbyclient")
+
+    def _send_write(self, route, request, url: str, method: str, *, read_only: bool) -> None:
+        """Send one approved write, following its redirects here instead of in the browser.
+
+        A redirect the browser follows never reaches the route handler, and a 307/308
+        re-sends the method AND the body — measured: a POST to an approved `/a` answered
+        307 → `/b` delivered the body to `/b` with no guard in between. So the request is
+        fetched with `max_redirects=0`; each body-keeping hop is judged by the same rule as
+        the original before it is sent, and a GET-turning redirect is handed back to the
+        browser once its target passes the navigation policy. The write still goes out
+        once: the fulfilled response is the one the server gave.
+        """
+        self._ledger_open(request, url, method, read_only=read_only)
+        fetch = getattr(route, "fetch", None)
+        if fetch is None:  # a stand-in route with no network stack of its own
+            route.continue_()
+            return
+        try:
+            top_level = bool(request.is_navigation_request()) and request.frame == self.page.main_frame
+        except Exception:
+            top_level = False
+        try:
+            body = request.post_data_buffer
+        except Exception:
+            body = None
+        target, hops = url, 0
+        kwargs, refusal = self._pinned_fetch_args(target, request)
+        while True:
+            if refusal:
+                self._refuse_sent_write(route, request, method, url, refusal)
+                return
+            try:
+                if hops == 0:
+                    response = fetch(max_redirects=0, timeout=self.nav_timeout_ms, **kwargs)
+                else:
+                    response = fetch(method=method, post_data=body, max_redirects=0, timeout=self.nav_timeout_ms, **{"url": target, **kwargs})
+            except Exception as exc:
+                self._ledger_close(request, f"fetch failed: {_cut(str(exc).splitlines()[0] if str(exc) else type(exc).__name__, 100)}")
+                route.abort("failed")
+                return
+            status = int(getattr(response, "status", 0) or 0)
+            location = (getattr(response, "headers", None) or {}).get("location") if status in _REDIRECTS else None
+            if not location:
+                break
+            next_target = urljoin(target, location)
+            refusal = self._redirect_refusal(next_target, status, method, read_only=read_only, top_level=top_level)
+            if refusal or status not in _BODY_KEEPING_REDIRECTS:
+                if refusal:
+                    continue
+                break  # a GET-turning redirect the policy allows: the browser follows it
+            hops += 1
+            if hops > MAX_WRITE_REDIRECTS:
+                refusal = f"more than {MAX_WRITE_REDIRECTS} redirects"
+                continue
+            target = next_target
+            kwargs, refusal = self._pinned_fetch_args(target, request)
+        route.fulfill(response=response)
+
+    def on_request(self, request) -> None:
+        """Catch a top-level navigation that a redirect took off policy.
+
+        The route handler saw only the first request; the browser followed the redirect on
+        its own. The page may already be loading the refused origin, so this does not claim
+        to have blocked anything: the step that caused it fails, saying the redirect was
+        followed.
+        """
+        if getattr(request, "redirected_from", None) is None:
+            return
+        url = str(request.url)
+        try:
+            top_level = bool(request.is_navigation_request()) and request.frame == self.page.main_frame
+        except Exception:
+            top_level = False
+        if top_level and navigation_error(url, self.config):
+            self.redirected_off_policy.append(url)
+            self.blocked.append(url)
 
     # ---- the request ledger ---------------------------------------------------------
     def _ledger_open(self, request, url: str, method: str, *, blocked: str | None = None, read_only: bool = False) -> None:
@@ -407,7 +576,9 @@ class Session:
         except ValueError:
             path = ""
         spec = step.get("request") if isinstance(step, dict) else None
-        if step is None:
+        if step is None or read_only:
+            # A confirmed read is not a write the step could have planned: counting it as
+            # `planned: false` inflated the run record's unplanned-write figure.
             planned = None
         elif isinstance(spec, dict):
             planned = str(spec.get("method") or "").upper() == method and request_path_matches(str(spec.get("path") or ""), path)
@@ -557,22 +728,29 @@ class Session:
         except Exception:
             return False
 
-    def wait_ready(self, conditions: list) -> dict:
+    def wait_ready(self, conditions: list, shown: list | None = None) -> dict:
         """Poll the step's readiness conditions until all hold or the step timeout passes.
-        Returns {conditions, waited_ms, unmet}; `unmet` names what never became true."""
+        Returns {conditions, waited_ms, unmet}; `unmet` names what never became true, in the
+        placeholder form `shown` gives when there is one."""
         started = self.clock()
         deadline = started + self.step_timeout_s
+        shown = shown if isinstance(shown, list) and len(shown) == len(conditions) else conditions
         while True:
-            unmet = [c for c in conditions if isinstance(c, dict) and c and not self._holds(c)]
+            unmet = [i for i, c in enumerate(conditions) if isinstance(c, dict) and c and not self._holds(c)]
             if not unmet or self.clock() >= deadline:
                 break
             self.beat()
             self.sleep(POLL_S)
+        described = [shown[i] if isinstance(shown[i], dict) else conditions[i] for i in unmet]
         return {
             "conditions": len(conditions),
             "waited_ms": int((self.clock() - started) * 1000),
-            "unmet": [_cut(f"{k}: {json.dumps(v, ensure_ascii=False)}", 120) for c in unmet for k, v in c.items()],
+            "unmet": [_cut(f"{k}: {json.dumps(v, ensure_ascii=False)}", 120) for c in described for k, v in c.items()],
         }
+
+    def _shown(self, step: dict) -> dict:
+        """The placeholder form of `step`, or the step itself when none was handed over."""
+        return self._display.get(str(step.get("id"))) or step
 
     # ---- assertions -----------------------------------------------------------------
     def _text_matches(self, actual: str, step: dict) -> bool:
@@ -613,7 +791,8 @@ class Session:
     # ---- steps ----------------------------------------------------------------------
     def perform(self, step: dict) -> dict:
         action = step.get("action")
-        expectation = {k: step[k] for k in ("contains", "equals", "matches") if k in step}
+        shown = self._shown(step)
+        expectation = {k: shown[k] for k in ("contains", "equals", "matches") if k in shown}
 
         if action == "goto":
             url = urljoin(self.base_url, str(step.get("url"))) if self.base_url else str(step.get("url"))
@@ -646,7 +825,7 @@ class Session:
         selector_view = {
             "selector_provenance": provenance,
             "selection": selection,
-            "expected": {"selector": step.get("selector") or [c["selector"] for c in step_selectors(step)]},
+            "expected": {"selector": shown.get("selector") or [c["selector"] for c in step_selectors(shown)]},
         }
         if error:
             return {"status": "failed", "error": error, **selector_view}
@@ -671,7 +850,7 @@ class Session:
         if action == "expect_dom" and "text" in step:
             wanted = str(step["text"])
             ok, actual = self._poll_text(lambda: str(loc.inner_text()), {"contains": wanted})
-            view = {**selector_view, "expected": {**selector_view["expected"], "text": wanted}, "actual": {"text": _cut(actual, 120)}}
+            view = {**selector_view, "expected": {**selector_view["expected"], "text": str(shown.get("text", ""))}, "actual": {"text": _cut(actual, 120)}}
             if not ok:
                 return {"status": "failed", "error": {"kind": "assertion", "detail": "element text did not match"}, **view}
             return {"status": "passed", **view}
@@ -748,8 +927,9 @@ class Session:
         ready = step.get("ready") if isinstance(step.get("ready"), list) else None
         readiness = None
         try:
+            shown_ready = self._shown(step).get("ready")
             if ready and step.get("action") != "goto":
-                readiness = self.wait_ready(ready)
+                readiness = self.wait_ready(ready, shown_ready)
             if readiness and readiness["unmet"]:
                 outcome = {"status": "failed", "page_stable": False, "error": {
                     "kind": "not_ready",
@@ -757,7 +937,7 @@ class Session:
             else:
                 outcome = self.perform(step)
                 if ready and step.get("action") == "goto" and outcome.get("status") == "passed":
-                    readiness = self.wait_ready(ready)
+                    readiness = self.wait_ready(ready, shown_ready)
                     if readiness["unmet"]:
                         outcome = {**outcome, "status": "failed", "page_stable": False, "error": {
                             "kind": "not_ready",
@@ -774,8 +954,12 @@ class Session:
             outcome["ready"] = readiness
         if len(self.blocked) > blocked_before and outcome.get("status") != "failed":
             origin = _origin(self.blocked[-1])
-            outcome = {**outcome, "status": "failed",
-                       "error": {"kind": "navigation_blocked", "detail": f"navigation to {origin} blocked by the /.verify-browser origin policy"}}
+            detail = (
+                f"a redirect took the page to {origin}, outside the /.verify-browser origin policy (followed by the browser before it could be refused)"
+                if self.blocked[-1] in self.redirected_off_policy
+                else f"navigation to {origin} blocked by the /.verify-browser origin policy"
+            )
+            outcome = {**outcome, "status": "failed", "error": {"kind": "navigation_blocked", "detail": detail}}
         elif len(self.blocked) == blocked_before and (
             fresh := [m for m in self.mutations_blocked[mutations_before:] if m["resource_type"] != "ping"]
         ):
@@ -786,7 +970,9 @@ class Session:
             for mutation in fresh:
                 mutation["attributed"] = True
             first = fresh[0]
-            if first.get("refusal"):
+            if first.get("reason") == "redirect":
+                detail = f"{first['method']} to {first['origin']} blocked: {first.get('refusal')}"
+            elif first.get("refusal"):
                 detail = (f"{first['method']} to {first['origin']} blocked: allowed_read_only_requests covers the endpoint,"
                           f" but the body is {first['refusal']}")
             else:
@@ -955,11 +1141,11 @@ def _launch_args(config: dict) -> list[str]:
     pins = config.get("host_pins") or {}
     if not pins or str(config.get("browser") or "chromium") != "chromium":
         return []
-    rules = ", ".join(f"MAP {host} {address}" for host, address in sorted(pins.items()))
+    rules = ", ".join(f"MAP {host} {f'[{address}]' if ':' in address else address}" for host, address in sorted(pins.items()))
     return [f"--host-resolver-rules={rules}"]
 
 
-def run_scenario(scenario: dict, config: dict, artifacts_dir: str, emit, *, has_secrets: bool = False) -> int:
+def run_scenario(scenario: dict, config: dict, artifacts_dir: str, emit, *, has_secrets: bool = False, display_scenario: dict | None = None) -> int:
     """Launch, run, close. Returns the player exit code; always ends with a `result` event."""
     def abort(reason: str, detail: str) -> int:
         emit({"type": "harness", "reason": reason, "detail": _cut(detail)})
@@ -983,7 +1169,7 @@ def run_scenario(scenario: dict, config: dict, artifacts_dir: str, emit, *, has_
                 reason = "browser_missing" if "Executable doesn't exist" in str(exc) else "launch_failed"
                 return abort(reason, first)
             context = None
-            session = Session(None, config, emit, artifacts_dir=artifacts_dir, has_secrets=has_secrets)
+            session = Session(None, config, emit, artifacts_dir=artifacts_dir, has_secrets=has_secrets, display_scenario=display_scenario)
             tracing = crashed = False
             try:
                 context = browser.new_context()
@@ -994,6 +1180,7 @@ def run_scenario(scenario: dict, config: dict, artifacts_dir: str, emit, *, has_
                     tracing = True
                 session.page = context.new_page()
                 context.route("**/*", session.guard)
+                context.on("request", session.on_request)
                 session.page.on("console", session.on_console)
                 session.page.on("pageerror", session.on_page_error)
                 session.page.on("response", session.on_response)
@@ -1004,6 +1191,12 @@ def run_scenario(scenario: dict, config: dict, artifacts_dir: str, emit, *, has_
                 crashed = True
                 raise
             finally:
+                if crashed:
+                    # A run that crashed mid-request still sent what it sent; the ledger says so.
+                    try:
+                        session.flush_requests()
+                    except Exception:
+                        pass
                 _finish_trace(context, session, tracing, crashed, artifacts_dir, has_secrets, emit)
                 for closable in (context, browser):
                     try:

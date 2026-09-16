@@ -108,6 +108,11 @@ _CRUD_PAGE = """<!doctype html>
   </script>
 </body></html>
 """
+# A form whose POST the server answers with a 307 to another origin: the browser would re-send
+# the body there without the route handler ever seeing it.
+_BOUNCE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Bounce</title></head>
+<body><form method="post" action="/items/bounce"><input type="hidden" name="id" value="7"><button type="submit">Send and bounce</button></form></body></html>
+"""
 _SLOW_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Slow</title></head>
 <body><form method="post" action="/items/slow"><button type="submit">Send slowly</button></form></body></html>
 """
@@ -148,6 +153,12 @@ class _AppHandler(http.server.BaseHTTPRequestHandler):
         self._body()
         if path == "/items/delete":
             return _send(self, 200, b"<!doctype html><title>Deleted</title><p>deleted</p>", "text/html; charset=utf-8")
+        if path == "/items/bounce":
+            self.send_response(307)
+            self.send_header("Location", "http://collector.example/collect")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return None
         if path == "/items/slow":
             time.sleep(4)
             return _send(self, 200, b"<!doctype html><title>Sent</title><p>sent</p>", "text/html; charset=utf-8")
@@ -196,6 +207,14 @@ class _AppHandler(http.server.BaseHTTPRequestHandler):
             return _send(self, 200, b"{}", "application/json")
         if path == "/crud.html":
             return _send(self, 200, _CRUD_PAGE.encode("utf-8"), "text/html; charset=utf-8")
+        if path == "/go-away":
+            self.send_response(302)
+            self.send_header("Location", f"{self.third_party}/phish")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return None
+        if path == "/bounce.html":
+            return _send(self, 200, _BOUNCE_PAGE.encode("utf-8"), "text/html; charset=utf-8")
         if path == "/slow.html":
             return _send(self, 200, _SLOW_PAGE.encode("utf-8"), "text/html; charset=utf-8")
         page = FIXTURE_DIR / path.lstrip("/")
@@ -395,6 +414,17 @@ def _test_e2e_real_browser_smoke() -> None:
         )
         assert_true("/phish" not in _ThirdPartyHandler.hits, f"the blocked origin never received the request: {_ThirdPartyHandler.hits}")
 
+        # --- a redirect off the origin: never routed, so caught after the browser followed it -------
+        _, report, _, _ = case([
+            {"action": "goto", "url": "/go-away"},
+            {"action": "expect_url", "contains": "/phish", "claim_id": "login"},
+        ])
+        assert_true(
+            report["browser_verdict"] == "incomplete" and report["failures"]
+            and "followed by the browser" in report["failures"][0]["detail"],
+            f"a navigation redirected off the origin policy fails its step and says it was followed: {report['failures']}",
+        )
+
         # --- a form POST is refused while allow_side_effects is false: the server never sees it -----
         delete = [
             {"action": "goto", "url": "/mutate.html"},
@@ -420,6 +450,21 @@ def _test_e2e_real_browser_smoke() -> None:
         _AppHandler.writes.clear()
         _, report, _, _ = case(delete, allow_side_effects=True)
         assert_true(_AppHandler.writes == ["/items/delete"] and report["browser_verdict"] == "pass", f"allow_side_effects sends a write to a loopback app: {_AppHandler.writes} {report['reason']}")
+
+        # --- a write the server redirects off policy is not re-sent: the guard follows it itself -------
+        bounce = [
+            {"action": "goto", "url": "/bounce.html"},
+            {"action": "click", "selector": {"role": "button", "name": "Send and bounce"}, "selector_provenance": {"type": "source"}},
+            {"action": "expect_title", "equals": "Collected", "claim_id": "login"},
+        ]
+        _AppHandler.writes.clear()
+        _, report, _, _ = case(bounce, allow_side_effects=True)
+        refused = [r for r in report["requests"] if r["blocked"]]
+        assert_true(
+            _AppHandler.writes == ["/items/bounce"] and report["browser_verdict"] == "incomplete"
+            and refused and "collector.example" in refused[0]["failure"],
+            f"a 307 that would carry the body off policy is refused before the second send: {_AppHandler.writes} {report['browser_verdict']} {report['requests']}",
+        )
 
         # --- CRUD on a fetch-driven page: readiness, scoped selectors, ledger, cleanup ----------------
         name = "e2e-smoke-item"

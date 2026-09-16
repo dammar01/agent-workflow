@@ -33,6 +33,10 @@ PROVIDER_CONFIG_NAME = "second_agent.json"
 # one reader still spelling it by hand, and a project whose file no longer matched fell
 # through to the tool defaults without a word — see resolve_provider_config below.
 LEGACY_PROVIDER_CONFIG_NAME = "opencode.json"
+# The tool-level TEMPLATE `init` copies into a new workspace, rebuilt by every
+# `install.py --apply`. Never read by the runtime: a project without its own
+# second_agent.json is refused, not run on whatever this machine was once set to.
+PROVIDER_SEED_NAME = "second_agent.seed.json"
 LOCK_TTL_SECONDS = 300
 JSON_INDENT = 2
 ARCHIVE_KEEP = 20
@@ -142,9 +146,10 @@ def resolve_provider_config(project_root) -> tuple[Path | None, str]:
     selected. Resolution lives here, next to the names it resolves, so the next rename
     has one place to miss instead of several.
 
-    A `None` path means no project-local file exists at all, which is a legitimate state
-    for a workspace that never tuned anything — the caller falls back to the tool default
-    knowingly rather than by accident.
+    A `None` path means no project-local file exists. That used to fall back to the
+    tool-level config/second_agent.json, and that fallback is how one stale machine-wide
+    choice (`opencode/mimo-v2.5-free`) reached every project initialised from it. There is
+    no fallback any more: the executor refuses a `missing` config with a next_action.
     """
     workflow_dir = Path(project_root) / WORKFLOW_DIRNAME
     for name, source in (
@@ -154,7 +159,7 @@ def resolve_provider_config(project_root) -> tuple[Path | None, str]:
         candidate = workflow_dir / name
         if candidate.exists():
             return candidate, source
-    return None, "tool_default"
+    return None, "missing"
 
 
 def _tool_paths(agent_workflow_path: str | None) -> dict:

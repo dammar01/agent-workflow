@@ -6,3 +6,5 @@ opencode.json
 .workflow/
 .env
 second_agent.json
+second_agent.json.retired
+second_agent.seed.json

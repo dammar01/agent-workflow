@@ -72,7 +72,7 @@ Celah G1–G14 dari revisi sebelumnya dan batch yang menutupnya:
 | G7 | Selector candidates | tertutup | batch 1 (schema), batch 3 (eksekusi) |
 | G8 | Grounding `source_refs` | tertutup | batch 1 (format), batch 6 (file dan baris ada) |
 | G9 | Config belum dikonsumsi | tertutup | batch 3 dan 4 |
-| G10 | Replay spec stage 1 | tertutup | batch 6 (`commands.e2e.replay`) |
+| G10 | Replay spec stage 1 | **terbuka** — tidak ada di kode (`runner.py` mencatat `replay_used: false`, tanpa `last_spec.json`/`commands.e2e.replay`). Pengganti parsial sejak 3.6.1: knowledge browser (`core/evidence/e2e/knowledge.py`) menawarkan alur yang terbukti ke draft berikutnya, bukan replay spec | batch 6 (klaim awal, dikoreksi) |
 | G11 | Retensi artifact berbasis ukuran | tertutup | batch 4 (`artifact_max_mb`) |
 | G12 | Metrik evaluasi e2e | tooling tertutup, data belum | batch 7 |
 | G13 | Token dibanding loop browser visual | sebagian | batch 7: token per run dan baseline delegated verify; baseline loop visual belum diukur |
@@ -1032,7 +1032,7 @@ MVP dinyatakan berhasil jika semua kriteria di bawah terpenuhi. Kolom status = p
 | 8 | Full DOM dan screenshot tidak otomatis masuk prompt. | terpenuhi | Prompt stage 3 hanya berisi `[E2E EVIDENCE]` terstruktur; uji marker source tidak muncul di prompt maupun artifact. |
 | 9 | Secret tidak muncul dalam report atau artifact yang diperiksa. | terpenuhi, dengan batas | Scrub raw, URL-encoded, HTML- dan JSON-escaped; HTML artifact di-scrub; tanpa screenshot/trace bila `${ENV}` dipakai; smoke memindai byte seluruh artifact. Batas: nilai di bawah 4 karakter dan encoding lain (mis. base64). |
 | 10 | Browser `fail` tidak dapat diubah menjadi `pass` oleh reviewer. | terpenuhi | Combine fail-closed. |
-| 11 | Scenario dapat dijalankan ulang pada state aplikasi yang sama. | terpenuhi | `spec_path` dan replay (`last_spec.json`); reproducibility diukur per `scenario_hash`. |
+| 11 | Scenario dapat dijalankan ulang pada state aplikasi yang sama. | sebagian | request `phase: run` dengan scenario yang sama bisa dijalankan ulang; replay (`last_spec.json`) tidak diimplementasikan; reproducibility diukur per `scenario_hash`. |
 | 12 | Process browser dihentikan dengan benar ketika timeout. | terpenuhi (Windows) | Smoke: halaman macet, idle timeout, nol proses Chromium tersisa. Linux belum diuji. |
 | 13 | Penggunaan token lebih rendah dibanding loop browser visual untuk alur yang sama. | belum | Token per run dan rasio terhadap delegated verify tersedia di `report`; baseline loop visual belum diukur. |
 

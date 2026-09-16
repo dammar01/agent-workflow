@@ -118,7 +118,7 @@ def _transport_cap(
     """
     static = DEFAULT_MAX_TASK_CHARS
     if not transport or transport.get("kind") != "argv":
-        # stdin, or a provider not in the table. The static cap is the pre-existing
+        # stdin, file (opencode's `-f`), or a provider not in the table. The static cap is the pre-existing
         # behaviour and stays the answer until there is evidence for a better number.
         return static, {"task_cap": static, "task_cap_source": "policy"}
     if not _argv_limit_enforced():
@@ -211,6 +211,7 @@ def _sidecar_block(
     has_facts: bool,
     fanout: bool,
     has_knowledge: bool = False,
+    has_e2e_knowledge: bool = False,
 ) -> list[str]:
     """Anchor pointing the second agent at the runtime evidence files.
 
@@ -249,6 +250,16 @@ def _sidecar_block(
             " permissions, or what you read in the code. Verify before relying on it;"
             " entries marked needs_branch_verification describe production, not this branch"
         )
+    if has_e2e_knowledge:
+        # Written by earlier browser runs from placeholder scenarios, so it holds no
+        # credential. Framed as hints because a page can change under a recorded selector:
+        # the spec still has to ground every selector in the code it reads.
+        lines.append(
+            f"- e2e_knowledge: {runtime_dir}/e2e_knowledge.json — what earlier browser runs against"
+            " this origin PROVED: the login/logout steps, routes reached, readiness that held,"
+            " selectors that matched one element. Reuse a flow instead of rediscovering it, but"
+            " re-check each selector against the code and cite that code, not this file"
+        )
     if fanout:
         lines.append(
             "- FAN-OUT call: dispatch one sub-agent per community in leads.json, then merge;"
@@ -274,6 +285,7 @@ def build_prompt(
     meta_sink: dict | None = None,
     transport: dict | None = None,
     e2e_evidence: str | None = None,
+    has_e2e_knowledge: bool = False,
     _changed_block: list[str] | None = None,
 ) -> str:
     if role not in VALID_ROLES:
@@ -305,6 +317,7 @@ def build_prompt(
             subagent_fanout=subagent_fanout,
             declared_tools=declared_tools,
             e2e_evidence=e2e_evidence,
+            has_e2e_knowledge=has_e2e_knowledge,
             _changed_block=changed_block,
         )
         cap, cap_info = _transport_cap(transport, probe, task)
@@ -341,6 +354,7 @@ def build_prompt(
         has_leads=has_leads,
         has_facts=has_facts,
         has_knowledge=has_knowledge,
+        has_e2e_knowledge=has_e2e_knowledge,
         fanout=subagent_fanout and role in _EVIDENCE_ROLES,
     )
 

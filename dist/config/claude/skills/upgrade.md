@@ -6,9 +6,12 @@ description: Refresh .workflow in place while preserving project state and sessi
 
 ## Run (local)
 Resolve the workflow entry point in this order:
-1. Existing `.workflow/config.json` → `runtime.main_py_path`.
-2. `$AGENT_PATH` / `$env:AGENT_PATH` when the config is missing.
+1. `$AGENT_PATH` / `$env:AGENT_PATH` — the build the user points at.
+2. Existing `.workflow/config.json` → `runtime.main_py_path`, only when AGENT_PATH is unset.
+   It names the build that WROTE the workspace, which may be an old clone.
 3. If neither points to a file, stop and ask for the agent-workflow repository path.
+The runtime then prefers the build actually running the command, so an upgrade always
+repoints the workspace at the code doing the upgrade.
 
 Windows: python "<main.py>" --command upgrade --work-dir "<work_dir>" --pretty
 POSIX:   python3 "<main.py>" --command upgrade --work-dir "<work_dir>" --pretty

@@ -37,10 +37,15 @@ TEXT_ARTIFACT_SUFFIXES = (".html", ".htm", ".txt", ".log", ".json", ".jsonl", ".
 
 
 # A path segment that is an identifier, not a route: a number, a UUID, a long hex or token
-# string, or anything with an `@` (an address used as a key). A reset link's token lives
-# exactly here, so the request ledger keeps the route and never the value.
+# string, a JWT, a mixed-case token with digits, or anything with an `@` (an address used
+# as a key). A reset link's token lives exactly here, so the request ledger keeps the route
+# and never the value. The JWT and mixed-case forms were missing: `eyJ....` carries dots,
+# and a 16–23 character invite code slipped under the 24-character floor.
 _ID_SEGMENT = re.compile(
-    r"^(?:\d+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{16,}|[A-Za-z0-9_\-]{24,}|.*@.*)$"
+    r"^(?:\d+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{16,}|[A-Za-z0-9_\-]{24,}"
+    r"|[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}"
+    r"|(?=[^/]*[a-z])(?=[^/]*[A-Z])(?=[^/]*\d)[A-Za-z0-9_\-]{16,}"
+    r"|.*@.*)$"
 )
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 

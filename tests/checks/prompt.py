@@ -18,7 +18,6 @@ locks itself: change both and it stays green while the parser breaks.
 """
 
 from config.roles import ROLE_EXPLORATION, ROLE_REASONING, ROLE_VERIFICATION
-from adapters.providers import opencode_adapter
 import contextlib
 
 from config.providers import transport_budget
@@ -41,12 +40,13 @@ _EVIDENCE_REPLY = (
 
 _LEAKS = ("_main().", "self.adapter.", "self.opencode.")
 
-# opencode's own refusal threshold: `_CMD_LINE_LIMIT - _CMD_LINE_HEADROOM`. Read from
-# the adapter rather than copied, so a change there fails this test instead of quietly
-# leaving it asserting a limit nobody enforces any more.
-_OPENCODE_THRESHOLD = (
-    opencode_adapter._CMD_LINE_LIMIT - opencode_adapter._CMD_LINE_HEADROOM
-)
+# A cmd.exe-bounded argv transport that rewrites newlines, as opencode's was before it moved
+# its prompt into an attached file. No shipped provider is this tight any more (agy has
+# 32767), but the sizing arithmetic still has to hold for one, so the checks below keep
+# exercising it through a registered stand-in rather than losing the coverage with opencode.
+_TIGHT_ARGV_PROVIDER = "tight-argv-test"
+_TIGHT_ARGV = {"kind": "argv", "limit": 8191, "headroom": 400, "newline_cost": 3, "reserved": 512}
+_TIGHT_ARGV_THRESHOLD = _TIGHT_ARGV["limit"] - _TIGHT_ARGV["headroom"]
 
 _BASE = {
     "session_id": "sid-1",
@@ -269,7 +269,7 @@ def _pinned_platform(is_windows: bool):
 
 
 def _assert_serialized_argv_fits() -> None:
-    """Every prompt opencode would build must fit the argv length IT measures."""
+    """Every prompt a tight argv provider would build must fit the argv length it measures."""
     for label, task in (
         ("newline-heavy", "line of instruction\n" * 400),
         ("newline dense", "a\n" * 4000),
@@ -284,16 +284,27 @@ def _assert_serialized_argv_fits() -> None:
                 role=role,
                 task=task,
                 command=command,
-                transport=transport_budget("opencode"),
+                transport=dict(_TIGHT_ARGV),
                 **_BASE,
             )
             serialized = len(built.replace("\n", " \\n "))
             assert_true(
-                serialized <= _OPENCODE_THRESHOLD,
+                serialized <= _TIGHT_ARGV_THRESHOLD,
                 f"a {label} task on {command} produced a command line of {serialized} "
-                f"chars, past the {_OPENCODE_THRESHOLD} the adapter refuses at — the cap "
+                f"chars, past the {_TIGHT_ARGV_THRESHOLD} the adapter refuses at — the cap "
                 "measured the prompt in a unit the transport does not use",
             )
+
+
+@contextlib.contextmanager
+def _registered_tight_argv():
+    from config import providers
+
+    providers.PROVIDER_TRANSPORT[_TIGHT_ARGV_PROVIDER] = dict(_TIGHT_ARGV)
+    try:
+        yield
+    finally:
+        providers.PROVIDER_TRANSPORT.pop(_TIGHT_ARGV_PROVIDER, None)
 
 
 def _assert_executor_sizes_for_long_argv() -> None:
@@ -339,9 +350,9 @@ def _assert_executor_sizes_for_long_argv() -> None:
         captured: dict = {}
 
         class _Capture:
-            # Named so the executor sizes for opencode's transport, the way the late-bound
-            # adapter would have.
-            adapter = "opencode"
+            # Named so the executor sizes for the tight argv transport, the way the
+            # late-bound adapter would have.
+            adapter = _TIGHT_ARGV_PROVIDER
 
             def run(self, prompt, session, model=None, work_dir=None) -> dict:
                 captured["prompt"] = prompt
@@ -349,7 +360,7 @@ def _assert_executor_sizes_for_long_argv() -> None:
 
         root = Path(tempfile.mkdtemp(prefix="argv-reserve-"))
         ensure_workflow_workspace(root, os.getenv("AGENT_PATH"))
-        with _pinned_platform(True):
+        with _pinned_platform(True), _registered_tight_argv():
             result = Executor(router=router, adapter=_Capture()).execute(
                 "explore", task, {"session_id": session}, str(root)
             )
@@ -369,9 +380,9 @@ def _assert_executor_sizes_for_long_argv() -> None:
     if prompt:
         total = len(prompt.replace("\n", " \\n ")) + 3 + non_prompt
         assert_true(
-            total <= _OPENCODE_THRESHOLD,
+            total <= _TIGHT_ARGV_THRESHOLD,
             f"a long command path and model id produced a {total}-char command line, past "
-            f"{_OPENCODE_THRESHOLD}: the reserve is a guess the runtime never measured",
+            f"{_TIGHT_ARGV_THRESHOLD}: the reserve is a guess the runtime never measured",
         )
     else:
         assert_true(
@@ -384,7 +395,7 @@ def _assert_executor_sizes_for_long_argv() -> None:
 def _test_task_cap_follows_the_provider_transport() -> None:
     """The cap is a property of the transport, not one number shared by every provider.
 
-    One constant for all providers was wrong in both directions at once. opencode serialises
+    One constant for all providers was wrong in both directions at once. An argv provider serialises
     the prompt into argv and pays for every character of scaffolding; codex pipes it through
     stdin and pays for none of it. A single number can only be right for one of them, and it
     was sized for the tighter one — so the looser transport was throwing away instruction it
@@ -418,7 +429,7 @@ def _check_task_cap_transport() -> None:
             task="short",
             command="explore",
             meta_sink=(argv_sink := {}),
-            transport=transport_budget("opencode"),
+            transport=dict(_TIGHT_ARGV),
             **_BASE,
         )
         assert_true(
@@ -430,7 +441,7 @@ def _check_task_cap_transport() -> None:
         assert_true(len(argv) > 0, "the probe pass must not consume the prompt it measured")
 
         # The guarantee is about the SERIALIZED command line, not about Python string length.
-        # opencode rewrites every newline as ` \n ` on its way into argv, so a cap derived
+        # A newline-rewriting transport turns every newline into ` \n ` in argv, so a cap derived
         # from `len()` passes its own arithmetic and still hands the adapter a prompt it refuses
         # — and only for newline-heavy tasks, which is to say only for the multi-point
         # instructions that most needed the extra room. The assertion below reproduces the
@@ -450,7 +461,7 @@ def _check_task_cap_transport() -> None:
                 task="x" * 50000,
                 command="verify",
                 meta_sink=posix_sink,
-                transport=transport_budget("opencode"),
+                transport=dict(_TIGHT_ARGV),
                 **_BASE,
             )
         assert_true(
@@ -500,13 +511,30 @@ def _check_task_cap_transport() -> None:
             task="short",
             command="verify",
             meta_sink=verify_sink,
-            transport=transport_budget("opencode"),
+            transport=dict(_TIGHT_ARGV),
             **_BASE,
         )
         assert_true(
             verify_sink["task_cap"] < argv_sink["task_cap"],
             "verify carries more scaffolding than explore, so it must be left less room for a "
             f"task: verify={verify_sink.get('task_cap')} explore={argv_sink.get('task_cap')}",
+        )
+
+        # opencode attaches its prompt as a file (`-f`): no command-line room to size for,
+        # and a cap derived from 8191 would cut tasks for a limit its prompt never meets.
+        file_sink: dict = {}
+        build_prompt(
+            role=ROLE_VERIFICATION,
+            task="short",
+            command="verify",
+            meta_sink=file_sink,
+            transport=transport_budget("opencode"),
+            **_BASE,
+        )
+        assert_true(
+            file_sink.get("task_cap_source") == "policy"
+            and file_sink["task_cap"] == DEFAULT_MAX_TASK_CHARS,
+            f"opencode sends its prompt as a file and must hold the policy cap: {file_sink}",
         )
 
         # stdin does not touch argv, so no argv-derived number applies to it. It holds the
@@ -551,7 +579,7 @@ def _check_task_cap_transport() -> None:
             task=over_static,
             command="explore",
             meta_sink=kept_sink,
-            transport=transport_budget("opencode"),
+            transport=dict(_TIGHT_ARGV),
             **_BASE,
         )
         assert_true(

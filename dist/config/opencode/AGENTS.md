@@ -102,11 +102,12 @@ Forbidden:
 - Tidak ada → direct traversal (glob + read + grep).
 
 ## Evidence Sidecars Protocol (WAJIB baca sendiri)
-Leads & facts TIDAK lagi ikut di prompt (argv Windows capped 8191). Ditulis ke file runtime; kamu baca sendiri. Prompt cuma bawa blok `[EVIDENCE_SIDECARS]` yang menyebut path-nya.
+Leads & facts TIDAK ikut di prompt; prompt sendiri datang sebagai file lampiran (`-f`). Ditulis ke file runtime; kamu baca sendiri. Prompt cuma bawa blok `[EVIDENCE_SIDECARS]` yang menyebut path-nya.
 - Header prompt punya `runtime_dir: <path>`. Blok `[EVIDENCE_SIDECARS]` menamai dua file di sana.
 - `runtime_dir/leads.json` → shortlist graph task-ranked: `{files:[{file,score,matched_terms,community,...}], communities:[{community,files[]}], stale}`. WEAK hints, STARTING POINTS — bukan bukti. Buka file-nya, ikuti kode. `stale:true` → graph lebih tua dari source, konfirmasi tiap file masih ada. `null` / `files` kosong → nihil shortlist, traverse dari task langsung.
 - `runtime_dir/facts.json` → list string `"<claim> [file:line]"` cached dari run lampau. Treat sbg LEADS to verify, BUKAN ground truth. `[]` → tak ada cached facts.
 - Kedua file WAJIB kamu baca (Read) SEBELUM jawab bila blok `[EVIDENCE_SIDECARS]` ada. Skip = instruksi gagal, bukan shortcut. File hilang/kosong → lanjut direct traversal, JANGAN gagal.
+- `runtime_dir/e2e_knowledge.json` (hanya bila blok menyebutnya, command `e2e_spec`) → hasil run browser sebelumnya untuk origin yang sama: alur login/logout, route, readiness, selector yang cocok satu elemen. Pakai untuk tidak menemukan ulang alur, tapi TIAP selector tetap dicocokkan ke kode dan dikutip dari kode, bukan dari file ini.
 
 ## Subagent Roster (satu primary, sisanya subagent)
 Kamu SATU-SATUNYA primary. Semua spesialisasi di bawah ini subagent, dipanggil lewat tool `task`.

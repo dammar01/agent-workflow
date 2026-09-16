@@ -63,7 +63,9 @@ def _test_redaction_boundary() -> None:
     callback_calls: list[str] = []
     existing.on_session_created = callback_calls.append
     existing_result = existing.run(
-        "prompt", {"session_id": "workflow", "provider_session_id": "ses_existing"}
+        "prompt",
+        {"session_id": "workflow", "provider_session_id": "ses_existing"},
+        "provider/model",
     )
     assert_true(
         existing_result["ok"] and not callback_calls,

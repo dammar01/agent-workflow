@@ -31,8 +31,15 @@ def _emit(event: dict) -> None:
     sys.stdout.flush()
 
 
-def _fake_run(mode: str, scenario: dict, artifacts_dir: str = "") -> int:
+def _fake_run(mode: str, scenario: dict, artifacts_dir: str = "", display_scenario: dict | None = None) -> int:
     steps = scenario.get("steps") or []
+    # What a step expected is reported in placeholder form, exactly as the real player does.
+    shown_by_id = {
+        str(item.get("id")): item
+        for key in ("steps", "cleanup")
+        for item in ((display_scenario or {}).get(key) or [])
+        if isinstance(item, dict) and item.get("id") is not None
+    }
     if mode == "launch_fail":
         _emit({"type": "harness", "reason": "browser_missing", "detail": "fake: chromium binary absent"})
         _emit({"type": "result", "status": "aborted"})
@@ -82,7 +89,8 @@ def _fake_run(mode: str, scenario: dict, artifacts_dir: str = "") -> int:
             sys.stdout.flush()
         if mode in ("app_fail", "artifacts") and action in ASSERTION_ACTIONS and not failed_once:
             failed_once = True
-            expected = {k: step[k] for k in ("contains", "equals", "matches", "text", "selector") if k in step}
+            shown = shown_by_id.get(str(step.get("id"))) or step
+            expected = {k: shown[k] for k in ("contains", "equals", "matches", "text", "selector") if k in shown}
             _emit(
                 {
                     **base,
@@ -102,7 +110,7 @@ def _fake_run(mode: str, scenario: dict, artifacts_dir: str = "") -> int:
                     "status": "failed",
                     "selector_provenance": "heuristic" if mode == "harness_fail" else "source",
                     "page_stable": mode == "harness_fail",
-                    "expected": {"selector": step.get("selector")},
+                    "expected": {"selector": (shown_by_id.get(str(step.get("id"))) or step).get("selector")},
                     "actual": {"found": False},
                     "url_after": url,
                     "error": {"kind": "selector_missing", "detail": "fake: no element matched"},
@@ -113,6 +121,7 @@ def _fake_run(mode: str, scenario: dict, artifacts_dir: str = "") -> int:
             _emit({**base, "status": "skipped", "url_after": url})
             continue
         _emit({**base, "status": "passed", "url_after": url})
+    _fake_cleanup(scenario)
     if mode == "artifacts" and artifacts_dir:
         # A page that echoed the typed value raw and URL-encoded, and a trace too large for
         # a small budget: the runner has to scrub the first and prune the second.
@@ -141,10 +150,36 @@ def _fake_run(mode: str, scenario: dict, artifacts_dir: str = "") -> int:
     return 0
 
 
-def _real_run(scenario: dict, config: dict, artifacts_dir: str, has_secrets: bool = False) -> int:
+def _fake_cleanup(scenario: dict) -> None:
+    """One `cleanup` event per cleanup step, as the real player sends them.
+
+    The fake runs every test step it reaches (a failed mode only fails one), so every
+    target counts as having run and each cleanup step passes. Without these events a fake
+    run with `scenario.cleanup` could only ever end `not_run`, and the pass path for
+    cleanup was untestable.
+    """
+    for index, step in enumerate(scenario.get("cleanup") or [], start=1):
+        if not isinstance(step, dict):
+            continue
+        _emit(
+            {
+                "type": "cleanup",
+                "step_id": str(step.get("id") or f"cleanup-{index}"),
+                "cleans": str(step.get("cleans") or ""),
+                "action": step.get("action"),
+                "status": "passed",
+                "expected": None,
+                "actual": None,
+                "error": None,
+                "duration_ms": 5,
+            }
+        )
+
+
+def _real_run(scenario: dict, config: dict, artifacts_dir: str, has_secrets: bool = False, display_scenario: dict | None = None) -> int:
     from core.evidence.e2e.browser import run_scenario
 
-    return run_scenario(scenario, config, artifacts_dir, _emit, has_secrets=has_secrets)
+    return run_scenario(scenario, config, artifacts_dir, _emit, has_secrets=has_secrets, display_scenario=display_scenario)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -157,9 +192,10 @@ def main(argv: list[str] | None = None) -> int:
     scenario = payload.get("scenario") or {}
     config = payload.get("config") or {}
     fake = payload.get("fake")
+    display = payload.get("display_scenario") if isinstance(payload.get("display_scenario"), dict) else None
     if fake:
-        return _fake_run(str(fake), scenario, str(payload.get("artifacts_dir") or ""))
-    return _real_run(scenario, config, str(payload.get("artifacts_dir") or ""), bool(payload.get("has_secrets")))
+        return _fake_run(str(fake), scenario, str(payload.get("artifacts_dir") or ""), display)
+    return _real_run(scenario, config, str(payload.get("artifacts_dir") or ""), bool(payload.get("has_secrets")), display)
 
 
 if __name__ == "__main__":

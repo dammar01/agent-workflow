@@ -299,6 +299,9 @@ def run(
         locks = JOB_MANAGER.release_stale_session_locks()
         summary = JOB_MANAGER.prune_jobs()
         facts = fact_store.prune(project_root)
+        from core.evidence.e2e import knowledge as e2e_knowledge
+
+        browser_knowledge = e2e_knowledge.prune(project_root)
         sessions = prune_sessions(project_root)
         return {
             "ok": True,
@@ -308,9 +311,10 @@ def run(
                 f"pruned {summary['removed']} job(s), kept {summary['kept']}; "
                 f"logs removed {summary['logs_removed']}; "
                 f"facts kept {facts['kept']}, dropped {facts['removed']} stale; "
+                f"browser knowledge kept {browser_knowledge['kept']}, dropped {browser_knowledge['removed']}; "
                 f"sessions removed {sessions['removed']}, kept {sessions['kept']}"
             ),
-            "meta": {**summary, "locks": locks, "facts": facts, "sessions": sessions},
+            "meta": {**summary, "locks": locks, "facts": facts, "e2e_knowledge": browser_knowledge, "sessions": sessions},
         }
 
     if normalized_command == "inspect":

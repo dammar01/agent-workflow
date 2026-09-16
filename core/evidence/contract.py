@@ -24,6 +24,17 @@ ERROR_TYPES = {
     "worker_stalled",  # PID alive, no progress — probe before judging
     "rate_limited",  # provider refused on quota: waiting fixes it, retrying does not
     "prompt_too_long",  # the shell rejected the command line before opencode ran
+    # An argument would have been parsed as shell syntax by cmd.exe (opencode's .cmd shim).
+    # Refused before spawning: past that point it is command injection, not an error.
+    "unsafe_command_line",
+    # The project has no .workflow/second_agent.json, or has one that does not parse. Both
+    # used to run on the tool-level file instead, which is how a model nobody chose for
+    # the project kept being called. Refused so the fix is named, not absorbed.
+    "provider_config_missing",
+    "provider_config_invalid",
+    # No model resolved for a provider whose CLI then picks one itself (opencode: its last
+    # used model). Refused rather than left to whatever that happened to be.
+    "model_unset",
     # The provider stream died mid-answer. The opposite advice to rate_limited: this one
     # IS worth retrying, and waiting does nothing for it. Left as `unknown` it collected
     # the useless "inspect the logs and rerun" next_action.

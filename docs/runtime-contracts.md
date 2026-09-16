@@ -17,8 +17,8 @@ kept explicit so that "configured" is never mistaken for "enforced".
 - `policies.graph_leads_enabled`
 - `policies.subagent_fanout_enabled`
 
-`/.verify-browser` reads nothing from config.json: its settings travel in a per-session
-request (see below).
+`/.verify-browser` reads one section of config.json, `e2e`, as the project's default
+settings; everything else about a run travels in a per-session request (see below).
 
 Timeout, stall, and probe settings are **not** here. They live in `opencode.json`, where
 the adapter and the job manager read them. The doctor report names that location so their
@@ -87,27 +87,49 @@ what replaced it. Hybrid review is not a setting: it always runs.
 | Phase | Stage | Command / route | Reply contract | Ends when |
 | --- | --- | --- | --- | --- |
 | both | request | — | — | missing or malformed → `incomplete: request_missing | request_invalid` (not recorded) |
-| both | preflight | — | — | `base_url` policy, write policy (`allow_side_effects` with a non-loopback `base_url` → `spec_invalid`), Playwright, browser, or URL reachability fails → draft `blocked`, run `incomplete` with that reason |
+| both | preflight | — | — | `base_url` policy, write policy (`allow_side_effects` with a write host that is not loopback or `.test` and resolves public, link-local or nowhere → `spec_invalid`), Playwright, browser, or URL reachability fails → draft `blocked`, run `incomplete` with that reason |
 | draft | 1 | `e2e_spec` (internal route, role exploration; refused by `main.run()` and absent from the CLI) | standard `[EVIDENCE]` … `[DIGEST]` with an `[E2E SPEC]` section inside | a proxy failure (returned as-is); otherwise always — `[E2E DRAFT]` with status `ready` or `invalid` (spec missing after one targeted continuation, refused by policy, ungrounded) |
 | run | spec | the request's `scenario` | — | refused by validation → `incomplete: spec_invalid`; malformed secrets.json, an unknown profile, or several profiles and none selected → `secrets_invalid`; an unresolved `${ENV}` → `env_missing` |
 | run | existing tests | `settings.existing_test_command` over allow-listed files | exit code | never by itself — covered claims become proven (exit 0) or `unknown` (anything else) |
 | run | 2 | local player child process (`python -m core.evidence.e2e.player` → `browser.run_scenario`) | JSONL events (`progress`, `request`, `cleanup`, `observation`, `artifact`, `harness`, `heartbeat`, `result`; shapes in `classify.py`) | never by itself — its report decides; skipped when the scenario has no steps; retried under the rules below |
+| run | 3 | `verify` with an `[E2E EVIDENCE]` block in the prompt | ordinary `[VERIFICATION]` | skipped when the browser could not finish; a failed review is a declared gap, never a softer verdict |
+| run | normalise | — | canonical `[VERIFICATION]` on `result.content`; `meta.verdict` set before `_finalize_verify_result` | — |
 
 Origin and write policy are two different questions, answered by two different things
 (`core/evidence/e2e/preflight.py`). WHERE a run may point is about names: a loopback host, a
 `.test` name (reserved for local development by RFC 6761, so it cannot be a public host, and
 therefore needs no `allow_remote`), or an origin listed in `allowed_origins` behind
 `allow_remote`. Crossing to any other origin mid-run still needs that origin listed,
-whatever class base_url belongs to. WHAT may be written to is about addresses: with
-`allow_side_effects` true, `write_network()` resolves base_url's host and every allow-listed
-origin's, and refuses the run (`spec_invalid`) if any of them has a public address, a
-link-local one (169.254.0.0/16 is the cloud metadata service), or none at all. A name that
-resolves to both private and public addresses is refused on the public one. The approved
-names and the addresses they resolved to travel to the player as `write_hosts` and
-`host_pins`; chromium is launched with `--host-resolver-rules` so the name cannot resolve
+whatever class base_url belongs to.
+
+WHAT may be written to treats loopback and `.test` alike (`is_local_dev_host`): both are
+local development by definition, take writes with no lookup, and get no pin — the one thing
+that can still point a `.test` name elsewhere is the user's own resolver. Every other write
+host is judged by address: with `allow_side_effects` true, `write_network()` resolves
+base_url's host and every allow-listed origin's, and refuses the run (`spec_invalid`) if any
+of them has a public address, a link-local one (169.254.0.0/16 is the cloud metadata
+service), or none at all. A name that resolves to both private and public addresses is
+refused on the public one. Each approved name is pinned to the address it resolved to —
+including a name that resolved to loopback, such as `127.0.0.1.nip.io`, whose owner can
+answer differently on the browser's own lookup; only a loopback NAME is left unpinned. The
+approved names and pins travel to the player as `write_hosts` and `host_pins`; chromium is
+launched with `--host-resolver-rules` (an IPv6 pin in brackets) so a name cannot resolve
 elsewhere between the check and the write, and a browser whose resolver cannot be pinned is
-refused a non-loopback write for exactly that reason. The guard never resolves anything
-itself — asking DNS a second time is what rebinding exists to exploit.
+refused a pinned write for exactly that reason. The guard never resolves anything itself —
+asking DNS a second time is what rebinding exists to exploit.
+
+Redirects never reach the route handler: Chromium follows them itself (measured against
+Playwright 1.60 — a POST answered 307 re-sent its body to the new address unseen). So an
+approved write is not continued but fetched by the guard with `route.fetch(max_redirects=0)`.
+A 307/308, which keeps the method and body, is judged by the same write rule before each hop
+is sent (at most `browser.MAX_WRITE_REDIRECTS`); a 301/302/303 is handed back to the browser
+as a GET once its target passes the navigation policy; a refused hop aborts the request and
+enters the ledger as blocked with the reason. `route.fetch` runs outside Chromium's resolver
+rules, so a pinned host over http is fetched at its pinned address with its name in `Host`,
+and a pinned host over https — which cannot be held to an address that way — is refused
+unsent. A TOP-LEVEL navigation redirected off policy cannot be stopped this way without
+breaking the page URL: it is detected from the `request` event after the browser followed it
+and fails the step as `navigation_blocked`, saying so.
 
 Tag proposals (`core/evidence/e2e/tagging.py`): after a run, every step that PASSED whose
 winning selector had provenance `source` and a `selector_provenance.ref` of `path:line`
@@ -120,8 +142,11 @@ plan, `ready` and `skipped` with reasons, is written to `tag-proposals.json` and
 in `meta.e2e.tags`. The runtime never edits a template: the user confirms the batch and the
 main agent applies `old_line` → `new_line`. `apply()` re-checks both the line AND the path: the
 plan was made before the user was asked, which is time enough for the path to become a symlink
-out of the project. Selector VALUES never enter the event stream — only their key names, since a
-value can be a resolved credential shorter than `redact.MIN_SCRUB_CHARS` and therefore unscrubbable. Elements found by
+out of the project. Selector VALUES never enter the event stream resolved: `selection` carries
+key names only, and what a step expected (`selector`, `text`, readiness `unmet`, `contains` /
+`equals` / `matches`) is reported from the PLACEHOLDER scenario the runner hands the player
+as `display_scenario`, since a value can be a resolved credential shorter than
+`redact.MIN_SCRUB_CHARS` and therefore unscrubbable. Elements found by
 heuristic or by probing the live DOM are never proposed — there is no map from a runtime
 selector back to the template that rendered it, and the rendered DOM is framework output,
 not source. `knowledge_claims()` turns applied tags into anchored claims for `/.promote`.
@@ -137,9 +162,19 @@ it hides is what this package exists to prevent), the reasons a rerun cannot cha
 (`playwright_missing`, `browser_missing`, `base_url_unreachable`, `spec_invalid`,
 `env_missing`, `player_unavailable`), and any run with `allow_side_effects` true — its
 first attempt's write may already have reached the server. Attempt 1 owns the run's `e2e/`
-directory; each retry writes to `e2e/retry<n>/`, and `meta.e2e.attempts` lists them.
-| run | 3 | `verify` with an `[E2E EVIDENCE]` block in the prompt | ordinary `[VERIFICATION]` | skipped when the browser could not finish; a failed review is a declared gap, never a softer verdict |
-| run | normalise | — | canonical `[VERIFICATION]` on `result.content`; `meta.verdict` set before `_finalize_verify_result` | — |
+directory; each retry writes to `e2e/retry<n>/`, and `meta.e2e.attempts` lists them. One
+`artifact_max_mb` budget covers the run directory and every `retry<n>/` together. A run that
+PASSES only on a later attempt is not a clean pass: the verdict carries a gap naming the
+reasons the earlier attempts ended on (`passed only on attempt N of N`), so it is
+`incomplete` — `timeout` and `not_ready` are also what an intermittently broken app looks like.
+
+Headed is the default. On a Linux machine with neither `DISPLAY` nor `WAYLAND_DISPLAY` set
+(CI, a container, SSH) a headed run is launched headless instead, with a
+`meta.e2e.config_warnings` entry; Windows and macOS always have a session to open a window in.
+
+A job running `verify-browser` whose worker dies is not recovered: recovery would replay the
+whole scenario, writes included, on top of what the dead attempt already sent. The worker
+fails the job with `worker_died`, `meta.reason: not_recoverable`, and releases the lock.
 
 A draft's `meta.command` is `verify-browser`: it carries no verdict, exits like any
 non-verify command, is finalised under its own name (never counted as a verification),
@@ -193,10 +228,11 @@ fenced JSON scenario), `spec_uncertainties`. Validation runs in both phases, bef
 - every claim carries `source_refs`: `path[:line[-line]]` naming a file and line that
   exist in the project, or `req:<id>`;
 - `goto` targets are relative paths under `base_url`, or absolute URLs on its origin or in
-  `allowed_origins` (remote origins also need `allow_remote`, which is how a virtual host
-  such as `http://app.test` is admitted); backslashes, whitespace and non-http schemes are
-  refused. The player applies the same rule at runtime to top-level navigations, so a
-  redirect or click that leaves the origin is blocked (`navigation_blocked`, harness);
+  `allowed_origins` (a remote origin also needs `allow_remote`; a `.test` origin does not);
+  backslashes, whitespace and non-http schemes are refused. The player applies the same rule
+  at runtime to top-level navigations: a click that leaves the origin is blocked before the
+  request goes out, and a redirect that does is detected after the browser followed it —
+  both fail the step as `navigation_blocked` (harness);
 - every step and cleanup step has an `id` (kebab, unique across both lists); events, the
   request ledger and the report refer to it;
 - a step that changes data declares `side_effect` (`creates_test_data`,
@@ -211,9 +247,9 @@ fenced JSON scenario), `spec_uncertainties`. Validation runs in both phases, bef
   needs one or a `no_cleanup_reason`. That declaration is the scenario's own word, so the
   player does not rely on it. While `allow_side_effects` is true a request whose method is
   not `GET`, `HEAD` or `OPTIONS` passes only when the request's own host is loopback
-  (`localhost`, `*.localhost`, 127.0.0.0/8, `::1`) — preflight already refused a
-  non-loopback `base_url`, and this catches an API on a remote host called from a local
-  page. While it is false every such request is aborted, on any origin (an API on another
+  (`localhost`, `*.localhost`, 127.0.0.0/8, `::1`), a `.test` name, or a host preflight
+  approved and pinned — this catches an API on a remote host called from a local page, and
+  its redirects are followed by the guard (above). While it is false every such request is aborted, on any origin (an API on another
   port is still the app's data). A POST that only reads (a search, a GraphQL query) may pass as a confirmed read:
   stage 1 proposes it under `read_only_requests` (`method | endpoint | source_refs | reason`,
   the handler's `path:line` required and grounded, `req:` refused, an ungrounded proposal
@@ -235,12 +271,14 @@ fenced JSON scenario), `spec_uncertainties`. Validation runs in both phases, bef
   event: id, `phase` (`steps` | `cleanup`), `step_id` when it was sent inside that step's
   window (readiness wait plus action), otherwise `attribution: uncertain` with `after_step`
   — never pinned to the nearest step — method, `endpoint` sanitised (scheme, host, port,
-  path; query, fragment and credentials dropped; numeric, UUID, long-hex, long-token and
-  `@` segments become `:id`), resource type, `read_only`, `blocked`, `planned` (the step's
-  `request` matched; `false` for an extra write; `null` when unattributed), `status` from the
+  path; query, fragment and credentials dropped; numeric, UUID, long-hex, long-token, JWT,
+  mixed-case-with-digits token and `@` segments become `:id`), resource type, `read_only`,
+  `blocked`, `planned` (the step's `request` matched; `false` for an extra write; `null` when
+  unattributed or a confirmed read), `status` from the
   response event, `failure`, `duration_ms` from request to `requestfinished` /
   `requestfailed`. A write still waiting when the run ends is reported with
-  `no response before the run ended`. Bodies, cookies and tokens are never recorded. An
+  `no response before the run ended`, including when the player crashes. Bodies, cookies and
+  tokens are never recorded. An
   HTTP 2xx proves nothing on its own — the assertions do;
 - a step uses one `selector` or `selector_candidates` (1–5, strongest first: role, label,
   testid, text, css), each with a `selector_provenance` (optionally `ref`, a
@@ -296,6 +334,22 @@ raw, URL-encoded, HTML- and JSON-escaped (values shorter than 4 characters excep
 run over `settings.artifact_max_mb` loses traces, then screenshots, then HTML. The
 directory is pruned with its run and never entered into `evidence.jsonl`.
 
+Browser knowledge (`core/evidence/e2e/knowledge.py`, `.workflow/e2e-knowledge.jsonl`) sits
+at the fact store's level: written automatically, anchored, aged out on its own, never in
+Git. Per base_url origin a run records `auth.login` (the login page's goto through the first
+assertion after `${E2E_PASS}`), `auth.logout` (an action followed by an `expect_url` back to
+that page), `navigation`, `page_ready` and `selector` (matched exactly one element) —
+built from the placeholder scenario, with a non-placeholder `fill` value dropped. Only proof
+counts: a passed, non-writing step in a run that passed on its FIRST attempt. A failed step
+weakens the matching entry; `STALE_AFTER_FAILS` (2) in a row retire it. A selector with a
+`source_ref` is anchored like a fact; `--command clean` relocates a moved anchor and drops
+retired entries and vanished anchors. A draft gets the live entries for its origin (bounded
+per kind) in the sidecar `sessions/<session>/runtime/e2e_knowledge.json`, named in the prompt
+only when it holds something, as hints that still have to be grounded in code;
+`meta.e2e.knowledge` reports `offered` on a draft and `added | confirmed | weakened |
+retired` on a run. `promotable_claims()` turns anchored entries proven in
+`PROMOTE_AFTER_PASSES` (3) runs into `/.promote` claims.
+
 Metrics: every run (not a draft) appends one `kind: e2e_run` row to
 `.workflow/quality.jsonl` — raw counts, the stage prompt ids, a scenario hash, `run_kind`
 (`fake`, `smoke`, `project`) and an optional `WORKFLOW_E2E_LABEL`. `main.py --command
@@ -317,3 +371,44 @@ pinned versions, never blocking); the browser and the URL are each run's preflig
 `heartbeat_forever`, `artifacts`) so the lifecycle is testable without a browser;
 `WORKFLOW_E2E_SMOKE=1 python tests/run.py --only e2e-smoke` drives real Chromium against
 `tests/fixtures/e2e_app/`.
+
+## Second agent: provider config, model, and prompt transport
+
+A project runs on its own `.workflow/second_agent.json` and nothing else
+(`config.settings.resolve_provider_config_for`). There is no machine-wide fallback: a missing
+file resolves `source: missing` and an unparseable one `source: invalid`, and the executor
+refuses both before any provider call (`provider_config_missing`, `provider_config_invalid`,
+each with a next_action). The tool-level `config/second_agent.seed.json` is a template `init`
+copies into a new workspace and `install.py --apply` rebuilds from
+`second_agent.example.json` on every run, carrying only the previous selection (provider,
+default model, per-route models). The old `config/second_agent.json`, written once and never
+refreshed, is renamed `.retired` and its selection is not carried over.
+
+Selectable routes are `explore plan analyze verify e2e_spec`. An opencode call whose route
+resolves no model is refused as `model_unset`: without `-m`, opencode answers with the model
+it used last on the machine. `/.doctor` names `-free` models as a recommended fix.
+
+opencode's prompt travels as a FILE: it is written to
+`sessions/<session>/runtime/opencode-prompt.md` and attached with `-f`, and argv carries one
+static sentence (transport `file` in `config/providers.py`, so the task cap is the policy
+cap, not a command-line remainder). On Windows `opencode` is the npm shim `opencode.cmd`,
+parsed by cmd.exe, which does not understand `subprocess`'s `\"` escaping: with the prompt on
+argv, a quoted JSON example became an input redirect (every verify-browser draft failed with
+"The system cannot find the file specified") and an odd quote in a task was command
+injection. Any remaining argument that cmd.exe would interpret (`" & | < > ^ %` or a newline
+in the command path, prompt-file path, model, agent or effort) is refused before spawning
+as `unsafe_command_line`.
+
+## install.py --apply and leftovers
+
+`--apply` refuses a `dist/` that does not match `dist/manifest.json` (dry run warns). After
+installing, it removes files an earlier release installed and this one no longer ships —
+only a file an install recorded writing (the ledger `~/.claude/.workflow-installed.json`, or
+any install receipt), in a family installed file by file (skills, commands, hooks, provider
+agents), and still byte-for-byte what was written. A file edited since is kept and named.
+Each removal is backed up under `backups/install_*/stale/` and receipted as `remove`, which
+`--rollback` restores. settings.json loses the hook commands that run a retired script and
+has a `statusLine` that runs a workflow script refreshed; a statusLine or hook running the
+user's own script is theirs. `--check` reports leftovers. `init`/`upgrade` point a workspace
+at the build running the command first, then `$AGENT_PATH`, and only then the path recorded
+in config.json.

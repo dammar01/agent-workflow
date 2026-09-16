@@ -35,12 +35,13 @@ import time
 from pathlib import Path
 
 from core.evidence.e2e import existing_tests as e2e_existing
+from core.evidence.e2e import knowledge as e2e_knowledge
 from core.evidence.e2e import redact as e2e_redact
 from core.evidence.e2e import request as e2e_request
 from core.evidence.e2e import tagging as e2e_tagging
 from core.evidence.e2e.classify import build_report
 from core.evidence.e2e.normalize import evidence_block, to_verification
-from core.evidence.e2e.preflight import preflight
+from core.evidence.e2e.preflight import display_available, preflight
 from core.evidence.e2e.spec import (
     env_references,
     ground_claims,
@@ -210,10 +211,16 @@ _PRUNABLE_SUFFIXES = (".zip", ".png", ".html")
 
 
 def _enforce_artifact_budget(directory: Path, max_mb: int) -> list[str]:
-    """Drop player artifacts until one run fits `settings.artifact_max_mb`."""
+    """Drop player artifacts until the whole run fits `settings.artifact_max_mb`.
+
+    Counted across the run directory AND its `retryN/` subdirectories: one budget per
+    attempt let a run with retries keep up to (1 + max_retries) times the configured size.
+    Names are relative to `directory`, so a pruned retry artifact is told apart from the
+    first attempt's file of the same name.
+    """
     budget = max(0, max_mb) * 1024 * 1024
     try:
-        files = [p for p in directory.iterdir() if p.is_file()]
+        files = [p for p in directory.rglob("*") if p.is_file()]
     except OSError:
         return []
     total = sum(p.stat().st_size for p in files)
@@ -228,7 +235,7 @@ def _enforce_artifact_budget(directory: Path, max_mb: int) -> list[str]:
             except OSError:
                 continue
             total -= size
-            removed.append(path.name)
+            removed.append(path.relative_to(directory).as_posix())
     return removed
 
 
@@ -505,6 +512,16 @@ def run(
         e2e_meta["existing_tests"] = {k: existing_result[k] for k in ("status", "files", "covers")}
 
     # ---- stage 2: the player ------------------------------------------------------
+    if not config.get("headless") and not display_available():
+        # Headed is the shipped default, and a Linux box with no X11/Wayland (CI, a
+        # container, SSH) cannot open a window: the launch would fail, be retried as an
+        # environment problem, and end `incomplete` having proved nothing about the app.
+        config = {**config, "headless": True}
+        e2e_meta["config"]["headless"] = True
+        e2e_meta.setdefault("config_warnings", []).append(
+            "headless: false but no display is available (DISPLAY/WAYLAND_DISPLAY unset); ran headless"
+        )
+
     def progress(event: dict) -> None:
         if on_progress is None:
             return
@@ -534,6 +551,10 @@ def run(
         payload = json.dumps(
             {
                 "scenario": resolved,
+                # The same scenario in placeholder form. The player reports what a step
+                # expected from this one, so a resolved value never has to be scrubbed back
+                # out of an event — which fails for one shorter than MIN_SCRUB_CHARS.
+                "display_scenario": scenario,
                 # The write decision preflight made, not the settings it made it from: the
                 # player is told which hosts were approved and at which addresses, and never
                 # repeats the lookup that approved them.
@@ -591,11 +612,12 @@ def run(
         # Player-written files: text scrubbed exactly like the events were, then the run's
         # size budget. Both before the report names them, so what it lists is what exists.
         redaction_hits += e2e_redact.scrub_text_files(final_dir, resolved_values)
-        pruned = _enforce_artifact_budget(final_dir, int(config["artifact_max_mb"]))
+        pruned = _enforce_artifact_budget(e2e_dir, int(config["artifact_max_mb"]))
         if pruned:
-            e2e_meta["artifacts_pruned"] = pruned
+            e2e_meta["artifacts_pruned"] = sorted(set(e2e_meta.get("artifacts_pruned") or []) | set(pruned))
+            prefix = "" if final_dir == e2e_dir else f"{final_dir.relative_to(e2e_dir).as_posix()}/"
             events = [
-                {**event, "pruned": True} if event.get("type") == "artifact" and event.get("name") in pruned else event
+                {**event, "pruned": True} if event.get("type") == "artifact" and f"{prefix}{event.get('name')}" in pruned else event
                 for event in events
             ]
         report = build_report(
@@ -666,6 +688,16 @@ def run(
             "ready": len(e2e_tagging.ready(tag_entries)),
             "skipped": len(tag_entries) - len(e2e_tagging.ready(tag_entries)),
         }
+    # ---- knowledge: what this run proved, for the next draft -------------------------
+    # From the placeholder scenario, never the resolved one. A pass that needed a retry is
+    # not recorded as proof; failures always count against what the store believed.
+    try:
+        e2e_meta["knowledge"] = e2e_knowledge.ingest(
+            project_root, report, scenario, str(config.get("base_url") or ""), session_id,
+            clean_first_attempt=len(attempts) == 1,
+        )
+    except Exception as exc:  # observing the run must never be able to fail it
+        e2e_meta["knowledge"] = {"error": f"{type(exc).__name__}: {exc}"}
     e2e_meta["browser_verdict"] = report["browser_verdict"]
     e2e_meta["reason"] = report["reason"]
     e2e_meta["cleanup"] = {key: report["cleanup"][key] for key in ("status", "groups")}
@@ -705,6 +737,7 @@ def run(
         reviewer_content=reviewer_content,
         reviewer_error=reviewer_error,
         existing_tests=existing_rows,
+        attempts=attempts,
     )
     redaction_hits += e2e_redact.write_text(e2e_dir / "verification.md", norm["content"])
     if redaction_hits:
@@ -730,7 +763,18 @@ def _draft(
 ) -> dict:
     """Stage 1 only: second_agent proposes, the runtime validates, the user decides."""
     spec_route = executor._router_for(project_root).route("e2e_spec")
-    prompt, prompt_meta = executor._build_delegated_prompt(spec_route, "e2e_spec", task, session_id, project_root)
+    # What earlier runs against this origin proved. A sidecar, not prompt text: the draft
+    # reads it the way it reads facts, and an empty store offers nothing rather than an
+    # empty section the model might fill in itself.
+    try:
+        offered = e2e_knowledge.write_sidecar(project_root, session_id, str(config.get("base_url") or ""))
+        e2e_meta["knowledge"] = {"offered": offered}
+    except Exception as exc:  # reuse is an optimisation; a draft never fails for it
+        offered = 0
+        e2e_meta["knowledge"] = {"offered": 0, "error": f"{type(exc).__name__}: {exc}"}
+    prompt, prompt_meta = executor._build_delegated_prompt(
+        spec_route, "e2e_spec", task, session_id, project_root, has_e2e_knowledge=offered > 0
+    )
     first = executor._run_delegated(
         spec_route, "e2e_spec", task, session, session_id, project_root, work_dir,
         on_progress, session_manager, prompt=prompt, prompt_meta=prompt_meta, lock_claim=lock_claim,

@@ -16,6 +16,7 @@ from pathlib import Path
 from core.workspace.workspace_paths import (
     JSON_INDENT,
     PROVIDER_CONFIG_NAME,
+    PROVIDER_SEED_NAME,
     WORKFLOW_DIRNAME,
     atomic_write_json,
     atomic_write_text,
@@ -42,11 +43,17 @@ def merge_policy(current: dict, incoming: dict, warn) -> tuple[dict, int, int]:
 
 
 def _copy_provider_config(project_root: Path, tool_dir: str) -> str | None:
-    """Copy the tool's second_agent.json into .workflow so it is project-local and overridable."""
+    """Copy the tool seed into .workflow so the project has its own, overridable config.
+
+    The source is `config/second_agent.seed.json`, which install.py rebuilds from the
+    shipped example on every --apply. The old source, `config/second_agent.json`, was
+    written once and never refreshed, so whatever it held on the day it was created was
+    copied into every project initialised after — including `opencode/mimo-v2.5-free`.
+    """
     dest = project_root / WORKFLOW_DIRNAME / PROVIDER_CONFIG_NAME
     if dest.exists():
         return str(dest)  # already project-local; never overwrite user edits
-    src = Path(tool_dir) / "config" / PROVIDER_CONFIG_NAME
+    src = Path(tool_dir) / "config" / PROVIDER_SEED_NAME
     if not src.exists():
         src = Path(tool_dir) / "config" / "second_agent.example.json"
     if src.exists():

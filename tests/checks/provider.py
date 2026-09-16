@@ -183,7 +183,6 @@ def _test_provider_seam() -> None:
     # the resolver still named the v3.4.2 file. Every project silently ran on tool
     # defaults — wrong model, wrong timeouts, wrong quota — and this suite stayed green.
     from config.settings import (
-        PROVIDER_CONFIG_FILE,
         load_provider_config_for,
         resolve_provider_config_for,
     )
@@ -224,15 +223,17 @@ def _test_provider_seam() -> None:
         f"an un-upgraded workspace must still be read: {legacy_resolved!r}",
     )
 
-    # No project config at all is a legitimate state, not an error.
+    # No project config is reported as `missing`, pointing at the file to create. It
+    # used to resolve to the tool-level config/second_agent.json, and that silent
+    # substitution is how one machine-wide model reached projects nobody chose it for.
     bare_root = Path(tempfile.mkdtemp(prefix="provider-bare-"))
     (bare_root / ".workflow").mkdir(parents=True)
     bare = resolve_provider_config_for(bare_root)
     assert_true(
-        bare["source"] == "tool_default"
+        bare["source"] == "missing"
         and bare["error"] is None
-        and Path(bare["path"]) == Path(PROVIDER_CONFIG_FILE),
-        f"absence must fall back cleanly, without inventing an error: {bare!r}",
+        and Path(bare["path"]) == bare_root / ".workflow" / "second_agent.json",
+        f"absence must be named, and name the project file to create: {bare!r}",
     )
 
     # Malformed is NOT absence. The runtime stays up on defaults, but the substitution
@@ -246,13 +247,27 @@ def _test_provider_seam() -> None:
     )
     broken = resolve_provider_config_for(broken_root)
     assert_true(
-        broken["error"] is not None and broken["source"] == "tool_default",
-        f"an unreadable config must report the fallback, not hide it: {broken!r}",
+        broken["error"] is not None and broken["source"] == "invalid",
+        f"an unreadable config must be reported as invalid, not substituted: {broken!r}",
     )
     assert_true(
         broken["config"].get("timeout_seconds") is not None,
-        "the runtime must survive a malformed config rather than lose its settings",
+        "readers such as doctor still get a config shape to report on",
     )
+
+    # And the executor refuses both before any provider is called.
+    from core.provider.executor import Executor
+    from tests.checks.support import FakeOpenCodeAdapter
+
+    for root, expected in ((bare_root, "provider_config_missing"), (broken_root, "provider_config_invalid")):
+        fake = FakeOpenCodeAdapter()
+        refused = Executor(adapter=fake).execute(
+            "explore", "map it", {"session_id": "sid-cfg", "provider_session_id": None}, str(root)
+        )
+        assert_true(
+            refused["meta"].get("error_type") == expected and not fake.calls,
+            f"{expected}: the call must be refused before reaching the adapter: {refused}",
+        )
     # A key the runtime does not know is a THIRD outcome, distinct from both of the above:
     # the file parses, its valid keys apply, and only the misspelled one is inert. Reported
     # as warnings rather than an error precisely so it does not discard the working keys —

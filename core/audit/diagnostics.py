@@ -61,6 +61,26 @@ def python_callable() -> tuple[bool, str]:
     return completed.returncode == 0, output
 
 
+def _free_tier_models(config: dict) -> list[tuple[str, str]]:
+    """`(where, model)` for every configured model id that names a free tier.
+
+    Reported, never rewritten. The shape is the evidence: `opencode/mimo-v2.5-free` came
+    from a tool-level seed written once and copied into every new project, so a project
+    running a `-free` model is usually running a default nobody re-examined. Some are
+    deliberate, which is why this is a recommended fix and not an issue.
+    """
+    found: list[tuple[str, str]] = []
+    default = config.get("default_model")
+    if isinstance(default, str) and default.lower().endswith("-free"):
+        found.append(("default_model", default))
+    routes = config.get("routes") if isinstance(config.get("routes"), dict) else {}
+    for name, entry in sorted(routes.items()):
+        model = entry.get("model") if isinstance(entry, dict) else None
+        if isinstance(model, str) and model.lower().endswith("-free") and model != default:
+            found.append((f"routes.{name}", model))
+    return found
+
+
 def run_doctor(
     project_root: Path, provider_command: str, session_id: str | None = None
 ) -> dict:
@@ -362,7 +382,15 @@ def run_doctor(
         }
         if resolved.get("error"):
             provider_config["error"] = resolved["error"]
-        provider_warnings = resolved.get("warnings") or []
+        provider_warnings = list(resolved.get("warnings") or [])
+        free_models = _free_tier_models(resolved.get("config") or {})
+        if free_models:
+            provider_config["free_tier_models"] = free_models
+            provider_warnings.append(
+                "free-tier model(s) selected: "
+                + ", ".join(f"{where}={model}" for where, model in free_models)
+                + " — often an old seed default rather than a choice; re-pick with /.provider"
+            )
         provider_config["warnings"] = provider_warnings or "none"
         checks["provider_config"] = provider_config
         if provider_warnings:
@@ -377,10 +405,19 @@ def run_doctor(
         if resolved.get("error"):
             issues.append(
                 f"provider config unreadable: {resolved.get('path')} — {resolved['error']}; "
-                "running on tool defaults instead"
+                "delegated commands are refused until it parses (provider_config_invalid)"
             )
             recommended_fixes.append(
-                f"Fix the JSON in {resolved.get('path')}, or delete it to fall back deliberately"
+                f"Fix the JSON in {resolved.get('path')}, or delete it and run --command init"
+            )
+        elif resolved.get("source") == "missing":
+            issues.append(
+                f"provider config missing: {resolved.get('path')} — delegated commands are "
+                "refused (provider_config_missing); there is no machine-wide fallback"
+            )
+            recommended_fixes.append(
+                "Run --command init to create it from the tool seed, then /.provider to "
+                "choose provider and model"
             )
         elif project_file.exists() and resolved.get("source") != "project":
             issues.append(

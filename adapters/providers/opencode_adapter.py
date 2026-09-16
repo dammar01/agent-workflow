@@ -162,6 +162,26 @@ _CMD_LINE_LIMIT = 8191
 _CMD_LINE_HEADROOM = 400
 _CMD_LINE_SIGNS = ("command line is too long", "the input line is too long")
 
+# The prompt travels as a FILE, never as argv. On Windows `opencode` resolves to the npm
+# shim `opencode.cmd`, and a .cmd is parsed by cmd.exe — which does not understand the
+# `\"` escaping `subprocess` applies. A prompt with an odd run of quotes flips cmd's quote
+# state, and whatever follows is shell syntax: `"<value>"` became an input redirect from a
+# file named `value` ("The system cannot find the file specified", every e2e_spec call),
+# and `x" & echo INJECTED & "` executed the echo. Measured, not theorised: both reproduced
+# through a dummy shim. `-f` hands opencode the file; argv carries one static sentence.
+_ATTACHED_PROMPT_INSTRUCTION = "Follow the instructions in the attached file exactly."
+_PROMPT_FILE_NAME = "opencode-prompt.md"
+# What cmd.exe acts on inside a .cmd/.bat invocation. `!` is left out: the shim does not
+# enable delayed expansion. Newlines are in because cmd ends the command at one.
+_CMD_METACHARS = frozenset('"&|<>^%\r\n')
+_CMD_SCRIPT_SUFFIXES = (".cmd", ".bat")
+_UNSAFE_NEXT_ACTION = (
+    "An argument handed to opencode's .cmd shim contains characters cmd.exe would run as "
+    "shell syntax, so the call was refused before spawning. Remove them from "
+    "provider_command / provider_agent / model / effort in .workflow/second_agent.json, "
+    "or move the project to a path without them."
+)
+
 
 def _argv_meta(args: list[str]) -> dict:
     encoded = "\0".join(str(arg) for arg in args).encode("utf-8", errors="replace")
@@ -189,6 +209,40 @@ def _too_long_for_cmd(args: list[str]) -> int | None:
         return None
     total = sum(len(str(a)) + 3 for a in args)  # +3: two quotes and a separator
     return total if total > (_CMD_LINE_LIMIT - _CMD_LINE_HEADROOM) else None
+
+
+def _cmd_parsing_applies() -> bool:
+    """Whether a .cmd/.bat launch goes through cmd.exe here. A named seam, like
+    `prompt_builder._argv_limit_enforced`: forging `osutil.IS_WINDOWS` to test this on
+    Linux would reroute lock and job code into branches that import msvcrt."""
+    return osutil.IS_WINDOWS
+
+
+def _cmd_shell_hazards(args: list[str]) -> list[dict]:
+    """Arguments cmd.exe would interpret, when `args` runs through a .cmd/.bat. Windows only.
+
+    Every argument is checked, the executable path included: an unquoted `C:\\a&b\\x.cmd`
+    splits the command just as a prompt would.
+    """
+    if not _cmd_parsing_applies() or not args:
+        return []
+    if not str(args[0]).lower().endswith(_CMD_SCRIPT_SUFFIXES):
+        return []
+    hazards = []
+    for index, arg in enumerate(args):
+        found = sorted({char for char in str(arg) if char in _CMD_METACHARS})
+        if found:
+            hazards.append({"argv_index": index, "chars": "".join(found).encode("unicode_escape").decode()})
+    return hazards
+
+
+def _unsafe_command_error(hazards: list[dict], cwd: str | None) -> dict:
+    return make_error(
+        "unsafe_command_line",
+        "refused to run opencode: cmd.exe would interpret characters in its arguments",
+        next_action=_UNSAFE_NEXT_ACTION,
+        meta={"hazards": hazards, "cwd": cwd, "checked": "pre_spawn"},
+    )
 
 
 def _guess_blocked_paths(stderr: str) -> list[str]:
@@ -570,6 +624,18 @@ class OpenCodeAdapter:
         if workflow_session_id:
             meta["workflow_session_id"] = workflow_session_id
 
+        hazards = _cmd_shell_hazards(args)
+        if hazards:
+            meta.update(
+                {
+                    "error": "unsafe_command_line: cmd.exe would interpret characters in the bootstrap arguments",
+                    "hazards": hazards,
+                    "returncode": 1,
+                    "provider_session_id": None,
+                }
+            )
+            return None, _sanitize_meta(meta)
+
         # Bootstrap uses a separate budget so a hung init cannot wait indefinitely.
         budget = self.bootstrap_timeout_seconds
         if budget is not None and budget <= 0:
@@ -617,39 +683,81 @@ class OpenCodeAdapter:
         )
         return session_id, _sanitize_meta(meta)
 
+    @staticmethod
+    def _prompt_file_path(work_dir: str | None, workflow_session_id: str | None) -> Path:
+        """Where this call's prompt is written for `-f`.
+
+        Inside the session's runtime dir, next to the other sidecars the agent reads: it is
+        within the project boundary opencode already runs under, and per-session, so two
+        main agents on one project never hand each other their prompts.
+        """
+        from core.workspace.workspace_paths import workflow_paths
+
+        if work_dir:
+            runtime_dir = workflow_paths(Path(work_dir).resolve(), workflow_session_id)["runtime_dir"]
+        else:
+            import tempfile
+
+            runtime_dir = Path(tempfile.gettempdir()) / "agent-workflow-opencode"
+        return Path(runtime_dir) / _PROMPT_FILE_NAME
+
+    def _agent_args_for(self, prompt_path: Path, model: str | None, session_id: str) -> list[str]:
+        """The one argv shape an agent call has. Shared by the run and the pre-spawn checks
+        so what is measured is what is sent."""
+        args = [
+            self._resolve_command(),
+            "run",
+            _ATTACHED_PROMPT_INSTRUCTION,
+            "-f",
+            str(prompt_path),
+            *self._agent_args(),
+        ]
+        if model:
+            args.extend(["-m", model])
+        args.extend(self._effort_args())
+        args.extend(_JSON_FORMAT_ARGS)
+        args.extend(["-s", session_id])
+        return args
+
     def run_agent(
         self,
         prompt: str,
         session_id: str,
         model: str | None = None,
         work_dir: str | None = None,
+        workflow_session_id: str | None = None,
     ) -> dict:
-        """Spawn workflow agent in existing session."""
-        command = self._resolve_command()
-        safe_prompt = prompt.replace("\n", " \\n ")
-        args = [command, "run", safe_prompt]
-        args.extend(self._agent_args())
-        if model:
-            args.extend(["-m", model])
-        args.extend(self._effort_args())
-        args.extend(_JSON_FORMAT_ARGS)
-        args.extend(["-s", session_id])
+        """Spawn workflow agent in existing session. The prompt goes in a file (`-f`)."""
+        prompt_path = self._prompt_file_path(work_dir, workflow_session_id)
+        args = self._agent_args_for(prompt_path, model, session_id)
+        hazards = _cmd_shell_hazards(args)
+        if hazards:
+            return _unsafe_command_error(hazards, self._resolve_work_dir(work_dir))
+        try:
+            prompt_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = prompt_path.with_name(f"{prompt_path.name}.{os.getpid()}.tmp")
+            tmp.write_text(prompt, encoding="utf-8")
+            os.replace(tmp, prompt_path)
+        except OSError as exc:
+            return make_error(
+                "unknown",
+                f"could not write the prompt file opencode reads: {exc}",
+                next_action="Check write access to the session's .workflow runtime directory, then rerun.",
+                meta={"error": type(exc).__name__, "prompt_path": str(prompt_path)},
+            )
         return self._run_args(args, work_dir)
 
-    def _prospective_agent_args(self, prompt: str, model: str | None) -> list[str]:
-        """The argv run_agent WILL build, with the same `\\n` expansion, so a length
-        check here measures the real command line — not the pre-expansion prompt."""
-        command = self._resolve_command()
-        safe_prompt = prompt.replace("\n", " \\n ")
-        args = [command, "run", safe_prompt, *self._agent_args()]
-        if model:
-            args.extend(["-m", model])
-        args.extend(self._effort_args())
-        args.extend(_JSON_FORMAT_ARGS)
-        # `-s <ses_id>` is appended once the session exists; a real id is ~30 chars.
-        # Include a stand-in so the pre-bootstrap measurement matches the final argv.
-        args.extend(["-s", "ses_" + "0" * 26])
-        return args
+    def _prospective_agent_args(
+        self,
+        model: str | None,
+        work_dir: str | None = None,
+        workflow_session_id: str | None = None,
+    ) -> list[str]:
+        """The argv run_agent WILL build. `-s <ses_id>` exists only after bootstrap; a real
+        id is ~30 chars, so a stand-in keeps the pre-bootstrap measurement honest."""
+        return self._agent_args_for(
+            self._prompt_file_path(work_dir, workflow_session_id), model, "ses_" + "0" * 26
+        )
 
     def run(
         self,
@@ -658,18 +766,38 @@ class OpenCodeAdapter:
         model: str | None = None,
         work_dir: str | None = None,
     ) -> dict:
-        # Fail fast: the command-line length is knowable BEFORE bootstrap, so an
-        # oversize prompt must not first pay ~10-60s spawning an opencode session only
-        # to be rejected. Measure the real (\n-expanded) argv up front.
-        oversize = _too_long_for_cmd(self._prospective_agent_args(prompt, model))
+        if not model:
+            # Without `-m`, opencode runs its configured model or else the LAST ONE USED on
+            # this machine — for any project, whoever used it. That is how a free model
+            # picked once somewhere kept answering calls configured for nothing at all.
+            return make_error(
+                "model_unset",
+                "no model is set for this opencode call",
+                next_action=(
+                    "Choose one with /.provider, or set default_model (or "
+                    "routes.<command>.model) in .workflow/second_agent.json."
+                ),
+                meta={"checked": "pre_bootstrap", "cwd": self._resolve_work_dir(work_dir)},
+            )
+
+        # Fail fast: both refusals are knowable BEFORE bootstrap, so neither may first pay
+        # ~10-60s spawning an opencode session only to be rejected. The prompt itself is
+        # no longer on the command line; what is checked here is everything else (command
+        # path, prompt-file path, model, agent, effort), which config and project location
+        # decide.
+        prospective = self._prospective_agent_args(model, work_dir, session.get("session_id"))
+        hazards = _cmd_shell_hazards(prospective)
+        if hazards:
+            return _unsafe_command_error(hazards, self._resolve_work_dir(work_dir))
+        oversize = _too_long_for_cmd(prospective)
         if oversize is not None:
             return make_error(
                 "prompt_too_long",
                 f"command line is {oversize} chars; the Windows shell caps it at {_CMD_LINE_LIMIT}",
                 next_action=(
-                    "Shorten the task text — split it into two narrower delegated calls. "
-                    "The prompt scaffolding is anchored in AGENTS.md and the evidence "
-                    "sidecars, so the task is the only caller-controlled size left."
+                    "The prompt travels as a file, so the task is not what overflowed. "
+                    "Shorten provider_command / model / agent in .workflow/second_agent.json "
+                    "or move the project to a shorter path."
                 ),
                 meta={
                     "command_line_chars": oversize,
@@ -734,7 +862,9 @@ class OpenCodeAdapter:
                     },
                 )
 
-        result = self.run_agent(prompt, provider_session_id, model, work_dir)
+        result = self.run_agent(
+            prompt, provider_session_id, model, work_dir, workflow_session_id=session.get("session_id")
+        )
 
         if bootstrap_meta is not None:
             result["meta"]["bootstrap"] = bootstrap_meta
@@ -768,6 +898,19 @@ class OpenCodeAdapter:
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
         cwd = self._resolve_work_dir(work_dir)
+
+        hazards = _cmd_shell_hazards(args)
+        if hazards:
+            return _sanitize_meta(
+                {
+                    "alive": False,
+                    "reason": "unsafe_command_line",
+                    "hazards": hazards,
+                    "returncode": None,
+                    "duration_seconds": None,
+                    "timed_out": False,
+                }
+            )
 
         try:
             outcome = self._popen_capture(
@@ -817,15 +960,18 @@ class OpenCodeAdapter:
         )
 
     def _run_args(self, args: list[str], work_dir: str | None = None) -> dict:
+        hazards = _cmd_shell_hazards(args)
+        if hazards:
+            return _unsafe_command_error(hazards, self._resolve_work_dir(work_dir))
         oversize = _too_long_for_cmd(args)
         if oversize is not None:
             return make_error(
                 "prompt_too_long",
                 f"command line is {oversize} chars; the Windows shell caps it at {_CMD_LINE_LIMIT}",
                 next_action=(
-                    "Shorten the task text — split it into two narrower delegated calls. "
-                    "The prompt scaffolding (constraints, graph leads, output format) is "
-                    "fixed cost; only the task is yours to trim."
+                    "The prompt travels as a file, so the task is not what overflowed. "
+                    "Shorten provider_command / model / agent in .workflow/second_agent.json "
+                    "or move the project to a shorter path."
                 ),
                 meta={
                     "command_line_chars": oversize,

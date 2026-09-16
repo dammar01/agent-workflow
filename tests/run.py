@@ -60,6 +60,8 @@ from tests.checks.e2e_routing import _test_e2e_routing  # noqa: E402
 from tests.checks.e2e_spec import _test_e2e_spec_contract  # noqa: E402
 from tests.checks.e2e_supervisor import _test_e2e_supervisor  # noqa: E402
 from tests.checks.e2e_tagging import _test_e2e_tagging  # noqa: E402
+from tests.checks.e2e_hardening import _test_e2e_hardening  # noqa: E402
+from tests.checks.e2e_knowledge import _test_e2e_knowledge  # noqa: E402
 from tests.checks.deps import _test_runtime_is_stdlib_only  # noqa: E402
 from tests.checks.governance import _test_governance_controls  # noqa: E402
 from tests.checks.graph_verification import _test_graph_verification  # noqa: E402
@@ -96,6 +98,9 @@ from tests.checks.usage_tokens import _test_usage_token_accounting  # noqa: E402
 from tests.checks.redaction import _test_redaction_boundary  # noqa: E402
 from tests.checks.registry import _test_every_check_is_registered  # noqa: E402
 from tests.checks.stamp_version import _test_stamp_version_reads_versions_not_addresses  # noqa: E402
+from tests.checks.manifest import _test_manifest_matches_dist  # noqa: E402
+from tests.checks.installer_stale import _test_installer_leaves_no_stale_files  # noqa: E402
+from tests.checks.opencode_launch import _test_opencode_prompt_never_reaches_cmd  # noqa: E402
 from tests.checks.statusline import _test_statusline_failed_calls_are_not_estimates  # noqa: E402
 from tests.checks.verify_gaps import (  # noqa: E402
     _test_empty_section_is_not_a_finding,
@@ -117,6 +122,8 @@ SUITES: dict[str, tuple] = {
     "bundle-sync": (_test_bundle_registry_bijection, "skills/ and intent-map.json agree with CLAUDE.md"),
     "hook-flavours": (_test_every_shipped_hook_has_both_os_flavours, "every shipped hook ships .ps1 and .sh"),
     "stamp-version": (_test_stamp_version_reads_versions_not_addresses, "version stamping ignores IP addresses and --check passes"),
+    "manifest": (_test_manifest_matches_dist, "dist/manifest.json matches the dist/ tree it describes"),
+    "opencode-launch": (_test_opencode_prompt_never_reaches_cmd, "opencode's prompt travels as an attached file; cmd.exe-parsed arguments are refused"),
     "statusline": (_test_statusline_failed_calls_are_not_estimates, "a failed call is counted beside the calls, never as an estimate"),
     "provider-seam": (_test_provider_seam, "adapter registry and provider resolution"),
     "provider-threads": (_test_provider_threads_are_kept_per_provider, "a provider thread is resumed only by the provider that issued it"),
@@ -141,6 +148,8 @@ SUITES: dict[str, tuple] = {
     "e2e-smoke": (_test_e2e_real_browser_smoke, "real Chromium against the fixture app through the full runner (opt-in: WORKFLOW_E2E_SMOKE=1)"),
     "e2e-existing-tests": (_test_e2e_existing_tests, "the project's own tests: user command and allowlist only, no shell, bounded, scrubbed, not trusted blindly"),
     "e2e-tagging": (_test_e2e_tagging, "data-e2e is written only to a cited template line inside the project that Git carries"),
+    "e2e-hardening": (_test_e2e_hardening, "retry passes are not clean, expected values stay placeholders, redirects and recovery cannot replay writes"),
+    "e2e-knowledge": (_test_e2e_knowledge, "what a browser run proved is kept per origin, retired on repeated failure, and offered to the next draft"),
     "e2e-metrics": (_test_e2e_metrics, "e2e runs as quality rows: rates per run kind, token join, reproducibility, delegated baseline"),
     "e2e-doctor": (_test_e2e_doctor_readiness, "doctor reports verify-browser readiness from package metadata and probes nothing"),
     "jobs": (_test_submit_admission, "job admission, capacity, and lock"),
@@ -176,6 +185,7 @@ SUITES: dict[str, tuple] = {
     "installer-seed-optin": (_test_installer_seed_reports_unenforced_provider, "an unenforced provider names its opt-in variable"),
     "installer-seed-state": (_test_installer_check_reports_second_agent_default, "--check describes the seed without calling it drift"),
     "installer-e2e": (_test_installer_e2e_deps_are_opt_in, "--with-e2e installs the Playwright extra and its browser; nothing without it"),
+    "installer-stale": (_test_installer_leaves_no_stale_files, "--apply removes only recorded, unedited, unshipped files, drops retired hooks, refuses an unstamped dist"),
     "audit": (_test_audit_report, "the governance trail reads back and keeps a null provider visible"),
     "audit-torn": (_test_audit_survives_a_torn_row, "a partial final line does not hide the readable trail"),
     "audit-separate": (_test_audit_is_not_telemetry, "audit and usage stay separate readers over separate files"),

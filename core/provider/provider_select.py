@@ -69,7 +69,9 @@ FIELD_SEPARATOR = "|"
 # The commands that actually reach a provider. `COMMAND_ROUTES` also carries init,
 # doctor, submit, status and result — routes that exist so the role lookup is total,
 # not because a model choice would change anything about them.
-SELECTABLE_ROUTES = ("explore", "plan", "analyze", "verify")
+# `e2e_spec` is the verify-browser draft: a real provider call that, left off this list,
+# could never be given a model and ran on `default_model` or, with none, no `-m` at all.
+SELECTABLE_ROUTES = ("explore", "plan", "analyze", "verify", "e2e_spec")
 
 ROUTE_SEPARATOR = ","
 ROUTE_ASSIGN = "="

@@ -132,10 +132,10 @@ scenario_json:
 {"version": 1, "feature": "login",
  "claims": [{"id": "login-valid-user", "severity": "blocking", "description": "valid login opens dashboard"}],
  "steps": [
-   {"action": "goto", "url": "/login"},
-   {"action": "fill", "selector": {"role": "textbox", "name": "Email"}, "selector_provenance": {"type": "source"}, "value": "${E2E_USER}"},
-   {"action": "click", "selector": {"role": "button", "name": "Masuk"}, "selector_provenance": {"type": "source"}},
-   {"action": "expect_url", "contains": "/dashboard", "claim_id": "login-valid-user"}
+   {"id": "open-login", "action": "goto", "url": "/login"},
+   {"id": "fill-email", "action": "fill", "selector": {"role": "textbox", "name": "Email"}, "selector_provenance": {"type": "source"}, "value": "${E2E_USER}"},
+   {"id": "submit", "action": "click", "selector": {"role": "button", "name": "Masuk"}, "selector_provenance": {"type": "source"}},
+   {"id": "assert-dashboard", "action": "expect_url", "contains": "/dashboard", "claim_id": "login-valid-user"}
  ]}
 ```
 

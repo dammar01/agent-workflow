@@ -8,9 +8,11 @@ said it was there.
 Where a run may point and what it may write to are two different questions. Navigation
 policy is about names: loopback, a `.test` name (reserved for local development, so it
 cannot be a public host), or an origin the user typed into `allowed_origins` behind
-`allow_remote`. Write policy is about addresses: whatever the name says, every host that
-may receive a write has to resolve to loopback or a private range, and the addresses it
-resolved to here are pinned into the browser so the answer cannot change afterwards.
+`allow_remote`. Write policy treats loopback and `.test` alike — both are local
+development by definition and take writes without a lookup. Every other host that may
+receive a write is judged by address: it has to resolve to loopback or a private range,
+and the address it resolved to here is pinned into the browser so the answer cannot
+change afterwards.
 """
 
 from __future__ import annotations
@@ -29,9 +31,9 @@ _LOOPBACK = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 _SCHEMES = frozenset({"http", "https"})
 # Reserved for local testing by RFC 6761 §6.2: `.test` never resolves on the public
 # internet, so a name under it can only be something the user pointed at their own
-# machine. That is what makes it usable without the explicit opt-in a real domain needs —
-# it is not a claim that the name is safe, which is why it still has to resolve to a
-# loopback or private address before anything writes to it.
+# machine (Valet, Herd, a hosts file). It is treated exactly like localhost: no opt-in to
+# open it and no lookup before writing to it. The one thing that can still point it
+# elsewhere is the user's own resolver, and that is their machine to configure.
 _VIRTUAL_DEV_SUFFIXES = (".test",)
 # Browsers whose resolver this runtime can pin to the addresses preflight approved.
 # Without pinning, the name could resolve to something else between the check and the
@@ -59,6 +61,11 @@ def is_virtual_dev_host(host: str | None) -> bool:
     """A name under a suffix reserved for local development (`.test`)."""
     host = (host or "").lower().strip("[]").rstrip(".")
     return bool(host) and any(host.endswith(suffix) and len(host) > len(suffix) for suffix in _VIRTUAL_DEV_SUFFIXES)
+
+
+def is_local_dev_host(host: str | None) -> bool:
+    """Loopback or `.test`: the hosts that are local development by definition."""
+    return is_loopback_host(host) or is_virtual_dev_host(host)
 
 
 def host_addresses(host: str) -> list[str]:
@@ -144,15 +151,24 @@ def write_network(config: dict) -> tuple[str | None, dict]:
     if not hosts:
         return "settings.allow_side_effects is true but base_url names no host", decision
     for host in hosts:
+        if is_virtual_dev_host(host):
+            # Like localhost: approved by name, no lookup, no pin.
+            decision["hosts"].append({"host": host, "addresses": [], "class": "local_dev", "detail": ".test name"})
+            decision["write_hosts"].append(host)
+            continue
         verdict = classify_host(host)
         decision["hosts"].append(verdict)
         if verdict["class"] in ("public", "unresolved"):
             return (
                 f"settings.allow_side_effects is true but host '{host}' {verdict['detail']}: "
-                "a data-changing run reaches only loopback or private addresses"
+                "a data-changing run reaches only loopback, .test, or private addresses"
             ), decision
         decision["write_hosts"].append(host)
-        if verdict["class"] != "loopback":
+        # A loopback NAME resolves nowhere else, so it needs no pin. Any other name does,
+        # including one that resolved to loopback just now: `127.0.0.1.nip.io` answers
+        # 127.0.0.1 today and whatever its owner likes on the browser's own lookup, which
+        # is the rebinding this pin exists to stop.
+        if not is_loopback_host(host):
             decision["pins"][host] = verdict["addresses"][0]
     if decision["pins"]:
         browser = str(config.get("browser") or "chromium")
@@ -163,6 +179,21 @@ def write_network(config: dict) -> tuple[str | None, dict]:
                 f"use {' or '.join(sorted(_PINNABLE_BROWSERS))}, or a loopback base_url"
             ), decision
     return None, decision
+
+
+def display_available() -> bool:
+    """Whether a headed browser has a screen to open on.
+
+    Only Linux can lack one in the normal case: Windows and macOS always have a session a
+    window can open in, while a Linux box without X11 or Wayland (CI, a container, SSH)
+    fails the launch outright. A module-level function so tests can describe a machine
+    they are not running on.
+    """
+    if not sys.platform.startswith("linux"):
+        return True
+    import os
+
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
 def safe_base_url(url: str, config: dict) -> tuple[bool, str]:

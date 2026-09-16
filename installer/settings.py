@@ -185,6 +185,40 @@ def _drop_intent_hook(template: dict, plan: Plan) -> dict:
     return out
 
 
+def _drop_retired_hooks(hooks: dict, retired: set[str]) -> tuple[dict, int]:
+    """Remove hook commands that run a script an earlier release shipped and this one does not.
+
+    Only commands naming a RETIRED stem go — a stem an install recorded writing and dist no
+    longer carries. A user's hook calling their own script is never touched, and an entry
+    that also runs something else keeps its other commands.
+    """
+    if not retired:
+        return hooks, 0
+    removed = 0
+    out: dict = {}
+    for event, entries in hooks.items():
+        if not isinstance(entries, list):
+            out[event] = entries
+            continue
+        kept_entries = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
+                kept_entries.append(entry)
+                continue
+            kept_hooks = []
+            for hook in entry["hooks"]:
+                stems = _hook_script_ids({"hooks": [hook]})
+                if stems and stems <= retired:
+                    removed += 1
+                else:
+                    kept_hooks.append(hook)
+            if kept_hooks:
+                kept_entries.append({**entry, "hooks": kept_hooks})
+        if kept_entries:
+            out[event] = kept_entries
+    return out, removed
+
+
 def _install_settings(
     src: Path,
     dest: Path,
@@ -195,7 +229,15 @@ def _install_settings(
 ) -> None:
     """Add missing keys only. An existing value is the user's decision, not a conflict
     for this script to resolve — except `hooks`, without which the workflow cannot bind
-    a session at all, and which is therefore reported loudly when it differs."""
+    a session at all, and which is therefore reported loudly when it differs.
+
+    Two shipped things are refreshed rather than kept: hook commands for scripts a release
+    retired (they would call a file that is gone), and a `statusLine` that runs one of the
+    workflow's own scripts (a changed command never reached existing installs)."""
+    from installer.stale import retired_hook_stems, shipped_hook_stems
+
+    retired = retired_hook_stems()
+    owned_stems = shipped_hook_stems() | retired
     template = _resolve_in_json(json.loads(src.read_text(encoding="utf-8")), None)
     template = _rewrite_hooks_for_posix(template)
     if only_command:
@@ -222,6 +264,14 @@ def _install_settings(
 
     added = [k for k in template if k not in current]
     differing = [k for k in template if k in current and current[k] != template[k]]
+
+    status_refresh = False
+    if "statusLine" in differing:
+        current_status = current.get("statusLine")
+        stems = _hook_script_ids({"hooks": [current_status]}) if isinstance(current_status, dict) else set()
+        if stems and stems <= owned_stems:
+            differing.remove("statusLine")
+            status_refresh = True
 
     # Refresh shipped hook entries while preserving hooks owned by the user.
     hook_changes: list[str] = []
@@ -269,6 +319,20 @@ def _install_settings(
         if merged_hooks == (cur_hooks or {}):
             merged_hooks = None
 
+    retire_base = merged_hooks if merged_hooks is not None else (
+        current.get("hooks") if isinstance(current.get("hooks"), dict) else None
+    )
+    if retire_base:
+        cleaned, dropped = _drop_retired_hooks(retire_base, retired)
+        if dropped:
+            merged_hooks = cleaned
+            hook_changes.append(
+                f"hooks (removed {dropped} command{'s' if dropped != 1 else ''} for retired scripts: "
+                f"{', '.join(sorted(retired))})"
+            )
+    if status_refresh:
+        hook_changes.append("statusLine (refreshed the shipped command)")
+
     for key in differing:
         level = "REQUIRED" if key in SETTINGS_REQUIRED else "kept"
         plan.warn(
@@ -286,6 +350,8 @@ def _install_settings(
     plan.add("merge", dest, f"update {detail}")
     if apply:
         current.update({k: template[k] for k in added})
+        if status_refresh:
+            current["statusLine"] = template["statusLine"]
         if merged_hooks is not None:
             current["hooks"] = merged_hooks
         dest.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")

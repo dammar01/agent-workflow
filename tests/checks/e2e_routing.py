@@ -744,17 +744,37 @@ def _test_e2e_routing() -> None:
             f"a .test name is admitted on its own: {policy}",
         )
 
-        # --- writes off loopback: judged by the ADDRESS, and pinned to it -----------------
-        # `.test` cannot exist on the public internet, but the name still says nothing about
-        # where it points, so every write host is resolved here and refused unless every
-        # address it has is loopback or private.
+        # --- writes: loopback and .test by name, every other host by ADDRESS, pinned -------
         import core.evidence.e2e.preflight as _pf
 
         saved_resolver = _pf.host_addresses
         try:
+            # `.test` is local development by definition, exactly like localhost: it takes
+            # writes with no lookup and no pin. The resolver raising proves nothing asked it.
+            _pf.host_addresses = lambda host: (_ for _ in ()).throw(AssertionError(f"looked up {host}"))
+            dev = _draft(root, adapter, settings={"base_url": "http://app.test", "allow_side_effects": True})
+            dev_network = dev["meta"]["e2e"].get("network") or {}
+            assert_true(
+                _draft_info(dev).get("status") == "ready"
+                and dev_network.get("write_hosts") == ["app.test"]
+                and not dev_network.get("pins"),
+                f"a .test app takes writes like localhost, without a lookup or a pin: {_draft_info(dev).get('errors')} {dev_network}",
+            )
+            dev_firefox = _draft(root, adapter, settings={"base_url": "http://app.test", "allow_side_effects": True, "browser": "firefox"})
+            assert_true(
+                _draft_info(dev_firefox).get("status") == "ready",
+                "and with nothing to pin, any browser may write to it",
+            )
+
+            # Every other name is judged by what it resolves to.
             calls_before = len(adapter.calls)
             _pf.host_addresses = lambda host: ["93.184.216.34"]
-            writes = {"base_url": "http://app.test", "allow_side_effects": True}
+            writes = {
+                "base_url": "http://devbox.lan",
+                "allow_remote": True,
+                "allowed_origins": ["http://devbox.lan"],
+                "allow_side_effects": True,
+            }
             draft = _draft(root, adapter, settings=writes)
             assert_true(
                 draft["meta"]["e2e"].get("reason") == "spec_invalid"
@@ -779,9 +799,20 @@ def _test_e2e_routing() -> None:
             assert_true(_draft_info(draft).get("status") == "ready", f"a private address admits the write: {_draft_info(draft).get('errors')}")
             network = draft["meta"]["e2e"].get("network") or {}
             assert_true(
-                network.get("pins") == {"app.test": "192.168.1.40"} and network.get("write_hosts") == ["app.test"],
+                network.get("pins") == {"devbox.lan": "192.168.1.40"} and network.get("write_hosts") == ["devbox.lan"],
                 f"and the decision travels as a pin, so the guard never asks DNS again: {network}",
             )
+            # A name that resolves to loopback TODAY is still a name its owner can repoint:
+            # it is pinned, unlike a loopback name, which resolves nowhere else.
+            _pf.host_addresses = lambda host: ["127.0.0.1"]
+            rebinding = {**writes, "base_url": "http://127.0.0.1.nip.io", "allowed_origins": ["http://127.0.0.1.nip.io"]}
+            draft = _draft(root, adapter, settings=rebinding)
+            assert_true(
+                _draft_info(draft).get("status") == "ready"
+                and (draft["meta"]["e2e"].get("network") or {}).get("pins") == {"127.0.0.1.nip.io": "127.0.0.1"},
+                f"a name resolving to loopback is pinned, so it cannot rebind mid-run: {draft['meta']['e2e'].get('network')}",
+            )
+            _pf.host_addresses = lambda host: ["192.168.1.40"]
             draft = _draft(root, adapter, settings={**writes, "browser": "firefox"})
             assert_true(
                 draft["meta"]["e2e"].get("reason") == "spec_invalid" and "resolver pinned" in draft["content"],
@@ -793,7 +824,17 @@ def _test_e2e_routing() -> None:
         finally:
             _pf.host_addresses = saved_resolver
 
-        result = _run(root, adapter, _scenario(), settings={"base_url": "http://app.test", "allow_side_effects": True}, env={"E2E_USER": "u"})
+        _pf.host_addresses = lambda host: ["93.184.216.34"]
+        try:
+            result = _run(
+                root,
+                adapter,
+                _scenario(),
+                settings={"base_url": "http://devbox.lan", "allow_remote": True, "allowed_origins": ["http://devbox.lan"], "allow_side_effects": True},
+                env={"E2E_USER": "u"},
+            )
+        finally:
+            _pf.host_addresses = saved_resolver
         assert_true(result["meta"].get("verdict") == "incomplete" and result["meta"]["e2e"].get("reason") == "spec_invalid", "a run is judged by the same check")
         local_writes = _draft(workspace("e2e-local-writes-"), _adapter(), settings={"base_url": "http://127.0.0.1:8000", "allow_side_effects": True})
         assert_true(_draft_info(local_writes).get("status") == "ready", f"a loopback app may take writes: {_draft_info(local_writes).get('errors')}")

@@ -147,10 +147,14 @@ agent** (write/edit denials and the shell allowlist), and persists `AGENT_PATH` 
 future shells. Drop `--apply` for a dry run that writes nothing; drop `--set-env` to
 skip the environment variable and set it yourself.
 
-On a fresh clone it also seeds `config/second_agent.json` — the machine-wide default every
-later `init` copies — and asks which provider and model to put in it. Answer with
-`--provider`/`--model` instead to skip the questions; a non-interactive run copies the
-shipped example unchanged.
+It also rebuilds `config/second_agent.seed.json` — the template every later `init` copies
+into a new project — from the shipped example, keeping the provider and model you chose last
+time; on a first run from a terminal it asks. Answer with `--provider`/`--model` instead to
+skip the questions; a non-interactive run with no earlier choice copies the example. The
+runtime never reads the seed: a project without its own `.workflow/second_agent.json` is
+refused, not run on a machine-wide default. Files an earlier release installed and this one
+no longer ships are removed (backed up, and restored by `--rollback`); a file you edited is
+kept and named.
 
 Skipping this step leaves the delegated agent running without write restrictions.
 Reopen the terminal so `AGENT_PATH` takes effect.
