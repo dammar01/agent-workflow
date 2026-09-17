@@ -652,6 +652,17 @@ def _test_installer_seed_is_non_interactive_without_a_tty() -> None:
             == (root / "config" / "second_agent.example.json").read_text("utf-8"),
             "without a tty the example is copied verbatim, and stdin is not consumed",
         )
+        # The second run reads that verbatim copy back as a previous selection and rebuilds
+        # it through _second_agent_config. An example that has fallen behind the canonical
+        # shape (a route or key the rebuild adds) turns every re-install into a `replace`.
+        plan = Plan()
+        with contextlib.redirect_stdout(io.StringIO()):
+            install_mod._seed_second_agent_config(plan, True, None, None)
+        verbs = [verb for verb, target, _ in plan.actions if Path(target) == dest]
+        assert_true(
+            verbs == ["same"],
+            f"re-seeding from the verbatim example is a no-op, so re-install stays idempotent: {verbs}",
+        )
     finally:
         install_mod.REPO_ROOT = original_root
         sys.stdin = original_stdin

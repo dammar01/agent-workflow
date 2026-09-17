@@ -239,13 +239,24 @@ def _write_all(handle: int, body: bytes) -> None:
         written += sent
 
 
+def _file_identity(info: os.stat_result) -> tuple:
+    """(device, inode) plus size and mtime.
+
+    The inode alone is not enough: once the descriptor is closed, a file deleted and
+    recreated under the same name can be given the inode number just freed (ext4 does this
+    readily), and the swap would pass as the same file. A recreated file with the same
+    number, size AND nanosecond mtime is not a realistic accident.
+    """
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+
+
 def _identity(target: Path) -> tuple | None:
     """What file this name points at right now, or None when it points at nothing."""
     try:
         info = os.lstat(target)
     except OSError:
         return None
-    return (info.st_dev, info.st_ino)
+    return _file_identity(info)
 
 
 def _discard(handle: int | None, temporary: str) -> None:
@@ -272,7 +283,7 @@ def _replace_contents(target: Path, body: bytes, mode: int, identity: tuple | No
     did. `os.replace` has no such moment: either the name points at the finished file or it
     still points at the untouched one.
 
-    `identity` is the (device, inode) of the file whose contents `body` was derived from.
+    `identity` is the `_file_identity` of the file whose contents `body` was derived from.
     It is checked again immediately before the move, so a name that has come to point at a
     DIFFERENT file since it was read is refused rather than overwritten with content that
     was never its own.
@@ -390,7 +401,7 @@ def apply(project_root: Path, entries: list[dict]) -> list[dict]:
             continue
         try:
             info = os.fstat(handle)
-            mode, identity = stat.S_IMODE(info.st_mode), (info.st_dev, info.st_ino)
+            mode, identity = stat.S_IMODE(info.st_mode), _file_identity(info)
             text = _read_all(handle).decode("utf-8")
         except (OSError, UnicodeDecodeError) as exc:
             done.append(_refuse(entry, f"{type(exc).__name__} while re-reading"))

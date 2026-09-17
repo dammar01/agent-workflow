@@ -24,6 +24,7 @@ from urllib.parse import quote
 
 from core.evidence.contract import validate_verification_contract
 from core.evidence.e2e import preflight as e2e_preflight
+from core.evidence.e2e import runner as e2e_runner
 from core.evidence.e2e.request import draft_path, ensure_secrets_template, load_secrets, request_path, secrets_path, settings_from
 from core.evidence.e2e.runner import FAKE_ENV
 from core.evidence.e2e.spec import parse_spec
@@ -294,6 +295,12 @@ def _test_e2e_routing() -> None:
         roots.append(root)
         return root
 
+    # These checks read `headless` back out of the run's meta. On a Linux box with no
+    # X11/Wayland (CI) the runner forces headless and rewrites that value, which would make
+    # them assert against the machine instead of the config. The no-display fallback has
+    # its own coverage in e2e_hardening.
+    real_display = e2e_runner.display_available
+    e2e_runner.display_available = lambda: True
     try:
         # --- pass: draft (stage 1) → confirmed run → fake player → stage 3 clean → pass ---
         root = workspace("e2e-pass-")
@@ -985,5 +992,6 @@ def _test_e2e_routing() -> None:
         result = _execute(root, adapter, "verify")
         assert_true(result["meta"].get("verify_mode") == "syntax" and adapter.calls == [], "syntax mode still never calls a provider")
     finally:
+        e2e_runner.display_available = real_display
         for root in roots:
             shutil.rmtree(root, ignore_errors=True)

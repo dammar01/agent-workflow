@@ -259,12 +259,23 @@ def _test_e2e_tagging() -> None:
         assert_true(swap_entry[0]["status"] == "ready", "fixture assumption: the file is taggable before the swap")
         # The window is between closing the descriptor and moving the new file into place,
         # so the swap is staged on the close itself.
+        # `tagging.os` is the process-wide `os`, and on POSIX `subprocess` (git.is_ignored)
+        # closes pipe descriptors through it too. Swapping on the first close of ANY handle
+        # would move the file before it was read; only the target's own descriptor counts.
         real_close = os.close
         swapped_once = {"done": False}
+        swap_identity = (os.stat(swap_target).st_dev, os.stat(swap_target).st_ino)
 
         def close_then_swap(handle):
-            real_close(handle)
+            is_target = False
             if not swapped_once["done"]:
+                try:
+                    info = os.fstat(handle)
+                    is_target = (info.st_dev, info.st_ino) == swap_identity
+                except OSError:
+                    pass
+            real_close(handle)
+            if is_target:
                 swapped_once["done"] = True
                 swap_target.unlink()  # the name now means a different file than the one read
                 swap_target.write_text("<p>someone else's file</p>\n", encoding="utf-8")

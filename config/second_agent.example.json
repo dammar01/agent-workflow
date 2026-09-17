@@ -21,7 +21,12 @@
     },
     "sweep": {
       "model": null
+    },
+    "e2e_spec": {
+      "role": "exploration",
+      "model": null
     }
   },
-  "provider_command": "opencode"
+  "provider_command": "opencode",
+  "provider_agent": "plan"
 }
