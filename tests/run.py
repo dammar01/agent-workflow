@@ -126,7 +126,7 @@ SUITES: dict[str, tuple] = {
     "stamp-version": (_test_stamp_version_reads_versions_not_addresses, "version stamping ignores IP addresses and --check passes"),
     "manifest": (_test_manifest_matches_dist, "dist/manifest.json matches the dist/ tree it describes"),
     "workflow-layout": (_test_workflow_layout, ".workflow/ keeps editable files, data/ the rest; unmigrated workspaces and hooks follow the same rule"),
-    "workspace-migration": (_test_workspace_migration, "3.6 -> data layout moves everything once with a backup, refuses under a live job, rolls back on failure; overrides-only config; current/ mirror"),
+    "workspace-migration": (_test_workspace_migration, "v3.5.x -> data layout moves everything once with a backup, refuses under a live job, rolls back on failure; overrides-only config; current/ mirror"),
     "opencode-launch": (_test_opencode_prompt_never_reaches_cmd, "opencode's prompt travels as an attached file; cmd.exe-parsed arguments are refused"),
     "statusline": (_test_statusline_failed_calls_are_not_estimates, "a failed call is counted beside the calls, never as an estimate"),
     "provider-seam": (_test_provider_seam, "adapter registry and provider resolution"),

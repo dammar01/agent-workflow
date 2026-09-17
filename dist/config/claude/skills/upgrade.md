@@ -16,7 +16,7 @@ repoints the workspace at the code doing the upgrade.
 Windows: python "<main.py>" --command upgrade --work-dir "<work_dir>" --pretty
 POSIX:   python3 "<main.py>" --command upgrade --work-dir "<work_dir>" --pretty
 
-Upgrade refuses while delegated jobs are active. On a workspace still on the 3.6 layout it
+Upgrade refuses while delegated jobs are active. On a workspace still on the v3.5.x layout it
 first MIGRATES: backup to `.workflow/data/backups/<stamp>/`, internal files moved into
 `.workflow/data/`, old leftovers removed, `config.json` stripped to overrides (values equal to
 a default and retired keys removed), a pre-list `e2e/secrets.json` converted. A failure puts

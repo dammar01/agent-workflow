@@ -613,7 +613,7 @@ Per-route juga bisa: `"plan": { "model": "...", "timeout_seconds": 3600 }`.
 `agent_workflow_path` dulu ditulis ke file ini dan tidak pernah dibaca siapa pun. Ketiganya
 sudah berhenti ditulis; nilainya diambil dari `AI_PROXY_JOB_MAX_RUNTIME_SECONDS`, CLI
 `--poll-timeout`, dan `.workflow/config.json → runtime.agent_workflow_path` (atau `AGENT_PATH`).
-Upgrade ke layout 3.7 membuang key pensiun dari `config.json`; sebelum itu `doctor` menandainya
+Upgrade ke layout `data/` (v3.6.0) membuang key pensiun dari `config.json`; sebelum itu `doctor` menandainya
 `retired — never read` dan aman dihapus manual.
 
 ### Sub-agent fan-out (default ON)
@@ -771,7 +771,7 @@ python3 main.py --command clean --work-dir /path/to/target-app --pretty
 
 State yang berubah-ubah (`state`/`scope`/`cache`/`runtime`/`logs`) hidup di bawah `data/sessions/<id>/`, sehingga dua main_agent pada project yang sama tak pernah saling menimpa. Root `.workflow/` hanya berisi file yang diedit manusia plus script.
 
-Workspace 3.6 (layout 1) menyimpan isi `data/` langsung di root `.workflow/`; runtime tetap membacanya sampai `upgrade` memindahkannya. Langkah pasca-pindah (rewrite path evidence, hapus sisa lama, strip config, konversi `secrets.json`, prune backup) dicatat di `data/.migration-pending.json`; bila salah satu gagal, `upgrade` berikutnya melanjutkan dari langkah itu dan `doctor` melaporkannya sebagai `migration incomplete`. Sisa `data.migrating/` yang namanya bentrok dengan root ditolak tanpa memindahkan apa pun.
+Workspace layout v3.5.x (layout 1) menyimpan isi `data/` langsung di root `.workflow/`; runtime tetap membacanya sampai `upgrade` memindahkannya. Langkah pasca-pindah (rewrite path evidence, hapus sisa lama, strip config, konversi `secrets.json`, prune backup) dicatat di `data/.migration-pending.json`; bila salah satu gagal, `upgrade` berikutnya melanjutkan dari langkah itu dan `doctor` melaporkannya sebagai `migration incomplete`. Sisa `data.migrating/` yang namanya bentrok dengan root ditolak tanpa memindahkan apa pun.
 
 Job asinkron tetap disimpan di repo tool pada `storage/jobs/`. Cache ID sesi default berada
 di `storage/main-sessions/` dan dipisah dengan hash project root; pemetaan ke ID sesi

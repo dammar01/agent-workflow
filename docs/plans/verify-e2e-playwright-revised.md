@@ -72,7 +72,7 @@ Celah G1–G14 dari revisi sebelumnya dan batch yang menutupnya:
 | G7 | Selector candidates | tertutup | batch 1 (schema), batch 3 (eksekusi) |
 | G8 | Grounding `source_refs` | tertutup | batch 1 (format), batch 6 (file dan baris ada) |
 | G9 | Config belum dikonsumsi | tertutup | batch 3 dan 4 |
-| G10 | Replay spec stage 1 | **terbuka** — tidak ada di kode (`runner.py` mencatat `replay_used: false`, tanpa `last_spec.json`/`commands.e2e.replay`). Pengganti parsial sejak 3.6.1: knowledge browser (`core/evidence/e2e/knowledge.py`) menawarkan alur yang terbukti ke draft berikutnya, bukan replay spec | batch 6 (klaim awal, dikoreksi) |
+| G10 | Replay spec stage 1 | **terbuka** — tidak ada di kode (`runner.py` mencatat `replay_used: false`, tanpa `last_spec.json`/`commands.e2e.replay`). Pengganti parsial sejak v3.6.0: knowledge browser (`core/evidence/e2e/knowledge.py`) menawarkan alur yang terbukti ke draft berikutnya, bukan replay spec | batch 6 (klaim awal, dikoreksi) |
 | G11 | Retensi artifact berbasis ukuran | tertutup | batch 4 (`artifact_max_mb`) |
 | G12 | Metrik evaluasi e2e | tooling tertutup, data belum | batch 7 |
 | G13 | Token dibanding loop browser visual | sebagian | batch 7: token per run dan baseline delegated verify; baseline loop visual belum diukur |

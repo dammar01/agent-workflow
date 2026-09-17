@@ -182,7 +182,7 @@ Creates, inside the project:
 | `opencode.json` | Deny-list of secret files the delegated agent may not read |
 
 `.workflow/` is added to the project's `.gitignore` automatically. A workspace created by
-3.6 or earlier keeps its data at the `.workflow/` root until `upgrade` moves it into
+v3.5.x or earlier keeps its data at the `.workflow/` root until `upgrade` moves it into
 `data/` (backed up first); it works unchanged until then, and `doctor` recommends the move.
 
 > **Do not commit `.workflow/`.** The generated scripts bake in absolute paths from the

@@ -146,7 +146,7 @@ def session_store_dirs(project_root: Path, session_dir: Path | None = None) -> l
     Two of them, and missing the second is what made the first version of this module
     useless in practice: `config.settings.SESSION_DIR` is only the fallback. The store
     the runtime actually reads is project-local — `main._session_manager_for()` points
-    SessionManager at `.workflow/data/provider-sessions/` (the root on a 3.6 layout) whenever the default manager is in
+    SessionManager at `.workflow/data/provider-sessions/` (the root on a v3.5.x layout) whenever the default manager is in
     play, which is every real run.
     """
     if session_dir is None:

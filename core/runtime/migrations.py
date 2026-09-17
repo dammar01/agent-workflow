@@ -4,7 +4,7 @@ A migration is a step from one `LAYOUT_VERSION` to the next. Each is idempotent:
 decides from what is on disk whether there is anything to do, so a second upgrade is a
 no-op and a half-finished one is finished or rolled back, never repeated on top of itself.
 
-Layout 1 → 2 (3.7.0): everything internal moves from the `.workflow` root into
+Layout 1 (v3.5.x) → 2 (v3.6.0): everything internal moves from the `.workflow` root into
 `.workflow/data/`, leaving the root to the files a person edits. In order:
 
   1. back the whole `.workflow` tree up to `data/backups/<stamp>/` (last BACKUPS_KEPT kept);

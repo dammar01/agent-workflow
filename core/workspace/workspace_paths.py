@@ -91,7 +91,7 @@ def slugify_project_name(name: str) -> str:
 
 
 DATA_DIRNAME = "data"
-# What a layout-3.6 workspace kept at the .workflow root that a 3.7 one keeps under data/.
+# What a v3.5.x-layout workspace kept at the .workflow root that a v3.6.0 one keeps under data/.
 # Its presence without data/ marks a workspace the upgrade migration has not moved yet.
 _LEGACY_MARKERS = (
     "sessions",
@@ -113,7 +113,7 @@ def data_dir(project_root: Path) -> Path:
     e2e/secrets.json, the run/check/inspect scripts, and current/. The rest — streams,
     stores, caches, sessions — lives in `.workflow/data/`.
 
-    A workspace written by 3.6 or earlier keeps those at the root until `upgrade` moves
+    A workspace written before v3.6.0 (the v3.5.x layout) keeps those at the root until `upgrade` moves
     them. Until then this returns the root, so an un-migrated workspace keeps working
     exactly as before instead of silently starting an empty history beside its real one.
     The rule is the directory's presence, and the shipped hooks and run scripts apply the

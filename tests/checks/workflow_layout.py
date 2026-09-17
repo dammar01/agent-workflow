@@ -2,7 +2,7 @@
 
 One rule decides where a stream, store, cache or session lives (`workspace_paths.data_dir`),
 and the shipped hooks and run scripts apply that same rule on their own. These checks pin
-both halves: a new workspace keeps its root to editable files, a 3.6 workspace that has not
+both halves: a new workspace keeps its root to editable files, a v3.5.x-layout workspace that has not
 been migrated keeps working where its data already is, and the hooks cannot drift from the
 Python definition of "legacy".
 """
@@ -61,7 +61,7 @@ def _check_unmigrated_workspace_stays_where_its_data_is() -> None:
         (root / ".workflow" / "sessions").mkdir(parents=True)
         (root / ".workflow" / "usage.jsonl").write_text("", encoding="utf-8")
         assert_true(is_legacy_layout(root) and data_dir(root) == root / ".workflow",
-                    "a 3.6 workspace keeps reading its data at the root until it is migrated")
+                    "a v3.5.x-layout workspace keeps reading its data at the root until it is migrated")
         write_usage_record(root, UsageRecord(command="explore").to_dict())
         assert_true((root / ".workflow" / "usage.jsonl").read_text(encoding="utf-8").strip(),
                     "and keeps appending to the history it already has, not a new empty one")

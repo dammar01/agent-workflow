@@ -429,7 +429,7 @@ the evidence, fact and browser-knowledge stores, caches, backups — lives in
 spelled.
 
 `data_dir()` decides the layout from the disk: `data/` once it exists; the `.workflow` root
-while a 3.6 workspace still keeps its data there (any of `_LEGACY_MARKERS` present); `data/`
+while a v3.5.x-layout workspace still keeps its data there (any of `_LEGACY_MARKERS` present); `data/`
 otherwise. The hooks (`intent-gate-set`, `intent-gate-check`, `workflow-statusline`) and the
 generated run scripts apply the same rule when they run, so every reader agrees at any
 moment. `upgrade` (and init's auto-upgrade) runs `core/runtime/migrations.py`: backup to

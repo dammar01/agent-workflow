@@ -143,8 +143,8 @@ def _span_seconds(records: list[dict]) -> float | None:
 def load_worker_usage(project_roots: list[Path]) -> dict:
     """Worker token totals per workflow session id, from every project's usage stream.
 
-    Resolved through `data_dir`, not spelled out: a 3.7 workspace keeps it in
-    `.workflow/data/`, a 3.6 one at the `.workflow` root, and a hardcoded root path reads
+    Resolved through `data_dir`, not spelled out: a v3.6.0 workspace keeps it in
+    `.workflow/data/`, a v3.5.x-layout one at the `.workflow` root, and a hardcoded root path reads
     an empty history from every migrated project without saying so.
     """
     from core.workspace.workspace_paths import data_dir

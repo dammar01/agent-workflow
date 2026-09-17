@@ -43,7 +43,7 @@ import sys
 
 def workflow_data_dir(root):
     # Same rule as core/workspace/workspace_paths.data_dir: .workflow/data once it exists,
-    # the .workflow root while a 3.6 workspace still keeps its data there, data/ otherwise.
+    # the .workflow root while a v3.5.x-layout workspace still keeps its data there, data/ otherwise.
     wf = os.path.join(root, ".workflow")
     data = os.path.join(wf, "data")
     if os.path.isdir(data):

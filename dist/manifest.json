@@ -133,8 +133,8 @@
     },
     {
       "path": "claude/skills/upgrade.md",
-      "sha256": "314630f7243cf3a9f9b413193dce7587893d2468cd649c08ef48e274556cea38",
-      "bytes": 1829,
+      "sha256": "0aedfdb248c559ddfbed069f471d59f35b6cbf9c467a8e4044f7bc526eba4c5e",
+      "bytes": 1832,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -308,29 +308,29 @@
     },
     {
       "path": "claude/hooks/intent-gate-check.ps1",
-      "sha256": "a1f573c5c6172514efef236e92ddd3b37e52caeb90a2237b9134f327b4633495",
-      "bytes": 6285,
+      "sha256": "737fc80bf3ceddc299242f82a29aa75e6ab8704ff499ab0fadb01e98e90702d0",
+      "bytes": 6295,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/intent-gate-check.sh",
-      "sha256": "31767f683d890f5b16f612d47b737cd9338ba82b41bf427dca7551d1ec4b2c6f",
-      "bytes": 5647,
+      "sha256": "d3142356db7fffa4ff84d12ee64c64412524e7a593bd4ba105c14a01b742ca13",
+      "bytes": 5657,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/intent-gate-set.ps1",
-      "sha256": "71dbfa38d6edd34b24f203ddeada7eb51fb2d8b9a2683cc08cd8146cd076d3b9",
-      "bytes": 4221,
+      "sha256": "e3033d11d9d7397273b2add07e497da67160173c0f98cadb0ae1a1b0ac591d2b",
+      "bytes": 4231,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/intent-gate-set.sh",
-      "sha256": "9d1eea36aedaeb8273c9f27715c4ff29b97e76e5a8e1aa2dcc004b205d79d1af",
-      "bytes": 3371,
+      "sha256": "d862b83f17a5526a589f317519113eeac6e2da789298df07b6cc31d8cabaf3dc",
+      "bytes": 3381,
       "merge": "replace",
       "component": "runtime"
     },
@@ -357,15 +357,15 @@
     },
     {
       "path": "claude/hooks/workflow-statusline.ps1",
-      "sha256": "3b282463a1f24decef952dabbc1ab11c3e10f5b1a39a2a4c1afdf58182c16c8f",
-      "bytes": 12437,
+      "sha256": "22b99dfcb43ac62ff55a197730ef09a886a2d2f7cbeb32df18f6763d74b0fba9",
+      "bytes": 12447,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/workflow-statusline.sh",
-      "sha256": "59973c5fe74552c4e9b6d3ace668655bfd3a2c6539d7cf16fac009506794fbdf",
-      "bytes": 10130,
+      "sha256": "809d6c7a9bcabdefe3925a822a2b84900d507760245d0a453beeec15e4ac14e2",
+      "bytes": 10140,
       "merge": "replace",
       "component": "runtime"
     },

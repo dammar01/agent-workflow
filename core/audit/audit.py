@@ -1,6 +1,6 @@
 """Reading side of the governance trail.
 
-`.workflow/data/audit.jsonl` (`.workflow/audit.jsonl` on a 3.6 layout) has been written
+`.workflow/data/audit.jsonl` (`.workflow/audit.jsonl` on a v3.5.x layout) has been written
 on every delegated call since the trail existed, and read by nothing. A record nobody can open is a record only in the sense that the
 bytes are on disk: the whole reason audit is a stream separate from usage is that someone
 consults it after an incident, and until now that someone had to `cat` a JSONL file and

@@ -1,4 +1,4 @@
-"""Upgrading a 3.6 workspace to the 3.7 layout, and what the 3.7 layout adds.
+"""Upgrading a v3.5.x-layout workspace to the v3.6.0 data/ layout, and what that layout adds.
 
 The migration moves a workspace's whole history, so each property that makes that safe is
 pinned: everything moves and nothing is lost (a backup first, archived evidence still
@@ -59,7 +59,7 @@ def _check_migration_moves_everything_once() -> None:
     root = _legacy_workspace()
     wf = root / ".workflow"
     try:
-        assert_true(is_legacy_layout(root) and needs_upgrade(root), "fixture assumption: a 3.6 workspace needs an upgrade")
+        assert_true(is_legacy_layout(root) and needs_upgrade(root), "fixture assumption: a v3.5.x-layout workspace needs an upgrade")
         result = upgrade_workflow_workspace(root, None)
         report = result["migrations"][0]
         data = wf / "data"

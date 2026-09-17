@@ -81,7 +81,7 @@ def _free_tier_models(config: dict) -> list[tuple[str, str]]:
     return found
 
 
-# What a 3.6 layout legitimately keeps at the .workflow root, so doctor does not call a
+# What a v3.5.x layout legitimately keeps at the .workflow root, so doctor does not call a
 # not-yet-migrated workspace's own data "stray".
 _LEGACY_ROOT_ITEMS = frozenset(
     {
@@ -148,7 +148,7 @@ def run_doctor(
                 "and otherwise refuses, naming the entries to compare with data/ and reconcile by hand"
             )
         if legacy:
-            # A recommendation, not an issue: the runtime reads a 3.6 layout correctly.
+            # A recommendation, not an issue: the runtime reads a v3.5.x layout correctly.
             recommended_fixes.append(
                 "Run `--command upgrade` to move .workflow's internal files into .workflow/data/ "
                 "(backed up first; config.json becomes overrides only)"
