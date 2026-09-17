@@ -57,7 +57,7 @@ _STEP_KEYS = ("action", "url", "selector", "selector_candidates", "within", "rea
 
 
 def _store_path(project_root: Path) -> Path:
-    return workflow_paths(Path(project_root))["workflow_dir"] / FILENAME
+    return workflow_paths(Path(project_root))["e2e_knowledge"]
 
 
 class _Lock:

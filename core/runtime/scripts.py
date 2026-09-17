@@ -1,6 +1,6 @@
 """Generation and drift-detection for the .workflow/ run scripts."""
 
-from core.workspace.workspace_paths import WORKFLOW_DIRNAME
+from core.workspace.workspace_paths import _LEGACY_MARKERS, WORKFLOW_DIRNAME
 from core.workspace.workspace_paths import atomic_write_text
 from pathlib import Path
 from utils import osutil
@@ -33,6 +33,8 @@ def _build_run_scripts(project_root: Path, main_py: str) -> list[tuple[Path, str
     check_py = str(Path(main_py).parent / "check.py")
     root = str(project_root)
     workflow_dir = project_root / WORKFLOW_DIRNAME
+    ps_markers = ",".join(f"'{name}'" for name in _LEGACY_MARKERS)
+    sh_markers = " ".join(_LEGACY_MARKERS)
 
     # Background (job) commands go through await+job-command; the rest run directly.
     run_ps1 = (
@@ -60,7 +62,12 @@ def _build_run_scripts(project_root: Path, main_py: str) -> list[tuple[Path, str
         "if ($bg -contains $Command) {\n"
         # Pre-flight gate: dispatching a delegated run satisfies the gate -> clear the marker
         # so the PreToolUse hook stops blocking gather tools for the rest of this turn.
-        f'  $mk = Join-Path "{root}" ".workflow\\sessions\\$Session\\runtime\\delegated.marker"\n'
+        # The data directory is decided when the script RUNS, by the rule
+        # workspace_paths.data_dir uses, so a workspace migrated after this script was
+        # generated clears the marker where the hooks now write it.
+        f'  $wf = Join-Path "{root}" ".workflow"; $dd = Join-Path $wf "data"\n'
+        f'  if (-not (Test-Path -LiteralPath $dd -PathType Container)) {{ foreach ($n in @({ps_markers})) {{ if (Test-Path -LiteralPath (Join-Path $wf $n)) {{ $dd = $wf; break }} }} }}\n'
+        '  $mk = Join-Path $dd "sessions\\$Session\\runtime\\delegated.marker"\n'
         "  if (Test-Path -LiteralPath $mk) { Remove-Item -LiteralPath $mk -Force -ErrorAction SilentlyContinue }\n"
         f'  $a = @("{main_py}", "--command", "await", "--job-command", $Command)\n'
         "} else {\n"
@@ -94,7 +101,9 @@ def _build_run_scripts(project_root: Path, main_py: str) -> list[tuple[Path, str
         'case " explore plan analyze verify verify-browser " in\n'
         '  *" $COMMAND "*)\n'
         # Pre-flight gate: clear the marker before dispatching (delegation satisfies the gate).
-        f'    MK="{root}/.workflow/sessions/$SESSION/runtime/delegated.marker"\n'
+        f'    WF="{root}/.workflow"; DD="$WF/data"\n'
+        f'    if [ ! -d "$DD" ]; then for n in {sh_markers}; do if [ -e "$WF/$n" ]; then DD="$WF"; break; fi; done; fi\n'
+        '    MK="$DD/sessions/$SESSION/runtime/delegated.marker"\n'
         '    [ -f "$MK" ] && rm -f "$MK"\n'
         f'    ARGS=("{main_py}" --command await --job-command "$COMMAND") ;;\n'
         "  *)\n"

@@ -7,6 +7,7 @@ never emitted. Failing there discards a completed read and sends the user off to
 evidence that already exists in a live session.
 """
 
+from core.workspace.workspace_paths import data_dir
 import os
 import shutil
 import tempfile
@@ -316,7 +317,7 @@ def _test_contract_continuation() -> None:
         # Without it the only trace of a failed contract is its character count, and asking
         # later WHY it failed means guessing at text the recovery threw away.
         first_files = sorted(
-            (root / ".workflow" / "sessions").glob("*/logs/*/output.first.md")
+            (data_dir(root) / "sessions").glob("*/logs/*/output.first.md")
         )
         assert_true(
             bool(first_files),

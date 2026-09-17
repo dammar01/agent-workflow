@@ -72,7 +72,7 @@ def _test_facts_concurrency() -> None:
             len(facts) == n,
             f"concurrent ingest lost updates: expected {n} facts, got {len(facts)}",
         )
-        for line in (wf / "facts.jsonl").read_text(encoding="utf-8").splitlines():
+        for line in fact_store._facts_path(root).read_text(encoding="utf-8").splitlines():
             if line.strip():
                 _json.loads(line)  # raises if the atomic rewrite ever left a torn line
     finally:
@@ -307,7 +307,7 @@ def _test_evidence_reuse() -> None:
         for thread in threads:
             thread.join()
         assert_true(not errors, f"concurrent evidence record failed: {errors}")
-        index_path = workflow_paths(root)["workflow_dir"] / "evidence.jsonl"
+        index_path = workflow_paths(root)["data_dir"] / "evidence.jsonl"
         rows = [json.loads(line) for line in index_path.read_text(encoding="utf-8").splitlines()]
         assert_true(len(rows) == 7, f"concurrent evidence writes lost rows: {len(rows)}")
 

@@ -110,6 +110,8 @@ from tests.checks.bundle_sync import (
 )
 from tests.checks.stamp_version import _test_stamp_version_reads_versions_not_addresses
 from tests.checks.manifest import _test_manifest_matches_dist
+from tests.checks.workflow_layout import _test_workflow_layout
+from tests.checks.workspace_migration import _test_workspace_migration
 from tests.checks.installer_stale import _test_installer_leaves_no_stale_files
 from tests.checks.opencode_launch import _test_opencode_prompt_never_reaches_cmd
 from tests.checks.provider_sessions import _test_provider_threads_are_kept_per_provider
@@ -139,6 +141,8 @@ def run_tests() -> None:
     _test_every_shipped_hook_has_both_os_flavours()
     _test_stamp_version_reads_versions_not_addresses()
     _test_manifest_matches_dist()
+    _test_workflow_layout()
+    _test_workspace_migration()
     _test_installer_leaves_no_stale_files()
     _test_opencode_prompt_never_reaches_cmd()
     _test_statusline_failed_calls_are_not_estimates()

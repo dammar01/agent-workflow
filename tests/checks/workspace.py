@@ -144,7 +144,7 @@ def _test_workspace_release_guards() -> None:
         unsafe_a = workflow_paths(root, "a/b")["session_dir"]
         unsafe_b = workflow_paths(root, "a?b")["session_dir"]
         dot_session = workflow_paths(root, "..")["session_dir"]
-        sessions_root = workflow_paths(root)["workflow_dir"] / "sessions"
+        sessions_root = workflow_paths(root)["data_dir"] / "sessions"
         assert_true(
             unsafe_a != unsafe_b
             and dot_session.resolve().parent == sessions_root.resolve(),

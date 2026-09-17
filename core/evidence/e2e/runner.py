@@ -36,6 +36,7 @@ from pathlib import Path
 
 from core.evidence.e2e import existing_tests as e2e_existing
 from core.evidence.e2e import knowledge as e2e_knowledge
+from core.workspace import current as e2e_current
 from core.evidence.e2e import redact as e2e_redact
 from core.evidence.e2e import request as e2e_request
 from core.evidence.e2e import tagging as e2e_tagging
@@ -523,6 +524,9 @@ def run(
         )
 
     def progress(event: dict) -> None:
+        # The live mirror gets the event itself, scrubbed exactly like the stored events.
+        mirror_event = e2e_redact.scrub_resolved([event], resolved_values)[0]
+        e2e_current.e2e_event(project_root, session_id, mirror_event)
         if on_progress is None:
             return
         on_progress(
@@ -668,6 +672,7 @@ def run(
         }
     )
     redaction_hits += e2e_redact.write_jsonl(e2e_dir / "events.jsonl", events)
+
     redaction_hits += e2e_redact.write_json(
         e2e_dir / "report.json",
         {**report, "stderr_tail": stderr_tail, "malformed": malformed},
@@ -740,6 +745,7 @@ def run(
         attempts=attempts,
     )
     redaction_hits += e2e_redact.write_text(e2e_dir / "verification.md", norm["content"])
+    e2e_current.e2e_finish(project_root, session_id, e2e_dir, final_dir)
     if redaction_hits:
         e2e_meta["artifact_redactions"] = redaction_hits
     return _finish(norm)

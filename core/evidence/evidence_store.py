@@ -22,7 +22,7 @@ _EVIDENCE_THREAD_LOCK = threading.Lock()
 
 
 def _path(project_root: Path) -> Path:
-    return workflow_paths(Path(project_root))["workflow_dir"] / EVIDENCE_FILENAME
+    return workflow_paths(Path(project_root))["evidence_store"]
 
 
 class _EvidenceLock:
@@ -138,8 +138,9 @@ def _immutable_artifact_path(project_root: Path, entry: dict) -> Path | None:
         return None
     try:
         artifact = Path(value).resolve()
-        workflow_dir = workflow_paths(Path(project_root))["workflow_dir"].resolve()
-        relative = artifact.relative_to(workflow_dir)
+        # Relative to the data directory, where sessions/ lives in either layout.
+        data = workflow_paths(Path(project_root))["data_dir"].resolve()
+        relative = artifact.relative_to(data)
     except (OSError, ValueError):
         return None
     parts = relative.parts

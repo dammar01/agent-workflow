@@ -25,6 +25,7 @@ from core.workspace.workspace_paths import (
     WORKFLOW_DIRNAME,
     atomic_write_json,
     read_json_file,
+    workflow_paths,
 )
 
 # One definition, shared with the resolver in core/workspace_paths. Two hand-written
@@ -153,7 +154,7 @@ def session_store_dirs(project_root: Path, session_dir: Path | None = None) -> l
 
         session_dir = SESSION_DIR
     return [
-        Path(project_root) / WORKFLOW_DIRNAME / "provider-sessions",
+        workflow_paths(Path(project_root))["provider_sessions_dir"],
         Path(session_dir),
     ]
 

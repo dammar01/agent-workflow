@@ -12,6 +12,7 @@ from tools.e2e.e2e_support import (
     sys,
     tempfile,
 )
+from core.workspace.workspace_paths import data_dir  # noqa: E402 - after e2e_support puts the repo on sys.path
 
 
 def integrity_checks(report: Report) -> None:
@@ -122,7 +123,7 @@ def integrity_checks(report: Report) -> None:
         report.check(
             "fact_store: ingest promotes a durable fact", added == 1, f"added={added}"
         )
-        facts_path = workflow_paths(project)["workflow_dir"] / "facts.jsonl"
+        facts_path = workflow_paths(project)["data_dir"] / "facts.jsonl"
         stored = []
         if facts_path.exists():
             stored = [
@@ -197,11 +198,11 @@ def integrity_checks(report: Report) -> None:
         # upgrade is what people run on a workspace that has been lived in, so it must
         # rebuild the directories only init used to create. A workspace that lost reports/
         # stayed broken through every upgrade and recovered only by re-running init.
-        shutil.rmtree(project / ".workflow" / "reports", ignore_errors=True)
+        shutil.rmtree(data_dir(project) / "reports", ignore_errors=True)
         restored = upgrade_workflow_workspace(project, str(REPO_ROOT / "main.py"))
         report.check(
             "upgrade: rebuilds scaffolding directories init used to own",
-            (project / ".workflow" / "reports").is_dir()
+            (data_dir(project) / "reports").is_dir()
             and any("reports" in d for d in restored.get("restored_dirs", [])),
             f"restored_dirs={restored.get('restored_dirs')}",
         )
@@ -380,7 +381,7 @@ def integrity_checks(report: Report) -> None:
         session_id="e2e",
         command="explore",
         project_root=str(REPO_ROOT),
-        runtime_dir=str(REPO_ROOT / ".workflow" / "sessions" / "e2e" / "runtime"),
+        runtime_dir=str(data_dir(REPO_ROOT) / "sessions" / "e2e" / "runtime"),
         has_leads=True,
         subagent_fanout=True,
     )

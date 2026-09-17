@@ -1121,6 +1121,56 @@ class Executor:
         _runtime_lock: dict | None = None,
         _resolved_route: dict | None = None,
     ) -> dict:
+        """One delegated dispatch, mirrored into `.workflow/current/` while it runs.
+
+        The mirror is written once per dispatch, by the outer call: the lock-holding
+        re-entry below (`_runtime_lock` set) is the same dispatch, not a new one.
+        """
+        if _runtime_lock is not None:
+            return self._execute(
+                command, task, session, work_dir, model, on_progress, allow_reuse,
+                session_manager, workflow_session_id,
+                _runtime_lock=_runtime_lock, _resolved_route=_resolved_route,
+            )
+        from core.workspace import current
+
+        project_root = detect_project_root(work_dir)
+        session_id = str(workflow_session_id or session["session_id"])
+        normalized = command.strip().lower()
+        current.start(project_root, session_id, normalized, task)
+
+        def mirrored(beat):
+            if isinstance(beat, dict):
+                current.progress(project_root, session_id, beat)
+            if on_progress is not None:
+                on_progress(beat)
+
+        result: dict = {}
+        try:
+            result = self._execute(
+                command, task, session, work_dir, model, mirrored, allow_reuse,
+                session_manager, workflow_session_id,
+                _resolved_route=_resolved_route,
+            )
+            return result
+        finally:
+            current.finish(project_root, session_id, result)
+
+    def _execute(
+        self,
+        command: str,
+        task: str,
+        session: dict,
+        work_dir: str | None = None,
+        model: str | None = None,
+        on_progress=None,
+        allow_reuse: bool = True,
+        session_manager=None,
+        workflow_session_id: str | None = None,
+        *,
+        _runtime_lock: dict | None = None,
+        _resolved_route: dict | None = None,
+    ) -> dict:
         normalized_command = command.strip().lower()
         self._last_call_meta = None
         self._call_metas = []

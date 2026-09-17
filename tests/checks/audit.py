@@ -10,6 +10,7 @@ trail into a clean bill of health — an audit that reports 0 problems over 0 ro
 same output as one that reviewed a hundred calls and found nothing.
 """
 
+from core.workspace.workspace_paths import data_dir
 import json
 import tempfile
 from pathlib import Path
@@ -97,7 +98,7 @@ def _test_audit_survives_a_torn_row() -> None:
     root = _workspace()
     write_audit_record(root, {"at": "2026-01-01T00:00:00+00:00", "command": "explore", "ok": True})
 
-    path = root / ".workflow" / "audit.jsonl"
+    path = data_dir(root) / "audit.jsonl"
     with path.open("a", encoding="utf-8") as handle:
         handle.write('{"at": "2026-01-02T00:00:00+00:00", "comm')
 
@@ -123,7 +124,7 @@ def _test_audit_is_not_telemetry() -> None:
     root = _workspace()
     write_audit_record(root, {"at": "2026-01-01T00:00:00+00:00", "command": "explore", "ok": True})
 
-    usage_path = root / ".workflow" / "usage.jsonl"
+    usage_path = data_dir(root) / "usage.jsonl"
     usage_path.write_text(
         json.dumps({"command": "plan", "contract_version": 1}) + "\n", encoding="utf-8"
     )

@@ -66,7 +66,7 @@ _NEGATION = re.compile(
 
 
 def _facts_path(project_root: Path) -> Path:
-    return workflow_paths(project_root)["workflow_dir"] / FACTS_FILENAME
+    return workflow_paths(project_root)["facts_store"]
 
 
 class _FactLock:
@@ -447,13 +447,14 @@ def _recurrence_counts(
     `grounded` blocks is an echo, not independent support. Such claims are skipped in all
     sessions, not just the current one.
     """
-    workflow_dir = workflow_paths(project_root)["workflow_dir"]
-    sessions = workflow_dir / "sessions"
+    paths = workflow_paths(project_root)
+    sessions = paths["sessions_dir"]
+    cache_path = paths["recurrence_cache"]
     if not sessions.exists():
         return {}
     excluded = _safe_component(exclude_session_id) if exclude_session_id else None
     injected_norms = injected or set()
-    cache = _load_claim_cache(workflow_dir)
+    cache = _load_claim_cache(cache_path)
     dirty = False
     per_claim: dict[str, set[str]] = {}
     for sdir in sessions.iterdir():
@@ -501,24 +502,22 @@ def _recurrence_counts(
             per_claim.setdefault(norm, set()).add(sdir.name)
 
     if dirty:
-        _save_claim_cache(workflow_dir, cache, {p.name for p in sessions.iterdir()})
+        _save_claim_cache(cache_path, cache, {p.name for p in sessions.iterdir()})
     return {claim: len(dirs) for claim, dirs in per_claim.items()}
 
 
 _CLAIM_CACHE_FILE = "recurrence-cache.json"
 
 
-def _load_claim_cache(workflow_dir: Path) -> dict:
+def _load_claim_cache(path: Path) -> dict:
     try:
-        data = json.loads(
-            (workflow_dir / _CLAIM_CACHE_FILE).read_text(encoding="utf-8")
-        )
+        data = json.loads(path.read_text(encoding="utf-8"))
         return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
         return {}
 
 
-def _save_claim_cache(workflow_dir: Path, cache: dict, live: set[str]) -> None:
+def _save_claim_cache(path: Path, cache: dict, live: set[str]) -> None:
     """Best-effort write, dropping sessions that no longer exist.
 
     Pruning here rather than never: `prune_jobs` deletes old session dirs, and a cache
@@ -526,7 +525,6 @@ def _save_claim_cache(workflow_dir: Path, cache: dict, live: set[str]) -> None:
     """
     try:
         pruned = {k: v for k, v in cache.items() if k in live}
-        path = workflow_dir / _CLAIM_CACHE_FILE
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(pruned), encoding="utf-8")

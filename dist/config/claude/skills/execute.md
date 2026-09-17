@@ -24,7 +24,8 @@ false (default) → JANGAN auto-jalankan /.verify (hindari test berat tak dimint
 
 ### Baca key ini SETIAP kali, jangan dari ingatan
 `commands.auto_verify_after_execute` dibaca dari `.workflow/config.json` di akhir TIAP
-/.execute. Nilai dari sesi lain, project lain, atau dari ingatanmu TIDAK berlaku.
+/.execute. Key TIDAK ADA = default `false` (config.json berisi override saja). Nilai dari
+sesi lain, project lain, atau dari ingatanmu TIDAK berlaku.
 `true` → chain ke /.verify adalah bagian dari /.execute, bukan langkah opsional sesudahnya.
 Berhenti sebelum verify selesai = /.execute yang belum selesai, apa pun isi diff-nya.
 

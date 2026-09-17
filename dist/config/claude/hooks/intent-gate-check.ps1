@@ -12,7 +12,7 @@
 #
 # Escape hatches (allow despite marker):
 #   - env  WORKFLOW_LOCAL_MODE=1
-#   - file .workflow/sessions/<MAIN_SESSION_ID>/runtime/local_mode.flag exists
+#   - file .workflow/data/sessions/<MAIN_SESSION_ID>/runtime/local_mode.flag exists
 # Marker absent, or session unresolved -> allow (fail-open). Always resolves via the
 # registry written by session-bind.ps1. A clean .workflow/run call remains allowlisted so
 # it can clear the marker while the gate is active.
@@ -50,6 +50,18 @@ function Write-HookWarning([string]$Kind, [string]$Message) {
     } catch { }
 }
 
+function Get-WorkflowDataDir([string]$root) {
+    # Same rule as core/workspace/workspace_paths.data_dir: .workflow/data once it exists,
+    # the .workflow root while a 3.6 workspace still keeps its data there, data/ otherwise.
+    $wf = Join-Path $root ".workflow"
+    $data = Join-Path $wf "data"
+    if (Test-Path -LiteralPath $data -PathType Container) { return $data }
+    foreach ($name in @('sessions','provider-sessions','reports','audit.jsonl','usage.jsonl','quality.jsonl','facts.jsonl','evidence.jsonl','redactions.jsonl')) {
+        if (Test-Path -LiteralPath (Join-Path $wf $name)) { return $wf }
+    }
+    return $data
+}
+
 try {
     $raw = [Console]::In.ReadToEnd()
     if ([string]::IsNullOrWhiteSpace($raw)) { exit 0 }
@@ -75,7 +87,7 @@ try {
     if ([string]::IsNullOrWhiteSpace($root)) { $root = $cwd }
     if ([string]::IsNullOrWhiteSpace($root)) { exit 0 }
 
-    $runtimeDir = Join-Path $root ".workflow\sessions\$mainId\runtime"
+    $runtimeDir = Join-Path (Get-WorkflowDataDir $root) "sessions\$mainId\runtime"
     $marker     = Join-Path $runtimeDir "delegated.marker"
     $localFlag  = Join-Path $runtimeDir "local_mode.flag"
 

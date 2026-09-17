@@ -253,7 +253,7 @@ def simulate():
         paths = workflow_paths(project)
         created = {
             "config.json": paths["config"].exists(),
-            "sessions/": (paths["workflow_dir"] / "sessions").is_dir(),
+            "sessions/": (paths["data_dir"] / "sessions").is_dir(),
             "run scripts": bool(list(paths["workflow_dir"].glob("run.*"))),
             "second_agent.json": (
                 paths["workflow_dir"] / "second_agent.json"
@@ -670,7 +670,7 @@ def simulate():
         weird = main.run(
             "explore", "path traversal session id", "../../evil id", work_dir
         )
-        sessions_root = workflow_paths(project)["workflow_dir"] / "sessions"
+        sessions_root = workflow_paths(project)["data_dir"] / "sessions"
         escaped = [p for p in sessions_root.iterdir() if p.is_dir()]
         record(
             "S15b",

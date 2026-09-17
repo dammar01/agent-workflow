@@ -12,6 +12,7 @@ rather than zeroed, because a zero reads as a measurement and averages into the 
 one.
 """
 
+from core.workspace.workspace_paths import data_dir
 from pathlib import Path
 
 from adapters.providers.codex_adapter import CodexAdapter
@@ -422,7 +423,7 @@ def _a_continuation_records_each_call_and_counts_the_saving_once() -> None:
         )
         rows = [
             json.loads(line)
-            for line in (root / ".workflow" / "usage.jsonl")
+            for line in (data_dir(root) / "usage.jsonl")
             .read_text(encoding="utf-8")
             .splitlines()
             if line
@@ -470,7 +471,7 @@ def _a_continuation_records_each_call_and_counts_the_saving_once() -> None:
 def _rows(root) -> list[dict]:
     import json
 
-    path = root / ".workflow" / "usage.jsonl"
+    path = data_dir(root) / "usage.jsonl"
     if not path.exists():
         return []
     return [

@@ -90,22 +90,69 @@ def slugify_project_name(name: str) -> str:
     return slug or "project"
 
 
+DATA_DIRNAME = "data"
+# What a layout-3.6 workspace kept at the .workflow root that a 3.7 one keeps under data/.
+# Its presence without data/ marks a workspace the upgrade migration has not moved yet.
+_LEGACY_MARKERS = (
+    "sessions",
+    "provider-sessions",
+    "reports",
+    "audit.jsonl",
+    "usage.jsonl",
+    "quality.jsonl",
+    "facts.jsonl",
+    "evidence.jsonl",
+    "redactions.jsonl",
+)
+
+
+def data_dir(project_root: Path) -> Path:
+    """Where this workspace keeps everything that is not a file the user edits.
+
+    `.workflow/` itself holds only what a person opens: config.json, second_agent.json,
+    e2e/secrets.json, the run/check/inspect scripts, and current/. The rest — streams,
+    stores, caches, sessions — lives in `.workflow/data/`.
+
+    A workspace written by 3.6 or earlier keeps those at the root until `upgrade` moves
+    them. Until then this returns the root, so an un-migrated workspace keeps working
+    exactly as before instead of silently starting an empty history beside its real one.
+    The rule is the directory's presence, and the shipped hooks and run scripts apply the
+    same rule, so every reader agrees on one layout at any moment.
+    """
+    workflow_dir = Path(project_root) / WORKFLOW_DIRNAME
+    data = workflow_dir / DATA_DIRNAME
+    if data.is_dir():
+        return data
+    if any((workflow_dir / name).exists() for name in _LEGACY_MARKERS):
+        return workflow_dir
+    return data
+
+
+def is_legacy_layout(project_root: Path) -> bool:
+    return data_dir(project_root) == Path(project_root) / WORKFLOW_DIRNAME
+
+
 def workflow_paths(
     project_root: Path, session_id: str | None = None
 ) -> dict[str, Path]:
-    """Resolve workflow paths. Mutable per-flow state (state/scope/cache/runtime)
-    lives under sessions/<sid>/ so concurrent main agents on the SAME project never
-    clobber each other; static config/logs/reports stay shared at the .workflow root.
-    session_id=None → legacy root fallback (init scaffolding / no-session tooling)."""
+    """Resolve workflow paths — the one place a `.workflow` path is spelled.
+
+    Mutable per-flow state (state/scope/cache/runtime/logs) lives under
+    `sessions/<sid>/` so concurrent main agents on the SAME project never clobber each
+    other. Shared streams and stores sit beside `sessions/` in the data directory
+    (`data_dir`). Only user-editable files stay at the `.workflow` root.
+
+    session_id=None → session-scoped keys point at the data directory itself: init
+    scaffolding and no-session tooling, never a session's state.
+    """
+    project_root = Path(project_root)
     workflow_dir = project_root / WORKFLOW_DIRNAME
-    reports_dir = workflow_dir / "reports"
-    session_dir = (
-        workflow_dir / "sessions" / _safe_component(session_id)
-        if session_id
-        else workflow_dir
-    )
+    data = data_dir(project_root)
+    sessions_dir = data / "sessions"
+    reports_dir = data / "reports"
+    session_dir = sessions_dir / _safe_component(session_id) if session_id else data
     runtime_dir = session_dir / "runtime"
-    logs_dir = (session_dir / "logs") if session_id else (workflow_dir / "logs")
+    logs_dir = session_dir / "logs"
     sweep_report = (
         session_dir / "reports" / "sweep.last.md"
         if session_id
@@ -114,23 +161,45 @@ def workflow_paths(
     return {
         "project_root": project_root,
         "workflow_dir": workflow_dir,
+        "data_dir": data,
+        # --- user-editable, at the .workflow root -------------------------------------
         "config": workflow_dir / "config.json",
+        "provider_config": workflow_dir / PROVIDER_CONFIG_NAME,
+        "secrets": workflow_dir / "e2e" / "secrets.json",
+        "gitignore": workflow_dir / ".gitignore",
+        "current_dir": workflow_dir / "current",
+        # --- internal, in the data directory -------------------------------------------
+        "sessions_dir": sessions_dir,
+        "provider_sessions_dir": data / "provider-sessions",
+        "reports_dir": reports_dir,
+        "doctor_report": reports_dir / "doctor.json",
+        "audit_stream": data / "audit.jsonl",
+        "usage_stream": data / "usage.jsonl",
+        "quality_stream": data / "quality.jsonl",
+        "redactions_stream": data / "redactions.jsonl",
+        "evidence_store": data / "evidence.jsonl",
+        "facts_store": data / "facts.jsonl",
+        "recurrence_cache": data / "recurrence-cache.json",
+        "e2e_knowledge": data / "e2e-knowledge.jsonl",
+        "capabilities": data / "capabilities.json",
+        "graph_meta": data / "graph-meta.json",
+        "graph_stale": data / "graph-stale.json",
+        "promote_lock": data / "promote.lock",
+        "backups_dir": data / "backups",
+        # --- per session -------------------------------------------------------------
         "session_dir": session_dir,
         "state": session_dir / "state.json",
         "scope": session_dir / "scope.json",
         "command_cache": session_dir / "command-cache.json",
-        "gitignore": workflow_dir / ".gitignore",
         "runtime_dir": runtime_dir,
         "prompt": runtime_dir / "prompt.txt",
         "prompt_meta": runtime_dir / "prompt.meta.json",
         "response_last": runtime_dir / "response.last.md",
         # Evidence sidecars: dynamic leads/facts the second agent reads for itself,
-        # instead of them riding in the (8191-capped) command-line prompt.
+        # instead of them riding in the prompt.
         "leads": runtime_dir / "leads.json",
         "facts": runtime_dir / "facts.json",
         "lock": runtime_dir / "lock",
-        "reports_dir": reports_dir,
-        "doctor_report": reports_dir / "doctor.json",
         "sweep_report": sweep_report,
         "logs_dir": logs_dir,
     }

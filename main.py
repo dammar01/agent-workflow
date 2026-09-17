@@ -77,7 +77,7 @@ def _session_manager_for(project_root: Path) -> SessionManager:
     if SESSION_MANAGER is not _DEFAULT_SESSION_MANAGER:
         return SESSION_MANAGER
     return SessionManager(
-        workflow_paths(project_root)["workflow_dir"] / "provider-sessions"
+        workflow_paths(project_root)["provider_sessions_dir"]
     )
 
 
@@ -287,9 +287,22 @@ def run(
                 ),
                 meta={"project_root": str(project_root)},
             )
+        lines = ["workflow workspace upgraded"]
+        for step in meta.get("migrations") or []:
+            lines.append(
+                f"migrated layout {step.get('from')} -> {step.get('to')}: moved {len(step.get('moved') or [])} item(s) "
+                f"into .workflow/data/, removed {', '.join(step.get('removed') or []) or 'nothing'}; "
+                f"backup {step.get('backup')}"
+            )
+            if step.get("config_stripped"):
+                lines.append(f"config.json now holds overrides only; removed: {', '.join(step['config_stripped'])}")
+            if step.get("secrets_converted"):
+                lines.append("e2e/secrets.json converted to the profile-list format (original in the backup)")
+            if step.get("stray"):
+                lines.append(f"left untouched at the .workflow root (not recognised): {', '.join(step['stray'])}")
         return {
             "ok": True,
-            "content": "workflow workspace upgraded",
+            "content": "\n".join(lines),
             "meta": meta,
         }
 

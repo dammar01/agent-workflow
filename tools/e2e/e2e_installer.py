@@ -549,6 +549,8 @@ def installer_checks(report: Report) -> None:
             encoding="utf-8",
             errors="replace",
             env=rollback_env,
+            # Never the repo: install.py upgrades the workspace it finds from its cwd.
+            cwd=str(rollback_home),
         )
         receipts = sorted(
             (rollback_home / ".claude" / "backups").glob(
@@ -577,6 +579,8 @@ def installer_checks(report: Report) -> None:
             encoding="utf-8",
             errors="replace",
             env=rollback_env,
+            # Never the repo: install.py upgrades the workspace it finds from its cwd.
+            cwd=str(rollback_home),
         )
         report.check(
             "clean rollback removes files created by the install",
@@ -598,6 +602,8 @@ def installer_checks(report: Report) -> None:
             errors="replace",
             env=rollback_env,
             check=True,
+            # Never the repo: install.py upgrades the workspace it finds from its cwd.
+            cwd=str(rollback_home),
         )
         edited = rollback_home / ".claude" / "CLAUDE.md"
         edited.write_text(
@@ -612,6 +618,8 @@ def installer_checks(report: Report) -> None:
             encoding="utf-8",
             errors="replace",
             env=rollback_env,
+            # Never the repo: install.py upgrades the workspace it finds from its cwd.
+            cwd=str(rollback_home),
         )
         report.check(
             "rollback refuses edited destinations without partial mutation",

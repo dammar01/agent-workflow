@@ -16,8 +16,12 @@ repoints the workspace at the code doing the upgrade.
 Windows: python "<main.py>" --command upgrade --work-dir "<work_dir>" --pretty
 POSIX:   python3 "<main.py>" --command upgrade --work-dir "<work_dir>" --pretty
 
-Upgrade refuses while delegated jobs are active. It regenerates runner scripts, repoints
-tool paths, and backfills config additively. Existing values and `sessions/` are preserved.
+Upgrade refuses while delegated jobs are active. On a workspace still on the 3.6 layout it
+first MIGRATES: backup to `.workflow/data/backups/<stamp>/`, internal files moved into
+`.workflow/data/`, old leftovers removed, `config.json` stripped to overrides (values equal to
+a default and retired keys removed), a pre-list `e2e/secrets.json` converted. A failure puts
+everything back (copy kept as `.workflow/migration-backup-<stamp>/`). Then it regenerates
+runner scripts, repoints tool paths and restamps config. Sessions and history are preserved.
 It does not call second_agent or run verification.
 
 ## Output
@@ -25,6 +29,9 @@ It does not call second_agent or run verification.
 from: <installed tool/config versions>
 to: <current tool/config versions>
 scripts: regenerated | unchanged
-config: <keys added | unchanged>
+migration: <moved N items into .workflow/data/, backup <path> | not needed>
+config: <overrides kept; removed: <keys> | unchanged>
+secrets: <converted | unchanged>
+stray: <unrecognised files left at .workflow root | none>
 sessions: preserved
 status: READY | BLOCKED (<active job/error>)

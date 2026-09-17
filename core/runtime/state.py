@@ -19,7 +19,7 @@ from core.runtime.upgrade import _install_project_boundary, ensure_root_gitignor
 
 
 def _capabilities_path(project_root: Path) -> Path:
-    return workflow_paths(project_root)["workflow_dir"] / "capabilities.json"
+    return workflow_paths(project_root)["capabilities"]
 
 def fanout_capability(project_root: Path) -> bool | None:
     """Learned opencode fan-out capability for this project.
@@ -90,7 +90,7 @@ def ensure_workflow_workspace(
     paths["reports_dir"].mkdir(parents=True, exist_ok=True)
     # logs are per-session: created lazily under sessions/<sid>/logs on first delegated
     # call. Init only scaffolds the sessions/ root — no vestigial .workflow/logs.
-    (paths["workflow_dir"] / "sessions").mkdir(parents=True, exist_ok=True)
+    paths["sessions_dir"].mkdir(parents=True, exist_ok=True)
 
     created_files: list[str] = []
     existing_files: list[str] = []

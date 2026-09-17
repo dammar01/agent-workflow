@@ -22,10 +22,11 @@ from core.evidence.contracts import (
     billable_input,
     billable_output,
 )
+from core.workspace.workspace_paths import data_dir
 
 
 def _stream_path(project_root, name: str) -> Path:
-    return Path(project_root) / ".workflow" / name
+    return data_dir(Path(project_root)) / name
 
 
 def load_usage(project_root) -> list[UsageRecord]:

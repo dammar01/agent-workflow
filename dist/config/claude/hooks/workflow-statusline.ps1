@@ -79,9 +79,21 @@ function Get-MainSessionId([string]$sid) {
     return $null
 }
 
+function Get-WorkflowDataDir([string]$root) {
+    # Same rule as core/workspace/workspace_paths.data_dir: .workflow/data once it exists,
+    # the .workflow root while a 3.6 workspace still keeps its data there, data/ otherwise.
+    $wf = Join-Path $root ".workflow"
+    $data = Join-Path $wf "data"
+    if (Test-Path -LiteralPath $data -PathType Container) { return $data }
+    foreach ($name in @('sessions','provider-sessions','reports','audit.jsonl','usage.jsonl','quality.jsonl','facts.jsonl','evidence.jsonl','redactions.jsonl')) {
+        if (Test-Path -LiteralPath (Join-Path $wf $name)) { return $wf }
+    }
+    return $data
+}
+
 function Get-SecondAgentTokens([string]$root, [string]$mainId) {
     if (-not $root) { return $null }
-    $usage = Join-Path $root '.workflow\usage.jsonl'
+    $usage = Join-Path (Get-WorkflowDataDir $root) 'usage.jsonl'
     if (-not (Test-Path -LiteralPath $usage)) { return $null }
     # one pass over the stream, everything scoped to this session
     # input/output kept apart so the headline can exclude cache read, which lives inside

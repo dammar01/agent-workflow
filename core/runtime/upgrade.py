@@ -62,10 +62,15 @@ def needs_upgrade(project_root: Path) -> bool:
     # COMPONENT_VERSIONS["runtime"] keeps deriving from TOOL_VERSION — the moment the
     # runtime is versioned on its own, a runtime-only bump would ship to workspaces that
     # never learned they were stale. Comparing it now costs nothing and closes that.
+    from core.workspace.workspace_paths import is_legacy_layout
+
     return (
         versions["installed_tool_version"] != versions["current_tool_version"]
         or versions["installed_config_version"] != versions["current_config_version"]
         or versions["installed_runtime_version"] != versions["current_runtime_version"]
+        # A workspace still keeping its data at the .workflow root is stale whatever its
+        # stamps say: only upgrade moves it to the data layout.
+        or is_legacy_layout(project_root)
     )
 
 def _install_project_boundary(project_root: Path, tool_dir: str) -> dict:
@@ -151,6 +156,18 @@ def upgrade_workflow_workspace(
     before = workspace_versions(project_root)
     tool = _tool_paths(agent_workflow_path)
 
+    # Layout migrations first: every path below is resolved against the layout they leave.
+    from core.runtime import migrations
+
+    try:
+        migration_reports = migrations.run(project_root)
+    except Exception as exc:
+        raise ValueError(
+            f"workspace migration failed and was rolled back: {type(exc).__name__}: {exc}. "
+            "The pre-migration copy is under .workflow/ (migration-backup-*); nothing else changed."
+        ) from exc
+    paths = workflow_paths(project_root)
+
     # Directories init scaffolds, re-made here because upgrade is what people run on a
     # workspace that has been lived in. `reports/` and `sessions/` were created by init and
     # by nothing else, so a workspace that lost one — cleaned by hand, restored from a
@@ -158,11 +175,11 @@ def upgrade_workflow_workspace(
     # and only recovered by running init again. mkdir with exist_ok is free when they exist.
     restored_dirs = [
         str(directory)
-        for directory in (paths["reports_dir"], paths["workflow_dir"] / "sessions")
+        for directory in (paths["reports_dir"], paths["sessions_dir"])
         if not directory.exists()
     ]
     paths["reports_dir"].mkdir(parents=True, exist_ok=True)
-    (paths["workflow_dir"] / "sessions").mkdir(parents=True, exist_ok=True)
+    paths["sessions_dir"].mkdir(parents=True, exist_ok=True)
 
     # Ahead of every read below: v3.4.3 renamed the provider keys with no read-side
     # alias, so a v3.4.2 workspace must be translated before anything interprets it.
@@ -238,7 +255,8 @@ def upgrade_workflow_workspace(
         "regenerated_scripts": scripts,
         "gitignore_updated": gitignore_updated,
         "restored_dirs": restored_dirs,
-        "preserved": [str(paths["workflow_dir"] / "sessions")],
+        "migrations": migration_reports,
+        "preserved": [str(paths["sessions_dir"])],
         "tool": tool,
     }
 

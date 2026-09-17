@@ -83,7 +83,7 @@ def write_prompt_handoff(
             "content": f"runtime lock active for session {holder}",
             "meta": {
                 "error_type": "runtime_lock",
-                "next_action": "Wait for the in-flight delegated call on this session to finish, then retry; if it is stuck, clear .workflow/sessions/<sid>/runtime/lock.",
+                "next_action": "Wait for the in-flight delegated call on this session to finish, then retry; if it is stuck, clear the session's runtime/lock under .workflow/data/sessions/<sid>/.",
                 "lock": payload,
                 "lock_path": str(loaded["paths"]["lock"]),
             },
@@ -247,7 +247,7 @@ def write_redaction_audit(
         },
         ensure_ascii=False,
     )
-    path = Path(paths["workflow_dir"]) / "redactions.jsonl"
+    path = Path(paths["redactions_stream"])
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(line + "\n")
@@ -262,7 +262,7 @@ def _append_stream(project_root: Path, name: str, record: dict) -> None:
     """
     try:
         paths = workflow_paths(project_root, None)
-        path = Path(paths["workflow_dir"]) / name
+        path = Path(paths["data_dir"]) / name
         path.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(record, ensure_ascii=False)
         with path.open("a", encoding="utf-8") as handle:

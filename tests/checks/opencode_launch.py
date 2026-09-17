@@ -13,6 +13,7 @@ interpret in the remaining arguments is refused before spawning.
 """
 
 from __future__ import annotations
+from core.workspace.workspace_paths import data_dir
 
 import contextlib
 import os
@@ -117,7 +118,7 @@ def _check_prompt_travels_as_file(root: Path) -> None:
         f"no part of the prompt may remain on the command line: {args}",
     )
     prompt_path = Path(args[4])
-    expected_dir = root.resolve() / ".workflow" / "sessions" / "sid-launch" / "runtime"
+    expected_dir = data_dir(root.resolve()) / "sessions" / "sid-launch" / "runtime"
     assert_true(
         prompt_path.parent == expected_dir,
         f"the prompt file belongs in the session runtime dir ({expected_dir}), got {prompt_path}",

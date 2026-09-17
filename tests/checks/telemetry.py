@@ -6,6 +6,7 @@ task instead of per call, first-pass correctness kept apart from eventual accept
 every rate carrying the denominator that makes it readable.
 """
 
+from core.workspace.workspace_paths import data_dir
 import shutil
 import tempfile
 from pathlib import Path
@@ -127,7 +128,7 @@ def _torn_row_is_skipped_not_fatal() -> None:
     root = Path(tempfile.mkdtemp(prefix="aw-torn-"))
     try:
         write_usage_record(root, _usage(command="explore").to_dict())
-        path = root / ".workflow" / "usage.jsonl"
+        path = data_dir(root) / "usage.jsonl"
         with path.open("a", encoding="utf-8") as handle:
             handle.write('{"command": "verify", "ok"\n')  # killed mid-write
         rows = telemetry.load_usage(root)

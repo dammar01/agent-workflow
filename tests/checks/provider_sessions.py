@@ -9,6 +9,7 @@ selected again.
 """
 
 from __future__ import annotations
+from core.workspace.workspace_paths import data_dir
 
 import json
 import os
@@ -86,7 +87,7 @@ def _test_provider_threads_are_kept_per_provider() -> None:
     root = Path(tempfile.mkdtemp(prefix="provider-threads-"))
     try:
         ensure_workflow_workspace(root, os.getenv("AGENT_PATH"))
-        store = SessionManager(root / ".workflow" / "provider-sessions")
+        store = SessionManager(data_dir(root) / "provider-sessions")
         session = store.load_or_create("switch-session")
 
         def call(provider: str, adapter: _ThreadAdapter, task: str) -> dict:
@@ -115,7 +116,7 @@ def _test_provider_threads_are_kept_per_provider() -> None:
         call("codex", again, "and once more on codex")
         assert_true(again.resumed == ["codex-thread-1"], f"same provider keeps resuming: {again.resumed}")
 
-        stored = json.loads((root / ".workflow" / "provider-sessions" / "switch-session.json").read_text(encoding="utf-8"))
+        stored = json.loads((data_dir(root) / "provider-sessions" / "switch-session.json").read_text(encoding="utf-8"))
         assert_true(
             stored.get("provider_sessions") == {"codex": "codex-thread-1", "opencode": "ses_opencode_1"}
             and stored.get("provider") == "codex"

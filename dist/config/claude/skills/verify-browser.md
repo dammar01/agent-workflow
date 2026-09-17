@@ -15,7 +15,7 @@ LOCAL command: tak ada pre-flight gate. Draft yang `ready` LANGSUNG dilanjut ke 
 Section `e2e` di `<project>/.workflow/config.json` = default terpasang milik project. Isinya key yang sama dengan settings request.
 - Section ada dan `base_url`-nya sesuai target → **LEWATI STEP 1 sepenuhnya**. Jangan wawancara. Tulis request minimal (STEP 2) dan lanjut.
 - Section tidak ada / base_url beda dari yang user sebut → STEP 1, lalu tawarkan menuliskan hasilnya ke `config.json` supaya run berikutnya nol wawancara.
-- `upgrade` mengisi section ini dengan default bawaan (`base_url: http://localhost:8000`). Section yang ADA belum tentu dikonfigurasi user: base_url default yang tak cocok dengan app user = belum dikonfigurasi → STEP 1.
+- config.json berisi OVERRIDE saja: section `e2e` hanya ada bila project pernah dikonfigurasi. Key yang tak ada = default bawaan (`base_url: http://localhost:8000`, headed, retry 2). Workspace lama yang belum di-upgrade bisa masih punya section berisi default hasil backfill lama — base_url yang tak cocok dengan app user = belum dikonfigurasi → STEP 1.
 Nilai config yang salah tipe/tak dikenal TIDAK menggagalkan run: dibuang, dipakai default bawaan, dan namanya muncul di `meta.e2e.config_warnings`. Relay peringatan itu — knob yang diabaikan terbaca sama seperti knob yang rusak.
 Credential TIDAK PERNAH masuk config.json — tetap di `.workflow/e2e/secrets.json`.
 
@@ -47,7 +47,7 @@ Isi dari konteks dulu (diff, pesan user); tanya HANYA yang belum pasti. Max 4 pe
 Hybrid review SELALU jalan (codex menilai bukti browser) — bukan pertanyaan. Sebut: tiap run = 2 panggilan second_agent (draft + review).
 
 ## STEP 2 — Tulis request draft
-File: `<project>/.workflow/sessions/<MAIN_SESSION_ID>/e2e/request.json` (Write tool, buat folder bila perlu).
+File: `<project>/.workflow/data/sessions/<MAIN_SESSION_ID>/e2e/request.json` (Write tool, buat folder bila perlu). Workspace lama yang belum di-upgrade (belum ada folder `.workflow/data/`) → `<project>/.workflow/sessions/<MAIN_SESSION_ID>/e2e/request.json`. Salah folder = `request_missing`.
 ```json
 {"version": 1, "phase": "draft",
  "settings": {"base_url": "http://app.test", "headless": false, "slow_mo_ms": 700, "allow_side_effects": false}}
@@ -103,7 +103,7 @@ Alur:
 Nol entri `ready` → lewati STEP 6 diam-diam, jangan tanya.
 
 ## Knowledge browser (otomatis, setara fact)
-Tiap run mencatat apa yang TERBUKTI ke `.workflow/e2e-knowledge.jsonl`, per origin base_url: `auth.login` (goto halaman login s/d assertion pertama setelah `${E2E_PASS}`), `auth.logout`, `navigation`, `page_ready`, `selector` (cocok tepat satu elemen). Tanpa konfirmasi, seperti facts — tidak ter-Git.
+Tiap run mencatat apa yang TERBUKTI ke `.workflow/data/e2e-knowledge.jsonl`, per origin base_url: `auth.login` (goto halaman login s/d assertion pertama setelah `${E2E_PASS}`), `auth.logout`, `navigation`, `page_ready`, `selector` (cocok tepat satu elemen). Tanpa konfirmasi, seperti facts — tidak ter-Git.
 - Yang dicatat: step `passed`, bukan write, dari run yang lolos di percobaan PERTAMA. Pass hasil retry tidak dicatat sebagai bukti.
 - Step gagal melemahkan entri yang cocok; 2 kali beruntun → entri pensiun (tak ditawarkan lagi). `--command clean` membuang entri pensiun dan yang anchor `path:line`-nya hilang; anchor yang cuma bergeser ikut pindah.
 - Isi selalu bentuk placeholder (`${E2E_USER}`), nilai `fill` literal dibuang. Nol credential.
@@ -131,4 +131,4 @@ verdict (pass | fail | incomplete) | browser_verdict | reason | cleanup (`meta.e
 - Sisa risiko yang diketahui: patokan resolver menutup celah antara preflight dan run untuk chromium. Yang tak tertutup — host privat yang memang dikuasai pihak lain di jaringan yang sama, dan GET yang mengubah data (nol guard, seperti sebelumnya).
 - Nilai credential tak pernah lewat chat, request, prompt, atau artifact. secrets.json bisa dibaca second_agent codex (read boundary NOT_ENFORCEABLE) — sebut ke user bila provider codex.
 - Satu session = satu request. Session lain di project yang sama tak berbagi setting request — tapi berbagi section `e2e` di config.json.
-- Metrik: tiap run = satu baris `kind: e2e_run` di `.workflow/quality.jsonl`; draft tidak dicatat.
+- Metrik: tiap run = satu baris `kind: e2e_run` di `.workflow/data/quality.jsonl`; draft tidak dicatat.

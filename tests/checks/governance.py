@@ -167,6 +167,7 @@ def _local_first_metadata() -> None:
     """
     from core.evidence.contracts import AUDIT_STREAM_NAME, QUALITY_STREAM_NAME, USAGE_STREAM_NAME
     from core.evidence.runtime_io import write_audit_record, write_quality_record
+    from core.workspace.workspace_paths import data_dir
 
     root = Path(tempfile.mkdtemp(prefix="aw-local-")).resolve()
     try:
@@ -174,7 +175,7 @@ def _local_first_metadata() -> None:
         write_audit_record(root, {"command": "explore"})
         write_quality_record(root, {"kind": "tests", "ok": True})
         for name in (USAGE_STREAM_NAME, AUDIT_STREAM_NAME, QUALITY_STREAM_NAME):
-            path = (root / ".workflow" / name).resolve()
+            path = (data_dir(root) / name).resolve()
             assert_true(
                 path.exists() and root in path.parents,
                 f"{name} must be written inside the project it describes, not outside it",

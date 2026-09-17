@@ -1,13 +1,27 @@
 #!/usr/bin/env bash
 # intent-gate-set.sh - UserPromptSubmit hook (Pre-flight gate: SET side) POSIX parity.
 # Classifies the raw prompt against the DELEGATED NL-map (intent-map.json). Delegated ->
-# write .workflow/sessions/<MAIN_SESSION_ID>/runtime/delegated.marker ; else delete stale.
+# write .workflow/data/sessions/<MAIN_SESSION_ID>/runtime/delegated.marker ; else delete stale.
 # MAIN_SESSION_ID resolved from $HOME/.claude/session_registry.json. Never blocks (exit 0).
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RAW="$(cat)"
 [ -z "$RAW" ] && exit 0
 HOOK_DIR="$SCRIPT_DIR" CLAUDE_HOOK_RAW="$RAW" python3 <<'PY'
 import os, sys, json, re, datetime
+
+
+def workflow_data_dir(root):
+    # Same rule as core/workspace/workspace_paths.data_dir: .workflow/data once it exists,
+    # the .workflow root while a 3.6 workspace still keeps its data there, data/ otherwise.
+    wf = os.path.join(root, ".workflow")
+    data = os.path.join(wf, "data")
+    if os.path.isdir(data):
+        return data
+    for name in ("sessions", "provider-sessions", "reports", "audit.jsonl", "usage.jsonl", "quality.jsonl", "facts.jsonl", "evidence.jsonl", "redactions.jsonl"):
+        if os.path.exists(os.path.join(wf, name)):
+            return wf
+    return data
+
 
 try:
     raw = os.environ.get("CLAUDE_HOOK_RAW", "")
@@ -34,7 +48,7 @@ try:
     if not main_id or not root:
         sys.exit(0)
 
-    runtime_dir = os.path.join(root, ".workflow", "sessions", main_id, "runtime")
+    runtime_dir = os.path.join(workflow_data_dir(root), "sessions", main_id, "runtime")
     marker = os.path.join(runtime_dir, "delegated.marker")
 
     map_path = os.path.join(os.environ.get("HOOK_DIR", ""), "intent-map.json")

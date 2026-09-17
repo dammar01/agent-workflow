@@ -29,5 +29,6 @@ mcp_second_agent: <verdict + daftar server + classification> — RISK/REVIEW = s
 read_boundary: <ENFORCED|NOT_ENFORCEABLE + provider> — NOT_ENFORCEABLE WAJIB tampil, jangan diringkas hilang
 status: READY | NEEDS_UPGRADE | NOT_READY
 actions: <fix per item MISSING/NOT SET + disable/confirm MCP risky> (kosong → "tidak ada — semua OK")
+`checks.workspace_layout.layout_version` 1 → workspace masih layout 3.6; relay rekomendasi `/.upgrade` (migrasi ke `.workflow/data/`, backup dulu). `stray_at_root` → sebut file tak dikenal di root `.workflow`, jangan hapus sendiri.
 NOT_READY + workspace missing → "Jalankan /.init". NEEDS_UPGRADE → jalankan `/.upgrade`.
 $AGENT_PATH NOT SET → set dulu (lihat /.init STEP 1).

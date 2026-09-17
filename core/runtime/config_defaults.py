@@ -104,22 +104,19 @@ def _rewrite_superseded_keys(config: dict) -> bool:
     return True
 
 def merge_config_defaults(config: dict) -> tuple[dict, bool]:
-    """Additively backfill new keys into an existing config. User values always win.
+    """Keep config.json current WITHOUT writing defaults into it.
 
-    `ensure_valid_json_or_create` only writes a config when it is MISSING, so without
-    this an already-initialized project would never see keys added by a later version.
+    config.json holds only what the user chose. The tunable sections (`commands`,
+    `policies`, `e2e`) are overrides: a key that is absent means the shipped default, which
+    every reader applies itself (`verify_mode`, `_policy`, `request.config_settings`, ...).
+    Backfilling the defaults used to freeze each project at the build that first wrote
+    them, so a default changed in a later release never reached it, and an `e2e` section
+    that merely held defaults looked like a project somebody had configured.
+
+    What still changes here: retired key names are carried onto their replacements, and
+    the derived version stamps follow the running build.
     """
     changed = _rewrite_superseded_keys(config)
-    for section, defaults in _tunable_sections():
-        current = config.get(section)
-        if not isinstance(current, dict):
-            current = {}
-            config[section] = current
-            changed = True
-        for key, value in defaults.items():
-            if key not in current:
-                current[key] = value
-                changed = True
     if config.get("version") != CONFIG_VERSION:
         config["version"] = CONFIG_VERSION
         changed = True
@@ -140,6 +137,41 @@ def merge_config_defaults(config: dict) -> tuple[dict, bool]:
             runtime["runtime_version"] = COMPONENT_VERSIONS["runtime"]
             changed = True
     return config, changed
+
+def effective_section(config: dict, section: str) -> dict:
+    """One tunable section as the runtime applies it: shipped defaults, then overrides."""
+    defaults = dict(dict(_tunable_sections())[section])
+    current = config.get(section)
+    if isinstance(current, dict):
+        defaults.update({k: v for k, v in current.items() if k in defaults})
+    return defaults
+
+
+def strip_to_overrides(config: dict) -> list[str]:
+    """Remove what an override-only config.json must not hold. Returns what was removed.
+
+    Two kinds of key go: a value identical to the shipped default (it overrides nothing,
+    and left in place it would silently pin the project if that default ever changes), and
+    a key the tunable section does not know (a retired or misspelled knob that does
+    nothing). A section left empty is removed too. Used by the upgrade migration, which
+    reports every removal.
+    """
+    removed: list[str] = []
+    for section, defaults in _tunable_sections():
+        current = config.get(section)
+        if not isinstance(current, dict):
+            continue
+        for key in list(current):
+            if key not in defaults:
+                removed.append(f"{section}.{key} (unknown or retired)")
+                del current[key]
+            elif current[key] == defaults[key]:
+                removed.append(f"{section}.{key} (same as the shipped default)")
+                del current[key]
+        if not current:
+            del config[section]
+    return removed
+
 
 def diverged_defaults(config: dict) -> list[dict]:
     """Settings whose stored value differs from what this build ships as the default.
@@ -179,7 +211,7 @@ def validate_config(config: dict) -> list[str]:
     for section, section_defaults in _tunable_sections():
         current = config.get(section)
         if current is None:
-            continue  # an absent section is backfilled by merge_config_defaults, not an error
+            continue  # an absent section means every key is at its shipped default
         if not isinstance(current, dict):
             warnings.append(f"{section}: {type(current).__name__}, expected object")
             continue
@@ -335,12 +367,13 @@ def default_config(project_root: Path, agent_workflow_path: str | None) -> dict:
             "second_agent": DEFAULT_PROVIDER,
             "main_agent": "agnostic",
             "provider_config": ".workflow/second_agent.json",
-            "sessions_dir": ".workflow/sessions",
+            "sessions_dir": ".workflow/data/sessions",
             "per_session_layout": "sessions/<session_id>/: state.json, scope.json, command-cache.json, runtime/{prompt.txt,response.last.md,prompt.meta.json,lock}, logs/",
         },
-        "commands": default_commands(),
-        "policies": default_policies(),
-        "e2e": default_e2e(),
+        # Overrides only: an absent key is the shipped default, applied by each reader.
+        # Nothing here is copied from default_commands()/default_policies()/default_e2e().
+        "commands": {},
+        "policies": {},
     }
 
 def default_state(project_root: Path) -> dict:

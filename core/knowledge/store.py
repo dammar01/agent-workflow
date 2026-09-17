@@ -53,7 +53,7 @@ class _KnowledgeLock:
     """
 
     def __init__(self, project_root: Path):
-        self.path = workflow_paths(Path(project_root))["workflow_dir"] / LOCK_FILENAME
+        self.path = workflow_paths(Path(project_root))["promote_lock"]
         self.fd: int | None = None
 
     def __enter__(self) -> "_KnowledgeLock":

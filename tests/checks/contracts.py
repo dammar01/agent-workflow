@@ -11,6 +11,7 @@ invisible if broken: `accepted=None` versus `accepted=False`, an absent duration
 zero one, and a reuse hit being recorded at all.
 """
 
+from core.workspace.workspace_paths import data_dir
 import json
 import shutil
 import tempfile
@@ -132,7 +133,7 @@ def _correlation_chain() -> None:
         )
         rows = [
             json.loads(line)
-            for line in (root / ".workflow" / "usage.jsonl")
+            for line in (data_dir(root) / "usage.jsonl")
             .read_text(encoding="utf-8")
             .splitlines()
             if line
@@ -159,7 +160,7 @@ def _correlation_chain() -> None:
         )
         rows = [
             json.loads(line)
-            for line in (root / ".workflow" / "usage.jsonl")
+            for line in (data_dir(root) / "usage.jsonl")
             .read_text(encoding="utf-8")
             .splitlines()
             if line
@@ -294,7 +295,7 @@ def _stream_append() -> None:
     try:
         write_usage_record(root, UsageRecord(command="explore").to_dict())
         write_usage_record(root, UsageRecord(command="verify").to_dict())
-        path = root / ".workflow" / "usage.jsonl"
+        path = data_dir(root) / "usage.jsonl"
         rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
         assert_true(
             [row["command"] for row in rows] == ["explore", "verify"],
@@ -347,7 +348,7 @@ def _verify_verdict_is_recorded() -> None:
             result, root, "verify", "check it", "sid-1", {"session_reset": False}, False
         )
         row = json.loads(
-            (root / ".workflow" / "usage.jsonl").read_text(encoding="utf-8").splitlines()[0]
+            (data_dir(root) / "usage.jsonl").read_text(encoding="utf-8").splitlines()[0]
         )
         assert_true(
             row["verdict"] == "pass" and row["accepted"] is True,

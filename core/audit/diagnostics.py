@@ -81,6 +81,19 @@ def _free_tier_models(config: dict) -> list[tuple[str, str]]:
     return found
 
 
+# What a 3.6 layout legitimately keeps at the .workflow root, so doctor does not call a
+# not-yet-migrated workspace's own data "stray".
+_LEGACY_ROOT_ITEMS = frozenset(
+    {
+        "sessions", "provider-sessions", "reports", "audit.jsonl", "usage.jsonl", "quality.jsonl",
+        "redactions.jsonl", "evidence.jsonl", "facts.jsonl", "recurrence-cache.json",
+        "capabilities.json", "graph-meta.json", "graph-stale.json", "e2e-knowledge.jsonl",
+        "state.json", "scope.json", "command-cache.json", "runtime", "logs",
+        "facts.jsonl.lock", "evidence.jsonl.lock", "e2e-knowledge.jsonl.lock", "promote.lock",
+    }
+)
+
+
 def run_doctor(
     project_root: Path, provider_command: str, session_id: str | None = None
 ) -> dict:
@@ -97,6 +110,34 @@ def run_doctor(
     if not paths["workflow_dir"].exists():
         issues.append(".workflow directory missing")
         recommended_fixes.append("Run init first")
+    else:
+        from core.runtime.migrations import LAYOUT_VERSION, _EDITABLE, _SCRIPT_STEMS
+        from core.workspace.workspace_paths import is_legacy_layout
+
+        legacy = is_legacy_layout(project_root)
+        stray = sorted(
+            entry.name
+            for entry in paths["workflow_dir"].iterdir()
+            if entry.name not in _EDITABLE
+            and not (entry.name.partition(".")[0] in _SCRIPT_STEMS and entry.name.partition(".")[2] in ("ps1", "sh"))
+            and not (legacy and entry.name in _LEGACY_ROOT_ITEMS)
+        )
+        checks["workspace_layout"] = {
+            "layout_version": 1 if legacy else LAYOUT_VERSION,
+            "data_dir": str(paths["data_dir"]),
+            "stray_at_root": stray or "none",
+        }
+        if legacy:
+            # A recommendation, not an issue: the runtime reads a 3.6 layout correctly.
+            recommended_fixes.append(
+                "Run `--command upgrade` to move .workflow's internal files into .workflow/data/ "
+                "(backed up first; config.json becomes overrides only)"
+            )
+        if stray:
+            recommended_fixes.append(
+                f"Unrecognised files at the .workflow root: {', '.join(stray)} — nothing reads "
+                "them; move or delete them if they are not yours"
+            )
 
     # config.json is static (strict); per-session state/scope/cache are created lazily
     # on first delegated call, so absence is normal, not a failure.
@@ -336,7 +377,7 @@ def run_doctor(
     checks["workspace_upgrade_needed"] = workspace_stale
     if workspace_stale:
         recommended_fixes.append(
-            "Run `--command upgrade` to regenerate .workflow scripts and backfill new config keys"
+            "Run `--command upgrade` to regenerate .workflow scripts, restamp config.json and migrate the layout if needed"
         )
 
     # Script drift: the entry scripts are the only way in, so one that no longer matches the
@@ -510,7 +551,7 @@ def run_doctor(
         # global SESSION_DIR is only its fallback. Checking the fallback alone reported a
         # healthy session as BROKEN and a broken one as linked.
         candidates = [
-            Path(project_root) / ".workflow" / "provider-sessions" / f"{safe}.json",
+            workflow_paths(Path(project_root))["provider_sessions_dir"] / f"{safe}.json",
             Path(SESSION_DIR) / f"{safe}.json",
         ]
         session_file = next((path for path in candidates if path.exists()), None)
@@ -794,8 +835,9 @@ def run_sweep(project_root: Path, session_id: str | None = None) -> dict:
 def prune_sessions(project_root: Path, ttl_days: int = 7, keep_last: int = 20) -> dict:
     """Delete per-session dirs older than ttl_days, always keeping the newest keep_last.
     Recent (active) sessions survive the TTL, so this never reaps a live session."""
-    sessions_dir = workflow_paths(project_root)["workflow_dir"] / "sessions"
-    provider_dir = workflow_paths(project_root)["workflow_dir"] / "provider-sessions"
+    paths = workflow_paths(project_root)
+    sessions_dir = paths["sessions_dir"]
+    provider_dir = paths["provider_sessions_dir"]
     if not sessions_dir.exists() and not provider_dir.exists():
         return {"removed": 0, "kept": 0}
     dirs = sorted(

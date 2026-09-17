@@ -7,6 +7,12 @@ here during the folder restructure so they stay findable without pretending to b
 
 ## Keys the runtime reads
 
+config.json holds OVERRIDES only. An absent key in `commands`, `policies` or `e2e` is the
+shipped default, applied by the reader; nothing writes defaults into the file, so a default
+changed in a later build reaches every project (`config_defaults.merge_config_defaults`,
+`effective_section`). The upgrade to layout 2 strips values equal to a default and unknown
+or retired keys, and reports each.
+
 Everything else under `commands` and `policies` is an instruction to main_agent only.
 Those keys are inert in this process: renaming one changes nothing here. The list is
 kept explicit so that "configured" is never mistaken for "enforced".
@@ -51,7 +57,7 @@ holds. Stages that need a provider go through `Executor._run_delegated` directly
 back through `execute()`, whose fact ingest, evidence indexing and fan-out bookkeeping
 belong to public commands.
 
-The request is `.workflow/sessions/<session>/e2e/request.json`
+The request is `.workflow/data/sessions/<session>/e2e/request.json` (`.workflow/sessions/…` in a workspace not yet on layout 2)
 (`core/evidence/e2e/request.py`):
 
 ```json
@@ -351,7 +357,7 @@ retired` on a run. `promotable_claims()` turns anchored entries proven in
 `PROMOTE_AFTER_PASSES` (3) runs into `/.promote` claims.
 
 Metrics: every run (not a draft) appends one `kind: e2e_run` row to
-`.workflow/quality.jsonl` — raw counts, the stage prompt ids, a scenario hash, `run_kind`
+`.workflow/data/quality.jsonl` — raw counts, the stage prompt ids, a scenario hash, `run_kind`
 (`fake`, `smoke`, `project`) and an optional `WORKFLOW_E2E_LABEL`. `main.py --command
 report` derives `e2e` from those rows, split by run kind: verdict, incomplete-by-reason
 and origin rates, browser runs per claim, probes, screenshots kept against screenshots
@@ -412,3 +418,31 @@ has a `statusLine` that runs a workflow script refreshed; a statusLine or hook r
 user's own script is theirs. `--check` reports leftovers. `init`/`upgrade` point a workspace
 at the build running the command first, then `$AGENT_PATH`, and only then the path recorded
 in config.json.
+
+## Workspace layout
+
+`.workflow/` holds what a person edits: `config.json`, `second_agent.json`,
+`e2e/secrets.json`, the `run`/`check`/`inspect` scripts, and `current/`. Everything else —
+`sessions/`, `provider-sessions/`, `reports/`, the usage/audit/quality/redactions streams,
+the evidence, fact and browser-knowledge stores, caches, backups — lives in
+`.workflow/data/`. `workspace_paths.workflow_paths` is the only place any of those paths is
+spelled.
+
+`data_dir()` decides the layout from the disk: `data/` once it exists; the `.workflow` root
+while a 3.6 workspace still keeps its data there (any of `_LEGACY_MARKERS` present); `data/`
+otherwise. The hooks (`intent-gate-set`, `intent-gate-check`, `workflow-statusline`) and the
+generated run scripts apply the same rule when they run, so every reader agrees at any
+moment. `upgrade` (and init's auto-upgrade) runs `core/runtime/migrations.py`: backup to
+`data/backups/<stamp>/`, store locks held, internal items staged in `data.migrating/` and
+renamed to `data/` in one step, evidence artifact paths rewritten, pre-session leftovers and
+old locks removed, config stripped to overrides, a pre-list `secrets.json` converted.
+A failure before the rename puts everything back and keeps the copy as
+`migration-backup-<stamp>/`. A live job refuses the upgrade before anything moves. `doctor`
+reports `workspace_layout` (layout version, data dir, unrecognised root files).
+
+`current/` is a mirror of the latest delegated dispatch, written by `Executor.execute` and the
+browser runner and never read back: `session.json` (session, command, status, phase,
+`other_active` sessions holding a runtime lock), `progress.jsonl` (reset per dispatch), and
+for a browser run `e2e/events.jsonl` (scrubbed like the stored events), `e2e/last.png`, and
+the run's `report.json`, `verification.md`, `evidence.md`. A newer dispatch takes it over and
+an older session stops writing into it.

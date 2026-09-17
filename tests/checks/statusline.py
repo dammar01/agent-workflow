@@ -14,6 +14,7 @@ prints nothing, and that would test the machine rather than the script.
 """
 
 from __future__ import annotations
+from core.workspace.workspace_paths import data_dir
 
 import json
 import os
@@ -70,7 +71,8 @@ def _render(command: list[str], rows: list[dict]) -> str:
         (claude_dir / "session_registry.json").write_text(json.dumps({"claude-sid": {"main_session_id": "main-1"}}), encoding="utf-8")
         project = root / "project"
         (project / ".workflow").mkdir(parents=True)
-        (project / ".workflow" / "usage.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+        data_dir(project).mkdir(parents=True, exist_ok=True)
+        (data_dir(project) / "usage.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
         context = json.dumps({"session_id": "claude-sid", "workspace": {"project_dir": str(project)}})
         # The bash wrapper hands stdin to python through this variable; the direct python
         # runner reads it from the same place.

@@ -40,6 +40,20 @@ import json
 import os
 import sys
 
+
+def workflow_data_dir(root):
+    # Same rule as core/workspace/workspace_paths.data_dir: .workflow/data once it exists,
+    # the .workflow root while a 3.6 workspace still keeps its data there, data/ otherwise.
+    wf = os.path.join(root, ".workflow")
+    data = os.path.join(wf, "data")
+    if os.path.isdir(data):
+        return data
+    for name in ("sessions", "provider-sessions", "reports", "audit.jsonl", "usage.jsonl", "quality.jsonl", "facts.jsonl", "evidence.jsonl", "redactions.jsonl"):
+        if os.path.exists(os.path.join(wf, name)):
+            return wf
+    return data
+
+
 ESC = "\033"
 
 
@@ -96,7 +110,7 @@ def main():
         except Exception:
             main_id = None
 
-    usage_path = os.path.join(str(proj_path), ".workflow", "usage.jsonl")
+    usage_path = os.path.join(workflow_data_dir(str(proj_path)), "usage.jsonl")
     if not os.path.isfile(usage_path):
         sys.stdout.write(color("240", " | ").join(segments))
         return

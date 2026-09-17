@@ -7,6 +7,7 @@ only well-proven anchored entries are offered to /.promote.
 """
 
 from __future__ import annotations
+from core.workspace.workspace_paths import data_dir
 
 import json
 import shutil
@@ -170,7 +171,7 @@ def _check_the_next_draft_is_offered_it() -> None:
         second, _ = _flow(root, adapter, "pass", {"E2E_USER": "user@example.test"})
         prompt = next(c["prompt"] for c in adapter.calls if c["command"] == "e2e_spec")
         offered = (second["meta"]["e2e"].get("knowledge") or {}).get("offered")
-        sidecar = root / ".workflow" / "sessions" / "e2e-session" / "runtime" / knowledge.SIDECAR_NAME
+        sidecar = data_dir(root) / "sessions" / "e2e-session" / "runtime" / knowledge.SIDECAR_NAME
         assert_true(offered and "e2e_knowledge.json" in prompt and sidecar.exists(),
                     f"the next draft is pointed at what the run proved: offered={offered}")
         assert_true("user@example.test" not in sidecar.read_text(encoding="utf-8"),

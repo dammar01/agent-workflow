@@ -100,7 +100,7 @@ def _check_headed_without_a_display_runs_headless(root: Path) -> None:
     import core.evidence.e2e.runner as runner
 
     captured: dict = {}
-    saved_display, saved_player = runner.display_available, runner.run_player
+    saved_display, saved_player, saved_preflight = runner.display_available, runner.run_player, runner.preflight
 
     def fake_player(argv, *, stdin_payload, **kwargs):
         import json
@@ -112,6 +112,8 @@ def _check_headed_without_a_display_runs_headless(root: Path) -> None:
 
     runner.display_available = lambda: False
     runner.run_player = fake_player
+    # No app is listening in a test: the reachability probe is not what this checks.
+    runner.preflight = lambda config, fake=False: {"ok": True, "checks": [], "network": {"write_hosts": [], "pins": {}, "hosts": []}}
     try:
         from tests.checks.e2e_routing import _adapter, _run, _scenario, _workspace
 
@@ -121,7 +123,7 @@ def _check_headed_without_a_display_runs_headless(root: Path) -> None:
         finally:
             shutil.rmtree(workspace, ignore_errors=True)
     finally:
-        runner.display_available, runner.run_player = saved_display, saved_player
+        runner.display_available, runner.run_player, runner.preflight = saved_display, saved_player, saved_preflight
     e2e = result["meta"]["e2e"]
     assert_true(
         captured.get("config", {}).get("headless") is True and e2e["config"]["headless"] is True

@@ -63,7 +63,7 @@ NB: gate ini DUA-LAPIS. (1) PROMPT-level (self-enforced, aturan di atas). (2) RU
 ### Session (satu otoritas)
 MAIN_SESSION_ID dari blok [SESSION BINDING] hook (STEP 5b) — AUTHORITATIVE, override semua.
 WAJIB teruskan nilainya ke run script (arg ke-3) tiap delegated call — hook taruh id di context, run script baca dari arg; tanpa diteruskan jatuh ke "default" (fatal untuk concurrent same-project).
-Hook absent → generate main_<slug>_<ts_ms>_<pid> (state per-session di sessions/<id>/, nol root state.json untuk fallback).
+Hook absent → generate main_<slug>_<ts_ms>_<pid> (state per-session di .workflow/data/sessions/<id>/, nol root state.json untuk fallback).
 Jangan reuse session lintas project root. Detail lifecycle: skill/hook, bukan sini.
 
 ### Division of Labor (main_agent ⇄ second_agent) — FRAME UTAMA

@@ -577,7 +577,7 @@ def main() -> int:
             "upgrade",
             project_root / ".workflow",
             f"tool {versions['installed_tool_version']} -> {versions['current_tool_version']}"
-            " (regenerate scripts, backfill config keys, refresh opencode.json, keep sessions/)",
+            " (migrate to .workflow/data if needed, regenerate scripts, restamp config, refresh opencode.json, keep sessions/)",
         )
         if apply:
             try:

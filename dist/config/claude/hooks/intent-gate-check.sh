@@ -10,6 +10,20 @@ RAW="$(cat)"
 CLAUDE_HOOK_RAW="$RAW" python3 <<'PY'
 import os, sys, json, re, datetime
 
+
+def workflow_data_dir(root):
+    # Same rule as core/workspace/workspace_paths.data_dir: .workflow/data once it exists,
+    # the .workflow root while a 3.6 workspace still keeps its data there, data/ otherwise.
+    wf = os.path.join(root, ".workflow")
+    data = os.path.join(wf, "data")
+    if os.path.isdir(data):
+        return data
+    for name in ("sessions", "provider-sessions", "reports", "audit.jsonl", "usage.jsonl", "quality.jsonl", "facts.jsonl", "evidence.jsonl", "redactions.jsonl"):
+        if os.path.exists(os.path.join(wf, name)):
+            return wf
+    return data
+
+
 # Fail-open leaves no trace, and that is the problem: a hook that dies on a malformed
 # registry exits 0 exactly like a hook that found nothing to block, so the enforcement
 # layer can be dead for an entire session with nothing to show for it. Record the fault
@@ -70,7 +84,7 @@ try:
     if not main_id or not root:
         sys.exit(0)
 
-    runtime_dir = os.path.join(root, ".workflow", "sessions", main_id, "runtime")
+    runtime_dir = os.path.join(workflow_data_dir(root), "sessions", main_id, "runtime")
     marker = os.path.join(runtime_dir, "delegated.marker")
     local_flag = os.path.join(runtime_dir, "local_mode.flag")
 

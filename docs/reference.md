@@ -185,7 +185,7 @@ dibuat.
 file ini nol padanan di `dist/` sehingga tak punya sumber untuk drift, dan ketiadaannya
 bukan kerusakan (init masih jalan lewat example).
 
-Bila installer dijalankan dari dalam project yang sudah memiliki `.workflow/`, ia menjalankan **upgrade in-place**: scripts diregenerasi, key config baru di-backfill secara additive, `<project_root>/opencode.json` di-refresh, dan `sessions/` dipertahankan. Workspace baru tidak di-scaffold oleh installer — pakai `python main.py --command init --work-dir DIR` (skill `/.init`). Upgrade workspace ditolak bila masih ada job aktif; install global tetap selesai dan warning harus diperiksa.
+Bila installer dijalankan dari dalam project yang sudah memiliki `.workflow/`, ia menjalankan **upgrade in-place**: workspace layout lama dimigrasi ke `.workflow/data/` (dengan backup), scripts diregenerasi, stamp versi config diperbarui, `<project_root>/opencode.json` di-refresh, dan `sessions/` dipertahankan. Workspace baru tidak di-scaffold oleh installer — pakai `python main.py --command init --work-dir DIR` (skill `/.init`). Upgrade workspace ditolak bila masih ada job aktif; install global tetap selesai dan warning harus diperiksa.
 
 ### Statusline (badge second agent)
 
@@ -216,7 +216,7 @@ agent-workflow | Second Agent 15.2M tok (14.5M cached) / 8 calls | Saved 642.7k 
 
 Kedua angka selalu tampil, termasuk saat bernilai nol. Segmen yang hilang terbaca sebagai rusak, bukan sebagai kosong.
 
-Angka diambil dari `<project_root>/.workflow/usage.jsonl`, di-cache 30 detik. Sesi Claude
+Angka diambil dari `<project_root>/.workflow/data/usage.jsonl` (atau `.workflow/usage.jsonl` pada workspace yang belum di-upgrade), di-cache 30 detik. Sesi Claude
 dipetakan ke `MAIN_SESSION_ID` lewat `~/.claude/session_registry.json` yang ditulis
 `session-bind`. Belum ada `usage.jsonl`, atau sesi belum terpetakan, badge cuma menampilkan
 nama project — tak pernah menggagalkan prompt.
@@ -348,12 +348,12 @@ python3 "$AGENT_PATH" --command init --work-dir /path/to/target-app --pretty
 python $env:AGENT_PATH --command init --work-dir "C:/path/to/target-app" --pretty
 ```
 
-`init` bersifat idempoten: membuat scaffolding yang belum ada dan meregenerasi enam runner script. Ia tidak mem-backfill key pada config lama; gunakan `upgrade` untuk itu.
+`init` bersifat idempoten: membuat scaffolding yang belum ada dan meregenerasi enam runner script. Workspace yang dibuat build lama (versi berbeda atau layout lama) langsung di-upgrade oleh init; bila ada job hidup, upgrade dilewati dan perintahnya disebut.
 
 - `.workflow/config.json` — path absolut `main.py`/`check.py`, sehingga runner dapat menemukan tool tanpa mengandalkan `AGENT_PATH`
 - `.workflow/second_agent.json` — salinan project-local, boleh kamu ubah
 - skrip runner untuk platform yang sedang berjalan: `run` `inspect` `check` — `.ps1` di Windows, `.sh` di POSIX
-- `.workflow/sessions/` kosong — state per-sesi dibuat lazy saat panggilan terdelegasi pertama
+- `.workflow/data/sessions/` kosong — state per-sesi dibuat lazy saat panggilan terdelegasi pertama. Semua file internal (stream, store, cache, sesi, report) ada di `.workflow/data/`; root `.workflow/` hanya berisi file yang kamu edit, script, dan `current/`
 - entri `.workflow/` ditambahkan ke `.gitignore` root project
 
 Skrip `.sh` diberi bit executable saat dibuat. Kalau repo dipindah lewat media yang membuang mode bit:
@@ -392,7 +392,8 @@ python $env:AGENT_PATH --command upgrade --work-dir "C:/path/to/target-app" --pr
 - menolak berjalan ketika ada delegated job aktif;
 - meregenerasi runner scripts dan me-repoint path tool;
 - memigrasi kunci v3.4.2 (`opencode_*` → `provider_*`, `.workflow/opencode.json` → `.workflow/second_agent.json`) sekali, memindahkan nilainya;
-- mem-backfill key `.workflow/config.json` dan `.workflow/second_agent.json` secara additive;
+- **migrasi layout** (sekali): isi internal `.workflow/` dipindah ke `.workflow/data/` setelah backup ke `data/backups/<stamp>/` (3 terakhir disimpan), path evidence yang diarsipkan ditulis ulang, sisa lama (`state.json`, `runtime/`, `logs/`, lock) dihapus, `secrets.json` format objek dikonversi ke list. Gagal → semua dikembalikan, backup disimpan sebagai `migration-backup-*`;
+- `config.json` dipangkas jadi **override saja**: nilai yang sama dengan default dan key pensiun/tak dikenal dibuang dan dilaporkan; `second_agent.json` tetap di-backfill additive;
 - mempertahankan nilai user dan seluruh `sessions/`;
 - tidak mengirim prompt, tidak memanggil second_agent, dan tidak menjalankan verify.
 
@@ -448,7 +449,7 @@ Second_agent hanya memasok evidence dan reasoning. Runtime tidak membuat atau me
 | Command | Jenis | Butuh prompt | Keterangan |
 |---|---|---|---|
 | `init` | lokal | — | scaffold `.workflow/`; regenerate runner script |
-| `upgrade` | lokal | — | refresh workspace, backfill config, preserve sessions |
+| `upgrade` | lokal | — | migrasi layout `.workflow/data/`, refresh workspace, config override-only, preserve sessions |
 | `doctor` | lokal | — | cek kesiapan, tulis `reports/doctor.json` |
 | `clean` | lokal | — | prune job, fakta usang/duplikat, sesi lama |
 | `inspect` | lokal | — | daftar job untuk sesi berjalan |
@@ -475,7 +476,7 @@ Second_agent hanya memasok evidence dan reasoning. Runtime tidak membuat atau me
 
 ² Ketiga tahap `promote-*` menerima **path ke file JSON** lewat `--prompt`, bukan dokumennya sendiri: satu dokumen knowledge melewati batas argv 8191 karakter Windows dengan mudah. Tahapnya dipisah karena persetujuan user terjadi di antaranya — CLI tak bisa bertanya apa pun, jadi verifikasi berhenti pada vonis, main_agent yang menjalankan review, dan penulisan adalah panggilan terpisah yang hanya bisa terjadi sesudahnya. `promote-write` menolak di luar `policies.production_branch`.
 
-³ `verify-browser` membaca **request per sesi** (`.workflow/sessions/<session>/e2e/request.json`), bukan `config.json`: wawancara dan konfirmasi terjadi di main_agent, browser dijalankan proses lokal, dan hanya draft spec serta review hasil yang memakai second_agent. Tahap `draft` tidak membawa vonis; tahap `run` diselesaikan sebagai `verify` sehingga vonis dan exit code-nya sama dengan verifikasi lain. Kontrak lengkap: `docs/runtime-contracts.md`, bagian `/.verify-browser`.
+³ `verify-browser` membaca **request per sesi** (`.workflow/data/sessions/<session>/e2e/request.json`) di atas default project dari section `e2e` di `config.json`: wawancara dan konfirmasi terjadi di main_agent, browser dijalankan proses lokal, dan hanya draft spec serta review hasil yang memakai second_agent. Tahap `draft` tidak membawa vonis; tahap `run` diselesaikan sebagai `verify` sehingga vonis dan exit code-nya sama dengan verifikasi lain. Kontrak lengkap: `docs/runtime-contracts.md`, bagian `/.verify-browser`.
 
 Tidak ada command Python `execute`. `/.execute -y` tetap tersedia sebagai command user-facing di main_agent; menulis kode sengaja tidak didelegasikan ke runtime atau second_agent.
 
@@ -520,7 +521,7 @@ gunakan `await` seperti contoh di atas. `sweep` dan command lokal lain selesai l
 
 ### `.workflow/config.json`
 
-Dibuat saat `init`. Jalankan `upgrade` untuk mem-backfill key versi baru; nilai yang sudah kamu isi tetap menang.
+Dibuat saat `init`, dan berisi **override saja**: section `commands`, `policies`, `e2e` kosong/tidak ada berarti semua key memakai default bawaan build yang sedang jalan. Tulis hanya key yang ingin kamu ubah; key yang tidak ada tidak pernah diisi otomatis, jadi default yang berubah di rilis berikutnya ikut sampai ke project ini.
 
 Delapan key berikut benar-benar mengubah perilaku runtime Python:
 
@@ -612,7 +613,7 @@ Per-route juga bisa: `"plan": { "model": "...", "timeout_seconds": 3600 }`.
 `agent_workflow_path` dulu ditulis ke file ini dan tidak pernah dibaca siapa pun. Ketiganya
 sudah berhenti ditulis; nilainya diambil dari `AI_PROXY_JOB_MAX_RUNTIME_SECONDS`, CLI
 `--poll-timeout`, dan `.workflow/config.json → runtime.agent_workflow_path` (atau `AGENT_PATH`).
-Workspace lama tetap membawanya karena upgrade bersifat additive — `doctor` menandainya
+Upgrade ke layout 3.7 membuang key pensiun dari `config.json`; sebelum itu `doctor` menandainya
 `retired — never read` dan aman dihapus manual.
 
 ### Sub-agent fan-out (default ON)
@@ -622,7 +623,7 @@ Workspace lama tetap membawanya karena upgrade bersifat additive — `doctor` me
 Upgrade mempertahankan nilai existing. Workspace lama yang sudah menyimpan `false` tetap nonaktif sampai kamu mengubahnya sendiri.
 
 Ketika aktif, prompt membawa anchor `[EVIDENCE_SIDECARS]`; cluster fan-out berada di
-`.workflow/sessions/<id>/runtime/leads.json` agar tidak menghabiskan batas argv Windows:
+`.workflow/data/sessions/<id>/runtime/leads.json` agar tidak ikut membesarkan prompt:
 
 - graph memiliki ≥2 community → satu slice per community;
 - graph tidak ada atau hanya menghasilkan 0–1 community → tetap fan-out ke empat sudut investigasi: entry point, core flow, reverse dependencies, serta config/tests.
@@ -692,7 +693,7 @@ Python diperiksa in-process, bukan lewat `py_compile`, supaya tak ada `.pyc` yan
 
 ## Fact store
 
-`.workflow/facts.jsonl` menyimpan pengetahuan yang bertahan lintas sesi. Sebuah klaim masuk lewat salah satu dari dua jalur:
+`.workflow/data/facts.jsonl` menyimpan pengetahuan yang bertahan lintas sesi. Sebuah klaim masuk lewat salah satu dari dua jalur:
 
 1. ditandai eksplisit `[config]`/`[pattern]`/`[invariant]` oleh second_agent, atau
 2. dilaporkan secara mandiri oleh ≥ `fact_recurrence_threshold` sesi **lain**.
@@ -705,7 +706,7 @@ Dua klaim dilebur hanya bila **semua** pagar setuju: `file` sama, `category` sam
 
 ## Evidence reuse dan boundary
 
-Evidence lintas sesi diindeks di `.workflow/evidence.jsonl` dengan lock lintas proses dan
+Evidence lintas sesi diindeks di `.workflow/data/evidence.jsonl` dengan lock lintas proses dan
 atomic rewrite. Entry hanya boleh menunjuk artifact immutable
 `sessions/<id>/logs/<prompt_id>/output.raw.md`; hash artifact dan seluruh anchor `file:line`
 harus tetap cocok. Anchor yang tidak resolve atau melebihi batas membuat evidence tidak
@@ -767,7 +768,7 @@ State yang berubah-ubah (`state`/`scope`/`cache`/`runtime`/`logs`) hidup di bawa
 
 Job asinkron tetap disimpan di repo tool pada `storage/jobs/`. Cache ID sesi default berada
 di `storage/main-sessions/` dan dipisah dengan hash project root; pemetaan ke ID sesi
-OpenCode berada project-local di `.workflow/provider-sessions/` sehingga ID yang sama pada
+OpenCode berada project-local di `.workflow/data/provider-sessions/` sehingga ID yang sama pada
 dua project tidak dapat me-resume provider session satu sama lain.
 
 ---
@@ -799,7 +800,7 @@ Exit code status `check`: `0` selesai · `1` gagal · `2` masih jalan/antre · `
 ditemukan. Dengan `--result` untuk job verify, `0` hanya berarti verdict `pass`; verdict
 `fail` atau `incomplete` mengembalikan `2`.
 
-Kalau tak ada job yang cocok, hasil terakhir masih ada di `.workflow/sessions/<id>/runtime/response.last.md`.
+Kalau tak ada job yang cocok, hasil terakhir masih ada di `.workflow/data/sessions/<id>/runtime/response.last.md`. Yang sedang berjalan terlihat di `.workflow/current/session.json` dan `progress.jsonl`.
 
 Recovery bersifat best-effort, bukan process survival: jika session OpenCode lama tidak
 pernah tercatat, runtime gagal sebagai `session_capture_failed` dan clean run diperlukan.
@@ -830,7 +831,7 @@ Plafon keras JobManager tetap ada sebagai jaring pengaman: default 5400 detik da
 
 Setiap panggilan yang mencapai `OpenCodeAdapter` menuliskan `call.meta.json` yang sudah
 diredaksi (exit code, durasi, timeout, cara kill, ekor stderr aman, dan agregat argv) ke
-`.workflow/sessions/<id>/logs/<prompt_id>/`. `verify_mode: syntax` tidak membuat file ini.
+`.workflow/data/sessions/<id>/logs/<prompt_id>/`. `verify_mode: syntax` tidak membuat file ini.
 
 ---
 
@@ -937,7 +938,7 @@ Disebut terbuka karena diam soal ini akan membuat runtime terlihat lebih menjami
 - **OpenCode nyata hanya diuji opt-in.** Suite default mensimulasikan provider; jalur `Popen`, persistence, installer, dan process lifecycle tetap dijalankan lokal. Gunakan `tools/e2e/e2e.py --full` untuk smoke test berkuota.
 - **Probe PING memakai kuota.** Job yang terus stalled dapat diprobe berulang sesuai cadence; default `await` adalah 120 detik.
 - **Tuning liveness belum seragam di jalur attach.** `check.py --wait` memakai default tool untuk ambang stalled dan probe ulang, bukan nilai project-local.
-- **Deteksi upgrade dapat tertutupi backfill parsial.** Delegated load memperbarui marker versi `config.json` tanpa meregenerasi scripts atau `second_agent.json`, sehingga warning berikutnya dan `doctor` dapat menganggap workspace current.
+- **Deteksi upgrade dapat tertutupi stamp parsial.** Delegated load memperbarui marker versi `config.json` tanpa meregenerasi scripts atau `second_agent.json`, sehingga warning berikutnya dapat menganggap workspace current. Layout lama tetap terdeteksi dari isinya, bukan dari stamp.
 - **Deteksi staleness graph hanya mengikuti source `.py`.** Perubahan bahasa lain tidak masuk fingerprint runtime; Stop hook Graphify merupakan layer Claude terpisah dan tidak tersedia di semua main agent.
 - **Path graph lintas-OS belum dinormalisasi penuh.** Snapshot yang dibuat di Windows lalu dibaca dari POSIX/WSL dapat tetap menghasilkan candidate path ber-backslash; refresh graph secara manual dari environment aktif bila ini terjadi.
 - **Skrip runner tidak portabel lintas-OS.** Path absolut dipanggang saat init/upgrade; pindah repo, path, atau OS berarti jalankan upgrade dari environment baru.

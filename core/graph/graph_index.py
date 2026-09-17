@@ -13,6 +13,8 @@ import os
 import re
 from pathlib import Path
 
+from core.workspace.workspace_paths import workflow_paths
+
 GRAPH_DIRNAME = "graphify-out"
 GRAPH_FILENAME = "graph.json"
 MAX_LEADS = 12
@@ -64,7 +66,7 @@ _STALE_CACHE_FILE = "graph-stale.json"
 
 
 def _stale_cache_path(project_root) -> Path:
-    return Path(project_root) / ".workflow" / _STALE_CACHE_FILE
+    return workflow_paths(Path(project_root))["graph_stale"]
 
 
 def _read_stale_cache(

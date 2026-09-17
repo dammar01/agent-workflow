@@ -182,7 +182,7 @@ def _commands(adapter: _StageAdapter) -> list[str]:
 
 
 def _e2e_rows(root: Path) -> list[dict]:
-    path = workflow_paths(root)["workflow_dir"] / "quality.jsonl"
+    path = workflow_paths(root)["data_dir"] / "quality.jsonl"
     if not path.is_file():
         return []
     rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -190,7 +190,7 @@ def _e2e_rows(root: Path) -> list[dict]:
 
 
 def _usage_rows(root: Path) -> list[dict]:
-    path = workflow_paths(root)["workflow_dir"] / "usage.jsonl"
+    path = workflow_paths(root)["data_dir"] / "usage.jsonl"
     if not path.is_file():
         return []
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -355,8 +355,15 @@ def _test_e2e_routing() -> None:
         config_path = workflow_paths(root)["config"]
         shipped = json.loads(config_path.read_text(encoding="utf-8"))
         assert_true(
-            shipped["e2e"]["headless"] is False and shipped["e2e"]["max_retries"] == 2,
-            f"a fresh workspace ships headed with a retry budget: {shipped.get('e2e')}",
+            "e2e" not in shipped,
+            f"config.json holds overrides only: a fresh workspace pins nothing for the browser: {shipped.get('e2e')}",
+        )
+        from core.runtime.config_defaults import effective_section
+
+        effective = effective_section(shipped, "e2e")
+        assert_true(
+            effective["headless"] is False and effective["max_retries"] == 2,
+            f"and the shipped defaults it runs on are headed with a retry budget: {effective}",
         )
 
         def _pin(**values) -> None:

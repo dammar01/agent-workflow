@@ -173,12 +173,17 @@ Creates, inside the project:
 
 | Path | Purpose |
 | --- | --- |
-| `.workflow/config.json` | Settings, plus absolute paths back to the tool |
+| `.workflow/config.json` | Your overrides only (absent key = shipped default), plus absolute paths back to the tool |
 | `.workflow/second_agent.json` | Provider and model selection; safe to edit |
+| `.workflow/e2e/secrets.json` | Browser-test credentials by profile (created by the first `/.verify-browser` draft that needs it) |
 | `.workflow/run.*`, `inspect.*`, `check.*` | Entry-point scripts (`.ps1` on Windows, `.sh` on POSIX) |
+| `.workflow/current/` | What is running now: `session.json`, `progress.jsonl`, and a browser run's live `e2e/` events and results |
+| `.workflow/data/` | Everything internal — sessions, logs, usage/audit/quality streams, facts, evidence, browser knowledge, backups. Not meant to be edited |
 | `opencode.json` | Deny-list of secret files the delegated agent may not read |
 
-`.workflow/` is added to the project's `.gitignore` automatically.
+`.workflow/` is added to the project's `.gitignore` automatically. A workspace created by
+3.6 or earlier keeps its data at the `.workflow/` root until `upgrade` moves it into
+`data/` (backed up first); it works unchanged until then, and `doctor` recommends the move.
 
 > **Do not commit `.workflow/`.** The generated scripts bake in absolute paths from the
 > machine where `init` ran. Each team member runs this step themselves.

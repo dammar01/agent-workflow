@@ -23,7 +23,7 @@ from pathlib import Path
 
 from core.graph import graph_index
 from core.evidence.fact_store import _anchor_hash, _hash_index
-from core.workspace.workspace_paths import atomic_write_json
+from core.workspace.workspace_paths import atomic_write_json, workflow_paths
 from utils import osutil
 
 GRAPH_META_FILENAME = "graph-meta.json"
@@ -36,7 +36,7 @@ PROVENANCE_FIELDS = ("source_file", "source_location", "commit_sha", "anchor_has
 
 
 def meta_path(project_root) -> Path:
-    return Path(project_root) / ".workflow" / GRAPH_META_FILENAME
+    return workflow_paths(Path(project_root))["graph_meta"]
 
 
 def head_commit(project_root) -> str | None:

@@ -2,7 +2,7 @@
 #
 # Classifies the raw user prompt against the DELEGATED NL-map (intent-map.json).
 # If the prompt resolves to a DELEGATED command (explore/plan/analyze/verify),
-# it writes a marker:  .workflow/sessions/<MAIN_SESSION_ID>/runtime/delegated.marker
+# it writes a marker:  .workflow/data/sessions/<MAIN_SESSION_ID>/runtime/delegated.marker
 # The PreToolUse hook (intent-gate-check.ps1) reads that marker to HARD-block gather
 # tools until .workflow/run has executed (which clears the marker).
 #
@@ -16,6 +16,18 @@ $ErrorActionPreference = 'Stop'
 function Write-NoBom([string]$Path, [string]$Content) {
     $enc = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($Path, $Content, $enc)
+}
+
+function Get-WorkflowDataDir([string]$root) {
+    # Same rule as core/workspace/workspace_paths.data_dir: .workflow/data once it exists,
+    # the .workflow root while a 3.6 workspace still keeps its data there, data/ otherwise.
+    $wf = Join-Path $root ".workflow"
+    $data = Join-Path $wf "data"
+    if (Test-Path -LiteralPath $data -PathType Container) { return $data }
+    foreach ($name in @('sessions','provider-sessions','reports','audit.jsonl','usage.jsonl','quality.jsonl','facts.jsonl','evidence.jsonl','redactions.jsonl')) {
+        if (Test-Path -LiteralPath (Join-Path $wf $name)) { return $wf }
+    }
+    return $data
 }
 
 try {
@@ -40,7 +52,7 @@ try {
     if ([string]::IsNullOrWhiteSpace($root)) { $root = $cwd }
     if ([string]::IsNullOrWhiteSpace($root)) { exit 0 }
 
-    $runtimeDir = Join-Path $root ".workflow\sessions\$mainId\runtime"
+    $runtimeDir = Join-Path (Get-WorkflowDataDir $root) "sessions\$mainId\runtime"
     $marker     = Join-Path $runtimeDir "delegated.marker"
 
     # load NL-map (co-located with this hook)

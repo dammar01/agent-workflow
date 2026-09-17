@@ -20,6 +20,7 @@ import json
 from pathlib import Path
 
 from core.evidence.contracts import AUDIT_STREAM_NAME
+from core.workspace.workspace_paths import data_dir
 
 
 def load_audit(project_root) -> list[dict]:
@@ -30,7 +31,7 @@ def load_audit(project_root) -> list[dict]:
     to open the trail because its last line is short would make the record useless exactly
     when something has gone wrong.
     """
-    path = Path(project_root) / ".workflow" / AUDIT_STREAM_NAME
+    path = data_dir(Path(project_root)) / AUDIT_STREAM_NAME
     rows: list[dict] = []
     try:
         text = path.read_text(encoding="utf-8")
