@@ -89,7 +89,18 @@ def _check_hooks_share_the_rule() -> None:
             )
 
 
+def _check_consumers_do_not_spell_the_root_layout() -> None:
+    """Messages and tools that name a data path must name the one a migrated workspace has."""
+    for relative in ("adapters/providers/opencode_adapter.py", "adapters/providers/codex_adapter.py", "bench/observe.py"):
+        text = (_REPO / relative).read_text(encoding="utf-8")
+        assert_true(
+            ".workflow/sessions/" not in text and '".workflow" / "usage.jsonl"' not in text,
+            f"{relative} still points at a .workflow root path instead of .workflow/data/",
+        )
+
+
 def _test_workflow_layout() -> None:
     _check_new_workspace_keeps_its_root_editable()
     _check_unmigrated_workspace_stays_where_its_data_is()
     _check_hooks_share_the_rule()
+    _check_consumers_do_not_spell_the_root_layout()

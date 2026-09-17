@@ -75,10 +75,6 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # its docs. 44 of its 89 models declare no effort knob at all; `()` is how one
         # of those is spelled here, and it is a statement, not a gap.
         "models": (
-            {
-                "id": "opencode/deepseek-v4-flash-free",
-                "efforts": ("low", "high", "max"),
-            },
             # `reasoning: true` but `reasoning_options: []` — it reasons, and exposes no
             # dial for how much. Passing --variant here is an error, not a no-op.
             {"id": "opencode/mimo-v2.5-free", "efforts": ()},

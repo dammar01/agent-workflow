@@ -17,7 +17,7 @@ Tiga topologi kerja dibandingkan:
 |-----|----------|
 | **A** | Claude langsung. Tanpa subagent, tanpa agent-workflow. |
 | **B** | Claude + native subagent (Task tool). |
-| **C** | Claude main + worker murah via agent-workflow (opencode `deepseek-v4-flash-free`). |
+| **C** | Claude main + worker murah via agent-workflow (opencode `mimo-v2.5-free`). |
 
 Metrik target:
 
@@ -37,7 +37,7 @@ Jangan buka ulang tanpa alasan baru.
 
 | Keputusan | Nilai |
 |-----------|-------|
-| Worker arm C | opencode `deepseek-v4-flash-free` (gratis) |
+| Worker arm C | opencode `mimo-v2.5-free` (gratis) |
 | Kriteria "PR diterima" | Oracle otomatis saja, tanpa review manusia |
 | Sumber corpus task | Revert commit historis repo ini |
 | SUT (subjek uji) | Repo agent-workflow ini sendiri |
@@ -273,7 +273,7 @@ tokenburn scan --last 1d --json > bench/raw/scan_<batch>.json
 tokenburn db export --since <batch_start_ms> > bench/raw/export_<batch>.csv
 ```
 
-Sisi worker arm C dari `.workflow/sessions/<sid>/logs/<prompt_id>/call.meta.json` saja.
+Sisi worker arm C dari `.workflow/data/sessions/<sid>/logs/<prompt_id>/call.meta.json` saja.
 `storage/jobs/job_<id>.json` **tidak** dipanen: isinya catatan siklus hidup — `worker_pid`,
 `worker_identity`, `status`, `error` — dan nol di antaranya ada di skema §7. Yang dulu
 diharapkan darinya (alasan kegagalan) kini datang langsung di balasan `await` yang

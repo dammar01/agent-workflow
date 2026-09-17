@@ -62,6 +62,7 @@ def needs_upgrade(project_root: Path) -> bool:
     # COMPONENT_VERSIONS["runtime"] keeps deriving from TOOL_VERSION — the moment the
     # runtime is versioned on its own, a runtime-only bump would ship to workspaces that
     # never learned they were stale. Comparing it now costs nothing and closes that.
+    from core.runtime.migrations import pending_migration
     from core.workspace.workspace_paths import is_legacy_layout
 
     return (
@@ -71,6 +72,12 @@ def needs_upgrade(project_root: Path) -> bool:
         # A workspace still keeping its data at the .workflow root is stale whatever its
         # stamps say: only upgrade moves it to the data layout.
         or is_legacy_layout(project_root)
+        # Nor is one whose migration moved the files but left post-rename steps undone.
+        or pending_migration(project_root) is not None
+        # Nor one whose migration died after staging and before the rename — whether or not
+        # a writer has since created data/: upgrade recovers the first and refuses, loudly,
+        # the second, which is better than neither ever being looked at again.
+        or (project_root / WORKFLOW_DIRNAME / "data.migrating").is_dir()
     )
 
 def _install_project_boundary(project_root: Path, tool_dir: str) -> dict:
@@ -161,6 +168,18 @@ def upgrade_workflow_workspace(
 
     try:
         migration_reports = migrations.run(project_root)
+    except migrations.MigrationConflict:
+        raise
+    except migrations.MigrationIncomplete as exc:
+        # Past the rename nothing is moved back: the workspace is already on data/ and
+        # working. Saying "rolled back" here would send the user looking for a
+        # migration-backup-* that does not exist and hide the step that still has to run.
+        raise ValueError(
+            f"workspace migration incomplete: the files moved into {WORKFLOW_DIRNAME}/data/, "
+            f"but {exc}. Fix the cause (a file held open by an editor or antivirus is the "
+            "usual one) and rerun upgrade — it resumes from that step. "
+            f"Backup: {exc.backup or 'none recorded'}."
+        ) from exc
     except Exception as exc:
         raise ValueError(
             f"workspace migration failed and was rolled back: {type(exc).__name__}: {exc}. "

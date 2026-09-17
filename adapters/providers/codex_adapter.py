@@ -313,7 +313,7 @@ class CodexAdapter:
             return make_error(
                 "unknown",
                 str(exc),
-                next_action="Inspect .workflow/sessions/<session>/logs and rerun.",
+                next_action="Inspect .workflow/data/sessions/<session>/logs and rerun.",
                 meta={"error": type(exc).__name__, **_argv_meta(args), "cwd": cwd},
             )
 
@@ -414,7 +414,7 @@ class CodexAdapter:
                 "unknown",
                 content or f"codex exited {outcome['returncode']}",
                 next_action=(
-                    "Inspect .workflow/sessions/<session>/logs for the raw JSONL events "
+                    "Inspect .workflow/data/sessions/<session>/logs for the raw JSONL events "
                     "and rerun."
                 ),
                 meta=meta,
@@ -426,7 +426,7 @@ class CodexAdapter:
                 "codex returned no final message",
                 next_action=(
                     "Rephrase the task, or check the raw JSONL events in "
-                    ".workflow/sessions/<session>/logs — the run succeeded but produced "
+                    ".workflow/data/sessions/<session>/logs — the run succeeded but produced "
                     "nothing."
                 ),
                 meta=meta,
@@ -451,7 +451,7 @@ class CodexAdapter:
                 next_action=(
                     "Rerun the task as a clean invocation. If it repeats, codex changed "
                     "the shape of its session event — check the raw JSONL in "
-                    ".workflow/sessions/<session>/logs for the first line and widen "
+                    ".workflow/data/sessions/<session>/logs for the first line and widen "
                     "_THREAD_ID_PATTERNS in adapters/codex_adapter.py to match it."
                 ),
                 meta=meta,

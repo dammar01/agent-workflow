@@ -64,9 +64,9 @@ def _refused(arm: str, provider: str) -> bool:
 def _seeded_for(provider: str) -> dict:
     """A second_agent.json as `init` would leave it for `provider`, plus local tuning."""
     seeded = dict(default_provider_config(provider))
-    seeded["default_model"] = "opencode/deepseek-v4-flash-free"
+    seeded["default_model"] = "opencode/mimo-v2.5-free"
     seeded["routes"] = {
-        name: {**route, "model": "opencode/deepseek-v4-flash-free"}
+        name: {**route, "model": "opencode/mimo-v2.5-free"}
         for name, route in seeded["routes"].items()
     }
     # Provider-neutral: an operator's own tuning, which pinning must not clobber.

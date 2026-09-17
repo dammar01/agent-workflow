@@ -141,10 +141,17 @@ def _span_seconds(records: list[dict]) -> float | None:
 
 
 def load_worker_usage(project_roots: list[Path]) -> dict:
-    """Worker token totals per workflow session id, from every `.workflow/usage.jsonl`."""
+    """Worker token totals per workflow session id, from every project's usage stream.
+
+    Resolved through `data_dir`, not spelled out: a 3.7 workspace keeps it in
+    `.workflow/data/`, a 3.6 one at the `.workflow` root, and a hardcoded root path reads
+    an empty history from every migrated project without saying so.
+    """
+    from core.workspace.workspace_paths import data_dir
+
     totals: dict[str, dict] = {}
     for root in project_roots:
-        path = root / ".workflow" / "usage.jsonl"
+        path = data_dir(root) / "usage.jsonl"
         try:
             text = path.read_text(encoding="utf-8")
         except OSError:
@@ -393,7 +400,7 @@ def main() -> int:
     parser.add_argument(
         "--projects-root",
         default=None,
-        help="parent directory of the project checkouts, for `.workflow/usage.jsonl`",
+        help="parent directory of the project checkouts, for `.workflow/data/usage.jsonl`",
     )
     parser.add_argument("--report", action="store_true", help="print the grouped report")
     parser.add_argument(

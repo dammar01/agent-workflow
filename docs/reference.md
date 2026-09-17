@@ -736,35 +736,42 @@ python3 main.py --command clean --work-dir /path/to/target-app --pretty
 
 ```text
 <target-app>/.workflow/
-├─ config.json              # statis, dibuat saat init
+├─ config.json              # override saja; default diisi saat dibaca
 ├─ second_agent.json        # salinan project-local, config provider
-├─ facts.jsonl              # fact store lintas sesi
-├─ evidence.jsonl           # index artifact immutable lintas sesi
-├─ provider-sessions/       # ID sesi provider, terisolasi per project
+├─ e2e/secrets.json         # opsional, profil credential verify-browser
+├─ current/                 # cermin dispatch terakhir (tanpa credential)
 ├─ .gitignore
 ├─ run.ps1  run.sh          # entry point 1-panggilan
 ├─ inspect.ps1  inspect.sh  # daftar job
 ├─ check.ps1  check.sh      # status/hasil job
-├─ reports/
-│  └─ doctor.json
-└─ sessions/<session_id>/   # dibuat lazy per sesi
-   ├─ state.json
-   ├─ scope.json
-   ├─ command-cache.json
-   ├─ runtime/
-   │  ├─ prompt.txt
-   │  ├─ prompt.meta.json
-   │  ├─ response.last.md
-   │  └─ lock
-   ├─ logs/<prompt_id>/
-   │  ├─ prompt.md
-   │  ├─ prompt.sha256
-   │  ├─ output.raw.md
-   │  └─ call.meta.json
-   └─ reports/sweep.last.md
+└─ data/                    # semua yang bukan file edit manusia (layout 2)
+   ├─ facts.jsonl           # fact store lintas sesi
+   ├─ evidence.jsonl        # index artifact immutable lintas sesi
+   ├─ audit.jsonl  usage.jsonl  quality.jsonl
+   ├─ provider-sessions/    # ID sesi provider, terisolasi per project
+   ├─ backups/<stamp>/      # salinan pra-migrasi, 3 terakhir disimpan
+   ├─ reports/
+   │  └─ doctor.json
+   └─ sessions/<session_id>/   # dibuat lazy per sesi
+      ├─ state.json
+      ├─ scope.json
+      ├─ command-cache.json
+      ├─ runtime/
+      │  ├─ prompt.txt
+      │  ├─ prompt.meta.json
+      │  ├─ response.last.md
+      │  └─ lock
+      ├─ logs/<prompt_id>/
+      │  ├─ prompt.md
+      │  ├─ prompt.sha256
+      │  ├─ output.raw.md
+      │  └─ call.meta.json
+      └─ reports/sweep.last.md
 ```
 
-State yang berubah-ubah (`state`/`scope`/`cache`/`runtime`/`logs`) hidup di bawah `sessions/<id>/`, sehingga dua main_agent pada project yang sama tak pernah saling menimpa. Config dan reports tetap bersama di root `.workflow/`.
+State yang berubah-ubah (`state`/`scope`/`cache`/`runtime`/`logs`) hidup di bawah `data/sessions/<id>/`, sehingga dua main_agent pada project yang sama tak pernah saling menimpa. Root `.workflow/` hanya berisi file yang diedit manusia plus script.
+
+Workspace 3.6 (layout 1) menyimpan isi `data/` langsung di root `.workflow/`; runtime tetap membacanya sampai `upgrade` memindahkannya. Langkah pasca-pindah (rewrite path evidence, hapus sisa lama, strip config, konversi `secrets.json`, prune backup) dicatat di `data/.migration-pending.json`; bila salah satu gagal, `upgrade` berikutnya melanjutkan dari langkah itu dan `doctor` melaporkannya sebagai `migration incomplete`. Sisa `data.migrating/` yang namanya bentrok dengan root ditolak tanpa memindahkan apa pun.
 
 Job asinkron tetap disimpan di repo tool pada `storage/jobs/`. Cache ID sesi default berada
 di `storage/main-sessions/` dan dipisah dengan hash project root; pemetaan ke ID sesi

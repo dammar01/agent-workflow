@@ -2,7 +2,7 @@
 
 The skill interviews the user, then writes one JSON file for the session:
 
-  .workflow/sessions/<session>/e2e/request.json
+  .workflow/data/sessions/<session>/e2e/request.json
   {"version": 1, "phase": "draft" | "run", "settings": {...},
    "scenario": {...}, "existing_tests": [...], "spec_notes": [...]}
 

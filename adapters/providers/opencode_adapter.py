@@ -1000,7 +1000,7 @@ class OpenCodeAdapter:
             return make_error(
                 "unknown",
                 str(exc),
-                next_action="Inspect .workflow/sessions/<session>/logs and rerun; report if it persists.",
+                next_action="Inspect .workflow/data/sessions/<session>/logs and rerun; report if it persists.",
                 meta={"error": type(exc).__name__, **_argv_meta(args), "cwd": cwd},
             )
 
@@ -1095,7 +1095,7 @@ class OpenCodeAdapter:
             return make_error(
                 "unknown",
                 cleaned or f"opencode exited {outcome['returncode']}",
-                next_action="Inspect .workflow/sessions/<session>/logs for the raw output and rerun.",
+                next_action="Inspect .workflow/data/sessions/<session>/logs for the raw output and rerun.",
                 meta=meta,
             )
 
@@ -1103,7 +1103,7 @@ class OpenCodeAdapter:
             return make_error(
                 "empty_output",
                 "opencode returned no content",
-                next_action="Rephrase the task or check .workflow/sessions/<session>/logs raw_tail; the run succeeded but produced nothing.",
+                next_action="Rephrase the task or check .workflow/data/sessions/<session>/logs raw_tail; the run succeeded but produced nothing.",
                 meta=meta,
                 raw_tail=raw[:500],
             )
@@ -1116,7 +1116,7 @@ class OpenCodeAdapter:
         return make_error(
             "unknown",
             ensure_text(content),
-            next_action="Inspect .workflow/sessions/<session>/logs and rerun.",
+            next_action="Inspect .workflow/data/sessions/<session>/logs and rerun.",
             meta=meta,
         )
 

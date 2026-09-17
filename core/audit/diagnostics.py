@@ -111,22 +111,42 @@ def run_doctor(
         issues.append(".workflow directory missing")
         recommended_fixes.append("Run init first")
     else:
-        from core.runtime.migrations import LAYOUT_VERSION, _EDITABLE, _SCRIPT_STEMS
-        from core.workspace.workspace_paths import is_legacy_layout
+        from core.runtime.migrations import LAYOUT_VERSION, _EDITABLE, _SCRIPT_STEMS, pending_migration
+        from core.workspace.workspace_paths import DATA_DIRNAME, is_legacy_layout
 
         legacy = is_legacy_layout(project_root)
+        staging_name = f"{DATA_DIRNAME}.migrating"
         stray = sorted(
             entry.name
             for entry in paths["workflow_dir"].iterdir()
             if entry.name not in _EDITABLE
+            and entry.name != staging_name
             and not (entry.name.partition(".")[0] in _SCRIPT_STEMS and entry.name.partition(".")[2] in ("ps1", "sh"))
             and not (legacy and entry.name in _LEGACY_ROOT_ITEMS)
         )
+        pending = None if legacy else pending_migration(project_root)
+        staging_left = (paths["workflow_dir"] / staging_name).is_dir()
         checks["workspace_layout"] = {
             "layout_version": 1 if legacy else LAYOUT_VERSION,
             "data_dir": str(paths["data_dir"]),
             "stray_at_root": stray or "none",
+            "migration_pending": pending["pending"] if pending else "none",
+            "migration_staging_leftover": staging_left,
         }
+        if pending:
+            # An issue, unlike the legacy layout: an unconverted secrets.json stops every
+            # browser run, and stale evidence paths quietly defeat reuse.
+            issues.append(f"workspace migration incomplete: still to run {', '.join(pending['pending']) or 'finalize'}")
+            recommended_fixes.append("Run `--command upgrade` to resume the migration from the step that failed")
+        if staging_left:
+            issues.append(f".workflow/{staging_name}/ is left from an interrupted migration")
+            recommended_fixes.append(
+                f"Run `--command upgrade`: it restores .workflow/{staging_name}/ to the root, or names the "
+                "entries that exist in both places for you to reconcile first"
+                if legacy
+                else f"Run `--command upgrade`: it carries backups-only .workflow/{staging_name}/ into data/, "
+                "and otherwise refuses, naming the entries to compare with data/ and reconcile by hand"
+            )
         if legacy:
             # A recommendation, not an issue: the runtime reads a 3.6 layout correctly.
             recommended_fixes.append(
