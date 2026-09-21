@@ -26,6 +26,7 @@ ALLOWED_ACTIONS = frozenset(
         "fill",
         "select",
         "press",
+        "upload",
         "wait_dom",
         "expect_dom",
         "expect_url",
@@ -50,8 +51,12 @@ READY_TEXT_KEYS = ("text", "url")
 READY_KEYS = (*READY_SELECTOR_KEYS, *READY_TEXT_KEYS)
 MAX_READY_CONDITIONS = 5
 WRITE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
-_ACTIONS_WITH_SELECTOR = frozenset({"click", "fill", "select", "press", "wait_dom", "expect_dom"})
-_ACTIONS_WITH_REQUEST = frozenset({"goto", "click", "fill", "select", "press"})
+_ACTIONS_WITH_SELECTOR = frozenset({"click", "fill", "select", "press", "upload", "wait_dom", "expect_dom"})
+_ACTIONS_WITH_REQUEST = frozenset({"goto", "click", "fill", "select", "press", "upload"})
+# `upload.file`: a fixture inside the project, named relative to its root with forward
+# slashes. Never absolute, never `..` — the player may only hand the page a file the project
+# itself carries, and upload_file_errors checks it still resolves inside the root.
+_UPLOAD_FILE = re.compile(r"^(?!/)(?!.*(?:^|/)\.\.(?:/|$))[^\s\\:*?\"<>|]{1,200}$")
 _SIDE_EFFECT_FIELDS = ("test_environment_required", "test_data", "no_cleanup_reason")
 _STEP_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _REQUEST_PATH = re.compile(r"^/[^\s?#*\\]*$")
@@ -377,8 +382,12 @@ def _side_effect_errors(where: str, step: Mapping, policy: Mapping) -> list[str]
     if not isinstance(test_data, dict) or not isinstance(test_data.get("marker"), str) or not test_data["marker"].strip():
         errors.append(f"{where}: side_effect '{effect}' needs test_data.marker, the value that tells this run's data apart from existing data")
     reason = step.get("no_cleanup_reason")
-    if reason is not None and (effect == "creates_test_data" or not isinstance(reason, str) or not reason.strip()):
-        errors.append(f"{where}: no_cleanup_reason is a non-empty string, for modifies/deletes only (created data is always cleaned up)")
+    keeps_created = bool(policy.get("keep_created_data"))
+    if reason is not None and ((effect == "creates_test_data" and not keeps_created) or not isinstance(reason, str) or not reason.strip()):
+        errors.append(
+            f"{where}: no_cleanup_reason is a non-empty string, for modifies/deletes only "
+            "(created data is always cleaned up unless settings.keep_created_data is true)"
+        )
     if not policy.get("allow_side_effects"):
         errors.append(f"{where}: side_effect '{effect}' refused: settings.allow_side_effects is false")
     return errors
@@ -464,6 +473,8 @@ def _step_errors(where: str, step: Mapping, policy: Mapping, claim_ids: set[str]
             errors.extend(_request_errors(where, step.get("request")))
     if action == "fill" and not isinstance(step.get("value"), str):
         errors.append(f"{where}: fill needs a string value")
+    if action == "upload" and not (isinstance(step.get("file"), str) and _UPLOAD_FILE.match(step["file"])):
+        errors.append(f"{where}: upload needs `file`, a project-relative path with forward slashes and no `..`")
     if action == "expect_url" and not any(k in step for k in ("contains", "equals", "matches")):
         errors.append(f"{where}: expect_url needs contains|equals|matches")
     return errors, asserted
@@ -506,7 +517,7 @@ def _cleanup_errors(scenario: Mapping, step_ids: dict[str, tuple[int, Mapping]],
             if step.get("no_cleanup_reason") is not None:
                 errors.append(f"steps[{index}]: has cleanup steps and a no_cleanup_reason; keep one")
             continue
-        if effect == "creates_test_data":
+        if effect == "creates_test_data" and not (policy.get("keep_created_data") and step.get("no_cleanup_reason") is not None):
             errors.append(f"steps[{index}]: side_effect '{effect}' needs a cleanup step (scenario.cleanup with cleans: '{sid}')")
         elif step.get("no_cleanup_reason") is None:
             errors.append(f"steps[{index}]: side_effect '{effect}' needs a cleanup step (scenario.cleanup with cleans: '{sid}') or no_cleanup_reason")
@@ -618,6 +629,33 @@ def validate_scenario(scenario: object, policy: Mapping | None = None, *, covere
             f"claims never asserted: {', '.join(sorted(unasserted))} (assert them in steps, or cover them with an "
             "existing test the project runs through settings.existing_test_command)"
         )
+    return errors
+
+
+def resolve_upload(project_root: Path | str, rel: str) -> Path | None:
+    """The fixture an `upload` step names, or None when it is not a file inside the project.
+
+    Resolved (symlinks followed) and compared against the resolved root, so a link that
+    points outside the project is refused like a `..` would be.
+    """
+    if not isinstance(rel, str) or not _UPLOAD_FILE.match(rel):
+        return None
+    root = Path(project_root).resolve()
+    target = (root / rel).resolve()
+    if target != root and root not in target.parents:
+        return None
+    return target if target.is_file() else None
+
+
+def upload_file_errors(scenario: object, project_root: Path) -> list[str]:
+    """Every `upload.file` must be an existing file inside the project."""
+    errors: list[str] = []
+    if not isinstance(scenario, dict):
+        return errors
+    for section in ("steps", "cleanup"):
+        for index, step in enumerate(scenario.get(section) or []):
+            if isinstance(step, dict) and step.get("action") == "upload" and resolve_upload(project_root, step.get("file")) is None:
+                errors.append(f"{section}[{index}]: upload file '{step.get('file')}' is not a file inside the project")
     return errors
 
 

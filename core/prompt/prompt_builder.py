@@ -521,10 +521,11 @@ def _e2e_spec_constraints() -> list[str]:
         "- readiness: when the page loads data or shows a loader, declare `ready` on the step from the app's own indicators — {\"hidden\": <loader selector>}, {\"visible\": ...}, {\"enabled\": ...}, {\"text\": \"...\"}, {\"url\": \"...\"}; never rely on network idle",
         "- navigation: relative paths under base_url; an absolute URL must share base_url's origin or it is refused",
         "- a step that creates, modifies or deletes data declares side_effect, test_environment_required: true, test_data: {\"marker\": \"<value unique to this run>\"} and `request` ({\"method\", \"path\"}, `:id` for one segment); it is refused unless the user enabled side effects against a local app, so prefer read-only flows",
-        "- cleanup: executable steps under the scenario's `cleanup` list, each with `cleans: <step id>`, starting from a goto and ending in an assertion that the data is gone or restored; created data always needs one, modified/deleted data needs one or a `no_cleanup_reason`; cleanup runs after the steps whether they passed or not",
+        "- cleanup: executable steps under the scenario's `cleanup` list, each with `cleans: <step id>`, starting from a goto and ending in an assertion that the data is gone or restored; created data always needs one (unless the task states settings.keep_created_data is true: then a creating step carries `no_cleanup_reason` and no cleanup), modified/deleted data needs one or a `no_cleanup_reason`; cleanup runs after the steps whether they passed or not",
         "- with side effects off the player aborts every POST/PUT/PATCH/DELETE; a POST the flow needs that only READS (search, filter, GraphQL query) goes under read_only_requests with the handler's file:line showing it writes nothing — the user confirms each one; a login, a GraphQL mutation, or anything that writes never belongs there",
         "- credentials only as ${ENV_NAME} placeholders with a registered name, exactly ${E2E_USER} and ${E2E_PASS}; never a literal value, never a production URL",
-        "- allowed actions: goto, click, fill, select, press, wait_dom, expect_dom, expect_url, expect_title, probe — nothing else",
+        "- allowed actions: goto, click, fill, select, press, upload, wait_dom, expect_dom, expect_url, expect_title, probe — nothing else",
+        "- upload: selector names the file <input>, `file` a fixture inside the project (relative path, forward slashes, no `..`); never a file outside the repo",
     ]
 
 

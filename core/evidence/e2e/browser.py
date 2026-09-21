@@ -25,14 +25,14 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 from core.evidence.e2e.preflight import is_local_dev_host, same_origin
 from core.evidence.e2e.redact import sanitize_endpoint
 from core.evidence.e2e.request import read_only_request_target
-from core.evidence.e2e.spec import SELECTOR_RANK, navigation_error, request_path_matches, selector_rank, step_selectors
+from core.evidence.e2e.spec import SELECTOR_RANK, navigation_error, request_path_matches, resolve_upload, selector_rank, step_selectors
 
 HEARTBEAT_EVERY_S = 2.0
 POLL_S = 0.1
 DETAIL_CHARS = 300
 STABLE_WAIT_MS = 2000
 _BROWSERS = ("chromium", "firefox", "webkit")
-_ELEMENT_ACTIONS = frozenset({"click", "fill", "select", "press"})
+_ELEMENT_ACTIONS = frozenset({"click", "fill", "select", "press", "upload"})
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # A 307/308 repeats the method and the body at the new address; the others turn a POST
 # into a GET, which is a navigation question rather than a write question.
@@ -842,6 +842,13 @@ class Session:
                     loc.select_option(label=str(step.get("label") or ""), timeout=timeout)
             elif action == "press":
                 loc.press(str(step.get("key") or ""), timeout=timeout)
+            elif action == "upload":
+                # Checked again here, not trusted from validation: the file could have been
+                # swapped for a link since.
+                target = resolve_upload(self.config.get("project_root") or "", step.get("file"))
+                if target is None:
+                    return {"status": "failed", "error": {"kind": "harness_error", "detail": "upload file is not a file inside the project"}, **selector_view}
+                loc.set_input_files(str(target), timeout=timeout)
         except Exception as exc:
             kind = _error_kind(exc)
             if kind == "timeout" and action in _ELEMENT_ACTIONS:

@@ -82,7 +82,7 @@ _E2E_SPEC_TOKENS = (
     "test_environment_required",
     "cleanup",
     "${ENV_NAME}",
-    "allowed actions: goto, click, fill, select, press, wait_dom, expect_dom, expect_url, expect_title, probe",
+    "allowed actions: goto, click, fill, select, press, upload, wait_dom, expect_dom, expect_url, expect_title, probe",
     "spec_uncertainties:",
 )
 

@@ -84,6 +84,11 @@ def default_settings() -> dict:
         # then reach loopback and .test hosts, plus any other host preflight resolved to a
         # private address and pinned.
         "allow_side_effects": False,
+        # opt-in: data a step creates may be left behind on purpose (the user reviews it by
+        # hand afterwards). Only then may a creates_test_data step carry no_cleanup_reason in
+        # place of a cleanup; the run reports cleanup `not_planned` with the reasons listed.
+        # Needs allow_side_effects; off by default so created data is still always cleaned up.
+        "keep_created_data": False,
         # while allow_side_effects is false the player aborts every request whose method is
         # not GET/HEAD/OPTIONS, on any origin, except POSTs that only READ (a search, a
         # filter, a GraphQL query), confirmed by the user from the draft's

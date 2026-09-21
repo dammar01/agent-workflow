@@ -53,7 +53,7 @@ from core.evidence.e2e.spec import (
     validate_existing_tests,
     validate_scenario,
 )
-from core.evidence.e2e.spec import validate_read_only_requests
+from core.evidence.e2e.spec import upload_file_errors, validate_read_only_requests
 from core.evidence.e2e.supervisor import run_player
 from core.provider.result_prep import _sanitize_result
 from core.evidence.contracts import correlation_id_for
@@ -262,6 +262,8 @@ def _spec_errors(scenario: dict, existing_tests: list, config: dict, project_roo
         errors = validate_existing_tests(existing_tests, {c["id"] for c in _claim_ids(scenario)})
     if not errors:
         errors = ground_claims(scenario, project_root)
+    if not errors:
+        errors = upload_file_errors(scenario, project_root)
     return errors, runnable, skipped
 
 
@@ -565,6 +567,8 @@ def run(
                 "config": {
                     **config,
                     "capture_html": not unscrubbable,
+                    # upload fixtures resolve against this, and only inside it
+                    "project_root": str(project_root),
                     "write_hosts": network.get("write_hosts") or [],
                     "host_pins": network.get("pins") or {},
                 },
