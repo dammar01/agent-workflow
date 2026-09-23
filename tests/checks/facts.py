@@ -332,6 +332,58 @@ def _test_evidence_reuse() -> None:
                 and evidence_store.find_fresh(root, "analyze", "outside anchor") is None,
                 "an anchor outside the project must never be certifiable or reusable",
             )
+            traversal_anchors = traversal_entry.get("anchors") or []
+            assert_true(
+                len(traversal_anchors) == 1
+                and traversal_anchors[0].get("certified") is False
+                and traversal_anchors[0].get("hash") is None,
+                "an uncertifiable anchor is recorded and marked, not dropped: "
+                f"{traversal_anchors}",
+            )
+
+            drive_content = "claim [E:\\elsewhere\\router.py:16]"
+            write_response_snapshot(root, drive_content, "run-drive", session_id)
+            drive_entry = evidence_store.record(
+                root,
+                "analyze",
+                "drive anchor",
+                session_id,
+                {"summary": "drive"},
+                paths["logs_dir"] / "run-drive" / "output.raw.md",
+                drive_content,
+            )
+            drive_anchors = drive_entry.get("anchors") or []
+            assert_true(
+                len(drive_anchors) == 1
+                and drive_anchors[0].get("file") == "E:\\elsewhere\\router.py",
+                "a Windows drive-qualified anchor keeps its drive letter: "
+                f"{drive_anchors}",
+            )
+            # The widening admits a drive letter and nothing else. A prose colon reads like
+            # `name:line` to a pattern that stops requiring an extension, and one anchor
+            # invented out of a ratio is a claim the reader is told was verified.
+            from core.evidence import contract as evidence_contract
+            from core.evidence.fact_store import _FILELINE
+
+            for prose in ("a ratio 3:14 of runs", "at 09:30 today", "chapter 2:4"):
+                assert_true(
+                    not _FILELINE.search(prose),
+                    f"prose carrying a colon is not an anchor: {prose!r}",
+                )
+            # One pattern, two readers. They lived in separate files and drifted apart once
+            # already, silently — the same text has to yield the same anchors in both.
+            bare = "dispatch happens in E:\\elsewhere\\router.py:16 and core/runtime/state.py:301"
+            assert_true(
+                evidence_contract.split_claim(bare)["refs"]
+                == [m.group(0) for m in _FILELINE.finditer(bare)]
+                == ["E:\\elsewhere\\router.py:16", "core/runtime/state.py:301"],
+                f"the contract parser and the fact store read one pattern the same way: "
+                f"{evidence_contract.split_claim(bare)['refs']}",
+            )
+            assert_true(
+                evidence_contract.split_claim("a ratio 3:14 of runs")["refs"] == [],
+                "and neither of them turns prose into an anchor",
+            )
         finally:
             outside.unlink(missing_ok=True)
 

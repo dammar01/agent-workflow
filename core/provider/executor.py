@@ -104,6 +104,24 @@ _FANOUT_WARNINGS = {
 
 
 
+def _scope_width(project_root, session_id: str | None) -> dict | None:
+    """How far the working tree has spread against the scope the plan declared.
+
+    Fail-open and silent, like every other read of the tree in this pipeline: no git, no
+    repo, or an unreadable scope file means the signal is absent, never wrong. A clean
+    tree returns zeros rather than None, because "nothing has changed yet" is itself an
+    answer main_agent can use.
+    """
+    try:
+        from core.evidence.quick_verify import scope_width
+        from core.runtime.state import load_workspace_state
+
+        scope = load_workspace_state(Path(project_root), session_id)["scope"]
+        return scope_width(Path(project_root), scope.get("editable_scope"))
+    except Exception:
+        return None
+
+
 def _apply_provider_usage(meta: dict, usage) -> None:
     """Stamp provider-reported counts onto a call meta, or leave it estimated.
 
@@ -641,6 +659,12 @@ class Executor:
                 "evidence_ref": {
                     "artifact_path": ap,
                     "anchors": len(hit.get("anchors") or []),
+                    # Always equal to `anchors` on this path — reuse requires every anchor
+                    # to have been certified — but reported anyway so a consumer can read
+                    # one field shape whether the evidence is fresh or recalled.
+                    "certified_anchors": sum(
+                        1 for a in (hit.get("anchors") or []) if a.get("certified") is not False
+                    ),
                     "reused": True,
                 },
                 "meta": {
@@ -652,7 +676,18 @@ class Executor:
             }
             _attach_redactions(result["meta"], reuse_redactions)
             if hit.get("digest") is not None:
-                result["digest"] = hit["digest"]
+                # Copied before the ratio is written into it: the stored digest belongs to
+                # the artifact and is read again by the next reuse, and annotating it in
+                # place would leave this run's numbers in the record.
+                result["digest"] = dict(hit["digest"]) if isinstance(hit["digest"], dict) else hit["digest"]
+                reused_anchors = hit.get("anchors") or []
+                if isinstance(result["digest"], dict) and reused_anchors:
+                    # The same shape as a fresh result's, so one reader handles both. On
+                    # this path the two numbers are always equal — reuse requires it.
+                    result["digest"]["anchors"] = {
+                        "certified": sum(1 for a in reused_anchors if a.get("certified") is not False),
+                        "total": len(reused_anchors),
+                    }
             return result
         except Exception:
             return None
@@ -1445,6 +1480,15 @@ class Executor:
             {k: v for k, v in prompt_meta.items() if k.startswith("task_")}
         )
 
+        # What the working tree actually costs a reviewer right now. Instruction length
+        # used to be the only thing bounded here, and it was the wrong parameter: a task
+        # does not widen because its wording is long, it widens because it ends up
+        # touching more files than anyone agreed to. This is that measurement, carried on
+        # every delegated result so main_agent sees drift without asking for it.
+        width = _scope_width(project_root, session_id)
+        if width:
+            result["meta"]["scope_width"] = width
+
         if route["role"] in ("exploration", "reasoning"):
             # Reported, never enforced: a contract miss is worth surfacing, but it says
             # nothing about whether the evidence underneath is correct.
@@ -1459,6 +1503,16 @@ class Executor:
                         ),
                     }
                 )
+            if width and (width.get("wide") or width.get("outside_scope")):
+                outside = width.get("outside_scope") or []
+                detail = f"{width['files']} file(s), {width['lines']} line(s) changed"
+                if outside:
+                    detail += (
+                        f"; {len(outside)} outside the plan's editable scope"
+                        f" ({', '.join(outside[:3])}"
+                        f"{', ...' if len(outside) > 3 else ''})"
+                    )
+                issues.append({"kind": "scope_wide", "detail": detail})
             if issues:
                 result.setdefault("meta", {})["contract_warnings"] = issues
 
@@ -1490,6 +1544,10 @@ class Executor:
                     caps.append(
                         ("medium", "output closes by addressing the user, not on evidence")
                     )
+                elif issue["kind"] == "scope_wide":
+                    # Reasoning done over a tree that has already drifted past its plan is
+                    # reasoning about a codebase nobody has described yet.
+                    caps.append(("medium", "working tree is wider than the declared scope"))
             if _scope_incomplete(result.get("content") or ""):
                 caps.append(("medium", "scope_not_covered is non-empty"))
             if caps and digest is not None:
@@ -1574,11 +1632,42 @@ class Executor:
                     result.get("content") or "",
                     evidence_context,
                 )
+                recorded_anchors = entry.get("anchors") or []
+                certified_count = sum(
+                    1 for a in recorded_anchors if a.get("certified") is not False
+                )
                 result["evidence_ref"] = {
                     "artifact_path": str(artifact_path),
-                    "anchors": len(entry.get("anchors") or []),
+                    "anchors": len(recorded_anchors),
+                    "certified_anchors": certified_count,
                     "reused": False,
                 }
+                # The same two numbers, in the block the reader is told to read first. The
+                # cap below fires only when NOTHING could be verified, which is the right
+                # place to stop trusting a digest outright — but between "all of it checks
+                # out" and "none of it does" there is a run whose confidence is untouched
+                # and whose anchors are half unopenable, and the digest said nothing about
+                # which one it was. It is reported rather than priced in: how much a
+                # partial result is worth is the reader's call, and a ratio lets them make
+                # it without opening the artifact.
+                if result.get("digest") and recorded_anchors:
+                    result["digest"]["anchors"] = {
+                        "certified": certified_count,
+                        "total": len(recorded_anchors),
+                    }
+                # An anchor this project cannot open is a citation, not evidence. The
+                # contract warning above cannot see this: it only asks whether a claim
+                # names a file:line, and every claim here did. Cross-project analyses are
+                # the ordinary case — the anchors are real, they just point outside the
+                # root — and they used to arrive reading `anchors: 0` with a clean warning
+                # list and an unqualified `confidence: high`.
+                if result.get("digest") and recorded_anchors and not any(
+                    a.get("certified") is not False for a in recorded_anchors
+                ):
+                    result["digest"] = cap_confidence(
+                        result["digest"],
+                        [("medium", "no cited anchor could be verified in this project")],
+                    )
             except Exception as exc:
                 result.setdefault("meta", {})["evidence_store_error"] = (
                     f"{type(exc).__name__}: {exc}"

@@ -392,9 +392,13 @@ def _test_e2e_browser_session() -> None:
     for method in ("GET", "HEAD", "OPTIONS", "get"):
         seen, guarded = call(method, BASE + "/api/items")
         assert_true(seen == ["continue"] and guarded.ledger == [], f"{method} is a read, passes, and is not a ledger entry")
-    for method in ("POST", "PUT", "PATCH", "DELETE"):
-        seen, guarded = call(method, BASE + "/api/items/7?token=abc")
-        assert_true(seen == ["abort:blockedbyclient"], f"{method} is refused while allow_side_effects is false: {seen}")
+    # allow_local_side_effects is on by default, so a write to a development host goes
+    # through without the global switch. Turning it off restores the old blanket refusal.
+    for method in ("POST", "PUT", "PATCH"):
+        seen, _ = call(method, BASE + "/api/items/7")
+        assert_true(seen == ["continue"], f"{method} to a local host writes by default: {seen}")
+        seen, guarded = call(method, BASE + "/api/items/7?token=abc", allow_local_side_effects=False)
+        assert_true(seen == ["abort:blockedbyclient"], f"{method} is refused with local writes off: {seen}")
         assert_true(
             guarded.mutations_blocked == [{"method": method, "origin": BASE, "resource_type": "fetch", "attributed": False, "reason": "side_effects_off"}],
             f"the record keeps the origin, never the path or query: {guarded.mutations_blocked}",
@@ -405,17 +409,335 @@ def _test_e2e_browser_session() -> None:
             and record["attribution"] == "uncertain" and record["planned"] is None and record["duration_ms"] == 0,
             f"a refused write enters the ledger at once, route kept, id and query gone: {record}",
         )
-    assert_true(call("POST", "http://localhost:9000/api/items")[0] == ["abort:blockedbyclient"], "an API on another port is still refused")
+
+    # --- a delete is its own rung: local is not enough, and neither is allow_side_effects --
+    for config in ({}, {"allow_side_effects": True}, {"allow_local_side_effects": True}):
+        seen, guarded = call("DELETE", BASE + "/api/items/7", **config)
+        assert_true(
+            seen == ["abort:blockedbyclient"]
+            and guarded.mutations_blocked[0]["reason"] == "destructive_unapproved",
+            f"a delete is refused until its endpoint is approved, whatever else is on ({config}): "
+            f"{seen} {guarded.mutations_blocked}",
+        )
+        assert_true(
+            guarded.destructive_blocked
+            and guarded.destructive_blocked[0]["method"] == "DELETE",
+            f"the refusal names the delete so the user can approve that one endpoint: "
+            f"{guarded.destructive_blocked}",
+        )
+    assert_true(
+        call("DELETE", BASE + "/api/items/7", allowed_destructive_requests=["DELETE /api/items/7"])[0] == ["continue"],
+        "an approved delete endpoint goes through",
+    )
+    assert_true(
+        call("DELETE", BASE + "/api/items/8", allowed_destructive_requests=["DELETE /api/items/7"])[0] == ["abort:blockedbyclient"],
+        "approval is per endpoint: the neighbouring record was never agreed to",
+    )
+
+    # --- a delete spelled as a POST is still a delete -----------------------------------
+    for body, label in (
+        ("_method=DELETE&id=7", "a Laravel/Rails form override"),
+        ('{"_method":"DELETE"}', "a JSON override field"),
+    ):
+        seen: list[str] = []
+        hop = SimpleNamespace(abort=lambda code: seen.append(f"abort:{code}"), continue_=lambda: seen.append("continue"))
+        guarded, _emitted, _ = _session(_Page())
+        guarded.guard(hop, SimpleNamespace(url=BASE + "/api/items/7", method="POST", resource_type="fetch",
+                                           is_navigation_request=lambda: False, frame=object(),
+                                           post_data=body, headers={}))
+        assert_true(
+            seen == ["abort:blockedbyclient"]
+            and guarded.mutations_blocked[0]["reason"] in ("destructive_unapproved", "override_unapproved"),
+            f"{label} must not ride through the door opened for local writes: {seen} {guarded.mutations_blocked}",
+        )
+    def overridden(url, method, *, post_data=None, headers=None, **config):
+        seen: list[str] = []
+        hop = SimpleNamespace(abort=lambda code: seen.append(f"abort:{code}"), continue_=lambda: seen.append("continue"))
+        guarded, _emitted, _ = _session(_Page(), **config)
+        guarded.guard(hop, SimpleNamespace(url=url, method=method, resource_type="fetch",
+                                           is_navigation_request=lambda: False, frame=object(),
+                                           post_data=post_data, headers=headers or {}))
+        return seen, guarded
+
+    seen, guarded = overridden(BASE + "/api/items/7", "POST", post_data="id=7",
+                               headers={"X-HTTP-Method-Override": "DELETE"})
+    assert_true(
+        seen == ["abort:blockedbyclient"] and guarded.mutations_blocked[0]["reason"] in ("destructive_unapproved", "override_unapproved"),
+        f"a header override is read too: {seen} {guarded.mutations_blocked}",
+    )
+    # An override is resolved BEFORE the safe-method exit. Reading the wire method first
+    # let a delete leave through the door held open for reads.
+    for label, kwargs in (
+        ("a query override on a GET", {"url": BASE + "/api/items/7?_method=DELETE", "method": "GET"}),
+        ("a header override on a GET", {"url": BASE + "/api/items/7", "method": "GET",
+                                        "headers": {"X-HTTP-Method-Override": "DELETE"}}),
+    ):
+        seen, guarded = overridden(**kwargs)
+        assert_true(
+            seen == ["abort:blockedbyclient"] and guarded.mutations_blocked[0]["reason"] in ("destructive_unapproved", "override_unapproved"),
+            f"{label} must not pass as a read: {seen} {guarded.mutations_blocked}",
+        )
+    # The value is not read, so a harmless-looking one is not a way past the gate either.
+    # An earlier design ranked values and spent six verification rounds on which rank a
+    # given spelling deserved; this one asks whether the field is there and stops.
+    seen, guarded = overridden(BASE + "/api/items", "POST", post_data="_method=GET&q=1")
+    assert_true(
+        seen == ["abort:blockedbyclient"]
+        and guarded.mutations_blocked[0]["reason"] == "override_unapproved",
+        f"a request carrying the field needs approval whatever the field says: "
+        f"{seen} {guarded.mutations_blocked}",
+    )
+    for label, kwargs in (
+        ("a body override", {"post_data": "_method=POST"}),
+        ("a header override", {"headers": {"X-HTTP-Method-Override": "POST"}}),
+    ):
+        seen, guarded = overridden(BASE + "/api/items/7", "DELETE", **kwargs)
+        assert_true(
+            seen == ["abort:blockedbyclient"]
+            and guarded.mutations_blocked[0]["reason"] in ("destructive_unapproved", "override_unapproved"),
+            f"a DELETE demoted to POST by {label} is still a delete: {seen} {guarded.mutations_blocked}",
+        )
+
+    # A body the harness cannot read cannot be cleared of carrying `_method=DELETE`, so it
+    # does not get the permission that exists because deletes can be ruled out. It falls
+    # back to allow_side_effects, which is where uploads were handled before any of this.
+    # A percent-encoded key decodes to `_method` at the backend like any other, so the
+    # override check runs the parser rather than testing the raw string for "_method=".
+    seen, guarded = overridden(BASE + "/api/items/7?%5Fmethod=DELETE", "GET")
+    assert_true(
+        seen == ["abort:blockedbyclient"]
+        and guarded.mutations_blocked[0]["reason"] in ("destructive_unapproved", "override_unapproved"),
+        f"an encoded override key is still an override: {seen} {guarded.mutations_blocked}",
+    )
+
+    class _MultipartBody:
+        """A request Playwright will not decode as text but will hand over as bytes —
+        which is what an ordinary file upload looks like at this guard."""
+
+        url = BASE + "/upload"
+        method = "POST"
+        resource_type = "fetch"
+        headers: dict = {}
+        frame = object()
+
+        def __init__(self, buffer):
+            self._buffer = buffer
+
+        @property
+        def post_data(self):
+            raise ValueError("multipart body is not text")
+
+        @property
+        def post_data_buffer(self):
+            if self._buffer is None:
+                raise ValueError("no buffer either")
+            return self._buffer
+
+        def is_navigation_request(self):
+            return False
+
+    def multipart(buffer, **config):
+        seen: list[str] = []
+        hop = SimpleNamespace(abort=lambda code: seen.append(f"abort:{code}"), continue_=lambda: seen.append("continue"))
+        guarded, _emitted, _ = _session(_Page(), **config)
+        guarded.guard(hop, _MultipartBody(buffer))
+        return seen, guarded
+
+    upload = b'--x\r\nContent-Disposition: form-data; name="file"; filename="a.png"\r\n\r\n\x89PNG\r\n--x--'
+    assert_true(
+        multipart(upload)[0] == ["continue"],
+        "a real multipart upload to a local host still writes: the bytes are readable "
+        "even when the text accessor refuses them",
+    )
+    seen, guarded = multipart(
+        b'--x\r\nContent-Disposition: form-data; name="_method"\r\n\r\nDELETE\r\n--x--'
+    )
+    assert_true(
+        seen == ["abort:blockedbyclient"]
+        and guarded.mutations_blocked[0]["reason"] in ("destructive_unapproved", "override_unapproved"),
+        f"an upload envelope hiding a delete does not pass as a write: {seen} {guarded.mutations_blocked}",
+    )
+    # Neither accessor works: the body was never cleared, so it does not get the new
+    # local permission — and under the broad opt-in it goes, but is reported.
+    seen, guarded = multipart(None)
+    assert_true(
+        seen == ["abort:blockedbyclient"]
+        and guarded.mutations_blocked[0]["reason"] == "side_effects_off",
+        f"a wholly unreadable body does not receive the local-write permission: {seen} {guarded.mutations_blocked}",
+    )
+    seen, guarded = multipart(None, allow_side_effects=True)
+    assert_true(
+        seen == ["continue"] and guarded.uninspectable_writes,
+        f"under allow_side_effects it still goes, and says it went unchecked: "
+        f"{seen} {guarded.uninspectable_writes}",
+    )
+    # An upload whose FILENAME happens to spell the override field IS refused. The rule
+    # asks only whether the field is present, so this is the cost side of that trade: a
+    # refusal naming the endpoint, in exchange for a rule with nothing left to interpret.
+    seen, guarded = multipart(
+        b'--x\r\nContent-Disposition: form-data; name="file"; '
+        b'filename="_method=DELETE.txt"\r\n\r\ndata\r\n--x--'
+    )
+    assert_true(
+        seen == ["abort:blockedbyclient"]
+        and guarded.mutations_blocked[0]["reason"] == "override_unapproved",
+        f"anything spelling the field asks for approval, filenames included: "
+        f"{seen} {guarded.mutations_blocked}",
+    )
+    # The value is never read, so a harmless one is not a way through. This is the whole
+    # point of the rewrite: six rounds of verification went on deciding what values meant.
+    for label, url, method, kwargs in (
+        ("a harmless value", BASE + "/api/items?_method=GET", "GET", {}),
+        ("a duplicated field", BASE + "/api/items?_method=GET&_method=DELETE", "GET", {}),
+        ("a demoted delete", BASE + "/api/items/7", "DELETE", {"post_data": "_method=POST"}),
+        ("a folded header", BASE + "/api/items", "GET",
+         {"headers": {"X-HTTP-Method-Override": "POST, DELETE"}}),
+        ("a header with nonsense in it", BASE + "/api/items", "GET",
+         {"headers": {"X-HTTP-Method-Override": "not-a-method"}}),
+    ):
+        seen, guarded = overridden(url, method, **kwargs)
+        assert_true(
+            seen == ["abort:blockedbyclient"] and guarded.mutations_blocked,
+            f"{label}: a request carrying the field needs approval whatever it says: "
+            f"{seen} {guarded.mutations_blocked}",
+        )
+
+    # The local permission was described, and granted, as one for ordinary form writes.
+    # The two rungs above it subtract reads and deletes; everything else used to fall
+    # through to it, so a verb no rule had ever named reached a development host on the
+    # strength of a switch that says nothing about it.
+    for verb in ("PROPFIND", "PURGE", "TRACE", "LOCK"):
+        seen, guarded = overridden(BASE + "/api/items", verb, post_data="x=1")
+        assert_true(
+            seen == ["abort:blockedbyclient"]
+            and guarded.mutations_blocked[0]["reason"] == "side_effects_off",
+            f"{verb} is not a write the local permission was granted for: "
+            f"{seen} {guarded.mutations_blocked}",
+        )
+    for verb in ("POST", "PUT", "PATCH"):
+        assert_true(
+            overridden(BASE + "/api/items", verb, post_data="x=1")[0] == ["continue"],
+            f"{verb} to a development host still writes: it is what the switch is for",
+        )
+    # And the wider opt-in is unchanged by the narrowing: it was never a list of verbs.
+    assert_true(
+        overridden(BASE + "/api/items", "PURGE", post_data="x=1", allow_side_effects=True)[0]
+        == ["continue"],
+        "allow_side_effects still admits any non-destructive method, as it always did",
+    )
+
+    from core.evidence.e2e.spec import carries_method_override
+
+    part = (
+        '--x\r\nContent-Disposition: form-data; name="_method"\r\n\r\nDELETE\r\n--x--'
+    )
+    # Every spelling a backend might resolve the field from. Only the NAME is looked for,
+    # so this list is the entire surface the guard still has to be right about.
+    for label, body, query, want in (
+        ("an escaped JSON key", '{"\\u005fmethod":"DELETE"}', "", True),
+        ("the field named in prose", '{"note":"nothing here"}', "", False),
+        ("an override after a large part", "x" * 70000 + part, "", True),
+        ("a neighbouring field", part.replace('name="_method"', 'name="_method_choice"'), "", False),
+        ("whitespace around the attribute", part.replace('name="_method"', 'name = "_method"'), "", True),
+        ("a partly encoded key", None, "%5F%6Dethod=DELETE", True),
+        ("a fully encoded key", None, "%5F%6D%65%74%68%6F%64=DELETE", True),
+        ("a doubly encoded key", None, "%255Fmethod=DELETE", True),
+        ("an ordinary query", None, "q=1&sort=name", False),
+        ("a clean upload", '--x\r\nContent-Disposition: form-data; name="f"; '
+                           'filename="a.png"\r\n\r\nPNG\r\n--x--', "", False),
+    ):
+        got = carries_method_override(body, {}, query)
+        assert_true(got is want, f"{label}: override detection gave {got}, expected {want}")
+
+    # A UTF-16 body carries a null beside every ASCII character, and one made mostly of
+    # non-ASCII text carries few nulls overall — which is how a ratio test missed it.
+    # Both readings are produced and either finding the field is enough.
+    from core.evidence.e2e.browser import _decode_body
+
+    utf16 = ("漢字" * 500 + "&_method=DELETE").encode("utf-16-le")
+    assert_true(
+        any(carries_method_override(text, {}, "") for text in _decode_body(utf16)),
+        "a UTF-16 body's override must be found in one of its readings",
+    )
+
+    # --- the deny list: checked first, and no setting reaches it ------------------------
+    deny = {"blocked_requests": ["* /api/payments", "DELETE /api/users/:id"]}
+    for label, method, url, config in (
+        ("a read", "GET", BASE + "/api/payments", {}),
+        ("a write", "POST", BASE + "/api/payments", {}),
+        ("with side effects on", "POST", BASE + "/api/payments", {"allow_side_effects": True}),
+        ("an approved delete", "DELETE", BASE + "/api/users/7",
+         {"allowed_destructive_requests": ["DELETE /api/users/:id"]}),
+    ):
+        seen, guarded = call(method, url, **deny, **config)
+        assert_true(
+            seen == ["abort:blockedbyclient"]
+            and guarded.mutations_blocked[0]["reason"] == "blocked_by_policy",
+            f"{label} to a blocked endpoint is refused before anything else: "
+            f"{seen} {guarded.mutations_blocked}",
+        )
+    assert_true(
+        call("GET", BASE + "/api/items", **deny)[0] == ["continue"],
+        "an endpoint the deny list does not name is untouched by it",
+    )
+    assert_true(
+        call("DELETE", BASE + "/api/users/7", **deny)[1].mutations_blocked[0]["reason"]
+        == "blocked_by_policy",
+        "a method-specific deny entry still wins over the approval that would allow it",
+    )
+    # A request carrying the override field has no verb to match a deny entry against, so
+    # it is measured against every entry for its endpoint. Matching on the wire verb let a
+    # POST carrying `_method` walk past the `DELETE` entry naming that exact endpoint.
+    seen, guarded = overridden(
+        BASE + "/api/users/7", "POST", post_data="_method=DELETE",
+        allowed_destructive_requests=["DELETE /api/users/:id"], **deny,
+    )
+    assert_true(
+        seen == ["abort:blockedbyclient"]
+        and guarded.mutations_blocked[0]["reason"] == "blocked_by_policy",
+        f"an override cannot route around the deny entry for its endpoint: "
+        f"{seen} {guarded.mutations_blocked}",
+    )
+    # And the readings apply to an ordinary body too, not only the bytes fallback: a
+    # `post_data` string that already carries nulls was being scanned once, unchanged.
+    seen, guarded = overridden(
+        BASE + "/api/items/7", "POST", post_data="\x00".join("_method=DELETE"),
+    )
+    assert_true(
+        seen == ["abort:blockedbyclient"]
+        and guarded.mutations_blocked[0]["reason"] == "override_unapproved",
+        f"a NUL-interleaved override in a plain body is still found: "
+        f"{seen} {guarded.mutations_blocked}",
+    )
+    # A confirmed read is admitted because its body was cleared of being a mutation, so
+    # that clearing has to read every reading too — one of them is the whole point.
+    seen, guarded = overridden(
+        BASE + "/graphql", "POST",
+        post_data="\x00".join('{"query":"mutation{x}"}'),
+        allowed_read_only_requests=["POST /graphql"],
+        allow_local_side_effects=False,
+    )
+    assert_true(
+        seen == ["abort:blockedbyclient"]
+        and "GraphQL" in (guarded.mutations_blocked[0].get("refusal") or ""),
+        f"a mutation hidden in an alternate body reading is still a mutation: "
+        f"{seen} {guarded.mutations_blocked}",
+    )
+
+    assert_true(call("POST", "http://localhost:9000/api/items")[0] == ["continue"], "another local port is a local host")
     assert_true(call("POST", "https://analytics.example/collect", resource_type="ping")[0] == ["abort:blockedbyclient"], "a third-party beacon is refused too")
     assert_true(call("POST", BASE + "/api/items", allow_side_effects=True)[0] == ["continue"], "allow_side_effects true sends a write to a loopback host")
     for url in ("http://127.0.0.1:9000/api/items", "http://[::1]:8080/x", "http://app.localhost/x", "http://127.0.0.2/x"):
-        assert_true(call("DELETE", url, allow_side_effects=True)[0] == ["continue"], f"every loopback form counts: {url}")
+        assert_true(call("PUT", url, allow_side_effects=True)[0] == ["continue"], f"every loopback form counts: {url}")
     seen, guarded = call("POST", "https://api.example/items", allow_side_effects=True)
     assert_true(
         seen == ["abort:blockedbyclient"] and guarded.mutations_blocked[0]["reason"] == "non_loopback" and "loopback" in guarded.ledger[0]["failure"],
         f"with side effects on, a write to a remote host is still refused — the request's host decides, not base_url's: {seen} {guarded.mutations_blocked}",
     )
-    assert_true(call("POST", BASE + "/login", allowed_mutation_paths=["/login"])[0] == ["abort:blockedbyclient"], "a leftover allowed_mutation_paths opens nothing")
+    assert_true(
+        call("POST", BASE + "/login", allowed_mutation_paths=["/login"], allow_local_side_effects=False)[0] == ["abort:blockedbyclient"],
+        "a leftover allowed_mutation_paths opens nothing",
+    )
     # `.test` is local development, like localhost: it takes a write with no approval.
     for url in ("http://app.test/api/items", "http://other.test:8080/x"):
         assert_true(call("POST", url, allow_side_effects=True)[0] == ["continue"], f"a .test host writes like localhost: {url}")
@@ -439,7 +761,7 @@ def _test_e2e_browser_session() -> None:
     # Measured against Playwright 1.60: a POST answered 307 is re-sent WITH its body to the
     # new address, and the route handler never sees that second request. So an approved write
     # is fetched with max_redirects=0 and each hop judged before it goes out.
-    def redirected(url, answers, *, navigation=False, **config):
+    def redirected(url, answers, *, navigation=False, method="POST", post_data="x=1", **config):
         """`answers` maps a URL to (status, location). Returns (route calls, fetch calls, session)."""
         seen: list[str] = []
         fetched: list[dict] = []
@@ -459,7 +781,7 @@ def _test_e2e_browser_session() -> None:
         guarded, emitted, _ = _session(_Page(), **config)
         guarded.guard(
             hop,
-            SimpleNamespace(url=url, method="POST", resource_type="fetch", post_data="x=1", post_data_buffer=b"x=1",
+            SimpleNamespace(url=url, method=method, resource_type="fetch", post_data=post_data, post_data_buffer=post_data.encode(),
                             is_navigation_request=lambda: navigation, frame=guarded.page.main_frame if navigation else object(),
                             all_headers=lambda: {"cookie": "sid=1"}),
         )
@@ -486,7 +808,102 @@ def _test_e2e_browser_session() -> None:
     assert_true(seen == ["fulfill:303"] and len(fetched) == 1, f"a 303 to an allowed page is handed back to the browser as a GET: {seen}")
     seen, _, _ = redirected(BASE + "/login", {BASE + "/login": (303, "https://evil.example/")}, allow_side_effects=True, navigation=True)
     assert_true(seen == ["abort:blockedbyclient"], f"a 303 that navigates off policy is refused: {seen}")
-    confirmed = {"allowed_read_only_requests": ["POST /api/search"]}
+    # A delete is judged by which ENDPOINT it reaches, so its redirect is re-checked the
+    # way a confirmed read's is. The host check alone let an approved delete be re-sent to
+    # a neighbouring path on the same local host.
+    approved_delete = {"allowed_destructive_requests": ["DELETE /api/items/:id"]}
+    seen, fetched, guarded = redirected(
+        BASE + "/api/items/7", {BASE + "/api/items/7": (307, "/api/orders/7")},
+        method="DELETE", **approved_delete,
+    )
+    assert_true(
+        seen == ["abort:blockedbyclient"]
+        and "not an approved delete" in (guarded.mutations_blocked[0].get("refusal") or ""),
+        f"an approved delete redirected to an unapproved endpoint is refused: {seen} {guarded.mutations_blocked}",
+    )
+    seen, fetched, _ = redirected(
+        BASE + "/api/items/7", {BASE + "/api/items/7": (307, "/api/items/8")},
+        method="DELETE", **approved_delete,
+    )
+    assert_true(
+        seen == ["fulfill:200"] and len(fetched) == 2,
+        f"a delete redirected within the approved route is followed: {seen} {fetched}",
+    )
+    # The same, for a delete spelled as a POST. Its wire method is POST all the way
+    # through, so the approval has to travel with the request rather than be re-derived
+    # from the verb at each hop.
+    seen, _fetched, guarded = redirected(
+        BASE + "/api/items/7", {BASE + "/api/items/7": (307, "/api/orders/7")},
+        method="POST", post_data="_method=DELETE", **approved_delete,
+    )
+    assert_true(
+        seen == ["abort:blockedbyclient"]
+        and "not an approved delete" in (guarded.mutations_blocked[0].get("refusal") or ""),
+        f"an approved override redirected off its route is refused too: "
+        f"{seen} {guarded.mutations_blocked}",
+    )
+
+    # The deny list, across a hop. A 307/308 is fetched here rather than issued by the
+    # browser, so it never comes back through the route handler — this loop is the only
+    # place the list gets a second look, and it had none. A write to an endpoint nobody
+    # denied, answered `307 → /api/payments`, landed on the one endpoint the project had
+    # said to leave alone.
+    denied = {"blocked_requests": ["* /api/payments", "DELETE /api/users/:id"]}
+    seen, fetched, guarded = redirected(
+        BASE + "/api/items", {BASE + "/api/items": (307, "/api/payments")},
+        allow_side_effects=True, **denied,
+    )
+    assert_true(
+        seen == ["abort:blockedbyclient"] and len(fetched) == 1
+        and "deny list" in (guarded.mutations_blocked[0].get("refusal") or ""),
+        f"a 307 onto a denied endpoint is refused, not followed: {seen} {fetched} {guarded.mutations_blocked}",
+    )
+    # Through a hop that is itself allowed, because the list is re-read at every one and
+    # not only at the target the first answer named.
+    seen, fetched, guarded = redirected(
+        BASE + "/api/items", {BASE + "/api/items": (308, "/api/items/v2"), BASE + "/api/items/v2": (308, "/api/payments")},
+        allow_side_effects=True, **denied,
+    )
+    assert_true(
+        seen == ["abort:blockedbyclient"] and len(fetched) == 2,
+        f"and at the second hop as readily as the first: {seen} {fetched}",
+    )
+    # A delete spelled as a POST has no verb for the method-specific entry to match, so
+    # across a hop it is measured against every entry for the endpoint — the same rule the
+    # first request is measured by, carried rather than re-derived.
+    seen, _fetched, guarded = redirected(
+        BASE + "/api/items/7", {BASE + "/api/items/7": (307, "/api/users/7")},
+        method="POST", post_data="_method=DELETE",
+        allowed_destructive_requests=["DELETE /api/items/:id", "DELETE /api/users/:id"], **denied,
+    )
+    assert_true(
+        seen == ["abort:blockedbyclient"]
+        and "deny list" in (guarded.mutations_blocked[0].get("refusal") or ""),
+        f"an override redirected onto a method-specific deny entry is refused: "
+        f"{seen} {guarded.mutations_blocked}",
+    )
+    # A 301/302/303 needs nothing here: the browser follows it with a fresh request, and
+    # that request arrives at `guard` through `context.route`, where the deny list is the
+    # first thing it meets. Pinned so the division stays visible — if the GET ever stopped
+    # returning through the handler, this is where the missing check would have to go.
+    seen, fetched, guarded = redirected(
+        BASE + "/api/items", {BASE + "/api/items": (303, "/api/payments")},
+        allow_side_effects=True, **denied,
+    )
+    assert_true(seen == ["fulfill:303"], f"a 303 is handed back for the browser to re-issue: {seen}")
+    assert_true(
+        guarded.guard(
+            SimpleNamespace(abort=lambda code: seen.append(f"abort:{code}"), continue_=lambda: seen.append("continue")),
+            SimpleNamespace(url=BASE + "/api/payments", method="GET", resource_type="fetch",
+                            is_navigation_request=lambda: False, frame=object(), post_data=None, headers={}),
+        ) is None and seen[-1] == "abort:blockedbyclient",
+        f"and the deny list stops it when it comes back around: {seen}",
+    )
+
+    # Local writes off, so this exercises the read-only path rather than the ordinary
+    # local-write one: the point here is that a CONFIRMED READ keeps its narrower promise
+    # across a redirect, which only means something while the wider permission is closed.
+    confirmed = {"allowed_read_only_requests": ["POST /api/search"], "allow_local_side_effects": False}
     seen, _, guarded = redirected(BASE + "/api/search", {BASE + "/api/search": (307, "/api/items")}, **confirmed)
     assert_true(
         seen == ["abort:blockedbyclient"] and "not a confirmed read" in guarded.mutations_blocked[0]["refusal"],
@@ -523,6 +940,132 @@ def _test_e2e_browser_session() -> None:
         f"the step whose action redirected off policy fails, and says the redirect was already followed: {outcome}",
     )
 
+    # --- the deny list judges navigation too, not only writes ------------------------------------
+    # The list names endpoints. It was read for every write and for no navigation, so a
+    # redirect from an allowed origin onto a denied path of that same origin passed both
+    # checks: the origin policy had nothing to object to, and the only reader of the list
+    # never saw a GET.
+    nav_deny = {"blocked_requests": ["* /api/payments", "DELETE /api/users/:id"]}
+    denier, _, _ = _session(_login_page(), **nav_deny)
+    denier.on_request(SimpleNamespace(url=BASE + "/api/payments", redirected_from=object(),
+                                      is_navigation_request=lambda: True, frame=denier.page.main_frame))
+    assert_true(
+        denier.blocked == [BASE + "/api/payments"] and "blocked_requests" in denier.blocked_detail[BASE + "/api/payments"],
+        f"a navigation redirected onto a denied endpoint is recorded, naming the deny list: {denier.blocked} {denier.blocked_detail}",
+    )
+    # And at the route handler, where it can still be stopped rather than reported.
+    routed, _, _ = _session(_login_page(), **nav_deny)
+    routed_seen: list[str] = []
+    nav_route = SimpleNamespace(
+        abort=lambda reason="failed": routed_seen.append(f"abort:{reason}"),
+        continue_=lambda **kw: routed_seen.append("continue"),
+        fetch=lambda **kw: None,
+    )
+    routed.guard(nav_route, SimpleNamespace(url=BASE + "/api/payments", method="GET", post_data=None,
+                                            is_navigation_request=lambda: True, frame=routed.page.main_frame,
+                                            all_headers=lambda: {}))
+    assert_true(routed_seen == ["abort:blockedbyclient"], f"a top-level navigation to a denied endpoint is aborted at the guard: {routed_seen}")
+    # A `goto` never starts: the step says which policy refused it, before any request.
+    refuser, _, _ = _session(_login_page(), **nav_deny)
+    outcome = refuser.perform({"id": "pay", "action": "goto", "url": "/api/payments"})
+    assert_true(
+        outcome["status"] == "failed" and outcome["error"]["kind"] == "navigation_blocked"
+        and "blocked_requests" in outcome["error"]["detail"] and refuser.page.gotos == [],
+        f"a goto at a denied endpoint is refused before navigating: {outcome} {refuser.page.gotos}",
+    )
+    # A method-specific entry is not a navigation rule. `DELETE /api/users/:id` says not to
+    # delete that record; opening the same address is a read, and refusing it would make the
+    # list mean something it does not say.
+    reader, _, _ = _session(_login_page(), **nav_deny)
+    assert_true(
+        reader._navigation_refusal(BASE + "/api/users/7") is None
+        and reader._navigation_refusal(BASE + "/api/payments") is not None,
+        "a DELETE-only entry leaves navigation to that address alone, while a `*` entry does not",
+    )
+
+    # --- every URL change is read, not only the ones that produced a request ---------------------
+    # `history.pushState`, a meta refresh and a redirect Chromium follows internally all move
+    # the address bar without a request event to attribute, and the address bar is what the
+    # policy is about. `framenavigated` reads it after every change.
+    subframe, _, _ = _session(_login_page(), **nav_deny)
+    subframe.on_frame_navigated(SimpleNamespace(url=BASE + "/api/payments"))
+    assert_true(subframe.blocked == [], "a frame that is not the main frame is not judged")
+    main_nav, _, _ = _session(_login_page(), **nav_deny)
+    frame = SimpleNamespace(url=BASE + "/api/payments")
+    main_nav.page.main_frame = frame
+    main_nav.on_frame_navigated(frame)
+    main_nav.on_frame_navigated(frame)  # the same landing reported twice stays one failure
+    assert_true(
+        main_nav.blocked == [BASE + "/api/payments"] and main_nav.redirected_off_policy == [BASE + "/api/payments"],
+        f"a URL change with no request behind it is caught once: {main_nav.blocked}",
+    )
+    blank, _, _ = _session(_login_page(), **nav_deny)
+    for address in ("about:blank", "", "data:text/html,<p>x</p>"):
+        blank.page.main_frame = SimpleNamespace(url=address)
+        blank.on_frame_navigated(blank.page.main_frame)
+    assert_true(blank.blocked == [], f"addresses the policy has no say over are left alone: {blank.blocked}")
+
+    # A landing that arrives after the step window closed — a debounced `pushState`, a
+    # redirect still being followed — was recorded and then read by nobody: `_execute`
+    # compares its counter before the navigation happens, so the page had reached a denied
+    # address and the run still had no failed step to show for it.
+    late, late_events, _ = _session(_login_page(), **nav_deny)
+    late.page.main_frame = SimpleNamespace(url=BASE + "/api/payments")
+    late.on_frame_navigated(late.page.main_frame)  # no step is current
+    late.report_unattributed_navigation()
+    harness = [e for e in late_events if e.get("type") == "harness"]
+    assert_true(
+        len(harness) == 1 and harness[0]["reason"] == "navigation_blocked" and "blocked_requests" in harness[0]["detail"],
+        f"an off-policy landing outside every step window is reported as harness: {harness}",
+    )
+    late.report_unattributed_navigation()
+    assert_true(len([e for e in late_events if e.get("type") == "harness"]) == 1, "and reported once")
+    # What a step's own window caught stays the step's, and is not repeated at the end.
+    owned, owned_events, _ = _session(_login_page(), **nav_deny)
+    owned.perform = lambda step: (owned._note_off_policy(BASE + "/api/payments", "denied", redirected=True), {"status": "passed"})[1]
+    outcome = owned._execute({"id": "pay", "action": "click", "selector": {"text": "Masuk"}}, "pay")
+    owned.report_unattributed_navigation()
+    assert_true(
+        outcome["status"] == "failed" and not [e for e in owned_events if e.get("type") == "harness"],
+        f"a landing a step caught is that step's failure, not a run-level one: {outcome}",
+    )
+    # Leaving a denied address and coming back is a second violation by a second step.
+    twice, _, _ = _session(_login_page(), **nav_deny)
+    twice.current_step_id = "one"
+    twice._note_off_policy(BASE + "/api/payments", "denied", redirected=True)
+    twice.current_step_id = "two"
+    twice._note_off_policy(BASE + "/api/payments", "denied", redirected=True)
+    assert_true(len(twice.blocked) == 2, f"the same address under a later step is recorded again: {twice.blocked}")
+    # A cleanup step that reaches a denied endpoint reached it exactly as a test step would
+    # have. Its own failure is a `cleanup` event, which the classifier treats as
+    # housekeeping and never lets decide a verdict — so the violation has to leave the
+    # cleanup unclaimed and be reported at the run level, or a run that went off policy
+    # during cleanup still reports `pass`.
+    cleaner, cleaner_events, _ = _session(_login_page(), **nav_deny)
+    cleaner.phase = "cleanup"
+    cleaner.perform = lambda step: (cleaner._note_off_policy(BASE + "/api/payments", "denied", redirected=True), {"status": "passed"})[1]
+    cleaner._execute({"id": "undo", "action": "click", "selector": {"text": "Masuk"}}, "undo")
+    cleaner.report_unattributed_navigation()
+    cleanup_harness = [e for e in cleaner_events if e.get("type") == "harness"]
+    assert_true(
+        len(cleanup_harness) == 1 and cleanup_harness[0]["reason"] == "navigation_blocked",
+        f"a cleanup that goes off policy reaches the verdict instead of staying housekeeping: {cleanup_harness}",
+    )
+
+    # An unattributed landing is still reported when a LATER step reaches the same address.
+    # Attribution keyed on the URL let the step's claim cover the earlier landing too, and
+    # the violation nobody owned went unreported.
+    both, both_events, _ = _session(_login_page(), **nav_deny)
+    both.page.main_frame = SimpleNamespace(url=BASE + "/api/payments")
+    both.on_frame_navigated(both.page.main_frame)  # outside every step
+    both.perform = lambda step: (both._note_off_policy(BASE + "/api/payments", "denied", redirected=True), {"status": "passed"})[1]
+    both._execute({"id": "pay", "action": "click", "selector": {"text": "Masuk"}}, "pay")
+    both.report_unattributed_navigation()
+    assert_true(
+        len([e for e in both_events if e.get("type") == "harness"]) == 1,
+        "the landing no step claimed is reported even after a step claims the same address",
+    )
+
     # --- confirmed reads: a POST the user confirmed as read-only passes; a GraphQL write never does ---
     import json as _json
 
@@ -536,7 +1079,12 @@ def _test_e2e_browser_session() -> None:
                                            is_navigation_request=lambda: False, frame=object()))
         return seen, guarded
 
-    reads = {"allowed_read_only_requests": ["POST /api/search", "POST /graphql"]}
+    # Local writes off throughout this block: a confirmed read is a narrower permission
+    # than a local write, and it can only be observed while the wider one is closed.
+    reads = {
+        "allowed_read_only_requests": ["POST /api/search", "POST /graphql"],
+        "allow_local_side_effects": False,
+    }
     seen, guarded = post(BASE + "/api/search?page=2", '{"q": "laptop"}', **reads)
     assert_true(
         seen == ["continue"] and guarded.read_only_allowed == [{"method": "POST", "origin": BASE}] and guarded.mutations_blocked == [],
@@ -544,7 +1092,10 @@ def _test_e2e_browser_session() -> None:
     )
     assert_true(post(BASE + "/api/search/export", "{}", **reads)[0] == ["abort:blockedbyclient"], "a confirmed read is exact, not a prefix")
     assert_true(post("http://localhost:9000/api/search", "{}", **reads)[0] == ["abort:blockedbyclient"], "a bare path belongs to base_url's origin only")
-    assert_true(post(BASE + "/api/search", "{}")[0] == ["abort:blockedbyclient"], "nothing is a read until the request settings name it")
+    assert_true(
+        post(BASE + "/api/search", "{}", allow_local_side_effects=False)[0] == ["abort:blockedbyclient"],
+        "nothing is a read until the request settings name it",
+    )
     assert_true(post(BASE + "/graphql", _json.dumps({"query": "query Items { items { id } }"}), **reads)[0] == ["continue"], "a GraphQL query is a read")
     seen, guarded = post(BASE + "/graphql", _json.dumps({"query": "mutation Drop { deleteItem(id: 7) { id } }"}), **reads)
     assert_true(

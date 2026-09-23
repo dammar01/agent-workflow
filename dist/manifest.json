@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "6831bb9a258192246a02c79f175d9a18f97b7aee12b4d32892a0ffaaf145a596",
-      "bytes": 25621,
+      "sha256": "991515a982ff606f21ac93a86325dee0229042604c4f8fe24d6ac10cb8d0caaa",
+      "bytes": 26256,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -140,8 +140,8 @@
     },
     {
       "path": "claude/skills/verify-browser.md",
-      "sha256": "fd6cb915383e8ef8bf5a6959002ba8420b124c9ed6ead80d8b8ae0fa38830c77",
-      "bytes": 20105,
+      "sha256": "bbf2883ac169197634d4e1836728d3aaeac5ed4a3c33e9428d3299cdd6c45fe3",
+      "bytes": 26810,
       "merge": "replace",
       "component": "prompt_bundle"
     },

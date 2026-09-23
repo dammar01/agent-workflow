@@ -166,6 +166,12 @@ def workflow_paths(
         "config": workflow_dir / "config.json",
         "provider_config": workflow_dir / PROVIDER_CONFIG_NAME,
         "secrets": workflow_dir / "e2e" / "secrets.json",
+        # Beside secrets.json, and for the same reason: both answer "what is this run
+        # allowed to do here", and both are the project's standing answer rather than one
+        # run's. Approvals are appended to it as they are given, so an endpoint agreed to
+        # once is not asked about again next session; the deny list beside them is the one
+        # thing a run cannot talk its way past.
+        "e2e_permissions": workflow_dir / "e2e" / "permissions.json",
         "gitignore": workflow_dir / ".gitignore",
         "current_dir": workflow_dir / "current",
         # --- internal, in the data directory -------------------------------------------

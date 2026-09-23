@@ -6,6 +6,8 @@ rides at the top level for main_agent to relay.
 """
 import re
 
+from core.evidence.fact_store import _FILELINE
+
 ERROR_TYPES = {
     "permission_denied",
     "empty_output",
@@ -261,7 +263,6 @@ def validate_fields(command: str, content: str) -> list[str]:
     return [field for field in required if field not in lowered]
 
 
-_FILE_LINE = re.compile(r"[\w./\\-]+\.\w+:\d+")
 _SECTION_HEAD = re.compile(r"^\s*([a-z_]+)\s*:\s*$", re.MULTILINE)
 
 
@@ -359,8 +360,12 @@ def split_claim(claim: str) -> dict:
     # below asks for `[file:line]`. Only the bracketed shape was ever collected, so a run
     # whose every claim named its file could still come back with refs=[] on all of them —
     # the anchors were in the prose, just never lifted out of it. `contract_warnings` has
-    # always read the bare shape via _FILE_LINE; this is the same regex, applied where the
-    # refs are actually built.
+    # always read the bare shape; this is now literally the same regex, applied where the
+    # refs are actually built. It was not: this module kept its own `_FILE_LINE` while the
+    # anchor counter used `fact_store._FILELINE`, and the comment claiming they matched was
+    # the only thing holding them together. They drifted, and the drift was silent —
+    # `evidence_ref.anchors` could read 0 while `grounded_without_evidence` stayed quiet,
+    # because each half was asking a different question of a different pattern.
     #
     # Bare anchors are COPIED, not moved. A trailing `[core/router.py:16]` is bookkeeping
     # appended to a finished sentence and can be lifted out cleanly; a bare one is usually
@@ -369,7 +374,9 @@ def split_claim(claim: str) -> dict:
     # has already said which identifiers are bookkeeping, and that answer is better than
     # this one.
     if not refs:
-        refs = list(dict.fromkeys(_FILE_LINE.findall(text)))
+        # `group(0)`, not `findall`: the shared pattern captures path and line separately,
+        # so `findall` would hand back tuples where every caller expects `file.py:16`.
+        refs = list(dict.fromkeys(m.group(0) for m in _FILELINE.finditer(text)))
     return {"text": text, "refs": refs}
 
 
@@ -552,7 +559,7 @@ def contract_warnings(command: str, content: str) -> list[dict]:
     unbacked = [
         claim
         for claim in grounded
-        if claim.lower() not in {"none", "(none)"} and not _FILE_LINE.search(claim)
+        if claim.lower() not in {"none", "(none)"} and not _FILELINE.search(claim)
     ]
     if unbacked:
         # `grounded` is the one section the prompt defines by its evidence, not by its
@@ -853,6 +860,13 @@ def cap_confidence(digest: dict | None, reasons: list[tuple[str, str]]) -> dict 
 
     `reasons` is a list of (cap_level, why). The lowest cap wins. The original value is
     kept as `confidence_reported` so the downgrade is auditable, never silent.
+
+    Callable more than once on the same digest. Some signals are only known after the
+    result has been archived — how many of its anchors could actually be certified, for
+    one — and those arrive too late to join the first pass. So `confidence_reported` is
+    written once and never overwritten by an already-capped value, and each pass appends
+    its reasons instead of replacing them. Without both, a later cap would report the
+    earlier cap as the second agent's own number and erase why the first one fired.
     """
     if not digest:
         return digest
@@ -862,12 +876,35 @@ def cap_confidence(digest: dict | None, reasons: list[tuple[str, str]]) -> dict 
 
     ceiling = min(_CONFIDENCE_RANK[level] for level, _ in reasons if level in _CONFIDENCE_RANK)
     if _CONFIDENCE_RANK[reported] <= ceiling:
+        # Already at or below this ceiling, but the reason still belongs in the record:
+        # main_agent reads `confidence_capped_by` to know what was wrong with the run,
+        # not only to explain the number. A run that graded itself `low` and then hit a
+        # stale graph used to record neither — the number needed no change, so the reason
+        # was dropped with it, and the one signal saying WHY the run was weak never
+        # arrived. `confidence_reported` is written here too, so the field means the same
+        # thing on both paths: what the second agent said before anything was applied.
+        digest.setdefault("confidence_reported", reported)
+        _append_cap_reasons(digest, reasons)
         return digest
 
-    digest["confidence_reported"] = reported
+    digest.setdefault("confidence_reported", reported)
     digest["confidence"] = _RANK_CONFIDENCE[ceiling]
-    digest["confidence_capped_by"] = [why for _, why in reasons]
+    _append_cap_reasons(digest, reasons)
     return digest
+
+
+def _append_cap_reasons(digest: dict, reasons: list[tuple[str, str]]) -> None:
+    """Add each new reason to `confidence_capped_by`, once.
+
+    `existing` is re-read as the list grows rather than snapshotted: two callers passing
+    the same reason in one `reasons` list both cleared a membership test taken before
+    either was added, and the record said the same thing twice.
+    """
+    existing = list(digest.get("confidence_capped_by") or [])
+    for _, why in reasons:
+        if why not in existing:
+            existing.append(why)
+    digest["confidence_capped_by"] = existing
 
 
 def extract_digest(content: str) -> dict | None:

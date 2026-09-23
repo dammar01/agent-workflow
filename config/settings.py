@@ -119,6 +119,15 @@ DEFAULT_JOB_MAX_RUNTIME_SECONDS = _env_int(
 # task string is the only variable-size part worth capping here — cap it before assembly
 # so a long task degrades to a visible truncation instead of a deterministic call failure.
 DEFAULT_MAX_TASK_CHARS = _env_int("AI_PROXY_MAX_TASK_CHARS", 3000)
+# The cap for transports that have no command-line limit to respect: opencode attaches
+# its prompt as a file, codex writes it to stdin. Neither can overflow argv, and both
+# were being cut at the number chosen for the transport that can — the arrangement was
+# backwards, with the only provider under a real OS ceiling getting ~31k measured
+# characters while the two under none got 3000. Zero means unbounded, which is the
+# default: length was never the property worth bounding here. What matters is how wide
+# the resulting change is, and `quick_verify.scope_width` measures that directly instead
+# of guessing at it from the size of the instruction.
+DEFAULT_MAX_TASK_CHARS_NO_ARGV = _env_int("AI_PROXY_MAX_TASK_CHARS_NO_ARGV", 0)
 # Fraction of the task that may be cut before the call is refused instead of degraded.
 # A tail trimmed off a long instruction usually costs nothing; losing a third of it means
 # the second agent answered a different question than the one asked — and it answers with

@@ -212,13 +212,24 @@ def _test_permitted_tools_line() -> None:
 def _test_task_cap_is_visible_in_and_out_of_band() -> None:
     sink: dict = {}
     long_task = "x" * (DEFAULT_MAX_TASK_CHARS + 500)
-    prompt = build_prompt(
-        role=ROLE_EXPLORATION,
-        task=long_task,
-        command="explore",
-        meta_sink=sink,
-        **_BASE,
-    )
+    # An argv transport, because that is now the only kind with a cap to report. A
+    # transport that never touches the command line is uncapped by default, which the
+    # check below asserts separately — passing no transport here would exercise that path
+    # instead and this case would silently stop being covered.
+    argv_transport = {
+        "kind": "argv",
+        "limit": DEFAULT_MAX_TASK_CHARS,
+        "newline_cost": 0,
+    }
+    with _pinned_platform(True):
+        prompt = build_prompt(
+            role=ROLE_EXPLORATION,
+            task=long_task,
+            command="explore",
+            meta_sink=sink,
+            transport=argv_transport,
+            **_BASE,
+        )
 
     assert_true(
         sink.get("task_truncated") is True,
@@ -227,7 +238,7 @@ def _test_task_cap_is_visible_in_and_out_of_band() -> None:
     )
     assert_true(
         sink.get("task_original_chars") == len(long_task)
-        and sink.get("task_kept_chars") == DEFAULT_MAX_TASK_CHARS,
+        and sink.get("task_kept_chars") == sink.get("task_cap"),
         f"truncation reported the wrong sizes: {sink}",
     )
     assert_true(
@@ -237,17 +248,40 @@ def _test_task_cap_is_visible_in_and_out_of_band() -> None:
     )
 
     short_sink: dict = {}
-    build_prompt(
-        role=ROLE_EXPLORATION,
-        task="short",
-        command="explore",
-        meta_sink=short_sink,
-        **_BASE,
-    )
+    with _pinned_platform(True):
+        build_prompt(
+            role=ROLE_EXPLORATION,
+            task="short",
+            command="explore",
+            meta_sink=short_sink,
+            transport=argv_transport,
+            **_BASE,
+        )
     assert_true(
         "task_truncated" not in short_sink,
         "a task under the cap reported truncation — a false `task_truncated` sends "
         "main_agent splitting work that was never too long",
+    )
+
+    # A transport with no command line to overflow carries the task whole. The cap was
+    # protecting argv; applying it to opencode's attached file or codex's stdin cut the
+    # two providers that could not overflow anything, at the number chosen for the one
+    # that could.
+    free_sink: dict = {}
+    free_prompt = build_prompt(
+        role=ROLE_EXPLORATION,
+        task=long_task,
+        command="explore",
+        meta_sink=free_sink,
+        transport={"kind": "file"},
+        **_BASE,
+    )
+    assert_true(
+        "task_truncated" not in free_sink
+        and free_sink.get("task_cap") is None
+        and free_sink.get("task_cap_source") == "unbounded"
+        and long_task in free_prompt,
+        f"a transport without an argv ceiling must carry the task uncut: {free_sink}",
     )
 
 
@@ -465,9 +499,9 @@ def _check_task_cap_transport() -> None:
                 **_BASE,
             )
         assert_true(
-            posix_sink.get("task_cap_source") == "policy"
-            and posix_sink["task_cap"] == DEFAULT_MAX_TASK_CHARS,
-            "off Windows the cap must fall back to policy rather than shrink to fit a limit "
+            posix_sink.get("task_cap_source") == "unbounded"
+            and posix_sink["task_cap"] is None,
+            "off Windows the cap must stand down rather than shrink to fit a limit "
             f"nothing enforces there: {posix_sink}",
         )
 
@@ -532,14 +566,15 @@ def _check_task_cap_transport() -> None:
             **_BASE,
         )
         assert_true(
-            file_sink.get("task_cap_source") == "policy"
-            and file_sink["task_cap"] == DEFAULT_MAX_TASK_CHARS,
-            f"opencode sends its prompt as a file and must hold the policy cap: {file_sink}",
+            file_sink.get("task_cap_source") == "unbounded"
+            and file_sink["task_cap"] is None,
+            f"opencode sends its prompt as a file and has no ceiling to hold: {file_sink}",
         )
 
-        # stdin does not touch argv, so no argv-derived number applies to it. It holds the
-        # policy default rather than inheriting another transport's ceiling OR being handed an
-        # unbounded one — a prompt too long for the provider still fails, just further away.
+        # stdin does not touch argv, so no argv-derived number applies to it — and neither
+        # does the policy number, which existed to keep a command line from overflowing.
+        # A prompt too long for the provider still fails; it just fails at the provider,
+        # naming the real limit, instead of being cut here against a borrowed one.
         stdin_sink: dict = {}
         build_prompt(
             role=ROLE_EXPLORATION,
@@ -550,13 +585,16 @@ def _check_task_cap_transport() -> None:
             **_BASE,
         )
         assert_true(
-            stdin_sink.get("task_cap_source") == "policy"
-            and stdin_sink["task_cap"] == DEFAULT_MAX_TASK_CHARS,
-            f"a stdin provider must hold the policy cap, not an argv-derived one: {stdin_sink}",
+            stdin_sink.get("task_cap_source") == "unbounded"
+            and stdin_sink["task_cap"] is None,
+            f"a stdin provider must hold no argv-derived cap at all: {stdin_sink}",
         )
 
-        # An unregistered provider is the case that must not get creative: unknown transport
-        # means the pre-existing static behaviour, never a guess.
+        # An unregistered provider declares no command line, so there is none to size for.
+        # The risk this accepts is a future argv provider added without a transport entry:
+        # its prompt would be refused by the adapter's own oversize check instead of cut
+        # here — which is the failure this module already prefers, because it fails loudly
+        # and names the real limit rather than silently shredding the task first.
         unknown_sink: dict = {}
         build_prompt(
             role=ROLE_EXPLORATION,
@@ -567,8 +605,9 @@ def _check_task_cap_transport() -> None:
             **_BASE,
         )
         assert_true(
-            unknown_sink.get("task_cap") == DEFAULT_MAX_TASK_CHARS,
-            f"an unknown provider must fall back to the static cap: {unknown_sink}",
+            unknown_sink.get("task_cap") is None
+            and unknown_sink.get("task_cap_source") == "unbounded",
+            f"an unknown provider has no declared command line to size for: {unknown_sink}",
         )
 
         # The whole point of the larger cap: a task an argv provider has room for must survive.

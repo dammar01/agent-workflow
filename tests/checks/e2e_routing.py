@@ -540,6 +540,24 @@ def _test_e2e_routing() -> None:
         assert_true("playwright_missing" in result["content"] and "verdict: INCOMPLETE" in result["content"], "the reason reaches the contract")
         assert_true(adapter.calls == [], "no provider call is spent when preflight fails")
 
+        # --- and the preflight gate feeds the repeat brake ----------------------------------
+        # An outcome used to be written only after a browser report, which a run refused at
+        # preflight never reaches. So the counter stayed at zero however many times the same
+        # missing dependency stopped the same run, and the brake — built for exactly that
+        # loop — had nothing to fire on.
+        e2e_preflight.playwright_available = lambda: (False, "pinned absent for the test")
+        try:
+            # The first run above counted one; the brake reads the streak before adding to
+            # it, so the limit is reached on the run after the one that reaches it.
+            repeated = [_run(root, adapter, _scenario(), fake=None, env={"E2E_USER": "u"}) for _ in range(3)]
+        finally:
+            e2e_preflight.playwright_available = real_probe
+        reasons = [r["meta"]["e2e"].get("reason") for r in repeated]
+        assert_true(
+            reasons[-1] == "repeat_failure" and "playwright_missing" in (repeated[-1]["meta"]["e2e"].get("next_action") or ""),
+            f"repeating a preflight failure reaches the brake, quoting what to fix: {reasons}",
+        )
+
         # --- spec section missing → one targeted continuation, then an invalid draft --------
         root = workspace("e2e-nospec-")
         adapter = _adapter(spec=[_EVIDENCE_ONLY, _EVIDENCE_ONLY])

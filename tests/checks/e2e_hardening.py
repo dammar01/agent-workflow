@@ -209,9 +209,247 @@ def _check_browser_job_is_not_resumed() -> None:
     )
 
 
+def _check_repeat_brake_counts_reasons_not_scenarios(root: Path) -> None:
+    """The in-run retry loop compares step outcomes; this counts outcomes across runs.
+
+    The loop that shipped twelve browser runs against one environment failure edited the
+    scenario between attempts, so a step-level key reset every time. Keying on the outcome
+    is what makes the streak survive those edits.
+    """
+    from core.evidence.e2e.classify import repeat_bucket
+    from core.runtime.state import E2E_REPEAT_LIMIT, e2e_repeat_state, note_e2e_outcome
+
+    (root / ".workflow").mkdir(parents=True, exist_ok=True)
+    (root / ".workflow" / "config.json").write_text("{}", encoding="utf-8")
+    origin = "http://localhost:8000"
+    streaks = [note_e2e_outcome(root, "sid-repeat", origin, "harness", "login_failed") for _ in range(3)]
+    assert_true(
+        streaks == [1, 2, 3] and streaks[-1] >= E2E_REPEAT_LIMIT,
+        f"the same outcome across separate runs must accumulate: {streaks}",
+    )
+    assert_true(
+        note_e2e_outcome(root, "sid-repeat", origin, "timeout", "timeout") == 1,
+        "a different kind of problem is a different problem and starts its own count",
+    )
+    note_e2e_outcome(root, "sid-repeat", origin, None)
+    assert_true(
+        e2e_repeat_state(root, "sid-repeat") == {},
+        "a pass clears the streak: the thing being counted stopped happening",
+    )
+
+    # One problem, three names. An unreachable base URL is reported as `stuck` on one run
+    # and `harness_error` on the next, and keyed on the exact reason each rename started a
+    # fresh streak of one — the brake never fired against a loop that was plainly one loop.
+    drift = [
+        note_e2e_outcome(root, "sid-drift", origin, repeat_bucket("incomplete", reason), reason)
+        for reason in ("base_url_unreachable", "harness_error", "unknown_origin")
+    ]
+    assert_true(
+        drift == [1, 2, 3],
+        f"reasons that rename the same obstacle keep one streak: {drift}",
+    )
+    assert_true(
+        e2e_repeat_state(root, "sid-drift").get("reason") == "unknown_origin",
+        "and the streak quotes back what the last run actually said",
+    )
+    # The failure most worth braking on was the only one that could not be counted: an app
+    # failure carries no reason, because the failing app IS the verdict, and a reason-keyed
+    # record read that as nothing to count and cleared itself on every run.
+    app = [
+        note_e2e_outcome(root, "sid-app", origin, repeat_bucket("fail", None), None)
+        for _ in range(3)
+    ]
+    assert_true(
+        app == [1, 2, 3] and app[-1] >= E2E_REPEAT_LIMIT,
+        f"three runs against a failing application reach the brake: {app}",
+    )
+    assert_true(
+        repeat_bucket("pass", None) is None and repeat_bucket("incomplete", None) is None,
+        "a pass, and an incomplete with nothing to name, are not counted",
+    )
+    assert_true(
+        note_e2e_outcome(root, "sid-app", "http://localhost:9000", "app", None) == 1,
+        "a different origin is a different environment and starts its own count",
+    )
+    assert_true(
+        e2e_repeat_state(root, "sid-fresh") == {},
+        "and a new session inherits nothing: the record is the session's own",
+    )
+
+    # A record written by the build that keyed on the exact reason. It carries no bucket,
+    # and without deriving one the next run matched nothing and restarted a streak that
+    # had already counted to two — the brake losing its count at exactly the moment it was
+    # about to fire.
+    from core.runtime.state import load_workspace_state
+    from core.workspace.workspace_paths import atomic_write_json
+
+    loaded = load_workspace_state(root, "sid-legacy")
+    loaded["state"]["e2e_repeat"] = {"origin": origin, "reason": "stuck", "streak": 2}
+    atomic_write_json(loaded["paths"]["state"], loaded["state"])
+    assert_true(
+        e2e_repeat_state(root, "sid-legacy").get("bucket") == "timeout",
+        f"a record from before buckets is read with the bucket its reason maps to: "
+        f"{e2e_repeat_state(root, 'sid-legacy')}",
+    )
+    assert_true(
+        note_e2e_outcome(root, "sid-legacy", origin, repeat_bucket("incomplete", "timeout"), "timeout") == 3,
+        "so the streak it had already built continues instead of starting over",
+    )
+    assert_true(
+        e2e_repeat_state(root, "sid-legacy").get("bucket") == "timeout",
+        "and the migrated record carries the bucket forward itself",
+    )
+
+
+def _check_a_blocked_delete_asks_instead_of_only_refusing() -> None:
+    from core.evidence.e2e.runner import _destructive_requests
+
+    pending = _destructive_requests(
+        {
+            "observations": [
+                {"kind": "mutation_blocked", "url": "http://localhost:8000"},
+                {"kind": "destructive_unapproved", "url": "http://localhost:8000/api/items/:id"},
+                {"kind": "destructive_unapproved", "url": "http://localhost:8000/api/items/:id"},
+            ]
+        }
+    )
+    assert_true(
+        pending == [
+            {
+                "method": "DELETE",
+                "endpoint": "http://localhost:8000/api/items/:id",
+                "entry": "DELETE http://localhost:8000/api/items/:id",
+            }
+        ],
+        f"a refused delete must come back as one answerable request, with the line that "
+        f"approves it: {pending}",
+    )
+
+
+def _check_permissions_file_fails_closed(root: Path) -> None:
+    """A deny list that could not be read in full does not become a shorter deny list.
+
+    `permissions.json` warned and dropped, the same posture as config.json's knobs. For
+    approvals that is right: dropping one leaves the run stricter than asked. For
+    `blocked_requests` it inverted the file's purpose — `{"blocked_requests": ["* /api/
+    payments", "bad"]}` loaded as NO deny list, one warning among the run's other warnings,
+    and the run proceeded free to touch the endpoint the project had named.
+    """
+    import json
+
+    from core.evidence.e2e.request import load_permissions, permissions_path
+
+    path = permissions_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    permissions, warnings, errors = load_permissions(root)
+    assert_true(
+        permissions["blocked_requests"] == [] and not warnings and not errors,
+        f"no file is no permissions, not a problem: {permissions} {warnings} {errors}",
+    )
+
+    path.write_text(json.dumps({"blocked_requests": ["* /api/payments", "bad"]}), encoding="utf-8")
+    permissions, _warnings, errors = load_permissions(root)
+    assert_true(
+        errors and "blocked_requests[1]" in " ".join(errors) and permissions["blocked_requests"] == [],
+        f"one unparseable deny entry is an error, not a dropped list: {errors} {permissions}",
+    )
+
+    path.write_text("{not json", encoding="utf-8")
+    _permissions, _warnings, errors = load_permissions(root)
+    assert_true(errors, f"a file present but unreadable is an error: {errors}")
+
+    path.write_text(json.dumps({"blocked_requests": "* /api/payments"}), encoding="utf-8")
+    _permissions, _warnings, errors = load_permissions(root)
+    assert_true(errors, f"a deny list that is not a list is an error: {errors}")
+
+    # The other key keeps the old posture, because dropping an approval fails closed: the
+    # run is left stricter than the user asked, which is the safe direction to err.
+    path.write_text(json.dumps({"allowed_destructive_requests": ["nonsense"]}), encoding="utf-8")
+    permissions, warnings, errors = load_permissions(root)
+    assert_true(
+        warnings and not errors and permissions["allowed_destructive_requests"] == [],
+        f"a malformed approval still warns and drops: {warnings} {errors}",
+    )
+
+    # Present but not an object at all: `null`, `[]`, `0`, `""` are a file that says
+    # nothing about the deny list, which is not the same as a file that says the deny list
+    # is empty. Only `{}` is the latter.
+    for raw in ("null", "false", "0", '""', "[]"):
+        path.write_text(raw, encoding="utf-8")
+        _permissions, _warnings, errors = load_permissions(root)
+        assert_true(errors, f"a present top-level {raw} is an error, not an empty deny list: {errors}")
+    path.write_text("{}", encoding="utf-8")
+    _permissions, warnings, errors = load_permissions(root)
+    assert_true(not errors and not warnings, f"an empty object is an empty permissions file: {errors} {warnings}")
+
+    path.write_text(json.dumps({"blocked_requests": ["* /api/payments", "DELETE /api/users/:id"]}), encoding="utf-8")
+    permissions, warnings, errors = load_permissions(root)
+    assert_true(
+        not errors and not warnings and len(permissions["blocked_requests"]) == 2,
+        f"a well-formed file loads whole: {permissions} {warnings} {errors}",
+    )
+
+    # And the run does not start on a file that could not be read in full: the loader
+    # returning an error is only half of failing closed.
+    from core.evidence.e2e.request import REQUEST_VERSION, load_request, request_path
+
+    path.write_text(json.dumps({"blocked_requests": ["* /api/payments", "bad"]}), encoding="utf-8")
+    session = "sid-permissions"
+    req = request_path(root, session)
+    req.parent.mkdir(parents=True, exist_ok=True)
+    req.write_text(json.dumps({"version": REQUEST_VERSION, "phase": "draft", "settings": {"base_url": "http://localhost:3000"}}), encoding="utf-8")
+    loaded, reason, errors = load_request(root, session)
+    assert_true(
+        loaded is None and reason == "request_invalid" and any("blocked_requests" in e for e in errors),
+        f"a malformed deny list refuses the run, naming the entry: {reason} {errors}",
+    )
+    path.unlink()
+
+
+def _check_preflight_failures_reach_the_brake(root: Path) -> None:
+    """The brake counts the runs that never start a browser, which is most of the loop.
+
+    An outcome was written only after a browser report. `base_url_unreachable` and
+    `playwright_missing` return long before one, so the counter stayed at zero across every
+    repetition and the brake never fired against the shape it was built for — while the
+    failures it must NOT count, the caller's own `spec_invalid` or `secrets_invalid`, are
+    corrected by coming back with better input.
+    """
+    from core.evidence.e2e.classify import repeat_bucket
+    from core.runtime.state import E2E_REPEAT_LIMIT, e2e_repeat_state, note_e2e_outcome
+
+    (root / ".workflow").mkdir(parents=True, exist_ok=True)
+    (root / ".workflow" / "config.json").write_text("{}", encoding="utf-8")
+    origin = "http://localhost:3000"
+    session = "sid-preflight"
+    # The runner's own call at the preflight gate, repeated the way a caller repeats it.
+    for reason in ("base_url_unreachable", "playwright_missing", "harness_error"):
+        note_e2e_outcome(root, session, origin, repeat_bucket("incomplete", reason), reason)
+    state = e2e_repeat_state(root, session)
+    assert_true(
+        state.get("streak") == 3 and state["streak"] >= E2E_REPEAT_LIMIT and state.get("reason") == "harness_error",
+        f"one environment problem under three names still reaches the limit: {state}",
+    )
+    # And the gate counts by reason, not by "preflight failed". `preflight` returns
+    # `spec_invalid` for a base_url or write policy the request itself named, which the
+    # caller fixes by asking again — counting it would refuse the corrected request.
+    from core.evidence.e2e.runner import _REPEATABLE_PREFLIGHT
+
+    assert_true(
+        "spec_invalid" not in _REPEATABLE_PREFLIGHT
+        and {"playwright_missing", "browser_missing", "base_url_unreachable"} <= _REPEATABLE_PREFLIGHT,
+        f"the brake counts the environment's refusals and not the caller's: {sorted(_REPEATABLE_PREFLIGHT)}",
+    )
+
+
 def _test_e2e_hardening() -> None:
     root = Path(tempfile.mkdtemp(prefix="aw-e2e-hardening-"))
     try:
+        _check_permissions_file_fails_closed(root)
+        _check_preflight_failures_reach_the_brake(root)
+        _check_repeat_brake_counts_reasons_not_scenarios(root)
+        _check_a_blocked_delete_asks_instead_of_only_refusing()
         _check_retry_pass_is_not_clean()
         _check_expected_values_stay_placeholders()
         _check_tokens_leave_the_ledger()

@@ -51,8 +51,42 @@ INCOMPLETE_REASONS = frozenset(
         "output_truncated",
         "player_unavailable",
         "env_missing",
+        # A landing the navigation policy refused, caught outside any step's window. Named
+        # rather than folded into `harness_error`, because what to do about it is specific:
+        # the run reached an address the project denied, and the scenario is what has to
+        # stop going there.
+        "navigation_blocked",
     }
 )
+
+# The repeat brake counts runs that keep ending the same way, and "the same way" has to be
+# coarse enough to survive one problem wearing three names. An unreachable base URL surfaces
+# as `base_url_unreachable` on one run, `stuck` on the next and `harness_error` on the third
+# — keyed on the exact reason, each one started a fresh streak of one and the brake never
+# fired against a loop that was plainly the same loop. Keyed on the rung, they accumulate.
+#
+# Three rungs, because they are the three different things a person does next: wait or raise
+# a limit; fix the environment the run needs; fix the application under test.
+_REPEAT_TIMEOUT = frozenset({"timeout", "stuck"})
+
+def repeat_bucket(verdict: str | None, reason: str | None) -> str | None:
+    """Which repeat rung a finished run belongs to, or None when nothing should be counted.
+
+    A pass is the one outcome that clears the record rather than adding to it.
+
+    An app failure arrives with `reason=None` — the reason field describes why a run could
+    not reach a verdict, and a failing app IS the verdict. Counting it needs a value of its
+    own, so it gets one here: without it, the failure most worth braking on was the only
+    one that reset the streak on every run.
+    """
+    if verdict == "pass" or verdict is None:
+        return None
+    if verdict == "fail":
+        return ORIGIN_APP
+    if not reason:
+        return None
+    return "timeout" if reason in _REPEAT_TIMEOUT else ORIGIN_HARNESS
+
 
 _GROUNDED = frozenset({"source", "existing_test", "runtime_probe"})
 _SELECTOR_ERRORS = frozenset({"selector_missing", "selector_ambiguous", "not_visible"})

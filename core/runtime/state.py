@@ -295,6 +295,97 @@ def update_plan_scope(project_root: Path, content: str, session_id: str) -> dict
     atomic_write_json(loaded["paths"]["scope"], scope)
     return scope
 
+# How many times a browser run may end the same way before the runtime stops starting
+# another one. Three, because two is still a fair test of flakiness and the fourth has
+# never once been the attempt that worked.
+E2E_REPEAT_LIMIT = 3
+
+
+def e2e_repeat_state(project_root: Path, session_id: str) -> dict:
+    """This session's record of browser runs that keep ending the same way."""
+    try:
+        loaded = load_workspace_state(project_root, session_id)
+    except (OSError, ValueError):
+        return {}
+    record = loaded["state"].get("e2e_repeat")
+    if not isinstance(record, dict) or not record:
+        return {}
+    # Coerced here rather than trusted at the reader. This file is on disk and can be
+    # edited, truncated or written by an older build, and a brake that raises on a
+    # malformed streak would abort the run it exists to protect.
+    try:
+        streak = int(record.get("streak") or 0)
+    except (TypeError, ValueError):
+        return {}
+    return {**record, "streak": streak, "bucket": _repeat_bucket_of(record)}
+
+
+def _repeat_bucket_of(record: dict) -> str | None:
+    """This record's bucket, deriving one for a record written before buckets existed.
+
+    The same comment above applies: the file is on disk and an older build may have
+    written it. That build keyed on the exact reason, so its records carry `reason` and no
+    `bucket` — and without a bucket the next run's outcome never matches, restarting a
+    streak that had already counted to two. Derived from the reason it does carry, through
+    the one mapping, rather than re-stated here.
+    """
+    bucket = record.get("bucket")
+    if bucket:
+        return str(bucket)
+    reason = record.get("reason")
+    if not reason:
+        return None
+    from core.evidence.e2e.classify import repeat_bucket
+
+    return repeat_bucket("incomplete", str(reason))
+
+
+def note_e2e_outcome(project_root: Path, session_id: str, origin: str, bucket: str | None, reason: str | None = None) -> int:
+    """Fold one finished browser run into the repeat counter; return the new streak.
+
+    Keyed on origin and failure BUCKET, deliberately not on the scenario. The runner
+    already stops retrying within a run when two attempts match step for step; what it
+    could not see was the same failure arriving across separate invocations, each one with
+    a slightly edited scenario. That is the shape of the loop worth breaking: twelve runs
+    against one environment problem, every one of them editing steps that were never what
+    was wrong. Editing the scenario changes the steps, so a step-level key would reset each
+    time and count to one forever.
+
+    The bucket rather than the exact reason, because one environment problem answers to
+    several reasons in turn — `base_url_unreachable`, then `stuck`, then `harness_error` —
+    and an exact key started a new streak of one at every rename. `reason` still travels,
+    as the detail the brake quotes back; it is what the person has to fix, and the bucket
+    is only how the runtime decides it has seen enough.
+
+    A pass clears the streak, since what it was counting is gone.
+    """
+    try:
+        loaded = load_workspace_state(project_root, session_id)
+    except (OSError, ValueError):
+        return 0
+    state = loaded["state"]
+    previous = state.get("e2e_repeat") if isinstance(state.get("e2e_repeat"), dict) else {}
+    previous_bucket = _repeat_bucket_of(previous) if previous else None
+    try:
+        previous_streak = int(previous.get("streak") or 0)
+    except (TypeError, ValueError):
+        previous, previous_streak = {}, 0
+    if not bucket:
+        record = {}
+    elif previous.get("origin") == origin and previous_bucket == bucket:
+        # The newest reason replaces the stored one: when a streak is quoted back it should
+        # name what the last run actually said, not the first name the problem went by.
+        # `bucket` written explicitly, not inherited from `previous`: a record migrated
+        # from an older build has none, and spreading it forward would leave every
+        # subsequent run deriving it again from a reason that keeps changing.
+        record = {**previous, "bucket": bucket, "reason": reason, "streak": previous_streak + 1}
+    else:
+        record = {"origin": origin, "bucket": bucket, "reason": reason, "streak": 1}
+    state["e2e_repeat"] = record
+    atomic_write_json(loaded["paths"]["state"], state)
+    return int(record.get("streak") or 0)
+
+
 def update_command_cache(project_root: Path, key: str, value, session_id: str) -> dict:
     loaded = load_workspace_state(project_root, session_id)
     command_cache = loaded["command_cache"]

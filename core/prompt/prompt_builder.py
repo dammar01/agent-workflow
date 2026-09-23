@@ -4,7 +4,7 @@ from config.roles import (
     ROLE_VERIFICATION,
     VALID_ROLES,
 )
-from config.settings import DEFAULT_MAX_TASK_CHARS
+from config.settings import DEFAULT_MAX_TASK_CHARS, DEFAULT_MAX_TASK_CHARS_NO_ARGV
 from utils import osutil
 
 _EVIDENCE_ROLES = {ROLE_EXPLORATION, ROLE_REASONING}
@@ -30,6 +30,10 @@ def _cap_task(task: str, max_chars: int | None = None) -> tuple[str, dict | None
     """
     keep = DEFAULT_MAX_TASK_CHARS if max_chars is None else max_chars
     task = task.strip()
+    if keep <= 0:
+        # Explicitly uncapped, which is not the same as "caller passed nothing". A
+        # transport with no argv ceiling has nothing for a character count to protect.
+        return task, None
     original = len(task)
     if original <= keep:
         return task, None
@@ -116,21 +120,32 @@ def _transport_cap(
     grows with the working tree, so the only honest overhead is the one this call just
     produced.
     """
-    static = DEFAULT_MAX_TASK_CHARS
+    def _no_ceiling() -> tuple[int, dict]:
+        """The answer whenever no command line is actually being protected.
+
+        Uncapped by default; `AI_PROXY_MAX_TASK_CHARS_NO_ARGV` restores a limit for
+        anyone who wants one. `task_cap: None` rather than a number, because reporting a
+        figure nothing enforced was how the old arrangement read as deliberate.
+        """
+        no_argv = DEFAULT_MAX_TASK_CHARS_NO_ARGV
+        if no_argv <= 0:
+            return 0, {"task_cap": None, "task_cap_source": "unbounded"}
+        return no_argv, {"task_cap": no_argv, "task_cap_source": "policy"}
+
     if not transport or transport.get("kind") != "argv":
-        # stdin, file (opencode's `-f`), or a provider not in the table. The static cap is the pre-existing
-        # behaviour and stays the answer until there is evidence for a better number.
-        return static, {"task_cap": static, "task_cap_source": "policy"}
+        # stdin, file (opencode's `-f`), or a provider not in the table. Nothing here has
+        # a command line to overflow, so the cap that exists to protect one does not apply.
+        return _no_ceiling()
     if not _argv_limit_enforced():
         # The 8191/32767 ceilings are cmd.exe and CreateProcess limits. POSIX argv runs to
         # megabytes, which is why both adapters' `_too_long_for_cmd` returns None off
         # Windows and never refuses a call there. Deriving a budget from a limit nothing
         # enforces would be pure loss: it cut the verify cap from 3000 to 1918 on Linux to
         # respect a boundary that does not exist on Linux.
-        return static, {"task_cap": static, "task_cap_source": "policy"}
+        return _no_ceiling()
     limit = transport.get("limit")
     if not limit:
-        return static, {"task_cap": static, "task_cap_source": "policy"}
+        return _no_ceiling()
     newline_cost = int(transport.get("newline_cost") or 0)
     overhead = _argv_cost(probe, newline_cost)
     budget = (

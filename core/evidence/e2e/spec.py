@@ -12,7 +12,7 @@ import json
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from core.evidence.e2e.preflight import safe_base_url, same_origin
 
@@ -50,7 +50,107 @@ READY_SELECTOR_KEYS = ("hidden", "visible", "enabled")
 READY_TEXT_KEYS = ("text", "url")
 READY_KEYS = (*READY_SELECTOR_KEYS, *READY_TEXT_KEYS)
 MAX_READY_CONDITIONS = 5
+# One ladder, three rungs, defined once. The browser guard used to keep its own
+# `_SAFE_METHODS` beside this tuple, and the two answered different halves of the same
+# question in different files — exactly the split that let the anchor regexes drift apart.
+# A rung added here must not be a rung only one caller knows about.
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 WRITE_METHODS = ("POST", "PUT", "PATCH", "DELETE")
+# Writes that remove something. They are separated from the rest not because deleting is
+# technically different from updating, but because it is the one write whose mistake has
+# no undo inside the run: a created row can be cleaned up, an edited field can be set
+# back, a deleted record is gone. Existing data is what is at risk, and a test scenario
+# cannot tell the runtime which records are its own.
+DESTRUCTIVE_METHODS = frozenset({"DELETE"})
+
+# Frameworks that route on a form field rather than the HTTP verb: Laravel and Rails both
+# send `_method=DELETE` inside a POST, and some stacks read the header instead. The wire
+# method is POST in every one of those cases, so a guard that only reads `request.method`
+# waves the delete through the door that was opened for ordinary writes.
+_METHOD_OVERRIDE_FIELD = "_method"
+_METHOD_OVERRIDE_HEADERS = ("x-http-method-override", "x-method-override")
+# The field name is the whole question. Not its value, not which method the value names,
+# not whether that method outranks the one on the wire — only whether the request carries
+# the field at all.
+#
+# Six rounds of verification were spent on the other design, the one that read the value
+# and decided what it meant. Every round closed a real hole and every round left a deeper
+# one: a demoted value, an escaped key, a late multipart part, a duplicated field, a
+# doubly encoded name, a UTF-16 body. The holes were not carelessness. They came from the
+# premise — that this guard can know how someone else's framework reads a request. It
+# cannot, and each fix only moved the guess.
+#
+# So the guess is gone. A request carrying `_method` needs its endpoint approved, whatever
+# the field says. That refuses some requests that were never deletes; a POST whose form
+# happens to carry the field, or a body that merely spells it, now asks for a yes. That is
+# the trade, taken deliberately: the cost is a refusal naming the endpoint, and the thing
+# it buys is a rule with no interpretation left in it to get wrong.
+_OVERRIDE_TOKEN = re.compile(rf"(?<!\w){_METHOD_OVERRIDE_FIELD}(?!\w)", re.IGNORECASE)
+# `\\uXXXX` written out, as a JSON encoder may write any character including the ones that
+# spell this field. `{"_method":"DELETE"}` is `_method` to every JSON decoder and is
+# nothing at all to a pattern reading the raw text.
+_JSON_ESCAPE = re.compile(r"\\u([0-9a-fA-F]{4})")
+
+
+def carries_method_override(
+    body: str | None, headers: dict | None = None, query: str | None = None
+) -> bool:
+    """Whether this request carries a method-override field anywhere a backend would find it.
+
+    True is not an accusation that the request is a delete. It says the request cannot be
+    judged by its verb alone, which is enough to send it to the approval gate.
+    """
+    for name in (headers or {}):
+        if str(name).lower() in _METHOD_OVERRIDE_HEADERS:
+            return True
+    for raw_source in (query, body):
+        if not raw_source:
+            continue
+        for source in _decodings(raw_source):
+            if _OVERRIDE_TOKEN.search(source):
+                return True
+    return False
+
+
+def _decodings(text: str) -> list[str]:
+    """`text` as sent, plus each way a backend might read it.
+
+    Every spelling this guard was caught by came from one assumption: that the bytes on the
+    wire are the bytes the application parses. They are not. A JSON decoder resolves
+    `\\u005f`, a URL decoder resolves `%5F`, and a proxy in front of the app may resolve one
+    layer before the framework resolves another. Each variant is produced and read rather
+    than guessed between — and since only the NAME is looked for now, this list is the
+    entire remaining surface.
+    """
+    out = [text]
+    if "\\u" in text:
+        out.append(_unescape_json(text))
+    if "%" in text:
+        once = unquote(text, errors="replace")
+        out.append(once)
+        # A second pass, for the layer that decodes what another layer already decoded:
+        # `%255Fmethod` becomes `%5Fmethod` becomes `_method`.
+        if "%" in once:
+            out.append(unquote(once, errors="replace"))
+    return out
+
+
+def _unescape_json(text: str) -> str:
+    """`\\uXXXX` sequences resolved, for matching only.
+
+    Never fed back to the application and never parsed as JSON — one substitution over a
+    string, so a malformed body costs nothing and yields nothing.
+    """
+
+    def one(match: re.Match) -> str:
+        try:
+            return chr(int(match.group(1), 16))
+        except ValueError:  # unreachable for a 4-hex-digit match, cheap to keep honest
+            return match.group(0)
+
+    return _JSON_ESCAPE.sub(one, text)
+
+
 _ACTIONS_WITH_SELECTOR = frozenset({"click", "fill", "select", "press", "upload", "wait_dom", "expect_dom"})
 _ACTIONS_WITH_REQUEST = frozenset({"goto", "click", "fill", "select", "press", "upload"})
 # `upload.file`: a fixture inside the project, named relative to its root with forward

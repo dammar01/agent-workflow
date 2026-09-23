@@ -95,6 +95,20 @@ def default_settings() -> dict:
         # read_only_requests: "POST /api/search" or "POST http(s)://host/path". Exact
         # endpoint, and a GraphQL body that asks for a mutation is still refused.
         "allowed_read_only_requests": [],
+        # Writes to a loopback or .test host run without the global opt-in above. The
+        # single `allow_side_effects` switch treated `localhost:8000` and a production
+        # host as the same risk, so proving a form works locally meant granting the same
+        # permission that lets a run write anywhere preflight approved. A dev server is
+        # the place these tests are supposed to write; that is what makes it a dev server.
+        # DELETE is NOT covered — see allowed_destructive_requests.
+        "allow_local_side_effects": True,
+        # DELETE endpoints the user approved, as "DELETE /api/items/:id" or a full URL.
+        # Deletes stay refused by default even on a local host and even with side effects
+        # on, because the runtime cannot tell a record the scenario created from one that
+        # was already there. Empty by default: each entry is a person saying yes to that
+        # endpoint. The refusal names the endpoint so the answer can be given and the run
+        # repeated.
+        "allowed_destructive_requests": [],
         # which secrets.json profile fills ${NAME}; empty = the file's `default`, or its only
         # profile. A name, never a value.
         "secrets_profile": "",
@@ -131,6 +145,121 @@ def draft_path(project_root: Path, session_id: str) -> Path:
 
 def secrets_path(project_root: Path) -> Path:
     return workflow_paths(project_root)["workflow_dir"] / "e2e" / SECRETS_FILE
+
+
+def permissions_path(project_root: Path) -> Path:
+    return workflow_paths(project_root)["e2e_permissions"]
+
+
+# Any method, or `*` for all of them. The deny list is not about deletes: it names
+# endpoints this project does not want a browser run touching at all, whatever the verb —
+# a payment, a mailer, an integration that reaches a third party from the dev host.
+_BLOCKED_METHODS = ("*", "GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE")
+MAX_BLOCKED_REQUESTS = 50
+
+
+def blocked_request_target(entry: str) -> tuple[str, str] | None:
+    """`"* /api/payments"` -> ("*", "/api/payments"); None when it is not that shape."""
+    method, _, target = entry.strip().partition(" ")
+    target = target.strip()
+    if method.upper() not in _BLOCKED_METHODS or not target:
+        return None
+    return method.upper(), target
+
+
+def blocked_request_errors(entries: list, where_root: str = "blocked_requests") -> list[str]:
+    """Shape of deny entries: `<METHOD|*> <endpoint>`, route templates allowed."""
+    errors: list[str] = []
+    if len(entries) > MAX_BLOCKED_REQUESTS:
+        errors.append(f"{where_root}: at most {MAX_BLOCKED_REQUESTS} entries")
+    for index, entry in enumerate(entries):
+        where = f"{where_root}[{index}]"
+        if not isinstance(entry, str) or not entry.strip():
+            errors.append(f"{where}: must be a non-empty string")
+            continue
+        parsed = blocked_request_target(entry)
+        if parsed is None:
+            errors.append(
+                f"{where}: '<METHOD> <path or URL>' with METHOD one of "
+                f"{', '.join(_BLOCKED_METHODS)}"
+            )
+            continue
+        problem = endpoint_error(parsed[1])
+        if problem:
+            errors.append(f"{where}: {problem}")
+    return errors
+
+
+def default_permissions() -> dict:
+    return {"allowed_destructive_requests": [], "blocked_requests": []}
+
+
+def load_permissions(project_root: Path) -> tuple[dict, list[str], list[str]]:
+    """The project's standing e2e permissions: what is approved, and what is never run.
+
+    Returns (permissions, warnings, errors). An absent file is no permissions, not a
+    problem — most projects never write one.
+
+    The two keys are NOT held to the same standard, because dropping them does opposite
+    things. Dropping an approval leaves the run stricter than the user asked: a warning is
+    enough, and that is the old posture kept. Dropping a deny entry leaves the run
+    permitted to touch an endpoint the project said to leave alone — the file's failure
+    silently removing the protection the file exists to provide. `{"blocked_requests":
+    ["* /api/payments", "bad"]}` loaded as NO deny list at all, one warning among the
+    run's other warnings, and the run proceeded. So anything that would shorten the deny
+    list is an error and the run does not start: unreadable file, malformed JSON, a top
+    level that is not an object, `blocked_requests` that is not a list, or any entry in it
+    that does not parse. A deny list is not advisory, and neither is its syntax.
+
+    The asymmetry that matters is elsewhere: approvals here are merged with whatever a
+    request also approves, while `blocked_requests` is read ONLY from this file. A deny
+    list a run could extend would be a deny list a run could also shorten, and a rule that
+    the thing it governs can edit is not a rule.
+    """
+    permissions = default_permissions()
+    path = permissions_path(project_root)
+    if not path.exists():
+        return permissions, [], []
+    try:
+        loaded = read_json_file(path)
+    except (OSError, ValueError) as exc:
+        # Present but unreadable. Whether the deny list in it was empty or named every
+        # endpoint in the project is exactly what could not be determined.
+        return permissions, [], [f"{path.name}: {type(exc).__name__}: {exc}"]
+    if not loaded:
+        return permissions, [], []
+    if not isinstance(loaded, dict):
+        return permissions, [], [
+            f"{path.name}: {type(loaded).__name__}, expected object"
+        ]
+    warnings: list[str] = []
+    errors: list[str] = []
+    for key, checker, fail_closed in (
+        ("allowed_destructive_requests", destructive_request_errors, False),
+        ("blocked_requests", blocked_request_errors, True),
+    ):
+        value = loaded.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, list):
+            problem = f"{path.name} {key}: {type(value).__name__}, expected list"
+            if fail_closed:
+                errors.append(problem)
+            else:
+                warnings.append(f"{problem}; ignored")
+            continue
+        problems = checker(value, key)
+        if problems:
+            if fail_closed:
+                # Named individually: one unparseable entry used to take the whole list
+                # with it, so the rules that were fine stopped applying because of the
+                # rule beside them. Now nothing is dropped — the entry is named and fixed.
+                errors += [f"{path.name} {problem}" for problem in problems]
+            else:
+                warnings += [f"{path.name} {problem}; ignored" for problem in problems]
+            continue
+        permissions[key] = value
+    return permissions, warnings, errors
 
 
 def _type_ok(fallback: object, value: object) -> bool:
@@ -188,6 +317,7 @@ def config_settings(project_root: Path) -> tuple[dict, list[str]]:
     # posture: name it, drop it, keep the shipped default.
     for key, checker in (
         ("allowed_read_only_requests", read_only_request_errors),
+        ("allowed_destructive_requests", destructive_request_errors),
         ("secrets_template_profiles", template_profile_errors),
     ):
         problems = checker(settings[key])
@@ -224,6 +354,7 @@ def settings_from(overrides: object, base: dict | None = None) -> tuple[dict, li
             continue
         settings[key] = value
     errors += read_only_request_errors(settings["allowed_read_only_requests"])
+    errors += destructive_request_errors(settings["allowed_destructive_requests"])
     if settings["secrets_profile"] and not _PROFILE_NAME.match(settings["secrets_profile"]):
         errors.append("settings.secrets_profile: a profile name, [A-Za-z0-9_-], at most 64 characters")
     errors += template_profile_errors(settings["secrets_template_profiles"])
@@ -282,6 +413,53 @@ def read_only_request_target(entry: str) -> tuple[str, str] | None:
     return method, target
 
 
+MAX_DESTRUCTIVE_REQUESTS = 20
+# The mirror of READ_ONLY_METHODS: that list exists to admit a method that usually
+# writes, this one to gate a method that always removes.
+DESTRUCTIVE_ENTRY_METHODS = ("DELETE",)
+
+
+def destructive_request_target(entry: str) -> tuple[str, str] | None:
+    """`"DELETE /api/items/7"` -> ("DELETE", "/api/items/7"); None when not that shape."""
+    method, _, target = entry.strip().partition(" ")
+    target = target.strip()
+    if method.upper() not in DESTRUCTIVE_ENTRY_METHODS or not target:
+        return None
+    return method.upper(), target
+
+
+def destructive_request_errors(
+    entries: list, where_root: str = "settings.allowed_destructive_requests"
+) -> list[str]:
+    """Shape of destructive-request entries: `<METHOD> <endpoint>`, METHOD DELETE.
+
+    Route templates are allowed — `DELETE /api/items/:id` — and wildcards are not. The
+    difference matters: `:id` stands for exactly one segment, so the approval is the route
+    the user was shown, while `/api/items/*` would reach everything nested beneath it. The
+    literal id cannot be required instead, because it changes every run and writing it here
+    would put it in the artifacts this package keeps ids out of.
+    """
+    errors: list[str] = []
+    if len(entries) > MAX_DESTRUCTIVE_REQUESTS:
+        errors.append(f"{where_root}: at most {MAX_DESTRUCTIVE_REQUESTS} entries")
+    for index, entry in enumerate(entries):
+        where = f"{where_root}[{index}]"
+        if not isinstance(entry, str) or not entry.strip():
+            errors.append(f"{where}: must be a non-empty string")
+            continue
+        parsed = destructive_request_target(entry)
+        if parsed is None:
+            errors.append(
+                f"{where}: '<METHOD> <path or URL>' with METHOD one of "
+                f"{', '.join(DESTRUCTIVE_ENTRY_METHODS)}"
+            )
+            continue
+        problem = endpoint_error(parsed[1])
+        if problem:
+            errors.append(f"{where}: {problem}")
+    return errors
+
+
 def read_only_request_errors(entries: list, where_root: str = "settings.allowed_read_only_requests") -> list[str]:
     """Shape of read-only request entries: `<METHOD> <exact endpoint>`, METHOD POST."""
     errors: list[str] = []
@@ -322,6 +500,21 @@ def load_request(project_root: Path, session_id: str) -> tuple[dict | None, str 
     base, config_warnings = config_settings(project_root)
     settings, setting_errors = settings_from(data.get("settings"), base=base)
     errors += setting_errors
+    # The standing permissions file, folded in after the request has had its say. Its
+    # approvals ADD to whatever this run approves — an endpoint agreed to in an earlier
+    # session does not need agreeing to again. Its deny list replaces nothing and can be
+    # replaced by nothing: it is not a settings key, so no request can name it.
+    permissions, permission_warnings, permission_errors = load_permissions(project_root)
+    config_warnings += permission_warnings
+    # A deny list that could not be read in full is not a run that starts with a smaller
+    # deny list. It is a run that does not start.
+    errors += permission_errors
+    persisted = permissions["allowed_destructive_requests"]
+    if persisted:
+        settings["allowed_destructive_requests"] = list(
+            dict.fromkeys([*settings["allowed_destructive_requests"], *persisted])
+        )
+    blocked = permissions["blocked_requests"]
     if phase == "run" and not isinstance(data.get("scenario"), dict):
         errors.append("phase run needs the confirmed scenario object")
     for key in ("existing_tests", "spec_notes"):
@@ -338,6 +531,8 @@ def load_request(project_root: Path, session_id: str) -> tuple[dict | None, str 
             "spec_notes": data.get("spec_notes") or [],
             "path": str(path),
             "config_warnings": config_warnings,
+            # Carried beside the settings, never inside them.
+            "blocked_requests": blocked,
         },
         None,
         [],

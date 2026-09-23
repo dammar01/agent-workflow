@@ -442,7 +442,92 @@ def _finalize_is_idempotent() -> None:
     )
 
 
+def _confidence_caps_keep_their_reasons() -> None:
+    """A cap explains itself even when it has no number left to change.
+
+    `confidence_capped_by` is what main_agent reads to know what was WRONG with a run, not
+    only to explain why a number moved. A run that graded itself `low` and then hit a stale
+    dependency graph used to record neither: the value needed no change, so the reason was
+    dropped along with it, and the one signal saying why the run was weak never arrived.
+    """
+    from core.evidence.contract import cap_confidence
+
+    already_low = cap_confidence({"confidence": "low"}, [("medium", "dependency graph is stale")])
+    assert_true(
+        already_low["confidence"] == "low"
+        and already_low["confidence_capped_by"] == ["dependency graph is stale"]
+        and already_low["confidence_reported"] == "low",
+        f"a digest already under the ceiling still records why it was capped: {already_low}",
+    )
+    # Two callers, one reason. The membership test was taken against a list snapshotted
+    # before either was appended, so both cleared it and the record said it twice.
+    doubled = cap_confidence(
+        {"confidence": "high"},
+        [("medium", "scope is wide"), ("low", "scope is wide")],
+    )
+    assert_true(
+        doubled["confidence"] == "low" and doubled["confidence_capped_by"] == ["scope is wide"],
+        f"one reason is recorded once, however many caps carry it: {doubled}",
+    )
+    # Across calls: some signals are only known after archival, and arrive on a second
+    # pass. The first pass's number is what the second agent said; the second pass must not
+    # report the first cap as that.
+    twice = cap_confidence({"confidence": "high"}, [("medium", "grounded claims carry no file:line")])
+    twice = cap_confidence(twice, [("low", "no cited anchor could be verified in this project")])
+    assert_true(
+        twice["confidence"] == "low"
+        and twice["confidence_reported"] == "high"
+        and len(twice["confidence_capped_by"]) == 2,
+        f"a later cap appends its reason and leaves the original number alone: {twice}",
+    )
+    assert_true(
+        cap_confidence({"confidence": "high"}, []) == {"confidence": "high"}
+        and cap_confidence(None, [("low", "x")]) is None,
+        "nothing to cap with, or nothing to cap, changes nothing",
+    )
+
+
+def _reused_evidence_reports_its_anchor_ratio() -> None:
+    """A recalled digest says how much of it could be verified, in the block read first.
+
+    The confidence cap fires only when NOTHING could be certified. Between that and a
+    clean run sits a result whose number is untouched and whose anchors are half
+    unopenable, and the digest used to read identically in both cases. The ratio is
+    reported rather than priced in: what a partial result is worth is the reader's call.
+    """
+    from core.evidence import evidence_store
+    from core.evidence.runtime_io import write_response_snapshot
+    from core.workspace.workspace_paths import workflow_paths
+
+    root = Path(tempfile.mkdtemp(prefix="anchor-ratio-"))
+    try:
+        (root / "src.py").write_text("\n".join(f"line_{i} = {i}" for i in range(1, 30)) + "\n", encoding="utf-8")
+        session_id = "ratio-session"
+        content = "claim [src.py:3] and claim [src.py:9]"
+        context = {"model": "provider/model-a", "agent": "analyze"}
+        write_response_snapshot(root, content, "run-ratio", session_id)
+        stored = {"summary": "recalled", "confidence": "high"}
+        evidence_store.record(
+            root, "analyze", "ratio query", session_id, stored,
+            workflow_paths(root, session_id)["logs_dir"] / "run-ratio" / "output.raw.md",
+            content, context=context,
+        )
+        result = Executor()._maybe_reuse(root, "analyze", "ratio query", session_id, context)
+        assert_true(
+            result is not None and result["digest"]["anchors"] == {"certified": 2, "total": 2},
+            f"a reused digest carries the ratio its evidence_ref reports: {result and result.get('digest')}",
+        )
+        assert_true(
+            "anchors" not in stored,
+            f"and the stored digest is not annotated with this run's numbers: {stored}",
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _test_workflow_contracts() -> None:
+    _confidence_caps_keep_their_reasons()
+    _reused_evidence_reports_its_anchor_ratio()
     _round_trips()
     _correlation_scoping()
     _correlation_chain()

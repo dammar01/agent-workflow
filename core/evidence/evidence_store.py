@@ -179,22 +179,38 @@ def read_artifact(project_root: Path, entry: dict) -> str | None:
 
 
 def _extract_anchors(project_root: Path, content: str) -> tuple[list[dict], bool]:
-    """Return hashed unique anchors and whether every citation was certifiable."""
+    """Return unique anchors and whether every citation was certifiable.
+
+    An uncertifiable citation no longer ends the scan. It used to: the first anchor that
+    could not be hashed — one outside the project root, or a file that has since moved —
+    returned whatever had been collected so far, and when that anchor came first the
+    answer was an empty list. A cross-project analysis whose every claim named a file
+    reported `anchors: 0`, which reads as "no evidence" rather than "evidence this process
+    cannot open".
+
+    So each anchor is kept and marked. `certified` says whether its line was hashed;
+    `hash` is None when it was not. The completeness flag still goes False, so nothing
+    downstream treats a partly-uncertified artifact as reusable — `_is_fresh` demands
+    every anchor hold, and it cannot check one it never hashed.
+    """
     seen: set[tuple[str, int]] = set()
     anchors: list[dict] = []
+    complete = True
     for m in _FILELINE.finditer(content or ""):
         file, line = m.group(1), int(m.group(2))
         key = (file, line)
         if key in seen:
             continue
         seen.add(key)
-        h = _anchor_hash(project_root, file, line)
-        if h is None:
-            return anchors, False
         if len(anchors) >= MAX_ANCHORS_PER_ARTIFACT:
             return anchors, False
-        anchors.append({"file": file, "line": line, "hash": h})
-    return anchors, True
+        h = _anchor_hash(project_root, file, line)
+        if h is None:
+            anchors.append({"file": file, "line": line, "hash": None, "certified": False})
+            complete = False
+            continue
+        anchors.append({"file": file, "line": line, "hash": h, "certified": True})
+    return anchors, complete
 
 
 def _load(project_root: Path) -> list[dict]:

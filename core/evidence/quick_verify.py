@@ -99,6 +99,106 @@ def changed_files(project_root: Path) -> list[str]:
     return files
 
 
+# A change this wide is not necessarily wrong, but it is no longer the change that was
+# planned, and that is worth saying out loud. The signal is "this grew past what a
+# reviewer holds in their head", not a budget to spend down to.
+#
+# Measured, not guessed. Across 44 commits from two real projects over two weeks:
+# files   median 8-17, p75 18-34, p90 32-41
+# lines   median 681-824, p75 1127-1806, p90 3366-3773
+# The first numbers tried here were 15 files / 600 lines, which would have fired on the
+# median commit of one project and most of the other's — a warning that arrives on
+# ordinary work is a warning nobody reads. These sit near p75-p90 instead, so the signal
+# stays rare enough to mean something. Both are ceilings on the whole working tree.
+SCOPE_WIDE_FILES = 30
+SCOPE_WIDE_LINES = 2000
+
+
+def changed_file_stats(project_root: Path) -> dict[str, tuple[int, int]]:
+    """Per-file (added, deleted) line counts for the working tree, keyed like
+    `changed_files`.
+
+    File COUNT was already known; magnitude was not. The runtime kept only the one-line
+    `--shortstat` summary for the prompt, so nothing downstream could tell a rename
+    sweep across twelve files from a rewrite of one. `--numstat` is the same git call
+    with the per-file rows kept.
+
+    Untracked files count as wholly added, which is what they are. Binary files report
+    `-` in numstat and land as (0, 0): they have no line count to report, and inventing
+    one would put weight on the exact files whose size says least about review effort.
+
+    Silent on failure, like `_changed_files_block`: no git, no repo, or a detached
+    worktree means no measurement, never a wrong one.
+    """
+    stats: dict[str, tuple[int, int]] = {}
+    lines, _error = _git_lines(["git", "diff", "--numstat", "HEAD", "--"], project_root)
+    for row in lines:
+        parts = row.split("\t")
+        if len(parts) < 3:
+            continue
+        added, deleted, rel = parts[0], parts[1], parts[-1]
+        if _IGNORED_PARTS & set(Path(rel).parts):
+            continue
+        stats[rel] = (
+            int(added) if added.isdigit() else 0,
+            int(deleted) if deleted.isdigit() else 0,
+        )
+
+    untracked, _ = _git_lines(
+        ["git", "ls-files", "--others", "--exclude-standard"], project_root
+    )
+    for rel in untracked:
+        if rel in stats or _IGNORED_PARTS & set(Path(rel).parts):
+            continue
+        try:
+            text = (project_root / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        stats[rel] = (len(text.splitlines()), 0)
+    return stats
+
+
+def _within_scope(rel: str, scope: list[str]) -> bool:
+    """Whether `rel` is covered by any entry of a plan's `editable:` list.
+
+    Scope entries are written by a human through the plan, so they arrive as whatever
+    reads naturally — a file, a directory with or without its trailing slash, a
+    backslash path on Windows. Prefix matching on a normalised form is the only
+    comparison that survives all of those without asking the plan to be machine-shaped.
+    """
+    target = rel.replace("\\", "/").strip().lower()
+    for entry in scope:
+        prefix = str(entry).replace("\\", "/").strip().strip("`").lower()
+        if not prefix:
+            continue
+        if target == prefix or target.startswith(prefix.rstrip("/") + "/"):
+            return True
+    return False
+
+
+def scope_width(project_root: Path, editable_scope: list[str] | None) -> dict:
+    """How wide the working tree has grown, and how much of it the plan claimed.
+
+    Returned even when there is no plan scope to compare against: the file and line
+    totals are the part that says a task is widening, and they are true whether or not
+    anyone wrote down what the task was supposed to touch. `outside_scope` stays empty
+    in that case rather than accusing every file of being unplanned.
+    """
+    stats = changed_file_stats(project_root)
+    scope = [s for s in (editable_scope or []) if str(s).strip()]
+    outside = (
+        sorted(rel for rel in stats if not _within_scope(rel, scope)) if scope else []
+    )
+    total_lines = sum(added + deleted for added, deleted in stats.values())
+    return {
+        "files": len(stats),
+        "lines": total_lines,
+        "outside_scope": outside,
+        "scope_declared": bool(scope),
+        "wide": len(stats) > SCOPE_WIDE_FILES or total_lines > SCOPE_WIDE_LINES,
+    }
+
+
 def _check_json(project_root: Path, rel: str) -> tuple[bool, str]:
     try:
         json.loads((project_root / rel).read_text(encoding="utf-8"))

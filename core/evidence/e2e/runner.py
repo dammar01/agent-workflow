@@ -40,7 +40,7 @@ from core.workspace import current as e2e_current
 from core.evidence.e2e import redact as e2e_redact
 from core.evidence.e2e import request as e2e_request
 from core.evidence.e2e import tagging as e2e_tagging
-from core.evidence.e2e.classify import build_report
+from core.evidence.e2e.classify import build_report, repeat_bucket
 from core.evidence.e2e.normalize import evidence_block, to_verification
 from core.evidence.e2e.preflight import display_available, preflight
 from core.evidence.e2e.spec import (
@@ -58,8 +58,14 @@ from core.evidence.e2e.supervisor import run_player
 from core.provider.result_prep import _sanitize_result
 from core.evidence.contracts import correlation_id_for
 from core.evidence.runtime_io import write_quality_record
+from core.runtime.state import E2E_REPEAT_LIMIT, e2e_repeat_state, note_e2e_outcome
 from core.workspace.workspace_paths import atomic_write_text, now_iso, workflow_paths
 from utils.redact import redact_value
+
+# Preflight refusals the repeat brake counts: the ones the environment owns, which no edit
+# to the request can clear. `preflight` also returns `spec_invalid` for a base_url or write
+# policy the run itself named, and that one is the caller's to fix by asking again.
+_REPEATABLE_PREFLIGHT = frozenset({"playwright_missing", "browser_missing", "base_url_unreachable"})
 
 FAKE_ENV = "WORKFLOW_E2E_FAKE"
 SMOKE_ENV = "WORKFLOW_E2E_SMOKE"
@@ -101,6 +107,12 @@ _INHERITED_ENV = (
     "DISPLAY",
 )
 _UNPROVEN = "unproven"
+# What to call a repeat streak that has no reason of its own to quote.
+_REPEAT_PHRASE = {
+    "app": "a failing application",
+    "harness": "the same harness problem",
+    "timeout": "a timeout",
+}
 
 
 def _result(content: str, verdict: str, e2e_meta: dict, warnings: list[dict]) -> dict:
@@ -349,6 +361,28 @@ def _retryable(report: dict) -> bool:
     return report["browser_verdict"] == "incomplete" and report["reason"] in RETRYABLE_REASONS
 
 
+def _destructive_requests(report: dict) -> list[dict]:
+    """Deletes the guard refused for want of an approval, as `{method, endpoint, entry}`.
+
+    `entry` is the line that would approve it, written out ready to paste, because the
+    gap between "a delete was blocked" and "here is what to add" is where this kind of
+    refusal usually stalls.
+    """
+    out: list[dict] = []
+    seen: set[str] = set()
+    for obs in report.get("observations") or []:
+        if obs.get("kind") != "destructive_unapproved":
+            continue
+        endpoint = str(obs.get("url") or "")
+        if not endpoint or endpoint in seen:
+            continue
+        seen.add(endpoint)
+        out.append(
+            {"method": "DELETE", "endpoint": endpoint, "entry": f"DELETE {endpoint}"}
+        )
+    return out
+
+
 def _run_signature(report: dict) -> tuple:
     """What "the same failure twice" means: same verdict, same reason, same step outcomes.
 
@@ -414,6 +448,48 @@ def run(
             pass
         return _result(norm["content"], norm["verdict"], e2e_meta, warnings=norm["warnings"])
 
+    # ---- the repeat brake --------------------------------------------------------
+    # Checked before a browser starts, because the cost this exists to stop is the browser.
+    # The in-run retry loop already refuses to try a third time when two attempts match step
+    # for step; it cannot see the caller coming back with an edited scenario and the same
+    # environment problem underneath. Twelve invocations against one 403 is the shape it
+    # missed, and every edit in between was to steps that were never what was wrong.
+    repeat = e2e_repeat_state(project_root, session_id)
+    repeat_origin = e2e_knowledge.origin_of(str(config.get("base_url") or ""))
+    if (
+        phase != "draft"
+        and repeat.get("origin") == repeat_origin
+        # `.get` throughout: this record comes off disk and may have been written by an
+        # older build or half-truncated. A brake that raises on a field it expected would
+        # stop the run it exists to protect, for the wrong reason and with no explanation.
+        and int(repeat.get("streak") or 0) >= E2E_REPEAT_LIMIT
+    ):
+        # An app failure has no reason — the failing app is the verdict, not an obstacle
+        # that kept the run from reaching one — so the bucket is what there is to name.
+        repeat_reason = repeat.get("reason") or _REPEAT_PHRASE.get(repeat.get("bucket") or "", "the same outcome")
+        e2e_meta["reason"] = "repeat_failure"
+        e2e_meta["repeat"] = dict(repeat)
+        e2e_meta["next_action"] = (
+            "the last "
+            f"{repeat.get('streak')} runs against {repeat_origin} all ended in "
+            f"'{repeat_reason}' — fix that before running again, or start a new session "
+            "if it has already been fixed"
+        )
+        return _finish(
+            to_verification(
+                {"claims": {}, "browser_verdict": None},
+                preflight={
+                    "ok": False,
+                    "reason": "repeat_failure",
+                    "detail": (
+                        f"{repeat.get('streak')} consecutive runs ended in '{repeat_reason}'. "
+                        "Editing the scenario has not changed the outcome, so the cause is "
+                        "outside it — the environment, the data, or the credentials."
+                    ),
+                },
+            )
+        )
+
     pre = preflight(config, fake=bool(fake))
     e2e_meta["preflight"] = pre["checks"]
     network = pre.get("network") or {"write_hosts": [], "pins": {}, "hosts": []}
@@ -423,6 +499,28 @@ def run(
         e2e_meta["reason"] = pre["reason"]
         if phase == "draft":
             return _draft_result(project_root, session_id, e2e_meta, status="blocked", errors=[f"{pre['reason']}: {pre['detail']}"])
+        # Counted, though no browser ever started. The loop the brake exists to break is
+        # precisely this one: the run never reaches the browser report below, which used to
+        # be the only place an outcome was written, so twelve invocations against one
+        # unreachable base URL left the counter at zero and the brake never fired against
+        # the shape it was built for.
+        #
+        # By reason, not by "preflight failed". The caller's own input — `spec_invalid` from
+        # the base-URL or write policy here, and `secrets_invalid` / `env_missing` above —
+        # is corrected by coming back with it fixed, which is the fix working rather than a
+        # loop; braking there would lock someone out on the third attempt at a password, and
+        # only a new session would let them try a fourth. What is counted is the environment,
+        # which no edit to the request can change, and that is what repeating is worth
+        # stopping.
+        if pre["reason"] in _REPEATABLE_PREFLIGHT:
+            try:
+                streak = note_e2e_outcome(
+                    project_root, session_id, repeat_origin, repeat_bucket("incomplete", pre["reason"]), pre["reason"]
+                )
+                if streak > 1:
+                    e2e_meta["repeat_streak"] = streak
+            except Exception:  # observing the run must never be able to fail it
+                pass
         return _finish(to_verification({"claims": {}, "browser_verdict": None}, preflight=pre))
 
     secrets, secret_errors, secret_info = e2e_request.load_secrets(project_root, config.get("secrets_profile") or "")
@@ -571,6 +669,10 @@ def run(
                     "project_root": str(project_root),
                     "write_hosts": network.get("write_hosts") or [],
                     "host_pins": network.get("pins") or {},
+                    # From the permissions file only. It reaches the player here rather
+                    # than through `settings` so that no request can name it, extend it,
+                    # or empty it.
+                    "blocked_requests": request.get("blocked_requests") or [],
                 },
                 "artifacts_dir": str(attempt_dir),
                 "fake": fake,
@@ -710,6 +812,32 @@ def run(
     e2e_meta["browser_verdict"] = report["browser_verdict"]
     e2e_meta["reason"] = report["reason"]
     e2e_meta["cleanup"] = {key: report["cleanup"][key] for key in ("status", "groups")}
+    # ---- deletes waiting on an answer ------------------------------------------------
+    # The one refusal in this package that is a question rather than a verdict. It travels
+    # in meta so the skill can ask it and write the approval into the next request; the
+    # runtime never grants it, and never asks on the user's behalf.
+    # Feeds the brake above on the next invocation. A pass clears the streak; only a
+    # non-pass verdict carries a reason worth counting.
+    try:
+        streak = note_e2e_outcome(
+            project_root,
+            session_id,
+            repeat_origin,
+            repeat_bucket(report["browser_verdict"], report["reason"]),
+            report["reason"],
+        )
+        if streak > 1:
+            e2e_meta["repeat_streak"] = streak
+    except Exception:  # observing the run must never be able to fail it
+        pass
+
+    pending = _destructive_requests(report)
+    if pending:
+        e2e_meta["destructive_pending"] = pending
+        e2e_meta["next_action"] = (
+            "ask the user to approve each delete below, then add the approved entries to "
+            "settings.allowed_destructive_requests in the next request and run again"
+        )
 
     # ---- stage 3: hybrid review ---------------------------------------------------
     block, block_hits = e2e_redact.redact_text(

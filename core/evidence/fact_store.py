@@ -55,7 +55,13 @@ LINE_PROXIMITY = 3
 # this much overlap — below it the fact is dropped, never served as "relevant".
 MIN_RELEVANCE_OVERLAP = 1
 
-_FILELINE = re.compile(r"([A-Za-z0-9_./\\-]+\.[A-Za-z0-9_]+):(\d+)")
+# The optional single-letter prefix is a Windows drive. Without it the path group, which
+# cannot contain `:`, stops at the drive colon: `E:\work\router.py:16` matched only
+# `\work\router.py:16`, and that fragment resolves nowhere. An analysis whose evidence
+# lives outside the repo — a transcript under ~/.claude, a sibling project — came back
+# reporting zero anchors while every claim named its file. One letter is deliberate:
+# `https:` and `note:` stay unmatched, so the shape this admits is still a path.
+_FILELINE = re.compile(r"((?:[A-Za-z]:)?[A-Za-z0-9_./\\-]+\.[A-Za-z0-9_]+):(\d+)")
 _CATEGORY = re.compile(r"^\[(config|pattern|invariant)\]", re.IGNORECASE)
 _WORD = re.compile(r"[a-z0-9_]+")
 # "X is cached" and "X is not cached" share almost every word — high similarity, opposite

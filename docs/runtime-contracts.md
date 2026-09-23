@@ -79,8 +79,12 @@ request is `request_invalid`, because the user confirmed it for this run.
 watchable headed run; 0..5000, counts against `total_timeout_s`), `nav_timeout_ms`,
 `step_timeout_ms`, `idle_timeout_s`, `total_timeout_s`, `probe_max_elements`,
 `allow_remote`, `allowed_origins`, `allow_side_effects` (judged by the addresses the write
-hosts resolve to; see below), `allowed_read_only_requests` (`"POST /path"` or `"POST http(s)://host/path"`,
-exact path, no wildcard or query, at most 20; see below), `secrets_profile` (a
+hosts resolve to; see below), `allow_local_side_effects` (default `true`: non-destructive
+writes to loopback, `*.localhost` and `.test` need no further opt-in; see below),
+`allowed_read_only_requests` (`"POST /path"` or `"POST http(s)://host/path"`,
+exact path, no wildcard or query, at most 20; see below), `allowed_destructive_requests`
+(`"DELETE /path"` or a full URL, route templates such as `/api/items/:id` allowed,
+wildcards are not, at most 20; see below), `secrets_profile` (a
 `secrets.json` profile name; empty = the file's `default`), `secrets_template_profiles`
 (profile names a newly created `secrets.json` gets; at most 20, unique),
 `fail_on_console_error`, `max_retries` (how many extra browsers one run may start; see
@@ -169,7 +173,41 @@ it hides is what this package exists to prevent), the reasons a rerun cannot cha
 `env_missing`, `player_unavailable`), and any run with `allow_side_effects` true — its
 first attempt's write may already have reached the server. Attempt 1 owns the run's `e2e/`
 directory; each retry writes to `e2e/retry<n>/`, and `meta.e2e.attempts` lists them. One
-`artifact_max_mb` budget covers the run directory and every `retry<n>/` together. A run that
+`artifact_max_mb` budget covers the run directory and every `retry<n>/` together.
+
+That loop lives inside one invocation. Across invocations there is a second brake, keyed on
+origin and failure BUCKET in the session state (`state.note_e2e_outcome`): three runs in a
+row against the same origin ending the same way, and the next one is refused before a
+browser starts, `incomplete` with reason `repeat_failure` and the streak in
+`meta.e2e.repeat`. The bucket is one of three (`classify.repeat_bucket`): `timeout` for a
+run that ran out of time, `harness` for one the environment stopped, `app` for one the
+application failed. Coarse, because one obstacle answers to several reasons in turn —
+`base_url_unreachable`, then `stuck`, then `harness_error` — and an exact-reason key started
+a fresh streak of one at every rename. The three rungs are three different things to do
+next: wait or raise a limit; fix the environment; fix the application. An app failure has no
+`reason` of its own — the failing app IS the verdict — so keyed on reason it was the one
+outcome that could never accumulate, which is the outcome most worth braking on. The latest
+reason still travels in the record as the detail the refusal quotes back.
+
+A run is counted at two points, not one. After a browser report, keyed on that report's own
+verdict and reason; and at the preflight gate, which a refused run never gets past — an
+outcome written only after a browser report left `base_url_unreachable` and
+`playwright_missing` counting for nothing, however many times the same missing dependency
+stopped the same run, so the streak stayed at zero and the brake never fired against the
+shape it was built for. By reason, not by "preflight failed": `runner._REPEATABLE_PREFLIGHT`
+is `playwright_missing`, `browser_missing`, `base_url_unreachable` — what the environment
+owns. Everything else is the caller's own input, including the `spec_invalid` that preflight
+itself returns for a base-URL or write policy the request named, and `secrets_invalid` and
+`env_missing` from the gates above it. Coming back with those corrected is the fix working
+rather than a loop, so braking there would lock someone out on the third attempt at a
+password and leave a new session as the only way to try a fourth. A draft is never counted —
+it starts no browser, so repeating it costs nothing — and neither is `repeat_failure` itself,
+which would extend the streak it has just reported.
+Bucket rather than step outcomes, deliberately — the loop this catches
+edits the scenario between attempts, so a step-level key would reset every time and count to
+one forever. What twelve such runs have in common is never the steps; it is the environment,
+the data or the credentials underneath them. A `pass` clears the streak, and so does a new
+session. A run that
 PASSES only on a later attempt is not a clean pass: the verdict carries a gap naming the
 reasons the earlier attempts ended on (`passed only on attempt N of N`), so it is
 `incomplete` — `timeout` and `not_ready` are also what an intermittently broken app looks like.
@@ -255,8 +293,101 @@ fenced JSON scenario), `spec_uncertainties`. Validation runs in both phases, bef
   not `GET`, `HEAD` or `OPTIONS` passes only when the request's own host is loopback
   (`localhost`, `*.localhost`, 127.0.0.0/8, `::1`), a `.test` name, or a host preflight
   approved and pinned — this catches an API on a remote host called from a local page, and
-  its redirects are followed by the guard (above). While it is false every such request is aborted, on any origin (an API on another
-  port is still the app's data). A POST that only reads (a search, a GraphQL query) may pass as a confirmed read:
+  its redirects are followed by the guard (above). While it is false a `POST`, `PUT` or
+  `PATCH` — those three and nothing else, `spec.WRITE_METHODS` less `DELETE` — to a local
+  development host still passes when `allow_local_side_effects` is true
+  (the default): one global switch used to make `localhost:8000` and a production host the
+  same decision, so proving a form saves required the permission to write anywhere
+  preflight approved. A verb outside that list (`PURGE`, `PROPFIND`, anything a stack
+  invents) is refused here however local the host: the permission was granted for ordinary
+  form writes, and being local is not a reason to send a method nobody named.
+  `allow_side_effects`, the wider opt-in, is unchanged — it was never a list of verbs.
+  Every other host is aborted, on any origin (an API on another
+  port is still the app's data).
+  `DELETE` is outside all of that. It passes only when its endpoint is named in
+  `allowed_destructive_requests`, whatever the other switches say: the runtime cannot tell
+  a record the scenario created from one that was already there, and a local database still
+  holds work that was not this run's to remove. So does any request CARRYING a `_method`
+  override field, whatever the field says (`spec.carries_method_override`, refusal
+  `override_unapproved`): a request holding that field is not the method it is spelled as,
+  and which value a given framework honours, on which verbs, after how many layers of
+  decoding, is not knowable from the browser side. The value is therefore not read. An
+  earlier design did read it and ranked what it meant; six verification rounds each closed
+  a real hole in that ranking and each left a deeper one — a demoted value, an escaped key,
+  a late multipart part, a duplicated field, a doubly encoded name, a UTF-16 body — because
+  the premise, not the code, was wrong. The trade is explicit: a POST whose form happens to
+  carry the field, or a body that merely spells it, is refused with the endpoint named. The
+  question is asked before the safe-method exit, over the query, body and headers
+  (`X-HTTP-Method-Override`, `X-Method-Override`), against every decoding a backend might
+  apply — percent (including doubled), JSON `\u` escapes, multipart envelopes and UTF-16.
+  A multipart body is read through `post_data_buffer` when `post_data` refuses it, which
+  keeps ordinary uploads working; a body neither accessor can produce does not receive the
+  local-write permission at all, and under `allow_side_effects` it is sent but reported as
+  a `write_uninspected` observation.
+  Approvals and refusals both live in `.workflow/e2e/permissions.json`, beside
+  `secrets.json` and for the same reason — both answer what a run may do here, and both
+  are the project's standing answer rather than one run's. Its
+  `allowed_destructive_requests` are merged into whatever the request also approves, so an
+  endpoint agreed to once is never asked about again. Its `blocked_requests`
+  (`<METHOD|*> <endpoint>`, route templates allowed) are the opposite: read from this file
+  only, never a settings key, checked before the safe-method exit and before every
+  permission below it, and winning over `allow_side_effects` and an approval alike
+  (`blocked_by_policy`). It is checked again at every body-keeping redirect hop, because a
+  307/308 is fetched by the guard rather than issued by the browser and so never returns
+  through the route handler — a write to an endpoint nobody denied, answered
+  `307 → /api/payments`, used to land on the one endpoint the project had named. A
+  301/302/303 is re-issued by the browser as a fresh request, which meets the list at
+  `guard` like any other. A deny list a run could extend is one a run could also shorten.
+
+  The list governs NAVIGATION as well as writes, through `Session._navigation_refusal`,
+  which asks the two policies that judge an address: `navigation_error` for the origin —
+  whether this run may go there at all — and the deny list for the endpoint. Only the first
+  was ever asked of a navigation, so a redirect from an allowed origin onto a denied path of
+  that same origin satisfied both checks at once, the origin policy having nothing to object
+  to and the list's only reader never seeing a GET. It is asked at `goto`, where the step is
+  refused before anything is sent; at `guard`, where a top-level navigation is aborted; and
+  at `page.on("framenavigated")`, which reads the address bar after every change — a
+  `history.pushState`, a meta refresh or a redirect Chromium followed internally moves the
+  page without producing a request to attribute, and the address bar is what the policy is
+  about. A landing caught after the fact fails the step that caused it, naming the policy
+  that refused it in `blocked_detail`; the same address reported twice within one step is
+  one failure, while reaching it again under a later step is that step's own. GET and `*`
+  entries only: `DELETE /api/users/:id` says not to delete that record, and opening the
+  address is a read.
+
+  A step fails on what its own window caught, by comparing a counter before and after the
+  action, so a navigation that action merely scheduled — a debounced `pushState`, a redirect
+  still being followed — arrives after the comparison and belongs to no step.
+  `report_unattributed_navigation` emits those at the end of the run as
+  `{"type": "harness", "reason": "navigation_blocked"}`, which is in `INCOMPLETE_REASONS`:
+  the verdict is `incomplete`, never `pass`. Harness rather than an application failure —
+  the application did nothing wrong, the run went where it may not go, and a run that went
+  off policy has proven nothing whatever its assertions saw. Attribution is by position in
+  `blocked`, not by address: the same address can be reached twice, and a URL key let a
+  later step's claim cover an earlier landing nobody owned.
+
+  A cleanup step claims nothing either. Its failures are reported as `cleanup` events, which
+  the classifier reads as housekeeping and never lets decide a verdict — right for a delete
+  that could not be undone, wrong for a policy refusal, since a cleanup that reached a denied
+  endpoint reached it exactly as a test step would have. So a cleanup-phase violation is left
+  unclaimed and surfaces at the run level like any other.
+
+  A malformed `permissions.json` is not a run with a shorter deny list. `load_permissions`
+  returns `(permissions, warnings, errors)`, and the two keys are held to opposite
+  standards, because dropping them does opposite things. Dropping an approval leaves the run
+  stricter than asked, so it warns and falls back, the same posture as a config.json knob.
+  Dropping a deny entry leaves the run free to touch what the project named, so it is an
+  error and `load_request` refuses the run (`request_invalid`): a file present but
+  unreadable, a top level that is not an object, a `blocked_requests` that is not a list, or
+  any entry in it that does not parse. Each bad entry is named individually — one of them
+  used to take the whole list with it, so `{"blocked_requests": ["* /api/payments", "bad"]}`
+  loaded as no deny list at all, one warning among the run's others, and the run proceeded.
+  An absent file is still no permissions and no problem.
+  A read is included deliberately: a GET can fire a mailer or bill per call, and this list
+  is where a project names the endpoints no run should touch at all. A refused delete is
+  reported as `meta.e2e.destructive_pending` — `{method, endpoint, entry}`, the endpoint in
+  route form — which is a question for the user, not a verdict; the runtime never grants it.
+  A POST that only reads (a search, a GraphQL query) may pass as a confirmed read:
   stage 1 proposes it under `read_only_requests` (`method | endpoint | source_refs | reason`,
   the handler's `path:line` required and grounded, `req:` refused, an ungrounded proposal
   makes the draft `invalid`), the draft lists it, the user confirms, and only an entry the

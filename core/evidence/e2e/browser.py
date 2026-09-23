@@ -24,8 +24,8 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 
 from core.evidence.e2e.preflight import is_local_dev_host, same_origin
 from core.evidence.e2e.redact import sanitize_endpoint
-from core.evidence.e2e.request import read_only_request_target
-from core.evidence.e2e.spec import SELECTOR_RANK, navigation_error, request_path_matches, resolve_upload, selector_rank, step_selectors
+from core.evidence.e2e.request import blocked_request_target, destructive_request_target, read_only_request_target
+from core.evidence.e2e.spec import DESTRUCTIVE_METHODS, SAFE_METHODS, SELECTOR_RANK, WRITE_METHODS, carries_method_override, navigation_error, request_path_matches, resolve_upload, selector_rank, step_selectors
 
 HEARTBEAT_EVERY_S = 2.0
 POLL_S = 0.1
@@ -33,7 +33,6 @@ DETAIL_CHARS = 300
 STABLE_WAIT_MS = 2000
 _BROWSERS = ("chromium", "firefox", "webkit")
 _ELEMENT_ACTIONS = frozenset({"click", "fill", "select", "press", "upload"})
-_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 # A 307/308 repeats the method and the body at the new address; the others turn a POST
 # into a GET, which is a navigation question rather than a write question.
 _BODY_KEEPING_REDIRECTS = frozenset({307, 308})
@@ -118,10 +117,81 @@ def _endpoint(url: str) -> tuple | None:
 
 # Why a write was refused, as the step detail and the warning observation phrase it.
 _REFUSAL_TEXT = {
-    "side_effects_off": "settings.allow_side_effects is false and the endpoint is not in allowed_read_only_requests",
+    "side_effects_off": "settings.allow_side_effects is false, settings.allow_local_side_effects does not cover this host, and the endpoint is not in allowed_read_only_requests",
     "non_loopback": "writes go only to a loopback or .test host, or one preflight approved and pinned, and this one is not",
     "redirect": "the server redirected the write somewhere the guard does not allow",
+    "destructive_unapproved": "a delete needs its exact endpoint in settings.allowed_destructive_requests — approve it and run again",
+    "override_unapproved": "this request carries a _method override field, so its verb does not decide what it does — approve the endpoint in settings.allowed_destructive_requests, or remove the field",
+    "blocked_by_policy": "the project's e2e/permissions.json lists this endpoint under blocked_requests; no run setting can override it",
 }
+
+
+def _body_readings(text: str) -> list[str]:
+    """One body as every text a backend might read it as.
+
+    A UTF-16 body renders each ASCII character with a null beside it, so `_method` matches
+    nothing here while the application, reading the declared charset, sees the field
+    plainly. Both readings are produced and both are scanned.
+
+    A null RATIO was tried to tell one case from the other and it was a guess dressed as a
+    rule: a UTF-16 body of mostly non-ASCII text carries few nulls and slipped under the
+    threshold. The cost of being wrong is asymmetric and this is the cheap side of it — a
+    binary upload whose bytes happen to spell the field once the nulls are gone is refused
+    with a message naming the endpoint, while the other mistake is a delete nobody approved.
+    """
+    if "\x00" not in text:
+        return [text]
+    return [text, text.replace("\x00", "")]
+
+
+def _decode_body(raw: bytes) -> list[str]:
+    """A request body's bytes as every text a backend might read them as.
+
+    UTF-8 first, since that is what a browser sends. The readings themselves are
+    `_body_readings`, shared with the ordinary string path: applying them only to the
+    bytes fallback left a `post_data` string that already contained nulls scanned once,
+    unchanged, which is the same hole one accessor further along.
+    """
+    return _body_readings(raw.decode("utf-8", errors="replace"))
+
+
+def _blocked_list(config: dict, base_url: str) -> tuple:
+    """(method, scheme, host, port, path-template) for every blocked_requests entry.
+
+    `*` stays as the method, matched against anything at check time.
+    """
+    blocked = []
+    for entry in config.get("blocked_requests") or []:
+        parsed = blocked_request_target(entry) if isinstance(entry, str) else None
+        if parsed is None:
+            continue
+        method, target = parsed
+        key = _endpoint(urljoin(base_url, target) if target.startswith("/") else target)
+        if key is not None:
+            blocked.append((method, *key))
+    return tuple(blocked)
+
+
+def _destructive_allow_list(config: dict, base_url: str) -> tuple:
+    """(method, scheme, host, port, path-template) for every allowed_destructive_requests entry.
+
+    A tuple of templates rather than a set of exact endpoints, because the path is matched
+    with `request_path_matches`: `/api/items/:id` covers `/api/items/7`. Approving the
+    literal id would be the tighter promise and an unusable one — the id changes every run,
+    and naming it here would also write it into the artifacts this package keeps ids out of.
+    `:id` spans one segment, never a subtree, so the approval stays the route the user was
+    shown rather than everything beneath it.
+    """
+    allowed = []
+    for entry in config.get("allowed_destructive_requests") or []:
+        parsed = destructive_request_target(entry) if isinstance(entry, str) else None
+        if parsed is None:
+            continue
+        method, target = parsed
+        key = _endpoint(urljoin(base_url, target) if target.startswith("/") else target)
+        if key is not None:
+            allowed.append((method, *key))
+    return tuple(allowed)
 _LEDGER_UNFINISHED = "no response before the run ended"
 MAX_HIDDEN_CHECK = 20
 
@@ -238,6 +308,23 @@ class Session:
         self.probe_limit = max(1, int(config.get("probe_max_elements") or 200))
         self.fail_on_console_error = bool(config.get("fail_on_console_error"))
         self.blocked: list[str] = []
+        # Why each blocked URL was refused, so the step that caused it can say which policy
+        # said no. The origin policy and the deny list both land in `blocked` and read
+        # nothing alike to whoever has to act on the failure.
+        self.blocked_detail: dict[str, str] = {}
+        # Addresses already judged, per step. `framenavigated` and the `request` event both
+        # report the same landing, and a redirect chain reports every hop; without this the
+        # step would fail once per report of one navigation. Keyed on the step as well as the
+        # address, because leaving a denied page and coming back to it later is a second
+        # violation by a second step, and a run-wide key would have shown only the first.
+        self._navigation_seen: set[tuple[str | None, str]] = set()
+        # Which entries of `blocked` a step's window already claimed, BY POSITION. A
+        # `pushState` scheduled by the last click lands after `_execute` has compared its
+        # counter, so without this the address was recorded and then read by nobody. By
+        # position and not by address, because the same address can be reached twice: keyed
+        # on the URL, a later step claiming it also marked the earlier unattributed landing
+        # as handled, and that first violation was never reported by anyone.
+        self._navigation_attributed: set[int] = set()
         self.allow_side_effects = bool(config.get("allow_side_effects"))
         # Hosts preflight approved for writes, by name. It resolved each one and found only
         # loopback or private addresses, and pinned the browser's resolver to what it found.
@@ -250,6 +337,24 @@ class Session:
         # from the `request` event, after the fact, and reported as exactly that.
         self.redirected_off_policy: list[str] = []
         self.read_only_allow = _read_only_allow_list(config, self.base_url)
+        # Default true, and narrow: it opens writes to hosts preflight already classified
+        # as local development, and it does not open deletes.
+        self.allow_local_side_effects = config.get("allow_local_side_effects", True) is not False
+        self.destructive_allow = _destructive_allow_list(config, self.base_url)
+        # The project's deny list. It comes from the permissions file beside secrets.json,
+        # never from a request, and it is checked before anything else — including before
+        # a GET is waved through as a read. An endpoint listed here is one nobody wants a
+        # browser run touching, and a run that could argue its way past it would make the
+        # list advisory.
+        self.blocked_requests = _blocked_list(config, self.base_url)
+        # Deletes this run refused for want of an approval, as {method, endpoint}. The
+        # runner turns them into the permission request the user answers; without the list
+        # the refusal would say a delete was blocked without saying which one to approve.
+        self.destructive_blocked: list[dict] = []
+        # Writes sent under allow_side_effects whose body neither accessor could produce.
+        # Reported as a warning, never silently: the delete check reads the body, so a
+        # body nothing could read is a check that did not happen.
+        self.uninspectable_writes: list[dict] = []
         try:
             self.total_timeout_s = float(config.get("total_timeout_s") or 0)
         except (TypeError, ValueError):
@@ -373,30 +478,157 @@ class Session:
             top_level = bool(request.is_navigation_request()) and request.frame == self.page.main_frame
         except Exception:
             top_level = False
-        if top_level and navigation_error(url, self.config):
-            self.blocked.append(url)
+        if top_level and (refusal := self._navigation_refusal(url)):
+            self._note_off_policy(url, refusal, redirected=False)
             route.abort("blockedbyclient")
             return
-        method = str(getattr(request, "method", None) or "GET").upper()
-        if method in _SAFE_METHODS:
+        wire_method = str(getattr(request, "method", None) or "GET").upper()
+        body_unreadable = False
+        bodies: list[str] = []
+        try:
+            raw_body = getattr(request, "post_data", None)
+            if isinstance(raw_body, str):
+                bodies = _body_readings(raw_body)
+        except Exception:  # a body Playwright cannot decode as text (multipart upload)
+            # `post_data` refuses a multipart body; `post_data_buffer` hands over the same
+            # bytes without trying to be a string. Decoded leniently and only to be read
+            # for an override field — a file upload is the common case here and it must
+            # keep working, while an upload envelope carrying `_method=DELETE` must not
+            # pass as an ordinary write just because Playwright called the body binary.
+            try:
+                buffered = getattr(request, "post_data_buffer", None)
+                if isinstance(buffered, (bytes, bytearray)):
+                    bodies = _decode_body(bytes(buffered))
+            except Exception:
+                bodies = []
+            body_unreadable = not bodies
+        body = bodies[0] if bodies else None
+        try:
+            request_headers = dict(request.headers or {})
+        except Exception:
+            request_headers = {}
+        # Whether this request can be judged by its verb at all. Laravel and Rails route a
+        # delete as a POST carrying `_method`, so a request holding that field is not the
+        # method it is spelled as — and which value a given framework honours, on which
+        # verbs, after how many layers of decoding, is not something this guard can know.
+        # So it does not try. Carrying the field is the whole test; the value is not read.
+        #
+        # Asked BEFORE the safe-method exit. Reading the verb first and the field second
+        # let `GET /items/7?_method=DELETE` leave through the door held open for reads.
+        try:
+            query = urlsplit(url).query
+        except ValueError:
+            query = ""
+        # Every reading of the body, because UTF-16 gives two and either could be the one
+        # the application parses.
+        overridden = carries_method_override(None, request_headers, query) or any(
+            carries_method_override(text, None, None) for text in bodies
+        )
+        method = wire_method
+        endpoint = _endpoint(url)
+        # Before the read exit, and before every permission below it. A read can still
+        # cost something — a mailer fired by a GET, an integration that bills per call —
+        # and the deny list is where a project says which endpoints are not this run's to
+        # touch at all.
+        if self._request_blocked(method, endpoint, any_method=overridden):
+            self.mutations_blocked.append(
+                {
+                    "method": method,
+                    "origin": _origin(url),
+                    "resource_type": str(getattr(request, "resource_type", None) or ""),
+                    "attributed": False,
+                    "reason": "blocked_by_policy",
+                }
+            )
+            self._ledger_open(request, url, method, blocked=_REFUSAL_TEXT["blocked_by_policy"])
+            route.abort("blockedbyclient")
+            return
+        if method in SAFE_METHODS and not overridden:
             route.continue_()
             return
-        endpoint = _endpoint(url)
         refusal = None
-        if self.allow_side_effects:
+        if method in DESTRUCTIVE_METHODS or overridden:
+            # Ahead of every other rule, allow_side_effects included: a delete is approved
+            # one endpoint at a time or not at all. Being local is not the question here —
+            # a local database still holds work that was not this run's to remove. A
+            # request carrying an override joins it, because nothing short of the backend
+            # can say it is not one.
+            # Approved as `DELETE <endpoint>` either way. A POST carrying the field is
+            # asking to be routed as a delete, so that is the permission it needs — and
+            # the person granting it is told which endpoint, not which verb.
+            if (
+                endpoint is not None
+                and self._write_host_allowed(endpoint[1])
+                and self._destructive_allowed("DELETE", endpoint)
+            ):
+                # `destructive=True` travels with it. The approval was granted for THIS
+                # endpoint, and a 307 re-sends the body to another one — the wire method
+                # is POST on an overridden request, so without this flag the redirect
+                # check would judge it an ordinary write and let the delete land wherever
+                # the server pointed.
+                self._send_write(route, request, url, method, read_only=False, destructive=True, overridden=overridden)
+                return
+            reason = "override_unapproved" if overridden and method not in DESTRUCTIVE_METHODS else "destructive_unapproved"
+            self.destructive_blocked.append(
+                {"method": method, "endpoint": sanitize_endpoint(url), "origin": _origin(url),
+                 "override": overridden}
+            )
+        elif self.allow_side_effects:
             if endpoint is not None and self._write_host_allowed(endpoint[1]):
+                if body_unreadable:
+                    # Neither accessor could produce the bytes, so this write was never
+                    # cleared of carrying a delete. It still goes: `allow_side_effects` is
+                    # the broad, explicit opt-in and refusing here would stop writes that
+                    # worked before any of this existed. What it does not do is go quietly
+                    # — the run reports that one request went out uninspected.
+                    self.uninspectable_writes.append(
+                        {"method": method, "origin": _origin(url)}
+                    )
                 self._send_write(route, request, url, method, read_only=False)
                 return
             reason = "non_loopback"
+        elif (
+            self.allow_local_side_effects
+            and method in WRITE_METHODS
+            and not body_unreadable
+            and endpoint is not None
+            and is_local_dev_host(endpoint[1])
+        ):
+            # A non-destructive write to a development host. Proving that a form saves is
+            # the ordinary reason this command exists, and it used to require the same
+            # switch that permits writing to every preflight-approved host.
+            #
+            # `method in WRITE_METHODS` is what the permission was described as — POST,
+            # PUT, PATCH — and the two rungs above it only subtract `SAFE_METHODS` and
+            # `DESTRUCTIVE_METHODS`. Everything else fell through: a `PURGE`, a `PROPPATCH`,
+            # any verb a stack invents. Being local is not a reason to send a method nobody
+            # named; the switch was granted for ordinary form writes, and that is the
+            # ladder `spec.py` already defines.
+            #
+            # `not body_unreadable` is the premise of that permission, not a detail of it.
+            # This branch is safe only because the delete check above could read the body
+            # and rule one out; a multipart body Playwright cannot decode as text could be
+            # carrying `_method=DELETE` and nothing here would know. So an uninspectable
+            # write does not receive the NEW permission — it falls through to the rule that
+            # governed it before, `allow_side_effects`, which is where file uploads were
+            # already handled. Nothing that worked before stops working.
+            self._send_write(route, request, url, method, read_only=False)
+            return
         else:
             reason = "side_effects_off"
             if endpoint is not None and (method, *endpoint) in self.read_only_allow:
-                try:
-                    body = getattr(request, "post_data", None)
-                except Exception:  # a body Playwright cannot decode as text (multipart upload)
+                if body_unreadable:
                     refusal = "a request body that cannot be read as text"
                 else:
-                    refusal = read_only_refusal(body if isinstance(body, str) else None)
+                    # Every reading, not `bodies[0]`. A confirmed read is admitted because
+                    # its body was checked for a GraphQL mutation, and a body has more
+                    # than one honest reading — a UTF-16 mutation spells nothing in the
+                    # first and spells itself plainly in the second. Checking one of them
+                    # is the same mistake as trusting the verb.
+                    refusal = next(
+                        (r for r in (read_only_refusal(text) for text in bodies) if r),
+                        None,
+                    )
                 if refusal is None:
                     self.read_only_allowed.append({"method": method, "origin": _origin(url)})
                     self._send_write(route, request, url, method, read_only=True)
@@ -417,23 +649,70 @@ class Session:
     def _write_host_allowed(self, host: str) -> bool:
         return is_local_dev_host(host) or host in self.write_hosts
 
-    def _redirect_refusal(self, target: str, status: int, method: str, *, read_only: bool, top_level: bool) -> str | None:
+    def _destructive_allowed(self, method: str, endpoint: tuple) -> bool:
+        """Whether an approved entry covers this exact request."""
+        scheme, host, port, path = endpoint
+        for allowed_method, a_scheme, a_host, a_port, template in self.destructive_allow:
+            if (allowed_method, a_scheme, a_host, a_port) == (method, scheme, host, port) and request_path_matches(template, path):
+                return True
+        return False
+
+    def _request_blocked(self, method: str, endpoint: tuple | None, *, any_method: bool = False) -> bool:
+        """Whether the project's deny list names this request. `*` matches any method.
+
+        `any_method` is for a request carrying an override field. Its verb is not what it
+        will be routed as, so matching the deny list against that verb alone let a POST
+        carrying `_method` walk past a `DELETE /api/users/:id` entry — the exact endpoint
+        the project had said to leave alone. A request that cannot be classified is
+        measured against every entry for its endpoint instead of one.
+        """
+        if endpoint is None:
+            return False
+        scheme, host, port, path = endpoint
+        for blocked_method, b_scheme, b_host, b_port, template in self.blocked_requests:
+            if (b_scheme, b_host, b_port) != (scheme, host, port):
+                continue
+            if not any_method and blocked_method not in ("*", method):
+                continue
+            if request_path_matches(template, path):
+                return True
+        return False
+
+    def _redirect_refusal(self, target: str, status: int, method: str, *, read_only: bool, top_level: bool, destructive: bool = False, overridden: bool = False) -> str | None:
         """Why a write's redirect to `target` must not be followed, or None."""
         if status in _BODY_KEEPING_REDIRECTS:
             endpoint = _endpoint(target)
             if endpoint is None:
                 return f"a {status} redirect to an unparseable address"
+            # First here, as it is first in `guard`. A 307/308 hop is fetched by Playwright
+            # rather than issued by the browser, so it never returns through the route
+            # handler — this is the only place the deny list gets to see it. Without the
+            # check, a write to an allowed endpoint answered `307 → /api/users/1` landed on
+            # an endpoint the project had named as not this run's to touch, because the
+            # host was the same one and nothing below re-read the list.
+            if self._request_blocked(method, endpoint, any_method=overridden):
+                return f"a {status} redirect re-sends the body to {sanitize_endpoint(target)}, which the deny list names"
             if read_only:
                 if (method, *endpoint) not in self.read_only_allow:
                     return f"a {status} redirect re-sends the body to {sanitize_endpoint(target)}, which is not a confirmed read"
                 return None
             if not self._write_host_allowed(endpoint[1]):
                 return f"a {status} redirect re-sends the body to {_origin(target)}, which may not take writes"
+            if (destructive or method in DESTRUCTIVE_METHODS) and not self._destructive_allowed("DELETE", endpoint):
+                # The host check alone was enough while every write was judged by where it
+                # went. A delete is judged by WHICH endpoint it reaches, so a 307 from an
+                # approved endpoint to a neighbouring path on the same local host would
+                # re-send the body somewhere nobody agreed to — the read-only branch above
+                # has always re-checked for exactly this reason.
+                return f"a {status} redirect re-sends the delete to {sanitize_endpoint(target)}, which is not an approved delete"
             return None
-        # 301/302/303: the browser follows with a GET. Only a top-level navigation has a
-        # policy for where a GET may go.
+        # 301/302/303: the browser follows with a GET, and that GET is a fresh request
+        # through `context.route("**/*", guard)` — so the deny list, the safe-method exit
+        # and every permission below them are applied to the target there, not here. Only
+        # a top-level navigation needs an answer before the response is handed back, since
+        # the page would already be leaving for it.
         if top_level:
-            refused = navigation_error(target, self.config)
+            refused = self._navigation_refusal(target)
             if refused:
                 return f"a {status} redirect navigates off policy: {refused}"
         return None
@@ -484,7 +763,7 @@ class Session:
         )
         route.abort("blockedbyclient")
 
-    def _send_write(self, route, request, url: str, method: str, *, read_only: bool) -> None:
+    def _send_write(self, route, request, url: str, method: str, *, read_only: bool, destructive: bool = False, overridden: bool = False) -> None:
         """Send one approved write, following its redirects here instead of in the browser.
 
         A redirect the browser follows never reaches the route handler, and a 307/308
@@ -528,7 +807,7 @@ class Session:
             if not location:
                 break
             next_target = urljoin(target, location)
-            refusal = self._redirect_refusal(next_target, status, method, read_only=read_only, top_level=top_level)
+            refusal = self._redirect_refusal(next_target, status, method, read_only=read_only, top_level=top_level, destructive=destructive, overridden=overridden)
             if refusal or status not in _BODY_KEEPING_REDIRECTS:
                 if refusal:
                     continue
@@ -540,6 +819,63 @@ class Session:
             target = next_target
             kwargs, refusal = self._pinned_fetch_args(target, request)
         route.fulfill(response=response)
+
+    def _navigation_refusal(self, url: str) -> str | None:
+        """Why the page may not be at `url`, or None.
+
+        Two policies, one question. `navigation_error` judges the ORIGIN — whether this run
+        may go there at all. The deny list judges the ENDPOINT — what nobody wants a browser
+        run touching, whichever origin serves it. Only the first was ever asked of a
+        navigation, so a redirect from an allowed origin to a denied path on that same
+        origin was waved through: `blocked_requests` was enforced against writes and against
+        nothing else, though the list names endpoints, not verbs.
+
+        GET and `*` entries only. A `DELETE /api/users/:id` entry says not to delete that
+        record; opening the same address is a read, and refusing it would make the list mean
+        something it does not say.
+        """
+        refused = navigation_error(url, self.config)
+        if refused:
+            return refused
+        if self._request_blocked("GET", _endpoint(url)):
+            return f"{sanitize_endpoint(url)} is named by the project's blocked_requests"
+        return None
+
+    def _note_off_policy(self, url: str, refusal: str, *, redirected: bool) -> None:
+        """Record one address policy refuses, once per step, with the reason it was refused."""
+        key = (self.current_step_id, url)
+        if key in self._navigation_seen:
+            return
+        self._navigation_seen.add(key)
+        if redirected:
+            self.redirected_off_policy.append(url)
+        self.blocked.append(url)
+        self.blocked_detail[url] = refusal
+
+    def on_frame_navigated(self, frame) -> None:
+        """Every address the main frame comes to rest on, whatever put it there.
+
+        `on_request` sees a redirect only when the browser issued a request it can attribute
+        to one. A `302` Chromium follows internally, a `history.pushState`, a meta refresh
+        and a JS assignment all change the address bar without producing one, and the
+        address bar is what the policy is about. So it is read after every change rather
+        than inferred from the traffic — which is also the only reading that survives a
+        redirect chain the route handler never sees again.
+
+        After the fact: the page is already there. The step that caused it fails saying so,
+        the same way a followed redirect has always been reported.
+        """
+        try:
+            if frame != self.page.main_frame:
+                return
+            url = str(frame.url or "")
+        except Exception:
+            return
+        if not url or not url.lower().startswith(("http://", "https://")):
+            return  # about:blank between navigations, and data:/blob: the policy has no say over
+        refusal = self._navigation_refusal(url)
+        if refusal:
+            self._note_off_policy(url, refusal, redirected=True)
 
     def on_request(self, request) -> None:
         """Catch a top-level navigation that a redirect took off policy.
@@ -556,9 +892,8 @@ class Session:
             top_level = bool(request.is_navigation_request()) and request.frame == self.page.main_frame
         except Exception:
             top_level = False
-        if top_level and navigation_error(url, self.config):
-            self.redirected_off_policy.append(url)
-            self.blocked.append(url)
+        if top_level and (refusal := self._navigation_refusal(url)):
+            self._note_off_policy(url, refusal, redirected=True)
 
     # ---- the request ledger ---------------------------------------------------------
     def _ledger_open(self, request, url: str, method: str, *, blocked: str | None = None, read_only: bool = False) -> None:
@@ -796,7 +1131,7 @@ class Session:
 
         if action == "goto":
             url = urljoin(self.base_url, str(step.get("url"))) if self.base_url else str(step.get("url"))
-            refused = navigation_error(url, self.config)
+            refused = self._navigation_refusal(url)
             if refused:
                 return {"status": "failed", "error": {"kind": "navigation_blocked", "detail": refused}}
             response = self.page.goto(url, wait_until="load", timeout=self.nav_timeout_ms)
@@ -959,12 +1294,27 @@ class Session:
             self.last_step_id = step_id
         if readiness is not None:
             outcome["ready"] = readiness
+        # Whatever this step's window caught belongs to this step, whether or not it is what
+        # the step ends up failing for. Anything left unclaimed when the run ends had no
+        # window open and is reported there instead of vanishing.
+        #
+        # A cleanup step claims nothing. Its failures are reported as `cleanup` events, which
+        # the classifier reads as housekeeping and never lets decide a verdict — right for a
+        # delete that could not be undone, wrong for a policy refusal, since a cleanup that
+        # reached a denied endpoint reached it exactly as a test step would have. Left
+        # unclaimed, it surfaces as `harness/navigation_blocked` and the run is `incomplete`.
+        if self.phase != "cleanup":
+            self._navigation_attributed.update(range(blocked_before, len(self.blocked)))
         if len(self.blocked) > blocked_before and outcome.get("status") != "failed":
-            origin = _origin(self.blocked[-1])
+            landed = self.blocked[-1]
+            # The refusal in its own words: the origin policy and the deny list both end up
+            # here, and "outside the origin policy" is a false explanation for an address
+            # that was refused by name.
+            refusal = self.blocked_detail.get(landed) or "refused by the /.verify-browser navigation policy"
             detail = (
-                f"a redirect took the page to {origin}, outside the /.verify-browser origin policy (followed by the browser before it could be refused)"
-                if self.blocked[-1] in self.redirected_off_policy
-                else f"navigation to {origin} blocked by the /.verify-browser origin policy"
+                f"the page reached {_origin(landed)} before this run could refuse it (followed by the browser): {refusal}"
+                if landed in self.redirected_off_policy
+                else f"navigation to {_origin(landed)} blocked: {refusal}"
             )
             outcome = {**outcome, "status": "failed", "error": {"kind": "navigation_blocked", "detail": detail}}
         elif len(self.blocked) == blocked_before and (
@@ -1043,8 +1393,11 @@ class Session:
             for artifact in artifacts:
                 self.emit(artifact)
         self.run_cleanup(cleanup, statuses)
+        self.report_unattributed_navigation()
         self.report_unattributed_mutations()
         self.report_read_only_requests()
+        self.report_destructive_requests()
+        self.report_uninspectable_writes()
         self.flush_requests()
 
     def run_cleanup(self, cleanup: list[dict], statuses: dict[str, str]) -> None:
@@ -1095,6 +1448,84 @@ class Session:
                     "detail": f"{count} {method} request(s) passed as confirmed reads (settings.allowed_read_only_requests)",
                     "same_origin": self._same(origin),
                     "main_request": False,
+                }
+            )
+
+    def report_destructive_requests(self) -> None:
+        """Deletes this run refused for want of an approval, one observation per endpoint.
+
+        Separate from `mutation_blocked` because this one is answerable: every other
+        refusal says a policy forbids the request, while this says nobody has been asked
+        yet. The runner turns these into the permission request the user replies to, so
+        the endpoint travels in route form — `/api/items/:id`, never the record's id.
+        """
+        seen: set[tuple[str, str]] = set()
+        for blocked in self.destructive_blocked:
+            key = (blocked["method"], blocked["endpoint"])
+            if key in seen:
+                continue
+            seen.add(key)
+            self.emit(
+                {
+                    "type": "observation",
+                    "kind": "destructive_unapproved",
+                    "url": blocked["endpoint"],
+                    "status": None,
+                    "detail": f"{blocked['method']} {blocked['endpoint']} needs approval before it can run",
+                    "same_origin": self._same(blocked["origin"]),
+                    "main_request": False,
+                }
+            )
+
+    def report_uninspectable_writes(self) -> None:
+        """Writes that went out without their body being readable, one per method+origin."""
+        counts: dict[tuple[str, str], int] = {}
+        for item in self.uninspectable_writes:
+            key = (item["method"], item["origin"])
+            counts[key] = counts.get(key, 0) + 1
+        self.uninspectable_writes = []
+        for (method, origin), count in counts.items():
+            self.emit(
+                {
+                    "type": "observation",
+                    "kind": "write_uninspected",
+                    "url": origin,
+                    "status": None,
+                    "detail": (
+                        f"{count} {method} request(s) to {origin} were sent with a body "
+                        "neither post_data nor post_data_buffer could produce, so they "
+                        "were not checked for a method override"
+                    ),
+                    "same_origin": self._same(origin),
+                    "main_request": False,
+                }
+            )
+
+    def report_unattributed_navigation(self) -> None:
+        """Off-policy landings no step's window was open for.
+
+        A step fails on what its own window caught, by comparing a counter before and after
+        the action. A navigation scheduled by that action — a debounced `pushState`, a meta
+        refresh, a redirect the browser was still following — arrives after the comparison,
+        so it was recorded and then read by nobody: the page had reached an address the
+        project denied and the run still had no failed step to show for it.
+
+        Reported as `harness`, not as an application failure. The application did nothing
+        wrong; the run went somewhere it may not go, and a run that went off policy has not
+        proven anything, whatever its assertions saw. `incomplete`, never `pass`.
+        """
+        for index, url in enumerate(self.blocked):
+            if index in self._navigation_attributed:
+                continue
+            self._navigation_attributed.add(index)
+            self.emit(
+                {
+                    "type": "harness",
+                    "reason": "navigation_blocked",
+                    "detail": (
+                        f"the page reached {sanitize_endpoint(url)} outside any step's window: "
+                        f"{self.blocked_detail.get(url) or 'refused by the /.verify-browser navigation policy'}"
+                    ),
                 }
             )
 
@@ -1188,6 +1619,7 @@ def run_scenario(scenario: dict, config: dict, artifacts_dir: str, emit, *, has_
                 session.page = context.new_page()
                 context.route("**/*", session.guard)
                 context.on("request", session.on_request)
+                session.page.on("framenavigated", session.on_frame_navigated)
                 session.page.on("console", session.on_console)
                 session.page.on("pageerror", session.on_page_error)
                 session.page.on("response", session.on_response)
@@ -1200,6 +1632,12 @@ def run_scenario(scenario: dict, config: dict, artifacts_dir: str, emit, *, has_
             finally:
                 if crashed:
                     # A run that crashed mid-request still sent what it sent; the ledger says so.
+                    # Writes that went out unchecked count for the same reason: a crash is
+                    # not a reason for the one unverified request to go unmentioned.
+                    try:
+                        session.report_uninspectable_writes()
+                    except Exception:
+                        pass
                     try:
                         session.flush_requests()
                     except Exception:
