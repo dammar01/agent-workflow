@@ -570,6 +570,59 @@ def _test_e2e_routing() -> None:
             f"a fixed environment is not still refused for the runs that were broken: {recovered['meta']['e2e']}",
         )
 
+        # --- ignore_repeat_brake: the one way past an `app` streak, end to end -------------
+        # Request parsing alone proved the setting exists, not that the runner honours it.
+        # An `app` streak is not preflight's to clear, so without the setting it holds; with
+        # it the run goes ahead. A run whose preflight fails under the setting still reports
+        # the environment and leaves the record as it found it — stepping past the brake is
+        # not spending it.
+        from core.runtime.state import E2E_REPEAT_LIMIT, e2e_repeat_state, note_e2e_outcome
+
+        root = workspace("e2e-bypass-")
+        adapter = _adapter()
+        e2e_preflight.playwright_available = lambda: (False, "pinned absent for the test")
+        try:
+            _run(root, adapter, _scenario(), fake=None, env={"E2E_USER": "u"})
+        finally:
+            e2e_preflight.playwright_available = real_probe
+        origin = e2e_repeat_state(root, _SESSION_ID).get("origin")
+        assert_true(origin, "a counted preflight failure names the origin it was counted against")
+        note_e2e_outcome(root, _SESSION_ID, origin, None)
+        for _ in range(E2E_REPEAT_LIMIT):
+            note_e2e_outcome(root, _SESSION_ID, origin, "app", None, source="browser")
+
+        held = _run(root, adapter, _scenario(), env={"E2E_USER": "u"})
+        assert_true(
+            held["meta"]["e2e"].get("reason") == "repeat_failure",
+            f"a passing preflight does not retire an app streak: {held['meta']['e2e']}",
+        )
+
+        e2e_preflight.playwright_available = lambda: (False, "pinned absent for the test")
+        try:
+            still_broken = _run(
+                root, adapter, _scenario(), fake=None, env={"E2E_USER": "u"},
+                settings={"ignore_repeat_brake": True},
+            )
+        finally:
+            e2e_preflight.playwright_available = real_probe
+        kept = e2e_repeat_state(root, _SESSION_ID)
+        assert_true(
+            still_broken["meta"]["e2e"].get("reason") == "playwright_missing",
+            f"with the brake ignored, a failing preflight reports the environment: {still_broken['meta']['e2e']}",
+        )
+        assert_true(
+            kept.get("bucket") == "app" and kept.get("streak") == E2E_REPEAT_LIMIT,
+            f"and the streak it stepped past is left as it was, not spent: {kept}",
+        )
+
+        bypassed = _run(root, adapter, _scenario(), env={"E2E_USER": "u"}, settings={"ignore_repeat_brake": True})
+        assert_true(
+            (bypassed["meta"]["e2e"].get("reason") or "") != "repeat_failure"
+            and bypassed["meta"].get("verdict") == "pass"
+            and bypassed["meta"]["e2e"]["config"].get("ignore_repeat_brake") is True,
+            f"the setting lets a run past an app streak, and says so in its config: {bypassed['meta']}",
+        )
+
         # --- spec section missing → one targeted continuation, then an invalid draft --------
         root = workspace("e2e-nospec-")
         adapter = _adapter(spec=[_EVIDENCE_ONLY, _EVIDENCE_ONLY])

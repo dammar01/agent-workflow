@@ -1,5 +1,5 @@
-<!-- WORKFLOW-SECOND-AGENT:START — v3.6.0, do not edit manually -->
-# Agy Second Agent — v3.6.0
+<!-- WORKFLOW-SECOND-AGENT:START — v3.7.0, do not edit manually -->
+# Agy Second Agent — v3.7.0
 
 ## [SECOND_AGENT CONSTRAINT — NON-NEGOTIABLE]
 

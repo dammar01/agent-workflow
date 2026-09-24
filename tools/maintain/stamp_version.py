@@ -92,6 +92,8 @@ EXEMPT: dict[str, tuple[str, ...]] = {
         "codex-cli",
         # The benchmark's frozen SUT, stated in prose. Same freeze as the TARGETS note.
         "System under test dibekukan",
+        # The v3.6.0 `data/` layout upgrade, described as history.
+        "Upgrade ke layout `data/`",
     ),
 }
 

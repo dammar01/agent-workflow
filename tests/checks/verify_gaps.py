@@ -26,11 +26,82 @@ from tests.checks.support import (
     extract_session_id,
 )
 
+def _check_scope_width() -> None:
+    """The working tree's width is measured, scoped only when a plan declared a scope, and
+    called wide past the ceiling rather than at it."""
+    from core.evidence import quick_verify
+
+    repo = Path(tempfile.mkdtemp(prefix="scope-width-"))
+    git = ["git", "-c", "user.email=t@example.test", "-c", "user.name=t"]
+    original_files = quick_verify.SCOPE_WIDE_FILES
+    original_lines = quick_verify.SCOPE_WIDE_LINES
+    try:
+        assert_true(
+            main.subprocess.run(["git", "init", "-q", str(repo)], capture_output=True).returncode == 0,
+            "scope width git init failed",
+        )
+        (repo / "src").mkdir()
+        (repo / "src" / "a.py").write_text("one\ntwo\n", encoding="utf-8")
+        main.subprocess.run(["git", "add", "."], cwd=repo, capture_output=True)
+        committed = main.subprocess.run(
+            [*git, "commit", "-q", "-m", "base"], cwd=repo, capture_output=True, text=True
+        )
+        assert_true(committed.returncode == 0, f"scope width commit failed: {committed.stderr}")
+
+        (repo / "src" / "a.py").write_text("one\nTWO\nthree\n", encoding="utf-8")  # +2 -1
+        (repo / "notes.md").write_text("a\nb\nc\n", encoding="utf-8")  # untracked, +3
+
+        unscoped = quick_verify.scope_width(repo, None)
+        assert_true(
+            unscoped["files"] == 2 and unscoped["lines"] == 6,
+            f"tracked changes and untracked files are both measured: {unscoped}",
+        )
+        assert_true(
+            unscoped["scope_declared"] is False and unscoped["outside_scope"] == [],
+            f"with no plan scope, no file is accused of being unplanned: {unscoped}",
+        )
+        assert_true(unscoped["wide"] is False, f"two files is not wide: {unscoped}")
+
+        scoped = quick_verify.scope_width(repo, ["src/", "  "])
+        assert_true(
+            scoped["scope_declared"] is True and scoped["outside_scope"] == ["notes.md"],
+            f"only the file outside the declared scope is named: {scoped}",
+        )
+        backslash = quick_verify.scope_width(repo, ["SRC\\a.py", "notes.md"])
+        assert_true(
+            backslash["outside_scope"] == [],
+            f"scope entries match case- and separator-insensitively: {backslash}",
+        )
+
+        quick_verify.SCOPE_WIDE_FILES = 2
+        assert_true(
+            quick_verify.scope_width(repo, None)["wide"] is False,
+            "wide is past the file ceiling, not at it",
+        )
+        quick_verify.SCOPE_WIDE_FILES = 1
+        assert_true(
+            quick_verify.scope_width(repo, None)["wide"] is True,
+            "more files than the ceiling reads as wide",
+        )
+        quick_verify.SCOPE_WIDE_FILES = original_files
+        quick_verify.SCOPE_WIDE_LINES = 5
+        assert_true(
+            quick_verify.scope_width(repo, None)["wide"] is True,
+            "more changed lines than the ceiling reads as wide on its own",
+        )
+    finally:
+        quick_verify.SCOPE_WIDE_FILES = original_files
+        quick_verify.SCOPE_WIDE_LINES = original_lines
+        shutil.rmtree(repo, ignore_errors=True)
+
+
 def _test_quick_verify_gaps() -> None:
     """Unavailable, deleted, and name-check failures cannot produce a pass verdict."""
     import shutil as _shutil
 
     from core.evidence import quick_verify
+
+    _check_scope_width()
 
     root = Path(tempfile.mkdtemp(prefix="quick-verify-"))
     original_discover = quick_verify._discover_changed_files

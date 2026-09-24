@@ -284,6 +284,51 @@ def _test_task_cap_is_visible_in_and_out_of_band() -> None:
         f"a transport without an argv ceiling must carry the task uncut: {free_sink}",
     )
 
+    # Uncapped is the default, not the only answer: AI_PROXY_MAX_TASK_CHARS_NO_ARGV puts a
+    # limit back for anyone who wants one. The setting is read once at import, so the two
+    # halves are checked apart — that the variable reaches the setting, and that the
+    # setting reaches the prompt — rather than by reloading modules the rest of the suite
+    # already holds.
+    import os
+
+    from config import settings as _settings
+
+    saved = os.environ.get("AI_PROXY_MAX_TASK_CHARS_NO_ARGV")
+    os.environ["AI_PROXY_MAX_TASK_CHARS_NO_ARGV"] = "1200"
+    try:
+        assert_true(
+            _settings._env_int("AI_PROXY_MAX_TASK_CHARS_NO_ARGV", 0) == 1200,
+            "the environment variable does not reach the no-argv cap setting",
+        )
+    finally:
+        if saved is None:
+            os.environ.pop("AI_PROXY_MAX_TASK_CHARS_NO_ARGV", None)
+        else:
+            os.environ["AI_PROXY_MAX_TASK_CHARS_NO_ARGV"] = saved
+
+    policy_sink: dict = {}
+    original_no_argv = prompt_builder.DEFAULT_MAX_TASK_CHARS_NO_ARGV
+    # Under the hard-truncation ratio, so the cut degrades the task rather than refusing it.
+    prompt_builder.DEFAULT_MAX_TASK_CHARS_NO_ARGV = DEFAULT_MAX_TASK_CHARS
+    try:
+        policy_prompt = build_prompt(
+            role=ROLE_EXPLORATION,
+            task=long_task,
+            command="explore",
+            meta_sink=policy_sink,
+            transport={"kind": "file"},
+            **_BASE,
+        )
+    finally:
+        prompt_builder.DEFAULT_MAX_TASK_CHARS_NO_ARGV = original_no_argv
+    assert_true(
+        policy_sink.get("task_cap") == DEFAULT_MAX_TASK_CHARS
+        and policy_sink.get("task_cap_source") == "policy"
+        and policy_sink.get("task_truncated") is True
+        and long_task not in policy_prompt,
+        f"an opted-in no-argv cap must be enforced and reported as policy: {policy_sink}",
+    )
+
 
 @contextlib.contextmanager
 def _pinned_platform(is_windows: bool):

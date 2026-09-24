@@ -177,9 +177,12 @@ directory; each retry writes to `e2e/retry<n>/`, and `meta.e2e.attempts` lists t
 
 That loop lives inside one invocation. Across invocations there is a second brake, keyed on
 origin and failure BUCKET in the session state (`state.note_e2e_outcome`): three runs in a
-row against the same origin ending the same way, and the next one is refused before a
-browser starts, `incomplete` with reason `repeat_failure` and the streak in
-`meta.e2e.repeat`. It is checked twice, in the two places a limit can be reached: at the
+row against the same origin ending the same way reach the limit, and a run is refused before
+a browser starts, `incomplete` with reason `repeat_failure` and the streak in
+`meta.e2e.repeat`. Which run that is depends on the gate that counted the third. A browser
+run is counted after its report, so the one refused is the NEXT invocation. A preflight
+failure is counted at the gate and read straight back, so the invocation that writes the
+third streak is itself the one refused — not a fourth. It is checked twice, in the two places a limit can be reached: at the
 preflight gate, which is where a repeating environment failure actually lives, and again
 once preflight has PASSED, before anything starts a browser. It used to be checked before all of them, which cost it
 the only evidence that the counted problem was gone: three runs with Playwright missing

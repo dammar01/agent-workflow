@@ -77,7 +77,7 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         "models": (
             # `reasoning: true` but `reasoning_options: []` — it reasons, and exposes no
             # dial for how much. Passing --variant here is an error, not a no-op.
-            {"id": "opencode/mimo-v2.5-free", "efforts": ()},
+            {"id": "opencode/mimo-v2.6-flash-free", "efforts": ()},
             {
                 "id": "openrouter/deepseek/deepseek-v4-flash-0731",
                 "efforts": ("low", "high", "max"),
