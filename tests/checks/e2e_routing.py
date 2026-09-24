@@ -558,6 +558,18 @@ def _test_e2e_routing() -> None:
             f"repeating a preflight failure reaches the brake, quoting what to fix: {reasons}",
         )
 
+        # --- and installing what was missing gets past it -----------------------------------
+        # The other half of the brake, and the half it used to be missing. The streak is
+        # cleared by a run that passes; the brake stood in front of that run, so a fixed
+        # environment answered `repeat_failure` forever and a new session was the only way
+        # out. Now the check sits past preflight, and a preflight that passes retires the
+        # environment streak that preflight itself wrote.
+        recovered = _run(root, adapter, _scenario(), env={"E2E_USER": "u"})
+        assert_true(
+            (recovered["meta"]["e2e"].get("reason") or "") != "repeat_failure",
+            f"a fixed environment is not still refused for the runs that were broken: {recovered['meta']['e2e']}",
+        )
+
         # --- spec section missing → one targeted continuation, then an invalid draft --------
         root = workspace("e2e-nospec-")
         adapter = _adapter(spec=[_EVIDENCE_ONLY, _EVIDENCE_ONLY])

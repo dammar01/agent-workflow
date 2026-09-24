@@ -848,6 +848,37 @@ _CONFIDENCE_RANK = {"low": 0, "medium": 1, "high": 2}
 _RANK_CONFIDENCE = {0: "low", 1: "medium", 2: "high"}
 
 
+def anchor_cap(certified: int, total: int) -> tuple[str, str] | None:
+    """What a run's certified-anchor ratio is worth as a confidence ceiling, or None.
+
+    An anchor this project cannot open is a citation, not evidence. The grounded-claims
+    warning cannot see the difference: it asks only whether a claim names a file:line, and
+    an unopenable one does.
+
+    Priced in rather than only reported. Reporting the ratio and leaving the number alone
+    assumed the reader opens the artifact to see which run this was — but the contract
+    tells them to read the digest FIRST and open the evidence only on a gap, so a digest
+    reading `confidence: high` over two verifiable anchors out of forty is the gap failing
+    to announce itself.
+
+    Coarse on purpose: there is no measurement behind a finer ladder, and its shape IS the
+    claim it makes. Mostly verified is worth a `medium`; mostly unverified is worth no
+    more than `low`; nothing verified keeps the `medium` it always had, because a
+    cross-project analysis whose anchors all point outside this root is the ordinary case
+    and not a weak analysis. The ratio stays in the digest either way, so a reader can
+    disagree with the grade without opening anything.
+    """
+    if total <= 0:
+        return None
+    if certified <= 0:
+        return "medium", "no cited anchor could be verified in this project"
+    if certified >= total:
+        return None
+    if certified / total < 0.5:
+        return "low", f"only {certified} of {total} cited anchors could be verified in this project"
+    return "medium", f"{total - certified} of {total} cited anchors could not be verified in this project"
+
+
 def cap_confidence(digest: dict | None, reasons: list[tuple[str, str]]) -> dict | None:
     """Lower a reported confidence to what the run's own conditions support.
 

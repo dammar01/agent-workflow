@@ -123,6 +123,18 @@ def default_settings() -> dict:
         # and retrying it would only hide it, and a run with allow_side_effects true is
         # never retried at all because its first attempt may already have written.
         "max_retries": 2,
+        # the repeat brake's one escape hatch. The brake counts environment failures per
+        # origin and stops the run when the same bucket arrives E2E_REPEAT_LIMIT times;
+        # a preflight that passes clears the environment buckets on its own, but an `app`
+        # bucket has no such proof — it is cleared by a passing browser run, and the brake
+        # stands in front of the run that would clear it. Someone who has fixed the app
+        # sets this once to get past it. Off by default: the brake exists because twelve
+        # invocations against one unfixed problem is the shape it was built to stop, and a
+        # switch that were on by default would not stop it. Settable from a request, for
+        # the one run, and from a project's config.json, where it is every run — which is
+        # a project saying it does not want this brake, and is why the run reports the
+        # value it used in `meta.e2e.config`.
+        "ignore_repeat_brake": False,
         # size budget for one run's player artifacts (trace, screenshots, HTML); the
         # heaviest class is pruned first.
         "artifact_max_mb": 25,

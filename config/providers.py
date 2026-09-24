@@ -373,8 +373,12 @@ PROVIDER_TRANSPORT: dict[str, dict] = {
 def transport_budget(provider: str | None) -> dict | None:
     """What `provider`'s prompt transport can carry, or None when it is unknown.
 
-    None is the safe answer for an unregistered provider: the caller falls back to the
-    static cap, which is the behaviour every provider had before this table existed.
+    None means the caller cannot know there is a command line to protect, and the caller
+    treats that the same as stdin or a file: no ceiling, unless
+    `AI_PROXY_MAX_TASK_CHARS_NO_ARGV` sets one. See `prompt_builder._no_ceiling`. An
+    earlier draft of this docstring said the caller fell back to the static cap; it never
+    did, and a reader pricing a new provider's prompt against that sentence would have
+    been budgeting for a limit that was not there.
     """
     if not provider:
         return None

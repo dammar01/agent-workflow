@@ -431,13 +431,51 @@ def run(
     phase = request["phase"]
     config = request["settings"]
     e2e_meta["phase"] = phase
-    e2e_meta["config"] = {k: config[k] for k in ("base_url", "browser", "headless", "slow_mo_ms", "allow_remote", "allow_side_effects", "max_retries")}
+    e2e_meta["config"] = {k: config[k] for k in ("base_url", "browser", "headless", "slow_mo_ms", "allow_remote", "allow_side_effects", "max_retries", "ignore_repeat_brake")}
     # Pinned defaults that were dropped for being malformed. A warning, not an error (see
     # request.config_settings), but silent would mean a knob the user set and the runtime
     # ignored, which reads from the outside exactly like the knob not working.
     if request.get("config_warnings"):
         e2e_meta["config_warnings"] = request["config_warnings"]
     run_state: dict = {"report": None, "scenario": None}
+
+    def _brake_refusal(record: dict) -> dict:
+        """The refusal itself, shared by the two places that can reach the limit.
+
+        Two, because the limit is reached in two different situations and only one of them
+        is about to start a browser. A preflight that keeps failing never gets near one,
+        and braking there buys nothing except the sentence — which is the whole point:
+        after the third identical refusal the run has to stop answering with the same
+        reason and start naming the loop.
+        """
+        # An app failure has no reason — the failing app is the verdict, not an obstacle
+        # that kept the run from reaching one — so the bucket is what there is to name.
+        reason_text = record.get("reason") or _REPEAT_PHRASE.get(record.get("bucket") or "", "the same outcome")
+        e2e_meta["reason"] = "repeat_failure"
+        e2e_meta["repeat"] = dict(record)
+        e2e_meta["next_action"] = (
+            "the last "
+            f"{record.get('streak')} runs against {repeat_origin} all ended in "
+            f"'{reason_text}' — fix that before running again, then set "
+            "settings.ignore_repeat_brake true in the request to get past this once "
+            "(pinned in config.json it turns the brake off for every run)"
+        )
+        return _finish(
+            to_verification(
+                {"claims": {}, "browser_verdict": None},
+                preflight={
+                    "ok": False,
+                    "reason": "repeat_failure",
+                    "detail": (
+                        f"{record.get('streak')} consecutive runs ended in '{reason_text}'. "
+                        "Editing the scenario has not changed the outcome, so the cause is "
+                        "outside it — the environment, the data, or the credentials. Once it "
+                        "is fixed, settings.ignore_repeat_brake true in the request runs this "
+                        "once anyway."
+                    ),
+                },
+            )
+        )
 
     def _finish(norm: dict) -> dict:
         # One quality row per run, whatever ended it: the incomplete runs are exactly what
@@ -448,47 +486,17 @@ def run(
             pass
         return _result(norm["content"], norm["verdict"], e2e_meta, warnings=norm["warnings"])
 
-    # ---- the repeat brake --------------------------------------------------------
-    # Checked before a browser starts, because the cost this exists to stop is the browser.
-    # The in-run retry loop already refuses to try a third time when two attempts match step
-    # for step; it cannot see the caller coming back with an edited scenario and the same
-    # environment problem underneath. Twelve invocations against one 403 is the shape it
-    # missed, and every edit in between was to steps that were never what was wrong.
+    # ---- the repeat state --------------------------------------------------------
+    # Loaded here, checked below. The brake used to stand in front of preflight, on the
+    # reasoning that the cost worth stopping is the browser — true, and preflight does not
+    # start one. What standing there did cost was the only evidence that the problem being
+    # counted was gone: three runs with Playwright missing reach the limit, the user
+    # installs Playwright, and the fourth run is refused before preflight can notice. The
+    # streak is cleared by a passing run, and the brake stood in front of the run that
+    # would have cleared it. So the check moved down, past the gates that can prove the
+    # environment recovered, and still ahead of every browser this run might start.
     repeat = e2e_repeat_state(project_root, session_id)
     repeat_origin = e2e_knowledge.origin_of(str(config.get("base_url") or ""))
-    if (
-        phase != "draft"
-        and repeat.get("origin") == repeat_origin
-        # `.get` throughout: this record comes off disk and may have been written by an
-        # older build or half-truncated. A brake that raises on a field it expected would
-        # stop the run it exists to protect, for the wrong reason and with no explanation.
-        and int(repeat.get("streak") or 0) >= E2E_REPEAT_LIMIT
-    ):
-        # An app failure has no reason — the failing app is the verdict, not an obstacle
-        # that kept the run from reaching one — so the bucket is what there is to name.
-        repeat_reason = repeat.get("reason") or _REPEAT_PHRASE.get(repeat.get("bucket") or "", "the same outcome")
-        e2e_meta["reason"] = "repeat_failure"
-        e2e_meta["repeat"] = dict(repeat)
-        e2e_meta["next_action"] = (
-            "the last "
-            f"{repeat.get('streak')} runs against {repeat_origin} all ended in "
-            f"'{repeat_reason}' — fix that before running again, or start a new session "
-            "if it has already been fixed"
-        )
-        return _finish(
-            to_verification(
-                {"claims": {}, "browser_verdict": None},
-                preflight={
-                    "ok": False,
-                    "reason": "repeat_failure",
-                    "detail": (
-                        f"{repeat.get('streak')} consecutive runs ended in '{repeat_reason}'. "
-                        "Editing the scenario has not changed the outcome, so the cause is "
-                        "outside it — the environment, the data, or the credentials."
-                    ),
-                },
-            )
-        )
 
     pre = preflight(config, fake=bool(fake))
     e2e_meta["preflight"] = pre["checks"]
@@ -513,15 +521,88 @@ def run(
         # which no edit to the request can change, and that is what repeating is worth
         # stopping.
         if pre["reason"] in _REPEATABLE_PREFLIGHT:
+            # Read before written. `note_e2e_outcome` REPLACES a record whose bucket
+            # differs, so an `app` streak sitting at the limit was being overwritten by
+            # the first `playwright_missing` that came along — bucket `harness`, streak
+            # back to 1 — and the brake that was holding a broken application at bay
+            # vanished because a dependency went missing for one run. Whatever reached the
+            # limit stays the answer until something clears it on its own terms.
+            if repeat.get("origin") == repeat_origin and int(repeat.get("streak") or 0) >= E2E_REPEAT_LIMIT:
+                if not config["ignore_repeat_brake"]:
+                    return _brake_refusal(repeat)
+                # Stepping past the brake is not the same as retiring what it was
+                # holding. Counting here would replace that record with this gate's own
+                # bucket at one, so a single run with the escape on would spend the
+                # streak as well as bypass it — and the brake would be gone for good
+                # rather than for the run that asked.
+                return _finish(to_verification({"claims": {}, "browser_verdict": None}, preflight=pre))
+            streak = 0
             try:
                 streak = note_e2e_outcome(
-                    project_root, session_id, repeat_origin, repeat_bucket("incomplete", pre["reason"]), pre["reason"]
+                    project_root,
+                    session_id,
+                    repeat_origin,
+                    repeat_bucket("incomplete", pre["reason"]),
+                    pre["reason"],
+                    source="preflight",
                 )
                 if streak > 1:
                     e2e_meta["repeat_streak"] = streak
             except Exception:  # observing the run must never be able to fail it
                 pass
+            # Counted first, then read: this gate is where the loop actually lives, so the
+            # run that reaches the limit is the one that says so. The brake below never
+            # sees these — it sits past a preflight that PASSED, which is the point of it
+            # sitting there — and without this the third identical `playwright_missing`
+            # would answer exactly like the first.
+            if (
+                not config["ignore_repeat_brake"]
+                and streak >= E2E_REPEAT_LIMIT
+            ):
+                return _brake_refusal(
+                    {
+                        "origin": repeat_origin,
+                        "bucket": repeat_bucket("incomplete", pre["reason"]),
+                        "reason": pre["reason"],
+                        "streak": streak,
+                    }
+                )
         return _finish(to_verification({"claims": {}, "browser_verdict": None}, preflight=pre))
+
+    # Preflight passed, so whatever it was that preflight kept failing on is no longer
+    # true: Playwright is installed, the browser is there, the base URL answers. That is
+    # the proof the run would otherwise have to reach a verdict to give.
+    #
+    # Keyed on WHO WROTE the streak. Two earlier keys were tried and both were too wide.
+    # Bucket, first: `harness` and `timeout` are where a browser run's own incompletes
+    # land too, so clearing by bucket retired a streak of real timeouts every time
+    # preflight reached the host — which it does on every run. Then the reason, which
+    # looked exact and is not: the player emits `playwright_missing` and `browser_missing`
+    # itself when a launch fails, the same words preflight uses, so a browser that will
+    # not start was indistinguishable from one preflight had just found. What preflight is
+    # evidence about is what preflight wrote, and only the record can say that.
+    if repeat.get("origin") == repeat_origin and repeat.get("source") == "preflight":
+        try:
+            note_e2e_outcome(project_root, session_id, repeat_origin, None)
+            repeat = {}
+        except Exception:  # observing the run must never be able to fail it
+            pass
+
+    # ---- the repeat brake --------------------------------------------------------
+    # The in-run retry loop already refuses to try a third time when two attempts match
+    # step for step; it cannot see the caller coming back with an edited scenario and the
+    # same environment problem underneath. Twelve invocations against one 403 is the shape
+    # it missed, and every edit in between was to steps that were never what was wrong.
+    if (
+        phase != "draft"
+        and not config["ignore_repeat_brake"]
+        and repeat.get("origin") == repeat_origin
+        # `.get` throughout: this record comes off disk and may have been written by an
+        # older build or half-truncated. A brake that raises on a field it expected would
+        # stop the run it exists to protect, for the wrong reason and with no explanation.
+        and int(repeat.get("streak") or 0) >= E2E_REPEAT_LIMIT
+    ):
+        return _brake_refusal(repeat)
 
     secrets, secret_errors, secret_info = e2e_request.load_secrets(project_root, config.get("secrets_profile") or "")
     e2e_meta["secrets"] = {key: secret_info[key] for key in ("file", "exists", "profile", "profiles")}

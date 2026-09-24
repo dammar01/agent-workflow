@@ -123,6 +123,7 @@ _REFUSAL_TEXT = {
     "destructive_unapproved": "a delete needs its exact endpoint in settings.allowed_destructive_requests — approve it and run again",
     "override_unapproved": "this request carries a _method override field, so its verb does not decide what it does — approve the endpoint in settings.allowed_destructive_requests, or remove the field",
     "blocked_by_policy": "the project's e2e/permissions.json lists this endpoint under blocked_requests; no run setting can override it",
+    "uninspectable_body": "neither post_data nor post_data_buffer could produce this request's body, so it was never cleared of carrying a _method override. No run setting sends it: allowed_destructive_requests approves DELETEs, and this request never reaches that rule. Drive an upload like this through the project's own test command (settings.existing_test_command) instead",
 }
 
 
@@ -577,16 +578,30 @@ class Session:
             if endpoint is not None and self._write_host_allowed(endpoint[1]):
                 if body_unreadable:
                     # Neither accessor could produce the bytes, so this write was never
-                    # cleared of carrying a delete. It still goes: `allow_side_effects` is
-                    # the broad, explicit opt-in and refusing here would stop writes that
-                    # worked before any of this existed. What it does not do is go quietly
-                    # — the run reports that one request went out uninspected.
+                    # cleared of carrying a delete. It used to go anyway, on the reasoning
+                    # that `allow_side_effects` is the broad, explicit opt-in and that
+                    # refusing would stop uploads that worked before any of this existed.
+                    # What that traded away is the guarantee the rule above it makes: a
+                    # delete is approved one endpoint at a time. An envelope holding
+                    # `_method=DELETE` walks through here unread, and the run reports it
+                    # afterwards — which is the wrong end of the request to find out.
+                    #
+                    # So it is refused — and refused outright, with nothing to turn on.
+                    # An endpoint approval was the obvious way out and it is not one: the
+                    # destructive allow-list takes DELETEs, this request is a POST whose
+                    # verb nobody can confirm, and it never reaches that rule to be
+                    # matched against it. Saying otherwise in the refusal would send the
+                    # reader to a setting that cannot help them. An upload that has to
+                    # happen is the project's own test command's to make.
                     self.uninspectable_writes.append(
                         {"method": method, "origin": _origin(url)}
                     )
-                self._send_write(route, request, url, method, read_only=False)
-                return
-            reason = "non_loopback"
+                    reason = "uninspectable_body"
+                else:
+                    self._send_write(route, request, url, method, read_only=False)
+                    return
+            else:
+                reason = "non_loopback"
         elif (
             self.allow_local_side_effects
             and method in WRITE_METHODS
@@ -609,9 +624,9 @@ class Session:
             # This branch is safe only because the delete check above could read the body
             # and rule one out; a multipart body Playwright cannot decode as text could be
             # carrying `_method=DELETE` and nothing here would know. So an uninspectable
-            # write does not receive the NEW permission — it falls through to the rule that
-            # governed it before, `allow_side_effects`, which is where file uploads were
-            # already handled. Nothing that worked before stops working.
+            # write does not receive this permission either. It used to fall through to
+            # `allow_side_effects` and be sent under that switch; it is now refused there
+            # too, so both rungs say the same thing about a body nobody can read.
             self._send_write(route, request, url, method, read_only=False)
             return
         else:
@@ -1478,7 +1493,12 @@ class Session:
             )
 
     def report_uninspectable_writes(self) -> None:
-        """Writes that went out without their body being readable, one per method+origin."""
+        """Writes refused for an unreadable body, one row per method+origin.
+
+        Kept as its own observation rather than left to the blocked-mutation record: an
+        upload that cannot be inspected is a scenario the user has to change something to
+        run, and it reads differently from a write the policy simply did not cover.
+        """
         counts: dict[tuple[str, str], int] = {}
         for item in self.uninspectable_writes:
             key = (item["method"], item["origin"])
@@ -1492,9 +1512,11 @@ class Session:
                     "url": origin,
                     "status": None,
                     "detail": (
-                        f"{count} {method} request(s) to {origin} were sent with a body "
-                        "neither post_data nor post_data_buffer could produce, so they "
-                        "were not checked for a method override"
+                        f"{count} {method} request(s) to {origin} were refused: their body "
+                        "was one neither post_data nor post_data_buffer could produce, so "
+                        "they could not be checked for a method override. No setting sends "
+                        "them; a scenario that must upload runs through the project's own "
+                        "test command instead"
                     ),
                     "same_origin": self._same(origin),
                     "main_request": False,

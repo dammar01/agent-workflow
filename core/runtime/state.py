@@ -340,7 +340,14 @@ def _repeat_bucket_of(record: dict) -> str | None:
     return repeat_bucket("incomplete", str(reason))
 
 
-def note_e2e_outcome(project_root: Path, session_id: str, origin: str, bucket: str | None, reason: str | None = None) -> int:
+def note_e2e_outcome(
+    project_root: Path,
+    session_id: str,
+    origin: str,
+    bucket: str | None,
+    reason: str | None = None,
+    source: str = "browser",
+) -> int:
     """Fold one finished browser run into the repeat counter; return the new streak.
 
     Keyed on origin and failure BUCKET, deliberately not on the scenario. The runner
@@ -358,6 +365,13 @@ def note_e2e_outcome(project_root: Path, session_id: str, origin: str, bucket: s
     is only how the runtime decides it has seen enough.
 
     A pass clears the streak, since what it was counting is gone.
+
+    `source` is which gate wrote this — `preflight` or `browser` — and it exists because
+    the reason alone cannot tell them apart. The player emits `playwright_missing` and
+    `browser_missing` of its own when a launch fails, the same words preflight uses, so a
+    caller deciding "preflight proved this one fixed, retire it" by reading the reason
+    would retire a streak of real launch failures too. It is recorded rather than derived
+    for the same cause: nothing about the record after the fact says where it came from.
     """
     try:
         loaded = load_workspace_state(project_root, session_id)
@@ -377,10 +391,25 @@ def note_e2e_outcome(project_root: Path, session_id: str, origin: str, bucket: s
         # name what the last run actually said, not the first name the problem went by.
         # `bucket` written explicitly, not inherited from `previous`: a record migrated
         # from an older build has none, and spreading it forward would leave every
-        # subsequent run deriving it again from a reason that keeps changing.
-        record = {**previous, "bucket": bucket, "reason": reason, "streak": previous_streak + 1}
+        # subsequent run deriving it again from a reason that keeps changing. `source`
+        # travels the same way, and for the same reason: a record from an older build
+        # carries none, and a streak continued by this gate belongs to this gate.
+        # A continued streak keeps the provenance of the WHOLE of it, not of its last
+        # run. Two browser failures and then a preflight one all land in `harness`, and
+        # writing the newest source over the record turned a streak that was mostly a
+        # browser refusing to start into one preflight was free to retire. Anything not
+        # written end to end by a single gate is `mixed`, which is nobody's to clear. A
+        # record from a build before this field carries no source at all, so it mixes too:
+        # unknown provenance is not preflight's.
+        record = {
+            **previous,
+            "bucket": bucket,
+            "reason": reason,
+            "streak": previous_streak + 1,
+            "source": source if previous.get("source") == source else "mixed",
+        }
     else:
-        record = {"origin": origin, "bucket": bucket, "reason": reason, "streak": 1}
+        record = {"origin": origin, "bucket": bucket, "reason": reason, "streak": 1, "source": source}
     state["e2e_repeat"] = record
     atomic_write_json(loaded["paths"]["state"], state)
     return int(record.get("streak") or 0)

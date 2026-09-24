@@ -443,11 +443,152 @@ def _check_preflight_failures_reach_the_brake(root: Path) -> None:
     )
 
 
+def _check_a_passing_preflight_clears_the_environment_streak(root: Path) -> None:
+    """The brake counts an environment problem; a preflight that passes is proof it is gone.
+
+    This is the deadlock the relocation exists to break. Three runs without Playwright
+    reach the limit. The user installs Playwright. The fourth run used to be refused
+    before preflight could notice, and the only thing that clears a streak is a run that
+    passes — which is the run being refused. `harness` and `timeout` are cleared, because
+    what they count is exactly what preflight just disproved; `app` is not, because a
+    reachable base URL says nothing about whether the application behind it still fails.
+    """
+    from core.evidence.e2e.runner import _REPEATABLE_PREFLIGHT
+    from core.runtime.state import e2e_repeat_state, note_e2e_outcome
+
+    (root / ".workflow").mkdir(parents=True, exist_ok=True)
+    (root / ".workflow" / "config.json").write_text("{}", encoding="utf-8")
+    origin = "http://localhost:3000"
+
+    # `note_e2e_outcome(..., None)` is what the runner calls on a passing preflight, and
+    # it is the same call a passing run makes. One clear, one meaning.
+    session = "sid-clear-harness"
+    for _ in range(3):
+        note_e2e_outcome(root, session, origin, "harness", "playwright_missing")
+    assert_true(e2e_repeat_state(root, session).get("streak") == 3, "the streak is seeded at the limit")
+    note_e2e_outcome(root, session, origin, None)
+    assert_true(
+        e2e_repeat_state(root, session) == {},
+        f"the environment streak is gone once preflight proves the environment: {e2e_repeat_state(root, session)}",
+    )
+
+    # The clear is keyed on WHO WROTE the streak. Neither the bucket nor the reason can
+    # carry that. The bucket cannot because `harness` and `timeout` are also where a
+    # browser run's own incompletes go. The reason cannot because the PLAYER emits
+    # `playwright_missing` and `browser_missing` itself when a launch fails
+    # [core/evidence/e2e/browser.py:1621,1629] — the same words preflight uses, so a
+    # browser that will not start read exactly like one preflight had just found.
+    session = "sid-collision"
+    for _ in range(3):
+        note_e2e_outcome(root, session, origin, "harness", "browser_missing", source="browser")
+    collided = e2e_repeat_state(root, session)
+    assert_true(
+        collided.get("streak") == 3
+        and collided.get("source") == "browser"
+        and (collided.get("reason") or "") in _REPEATABLE_PREFLIGHT,
+        f"a browser-side failure can wear a preflight reason: {collided}",
+    )
+    assert_true(
+        collided.get("source") != "preflight",
+        f"and the record still says it was not preflight that wrote it, which is the whole key: {collided}",
+    )
+    # A streak both gates wrote belongs to neither. Two browser failures land in
+    # `harness`; a preflight `playwright_missing` lands in `harness` as well and continues
+    # the same record, and writing the newest source over it would hand preflight a streak
+    # that was mostly a browser refusing to start.
+    session = "sid-mixed"
+    note_e2e_outcome(root, session, origin, "harness", "harness_error", source="browser")
+    note_e2e_outcome(root, session, origin, "harness", "harness_error", source="browser")
+    note_e2e_outcome(root, session, origin, "harness", "playwright_missing", source="preflight")
+    mixed_state = e2e_repeat_state(root, session)
+    assert_true(
+        mixed_state.get("streak") == 3 and mixed_state.get("source") == "mixed",
+        f"a streak two gates wrote is neither gate's to retire: {mixed_state}",
+    )
+    assert_true(
+        mixed_state.get("source") != "preflight",
+        f"and so a passing preflight does not clear it: {mixed_state}",
+    )
+
+    # What preflight writes says so.
+    session = "sid-provenance"
+    note_e2e_outcome(root, session, origin, "harness", "browser_missing", source="preflight")
+    assert_true(
+        e2e_repeat_state(root, session).get("source") == "preflight",
+        f"the gate that wrote the streak is on the record: {e2e_repeat_state(root, session)}",
+    )
+
+    # An `app` streak is untouched by any of this: the runner never makes the clearing
+    # call for a reason it did not write, and `app` carries no reason at all.
+    session = "sid-keep-app"
+    for _ in range(3):
+        note_e2e_outcome(root, session, origin, "app", None)
+    state = e2e_repeat_state(root, session)
+    assert_true(
+        state.get("bucket") == "app"
+        and state.get("streak") == 3
+        and (state.get("reason") or "") not in _REPEATABLE_PREFLIGHT,
+        f"a failing application is not retired by a reachable base URL: {state}",
+    )
+
+    # And a record at the limit is not replaced by the next gate to fail. A `playwright
+    #_missing` arriving over an at-limit `app` streak used to overwrite it — different
+    # bucket, count back to one — so a dependency going missing for one run retired the
+    # brake holding a broken application at bay.
+    note_e2e_outcome(root, session, origin, "harness", "playwright_missing")
+    overwritten = e2e_repeat_state(root, session)
+    assert_true(
+        overwritten.get("bucket") == "harness" and overwritten.get("streak") == 1,
+        f"the state layer replaces on a bucket change, which is why the runner reads before it writes: {overwritten}",
+    )
+
+
+def _check_the_brake_has_one_way_past_it(root: Path) -> None:
+    """`ignore_repeat_brake`: off by default, and the refusal is what names it.
+
+    The `app` bucket has no other exit inside a session. It is cleared by a run that
+    passes, and the brake stands in front of that run — so someone who has fixed the
+    application needs a way to say so that is not "start a new session".
+    """
+    import json
+
+    from core.evidence.e2e.request import REQUEST_VERSION, default_settings, load_request, request_path
+
+    assert_true(
+        default_settings()["ignore_repeat_brake"] is False,
+        "the way past the brake is off until someone turns it on",
+    )
+
+    (root / ".workflow").mkdir(parents=True, exist_ok=True)
+    (root / ".workflow" / "config.json").write_text("{}", encoding="utf-8")
+    session = "sid-ignore"
+    req = request_path(root, session)
+    req.parent.mkdir(parents=True, exist_ok=True)
+    req.write_text(
+        json.dumps(
+            {
+                "version": REQUEST_VERSION,
+                "phase": "draft",
+                "settings": {"base_url": "http://localhost:3000", "ignore_repeat_brake": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    loaded, reason, errors = load_request(root, session)
+    assert_true(
+        loaded is not None and loaded["settings"]["ignore_repeat_brake"] is True,
+        f"a request can turn it on for one run: {reason} {errors}",
+    )
+    req.unlink()
+
+
 def _test_e2e_hardening() -> None:
     root = Path(tempfile.mkdtemp(prefix="aw-e2e-hardening-"))
     try:
         _check_permissions_file_fails_closed(root)
         _check_preflight_failures_reach_the_brake(root)
+        _check_a_passing_preflight_clears_the_environment_streak(root)
+        _check_the_brake_has_one_way_past_it(root)
         _check_repeat_brake_counts_reasons_not_scenarios(root)
         _check_a_blocked_delete_asks_instead_of_only_refusing()
         _check_retry_pass_is_not_clean()

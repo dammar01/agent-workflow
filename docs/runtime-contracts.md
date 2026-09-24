@@ -179,7 +179,13 @@ That loop lives inside one invocation. Across invocations there is a second brak
 origin and failure BUCKET in the session state (`state.note_e2e_outcome`): three runs in a
 row against the same origin ending the same way, and the next one is refused before a
 browser starts, `incomplete` with reason `repeat_failure` and the streak in
-`meta.e2e.repeat`. The bucket is one of three (`classify.repeat_bucket`): `timeout` for a
+`meta.e2e.repeat`. It is checked twice, in the two places a limit can be reached: at the
+preflight gate, which is where a repeating environment failure actually lives, and again
+once preflight has PASSED, before anything starts a browser. It used to be checked before all of them, which cost it
+the only evidence that the counted problem was gone: three runs with Playwright missing
+reach the limit, the user installs Playwright, and the fourth is refused before preflight
+can notice. The streak is cleared by a run that passes, and the brake was standing in
+front of the run that would have cleared it. The bucket is one of three (`classify.repeat_bucket`): `timeout` for a
 run that ran out of time, `harness` for one the environment stopped, `app` for one the
 application failed. Coarse, because one obstacle answers to several reasons in turn —
 `base_url_unreachable`, then `stuck`, then `harness_error` — and an exact-reason key started
@@ -207,7 +213,22 @@ Bucket rather than step outcomes, deliberately — the loop this catches
 edits the scenario between attempts, so a step-level key would reset every time and count to
 one forever. What twelve such runs have in common is never the steps; it is the environment,
 the data or the credentials underneath them. A `pass` clears the streak, and so does a new
-session. A run that
+session. So does a preflight that passes, for a streak preflight itself
+wrote — one whose recorded `source` is `preflight`. Neither the bucket nor the reason can
+carry that. Not the bucket, because `harness` and `timeout` are where a browser run’s own
+incompletes land too, so clearing by bucket retired a streak of real timeouts every time
+preflight managed to reach the host, which it does on every run. Not the reason either,
+because the player emits `playwright_missing` and `browser_missing` of its own when a
+launch fails — the same words preflight uses. So the gate that wrote the streak is
+recorded on it. A streak both gates wrote is `mixed` and is nobody’s to retire, as is a
+record from a build before the field existed; what clears those is a run that passes.
+Preflight is evidence about what preflight wrote and nothing else. A streak already at the limit is never overwritten either — an
+`app` streak used to be replaced by the first `playwright_missing` that came along, bucket
+`harness` and the count back at one, so a missing dependency retired the brake that was
+holding a broken application at bay. What clears `app` is the run passing, or
+`settings.ignore_repeat_brake`, set by someone who has fixed the application and is saying
+so. Off by default, and the refusal names it. Pinned in a project’s `config.json` it is
+not one run but every run, which is a project deciding it does not want this brake. A run that
 PASSES only on a later attempt is not a clean pass: the verdict carries a gap naming the
 reasons the earlier attempts ended on (`passed only on attempt N of N`), so it is
 `incomplete` — `timeout` and `not_ready` are also what an intermittently broken app looks like.
@@ -321,9 +342,16 @@ fenced JSON scenario), `spec_uncertainties`. Validation runs in both phases, bef
   (`X-HTTP-Method-Override`, `X-Method-Override`), against every decoding a backend might
   apply — percent (including doubled), JSON `\u` escapes, multipart envelopes and UTF-16.
   A multipart body is read through `post_data_buffer` when `post_data` refuses it, which
-  keeps ordinary uploads working; a body neither accessor can produce does not receive the
-  local-write permission at all, and under `allow_side_effects` it is sent but reported as
-  a `write_uninspected` observation.
+  keeps ordinary uploads working; a body neither accessor can produce is refused under
+  every permission, including `allow_side_effects`, and reported as a `write_uninspected`
+  observation naming the endpoint. It used to be sent under that switch and reported
+  afterwards, which put the report on the wrong side of the request: an envelope carrying
+  `_method=DELETE` had already landed by the time anyone read the observation, and one
+  endpoint at a time is what a delete is approved by everywhere else in this guard. There is
+  nothing to turn on: `allowed_destructive_requests` approves DELETEs, and a POST whose
+  verb cannot be confirmed never reaches that rule, so a refusal pointing there would name
+  a setting that cannot help. A scenario that must upload runs through the project's own
+  `existing_test_command` instead.
   Approvals and refusals both live in `.workflow/e2e/permissions.json`, beside
   `secrets.json` and for the same reason — both answer what a run may do here, and both
   are the project's standing answer rather than one run's. Its

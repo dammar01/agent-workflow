@@ -6,6 +6,7 @@ from config.providers import transport_budget
 from config.settings import DEFAULT_TASK_TRUNCATION_HARD_RATIO
 from core.evidence.contract import (
     FANOUT_DECLINED,
+    anchor_cap,
     FANOUT_DENIED,
     FANOUT_INCAPABLE,
     FANOUT_MISMATCH,
@@ -1642,32 +1643,17 @@ class Executor:
                     "certified_anchors": certified_count,
                     "reused": False,
                 }
-                # The same two numbers, in the block the reader is told to read first. The
-                # cap below fires only when NOTHING could be verified, which is the right
-                # place to stop trusting a digest outright — but between "all of it checks
-                # out" and "none of it does" there is a run whose confidence is untouched
-                # and whose anchors are half unopenable, and the digest said nothing about
-                # which one it was. It is reported rather than priced in: how much a
-                # partial result is worth is the reader's call, and a ratio lets them make
-                # it without opening the artifact.
+                # The same two numbers, in the block the reader is told to read first.
                 if result.get("digest") and recorded_anchors:
                     result["digest"]["anchors"] = {
                         "certified": certified_count,
                         "total": len(recorded_anchors),
                     }
-                # An anchor this project cannot open is a citation, not evidence. The
-                # contract warning above cannot see this: it only asks whether a claim
-                # names a file:line, and every claim here did. Cross-project analyses are
-                # the ordinary case — the anchors are real, they just point outside the
-                # root — and they used to arrive reading `anchors: 0` with a clean warning
-                # list and an unqualified `confidence: high`.
-                if result.get("digest") and recorded_anchors and not any(
-                    a.get("certified") is not False for a in recorded_anchors
-                ):
-                    result["digest"] = cap_confidence(
-                        result["digest"],
-                        [("medium", "no cited anchor could be verified in this project")],
-                    )
+                # The ladder lives in `contract.anchor_cap`, beside the cap it feeds.
+                if result.get("digest") and recorded_anchors:
+                    cap = anchor_cap(certified_count, len(recorded_anchors))
+                    if cap:
+                        result["digest"] = cap_confidence(result["digest"], [cap])
             except Exception as exc:
                 result.setdefault("meta", {})["evidence_store_error"] = (
                     f"{type(exc).__name__}: {exc}"

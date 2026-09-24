@@ -488,13 +488,7 @@ def _confidence_caps_keep_their_reasons() -> None:
 
 
 def _reused_evidence_reports_its_anchor_ratio() -> None:
-    """A recalled digest says how much of it could be verified, in the block read first.
-
-    The confidence cap fires only when NOTHING could be certified. Between that and a
-    clean run sits a result whose number is untouched and whose anchors are half
-    unopenable, and the digest used to read identically in both cases. The ratio is
-    reported rather than priced in: what a partial result is worth is the reader's call.
-    """
+    """A recalled digest says how much of it could be verified, in the block read first."""
     from core.evidence import evidence_store
     from core.evidence.runtime_io import write_response_snapshot
     from core.workspace.workspace_paths import workflow_paths
@@ -525,9 +519,55 @@ def _reused_evidence_reports_its_anchor_ratio() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _partial_anchor_evidence_is_priced_in() -> None:
+    """Half-unopenable evidence lowers the number, not only the footnote.
+
+    The cap used to fire only when NOTHING could be certified. Between that and a clean
+    run sat a digest reading `confidence: high` over two verifiable anchors out of forty,
+    and the reader was told to read the digest FIRST and open the artifact only on a gap
+    — so the one run whose gap most needed announcing was the one that announced nothing.
+    """
+    from core.evidence.contract import anchor_cap, cap_confidence
+
+    assert_true(
+        anchor_cap(4, 4) is None and anchor_cap(0, 0) is None,
+        f"nothing to say about evidence that all checks out, or about none of it: "
+        f"{anchor_cap(4, 4)} {anchor_cap(0, 0)}",
+    )
+    assert_true(
+        anchor_cap(0, 40) == ("medium", "no cited anchor could be verified in this project"),
+        f"nothing verified keeps the ceiling it always had: {anchor_cap(0, 40)}",
+    )
+    # The two rungs that did not exist. 1-of-40 and 39-of-40 used to be graded the same as
+    # 40-of-40, which is the whole finding.
+    mostly_unverified = anchor_cap(1, 40)
+    mostly_verified = anchor_cap(39, 40)
+    assert_true(
+        mostly_unverified is not None and mostly_unverified[0] == "low" and "1 of 40" in mostly_unverified[1],
+        f"mostly unverified is worth no more than low, and says the count: {mostly_unverified}",
+    )
+    assert_true(
+        mostly_verified is not None and mostly_verified[0] == "medium" and "1 of 40" in mostly_verified[1],
+        f"mostly verified is worth a medium, naming what was missed: {mostly_verified}",
+    )
+    # The boundary is a decision, so it is asserted rather than left to arithmetic.
+    assert_true(
+        anchor_cap(2, 4)[0] == "medium" and anchor_cap(1, 4)[0] == "low",
+        f"half verified is the medium rung, below it is low: {anchor_cap(2, 4)} {anchor_cap(1, 4)}",
+    )
+    # And a cap never RAISES anything. A digest that graded itself low stays low, with the
+    # ratio's reason appended to whatever was already recorded.
+    lowered = cap_confidence({"confidence": "low"}, [anchor_cap(39, 40)])
+    assert_true(
+        lowered["confidence"] == "low" and lowered["confidence_capped_by"] == [mostly_verified[1]],
+        f"a ceiling above the reported number moves nothing and still records why: {lowered}",
+    )
+
+
 def _test_workflow_contracts() -> None:
     _confidence_caps_keep_their_reasons()
     _reused_evidence_reports_its_anchor_ratio()
+    _partial_anchor_evidence_is_priced_in()
     _round_trips()
     _correlation_scoping()
     _correlation_chain()

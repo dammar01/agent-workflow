@@ -558,7 +558,7 @@ def _test_e2e_browser_session() -> None:
         f"an upload envelope hiding a delete does not pass as a write: {seen} {guarded.mutations_blocked}",
     )
     # Neither accessor works: the body was never cleared, so it does not get the new
-    # local permission — and under the broad opt-in it goes, but is reported.
+    # local permission — and the broad opt-in does not rescue it either.
     seen, guarded = multipart(None)
     assert_true(
         seen == ["abort:blockedbyclient"]
@@ -567,9 +567,32 @@ def _test_e2e_browser_session() -> None:
     )
     seen, guarded = multipart(None, allow_side_effects=True)
     assert_true(
-        seen == ["continue"] and guarded.uninspectable_writes,
-        f"under allow_side_effects it still goes, and says it went unchecked: "
-        f"{seen} {guarded.uninspectable_writes}",
+        seen == ["abort:blockedbyclient"]
+        and guarded.mutations_blocked
+        and guarded.mutations_blocked[0]["reason"] == "uninspectable_body"
+        and guarded.uninspectable_writes,
+        f"under allow_side_effects it is refused, not sent, and says why: "
+        f"{seen} {guarded.mutations_blocked} {guarded.uninspectable_writes}",
+    )
+    # The refusal has to be honest about there being no way out. `allow_side_effects` is
+    # the switch the caller already threw, and an endpoint approval cannot send this
+    # either: that list takes DELETEs and this request never reaches the rule that reads
+    # it. What is left is the project's own test command, so that is what it names.
+    refusal_text = e2e_browser._REFUSAL_TEXT["uninspectable_body"]
+    assert_true(
+        "existing_test_command" in refusal_text,
+        f"the refusal points at the one thing that can still do this: {refusal_text}",
+    )
+    assert_true(
+        "No run setting sends it" in refusal_text,
+        f"and says plainly that nothing turns this into a sent request: {refusal_text}",
+    )
+    # And nothing changed for a body that CAN be read: the same switch, an ordinary
+    # write, still goes. Fail-closed on the unreadable case only.
+    seen, guarded = multipart(b"name=value", allow_side_effects=True)
+    assert_true(
+        seen == ["continue"] and not guarded.uninspectable_writes,
+        f"a readable body under allow_side_effects is unaffected: {seen} {guarded.uninspectable_writes}",
     )
     # An upload whose FILENAME happens to spell the override field IS refused. The rule
     # asks only whether the field is present, so this is the cost side of that trade: a
