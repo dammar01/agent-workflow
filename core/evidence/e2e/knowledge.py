@@ -31,11 +31,11 @@ import hashlib
 import json
 import os
 import re
-import time
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 from core.workspace.workspace_paths import now_iso, workflow_paths
+from utils.owned_lock import OwnedFileLock
 
 FILENAME = "e2e-knowledge.jsonl"
 LOCK_FILENAME = "e2e-knowledge.jsonl.lock"
@@ -60,43 +60,11 @@ def _store_path(project_root: Path) -> Path:
     return workflow_paths(Path(project_root))["e2e_knowledge"]
 
 
-class _Lock:
-    """O_EXCL lock around the read-modify-write, with the fact store's steal-when-orphaned rule."""
+class _Lock(OwnedFileLock):
+    """O_EXCL lock around the read-modify-write, with the fact store's ownership rules."""
 
     def __init__(self, project_root: Path) -> None:
-        self.path = _store_path(project_root).with_name(LOCK_FILENAME)
-        self.fd: int | None = None
-
-    def __enter__(self) -> "_Lock":
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        deadline = time.time() + LOCK_TTL_SECONDS
-        while True:
-            try:
-                self.fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(self.fd, f"{os.getpid()} {time.time()}".encode("utf-8"))
-                return self
-            except FileExistsError:
-                try:
-                    orphaned = time.time() - self.path.stat().st_mtime > LOCK_TTL_SECONDS
-                except OSError:
-                    orphaned = True
-                if orphaned or time.time() > deadline:
-                    try:
-                        self.path.unlink()
-                    except OSError:
-                        pass
-                time.sleep(0.05)
-
-    def __exit__(self, *exc) -> None:
-        if self.fd is not None:
-            try:
-                os.close(self.fd)
-            except OSError:
-                pass
-        try:
-            self.path.unlink()
-        except OSError:
-            pass
+        super().__init__(_store_path(project_root).with_name(LOCK_FILENAME), LOCK_TTL_SECONDS)
 
 
 def load(project_root: Path) -> list[dict]:

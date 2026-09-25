@@ -180,6 +180,14 @@ def upgrade_workflow_workspace(
             "usual one) and rerun upgrade — it resumes from that step. "
             f"Backup: {exc.backup or 'none recorded'}."
         ) from exc
+    except migrations.MigrationRollbackIncomplete as exc:
+        raise ValueError(
+            f"workspace migration failed and the rollback is INCOMPLETE: {exc}. The entries "
+            f"that could not move back are still in {exc.staging}; move them to "
+            f"{WORKFLOW_DIRNAME}/ by hand (or rerun upgrade, which recovers a leftover staging "
+            "directory first). A pre-migration copy may also be under .workflow/ "
+            "(migration-backup-*)."
+        ) from exc
     except Exception as exc:
         raise ValueError(
             f"workspace migration failed and was rolled back: {type(exc).__name__}: {exc}. "

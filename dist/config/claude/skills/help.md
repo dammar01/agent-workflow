@@ -1,11 +1,11 @@
 # Skill: help
-description: Command reference v3.7.0
+description: Command reference v3.7.1
 
 ## Trigger
 /.help
 
 ## Output
-[COMMAND GUIDE — v3.7.0]
+[COMMAND GUIDE — v3.7.1]
 
 LOCAL (main_agent langsung):
   /.execute -y      implement code (wajib -y)

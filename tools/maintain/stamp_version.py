@@ -95,6 +95,10 @@ EXEMPT: dict[str, tuple[str, ...]] = {
         # The v3.6.0 `data/` layout upgrade, described as history.
         "Upgrade ke layout `data/`",
     ),
+    "dist/config/claude/settings.template.json": (
+        # Marketplace pins: the plugin repos' own release tags, not ours.
+        '"ref": "v',
+    ),
 }
 
 # Bounded on both sides: no digit or dot before, no further `.digit` or digit after. The

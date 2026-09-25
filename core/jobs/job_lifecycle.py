@@ -583,7 +583,15 @@ def run_worker(job_id: str) -> dict:
             )
         return output
     except Exception as exc:
-        _main().JOB_MANAGER.fail_job(job_id, str(exc))
+        # Guarded: this is the worker's last line. If recording the failure raises too (the
+        # same disk that failed the run), letting it escape would lose the crash report the
+        # caller is about to get. fail_job releases the session lock itself, even when its
+        # own save fails, so a raise here no longer strands the lock.
+        record_error = None
+        try:
+            _main().JOB_MANAGER.fail_job(job_id, str(exc))
+        except Exception as fail_exc:  # noqa: BLE001 — reported in the failure meta
+            record_error = f"{type(fail_exc).__name__}: {fail_exc}"
         # Through make_error like every other failure: a plain dict here carried no
         # error_type and no next_action, so a caller branching on error_type saw None and
         # treated a crashed worker as an unknown shape rather than a known failure.
@@ -595,6 +603,8 @@ def run_worker(job_id: str) -> dict:
         failure["job_id"] = job_id
         failure["status"] = "failed"
         failure.setdefault("meta", {})["job_id"] = job_id
+        if record_error:
+            failure["meta"]["job_record_error"] = record_error
         return failure
 
 

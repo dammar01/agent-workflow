@@ -43,7 +43,10 @@ from installer.base import (  # noqa: E402,F401
     SETTINGS_REQUIRED,
     Plan,
     _RECEIPT,
-    _RECEIPT_SCHEMA_VERSION,
+    _begin_receipt,
+    _discard_empty_receipt,
+    _flush_receipt,
+    _reset_receipt,
     _apply_intent_mode,
     _backup,
     _env_values,
@@ -456,7 +459,7 @@ def main() -> int:
     )
     args = parser.parse_args()
     apply = args.apply
-    _RECEIPT.clear()
+    _reset_receipt()
 
     if args.rollback is not None:
         return _run_rollback(args.rollback or None, apply)
@@ -521,6 +524,21 @@ def main() -> int:
 
     for key in stale_bundle:
         plan.warn(f"dist/ does not match the manifest for {key} (dry run; --apply refuses)")
+
+    if apply:
+        # Begun after every abort-before-writing check and before the first write,
+        # flushed after each one: see installer/base.py.
+        # Receipt goes down with the backups, not beside the code: it is only meaningful
+        # paired with them, and --rollback refuses to act without it.
+        _begin_receipt(
+            backup_root / "install_receipt.json",
+            {
+                "installed_at": datetime.now(timezone.utc).isoformat(),
+                "version": manifest.get("version"),
+                "only_command": bool(args.only_command),
+                "project_root": str(project_root) if project_root else None,
+            },
+        )
 
     _install_deps(plan, apply, args.with_e2e)
 
@@ -591,28 +609,12 @@ def main() -> int:
     _store_only_command(args.only_command, plan, apply, backup_root)
     _write_ledger(targets, apply)
 
-    # Receipt goes down with the backups, not beside the code: it is only meaningful
-    # paired with them, and --rollback refuses to act without it.
+    # The last write marks the receipt complete; every earlier one left it `complete:
+    # false`, which is what an interrupted install leaves behind.
     if apply and _RECEIPT:
-        backup_root.mkdir(parents=True, exist_ok=True)
-        receipt_path = backup_root / "install_receipt.json"
-        receipt_tmp = receipt_path.with_suffix(".tmp")
-        receipt_tmp.write_text(
-            json.dumps(
-                {
-                    "schema_version": _RECEIPT_SCHEMA_VERSION,
-                    "installed_at": datetime.now(timezone.utc).isoformat(),
-                    "version": manifest.get("version"),
-                    "only_command": bool(args.only_command),
-                    "project_root": str(project_root) if project_root else None,
-                    "entries": _RECEIPT,
-                },
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        os.replace(receipt_tmp, receipt_path)
+        _flush_receipt(complete=True)
+    elif apply:
+        _discard_empty_receipt()
 
     counts: dict[str, int] = {}
     for verb, target, detail in plan.actions:

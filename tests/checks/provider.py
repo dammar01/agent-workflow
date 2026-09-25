@@ -653,6 +653,43 @@ def _test_provider_selection() -> None:
     shutil.rmtree(temp_root, ignore_errors=True)
 
 
+def _test_doctor_read_boundary_warning() -> None:
+    """codex and agy cannot bound what the second agent reads and get the full environment.
+
+    Choosing one is trusting it, which is the user's call — so doctor warns on every run
+    instead of failing readiness, and says nothing of the kind for opencode."""
+    from core.audit.diagnostics import run_doctor
+    from core.runtime.state import ensure_workflow_workspace
+    from core.workspace.workspace_paths import PROVIDER_CONFIG_NAME, read_json_file, workflow_paths
+
+    root = Path(tempfile.mkdtemp(prefix="doctor-read-boundary-"))
+    try:
+        ensure_workflow_workspace(root, os.getenv("AGENT_PATH"))
+        config_path = workflow_paths(root)["workflow_dir"] / PROVIDER_CONFIG_NAME
+        for provider, expected in (("codex", "not_enforceable"), ("agy", "not_enforceable"), ("opencode", "enforceable")):
+            config = read_json_file(config_path)
+            config["provider"] = provider
+            config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+            meta = run_doctor(root, "does-not-exist", "doctor-read-boundary")["meta"]
+            checks = read_json_file(Path(meta["doctor_report"]))["checks"]
+            boundary = checks.get("second_agent_read_boundary") or {}
+            warnings = [fix for fix in meta["recommended_fixes"] if fix.startswith("WARNING: second_agent provider")]
+            assert_true(boundary.get("status") == expected, f"{provider}: read boundary reported as {expected}: {boundary}")
+            if expected == "not_enforceable":
+                assert_true(
+                    len(warnings) == 1 and f"'{provider}'" in warnings[0] and "`.env`" in warnings[0] and "/.provider" in warnings[0],
+                    f"{provider}: doctor warns that every file and env var is readable: {warnings}",
+                )
+                assert_true(
+                    not any("second_agent provider" in issue for issue in meta["issues"]),
+                    f"{provider}: a trusted provider is a warning, never an issue: {meta['issues']}",
+                )
+            else:
+                assert_true(warnings == [], f"{provider}: no warning where the boundary holds: {warnings}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _test_agy_provider() -> None:
     """agy: parsing, argv, and the guard that stands in for a boundary it does not have.
 
@@ -1286,19 +1323,29 @@ def _assert_codex_provider() -> None:
         / "opencode"
         / "opencode.project.json"
     )
-    shipped = json.loads(project_json.read_text(encoding="utf-8"))["permission"]["read"]
-    denied = {pattern for pattern, verdict in shipped.items() if verdict == "deny"}
-    allowed = {pattern for pattern, verdict in shipped.items() if verdict == "allow"}
+    # Every block that names a path pattern is a way to reach file contents — `read` opens
+    # a file, `grep` prints its matching lines — so every such block carries the whole list.
+    # Checking `read` alone let `grep` fall eight patterns behind: a keystore `read` refused,
+    # `grep` would print.
+    permission = json.loads(project_json.read_text(encoding="utf-8"))["permission"]
+    path_blocks = {name: block for name, block in permission.items() if isinstance(block, dict)}
     assert_true(
-        denied == set(SECRET_READ_PATTERNS),
-        "core/secret_patterns.py and opencode.project.json must deny the same set; "
-        f"only in code: {sorted(set(SECRET_READ_PATTERNS) - denied)}, "
-        f"only in JSON: {sorted(denied - set(SECRET_READ_PATTERNS))}",
+        {"read", "grep"} <= set(path_blocks),
+        f"opencode.project.json must bound both read and grep: {sorted(path_blocks)}",
     )
-    assert_true(
-        allowed == set(SECRET_READ_ALLOWLIST),
-        f"the read allowlist must agree too: {sorted(allowed)} vs {sorted(SECRET_READ_ALLOWLIST)}",
-    )
+    for name, shipped in path_blocks.items():
+        denied = {pattern for pattern, verdict in shipped.items() if verdict == "deny"}
+        allowed = {pattern for pattern, verdict in shipped.items() if verdict == "allow"}
+        assert_true(
+            denied == set(SECRET_READ_PATTERNS),
+            f"core/secret_patterns.py and opencode.project.json permission.{name} must deny the same set; "
+            f"only in code: {sorted(set(SECRET_READ_PATTERNS) - denied)}, "
+            f"only in JSON: {sorted(denied - set(SECRET_READ_PATTERNS))}",
+        )
+        assert_true(
+            allowed == set(SECRET_READ_ALLOWLIST),
+            f"the permission.{name} allowlist must agree too: {sorted(allowed)} vs {sorted(SECRET_READ_ALLOWLIST)}",
+        )
 
     # The boundary is only real if it is on the argv of BOTH call shapes. A resumed thread
     # that dropped it would leave a hole that opens on the second call of a session.

@@ -12,7 +12,7 @@ LOCAL command: tak ada pre-flight gate. Draft yang `ready` LANGSUNG dilanjut ke 
 - Run script lama (belum kenal `verify-browser`) balas job tanpa hasil / `unsupported command` → jalankan /.upgrade dulu.
 
 ## STEP 0 — Baca config project (SEBELUM bertanya apa pun)
-Section `e2e` di `<project>/.workflow/config.json` = default terpasang milik project. Isinya key yang sama dengan settings request.
+Section `e2e` di `<project>/.workflow/config.json` = default terpasang milik project. Isinya key yang sama dengan settings request, DITAMBAH key config-only yang request tak boleh sebut: `allow_remote`, `allowed_origins`, `existing_test_command`, `existing_test_allowlist`, `existing_test_timeout_s` (registry `CONFIG_ONLY_SETTINGS`). Request ditulis agent, jadi policy yang mengizinkan origin remote atau command yang dieksekusi tak boleh tinggal di request itu sendiri.
 - Section ada dan `base_url`-nya sesuai target → **LEWATI STEP 1 sepenuhnya**. Jangan wawancara. Tulis request minimal (STEP 2) dan lanjut.
 - Section tidak ada / base_url beda dari yang user sebut → STEP 1, lalu tawarkan menuliskan hasilnya ke `config.json` supaya run berikutnya nol wawancara.
 - config.json berisi OVERRIDE saja: section `e2e` hanya ada bila project pernah dikonfigurasi. Key yang tak ada = default bawaan (`base_url: http://localhost:8000`, headed, retry 2). Workspace lama yang belum di-upgrade bisa masih punya section berisi default hasil backfill lama — base_url yang tak cocok dengan app user = belum dikonfigurasi → STEP 1.
@@ -26,7 +26,7 @@ Isi dari konteks dulu (diff, pesan user); tanya HANYA yang belum pasti. Max 4 pe
    Tiga kelas, jangan dicampur:
    - loopback (localhost/127.0.0.1/::1/*.localhost) → lolos apa adanya.
    - nama `.test` (suffix cadangan RFC 6761 untuk development lokal) → diperlakukan PERSIS seperti localhost: lolos TANPA `allow_remote`, dan write ke sana tanpa lookup DNS maupun patokan.
-   - domain sungguhan (`staging.example.com`) → WAJIB `allow_remote: true` + `allowed_origins: ["<scheme://host[:port]> persis"]`. Itu opt-in yang harus diketik user, bukan default.
+   - domain sungguhan (`staging.example.com`) → WAJIB `allow_remote: true` + `allowed_origins: ["<scheme://host[:port]> persis"]` di section `e2e` config.json — BUKAN di request. Itu opt-in yang harus diketik user, bukan default. Tunjukkan snippet-nya, user yang menulis/menyetujui edit config.json.
    Navigasi ke origin LAIN (termasuk `.test` lain) tetap butuh entri di `allowed_origins`, apa pun kelas base_url-nya.
 3. Perlu login? tidak | ya, akun sudah ada.
    Nama key credential DITETAPKAN runtime: `E2E_USER`, `E2E_PASS` (registry `CREDENTIAL_KEYS`). Scenario hanya boleh `${E2E_USER}` / `${E2E_PASS}`, huruf persis; nama lain atau salah kapital → `spec_invalid`. JANGAN tanya/karang nama key lain.
@@ -47,7 +47,7 @@ Deteksi mencakup body, query, dan header (`X-HTTP-Method-Override`, `X-Method-Ov
    `boleh` → settings `allow_side_effects: true`. Loopback dan `.test` langsung boleh menerima write. Host LAIN dinilai dari ALAMAT, bukan nama: preflight me-resolve base_url dan tiap origin di `allowed_origins`, dan menolak run (`spec_invalid`) kalau salah satu punya alamat publik, link-local (`169.254.0.0/16` = metadata service cloud), atau tak bisa di-resolve. Semua alamat loopback/privat → host itu boleh menerima write, dan alamatnya DIPATOK (`--host-resolver-rules`) supaya nama itu tak bisa berpindah IP di tengah run — termasuk nama yang resolve ke loopback seperti `127.0.0.1.nip.io`. Patokan cuma didukung chromium → browser lain + write ke host terpatok DITOLAK; write https ke host terpatok juga ditolak. Tidak ada allow-list path lagi: `allowed_mutation_paths` DIHAPUS → `request_invalid` bila masih ditulis.
    Redirect: write yang dijawab 307/308 diikuti guard sendiri, tiap hop dinilai dulu — redirect ke tujuan yang tak boleh ditulis → diblok sebelum body terkirim ulang.
    Batas: GET yang mengubah data, WebSocket, service worker tidak terlihat guard maupun ledger request.
-6. Existing test project (opsional): argv command tanpa shell (`{files}`, `{base_url}`) + allowlist glob. Tak ada → lewati.
+6. Existing test project (opsional): argv command tanpa shell (`{files}`, `{base_url}`) + allowlist glob — config-only, ditulis ke section `e2e` config.json, bukan ke request (command itu jalan dengan environment user). Tak ada → lewati.
 Hybrid review SELALU jalan (codex menilai bukti browser) — bukan pertanyaan. Sebut: tiap run = 2 panggilan second_agent (draft + review).
 
 ## STEP 2 — Tulis request draft
@@ -56,8 +56,8 @@ File: `<project>/.workflow/data/sessions/<MAIN_SESSION_ID>/e2e/request.json` (Wr
 {"version": 1, "phase": "draft",
  "settings": {"base_url": "http://app.test", "headless": false, "slow_mo_ms": 700, "allow_side_effects": false}}
 ```
-`settings` = SELISIH terhadap config project, bukan salinannya. Project sudah punya section `e2e` → tulis `{"version": 1, "phase": "draft"}` saja; apa pun yang ditulis di sini menang atas config, dan menyalin nilai yang sama cuma bikin dua tempat yang bisa berbeda diam-diam.
-Key settings sah: base_url browser headless slow_mo_ms nav_timeout_ms step_timeout_ms idle_timeout_s total_timeout_s probe_max_elements allow_remote allowed_origins allow_side_effects allow_local_side_effects allowed_read_only_requests allowed_destructive_requests secrets_profile secrets_template_profiles fail_on_console_error max_retries artifact_max_mb existing_test_command existing_test_allowlist existing_test_timeout_s. Key lain/tipe salah → `request_invalid` (`allowed_mutation_paths` → error migrasi). Key yang sama di config.json: salah tipe → diabaikan + warning, bukan error.
+`settings` = SELISIH terhadap config project, bukan salinannya. Project sudah punya section `e2e` → tulis `{"version": 1, "phase": "draft"}` saja; key yang sah di request menang atas config, dan menyalin nilai yang sama cuma bikin dua tempat yang bisa berbeda diam-diam.
+Key settings sah di request: base_url browser headless slow_mo_ms nav_timeout_ms step_timeout_ms idle_timeout_s total_timeout_s probe_max_elements allow_side_effects allow_local_side_effects allowed_read_only_requests allowed_destructive_requests secrets_profile secrets_template_profiles fail_on_console_error max_retries ignore_repeat_brake keep_created_data artifact_max_mb. Key lain/tipe salah → `request_invalid` (`allowed_mutation_paths` → error migrasi). Key config-only (`allow_remote` `allowed_origins` `existing_test_command` `existing_test_allowlist` `existing_test_timeout_s`) di request → `request_invalid` yang menyuruh pindah ke config.json; JANGAN tulis di request. `base_url` tetap boleh per-run, tapi dinilai policy origin dari config. Key yang sama di config.json: salah tipe → diabaikan + warning, bukan error.
 DILARANG menulis nilai credential ke request.
 
 ## STEP 3 — Draft (background)
@@ -149,7 +149,7 @@ verdict (pass | fail | incomplete) | browser_verdict | reason | cleanup (`meta.e
 - Verdict `incomplete` dengan gap `passed only on attempt N` → lolos hanya setelah retry. JANGAN relay sebagai pass: bisa lingkungan flaky atau bug app yang sesekali muncul. Detail `allowed_read_only_requests covers the endpoint, but the body is ...` → body GraphQL write; bukan kandidat read-only. Observation `mutation_blocked` (beacon/async) = warning saja.
 
 ## Batas
-- Config project hanya memindahkan DEFAULT; tak satu pun knob di `config.json` melonggarkan policy origin atau write. Domain sungguhan tetap butuh `allow_remote` + `allowed_origins` persis, dan write tetap dinilai dari alamat hasil resolve, di mana pun nilainya ditulis.
+- Config project hanya memindahkan DEFAULT; tak satu pun knob di `config.json` melonggarkan policy origin atau write. Domain sungguhan tetap butuh `allow_remote` + `allowed_origins` persis — dua key itu HANYA dibaca dari config.json — dan write tetap dinilai dari alamat hasil resolve.
 - Sisa risiko yang diketahui: patokan resolver menutup celah antara preflight dan run untuk chromium. Yang tak tertutup — host privat yang memang dikuasai pihak lain di jaringan yang sama, dan GET yang mengubah data (nol guard, seperti sebelumnya).
 - Nilai credential tak pernah lewat chat, request, prompt, atau artifact. secrets.json bisa dibaca second_agent codex (read boundary NOT_ENFORCEABLE) — sebut ke user bila provider codex.
 - Satu session = satu request. Session lain di project yang sama tak berbagi setting request — tapi berbagi section `e2e` di config.json.

@@ -1,4 +1,4 @@
-# agent-workflow v3.7.0
+# agent-workflow v3.7.1
 
 Runtime orkestrasi mandiri untuk alur kerja dua-agent. Tanpa dependency pihak ketiga.
 
@@ -70,7 +70,7 @@ git --version
 
 ---
 
-## Install (v3.7.0)
+## Install (v3.7.1)
 
 ### Anggota tim baru — urutan lengkap dari nol
 
@@ -134,6 +134,15 @@ Receipt schema v2 mencatat hash sebelum dan sesudah untuk setiap file yang dibua
 diubah, termasuk `settings.json` dan file mode intent. Rollback memvalidasi seluruh
 destination dan backup sebelum menulis apa pun; satu perubahan setelah instalasi membuat
 rollback berhenti dengan konflik, bukan menimpa edit user atau melakukan rollback parsial.
+Receipt (`~/.claude/backups/install_<timestamp>/install_receipt.json`) ditulis **inkremental**:
+sekali sebelum destination apa pun berubah, lalu ulang setelah tiap langkah yang tercatat,
+dengan `complete: false` sampai tulis final. Tiap entry berisi `action`, `key`, `dest`,
+`backup`, `pre_sha256`, dan `post_sha256`, dan dicatat setelah file-nya selesai ditulis.
+Instalasi yang mati di tengah (file terkunci, disk penuh, Ctrl+C) tetap meninggalkan receipt:
+`--rollback` menerimanya, mencetak `NOTE: that install was interrupted; undoing the steps it
+recorded.`, dan membatalkan langkah yang tercatat saja. Langkah yang mati saat menulis tak
+punya entry — backup-nya tetap di direktori backup dan disalin balik manual. Apply yang tidak
+mengubah apa pun tidak meninggalkan receipt.
 Receipt mencakup target instalasi global dan bundle. Init/upgrade stateful pada `.workflow/`
 serta penambahan `.workflow/` ke `.gitignore` tidak masuk rollback installer karena dapat
 memuat session dan state project yang tidak aman dihapus otomatis.
@@ -392,7 +401,10 @@ python $env:AGENT_PATH --command upgrade --work-dir "C:/path/to/target-app" --pr
 - menolak berjalan ketika ada delegated job aktif;
 - meregenerasi runner scripts dan me-repoint path tool;
 - memigrasi kunci v3.4.2 (`opencode_*` → `provider_*`, `.workflow/opencode.json` → `.workflow/second_agent.json`) sekali, memindahkan nilainya;
-- **migrasi layout** (sekali): isi internal `.workflow/` dipindah ke `.workflow/data/` setelah backup ke `data/backups/<stamp>/` (3 terakhir disimpan), path evidence yang diarsipkan ditulis ulang, sisa lama (`state.json`, `runtime/`, `logs/`, lock) dihapus, `secrets.json` format objek dikonversi ke list. Gagal → semua dikembalikan, backup disimpan sebagai `migration-backup-*`;
+- **migrasi layout** (sekali): isi internal `.workflow/` dipindah ke `.workflow/data/` setelah backup ke `data/backups/<stamp>/` (3 terakhir disimpan), path evidence yang diarsipkan ditulis ulang, sisa lama (`state.json`, `runtime/`, `logs/`, lock) dihapus, `secrets.json` format objek dikonversi ke list. Isi dipindah dulu ke staging `.workflow/data.migrating/` lalu di-rename ke `data/` dalam satu langkah. Staging sisa percobaan yang terputus dikembalikan dulu; bila ia berisi nama yang juga ada di root `.workflow`, upgrade berhenti dengan `MigrationConflict` dan **tak memindah apa pun** — simpan satu salinan tiap entry (bandingkan dulu), hapus yang lain, lalu jalankan ulang `upgrade`. Setelah cek itu, kegagalan punya tiga hasil berbeda:
+  - **gagal sebelum rename, rollback bersih** → semua dikembalikan ke `.workflow/`, backup disimpan sebagai `.workflow/migration-backup-*`, pesan `workspace migration failed and was rolled back`;
+  - **gagal sebelum rename, rollback INCOMPLETE** (`MigrationRollbackIncomplete`) → tiap langkah balik tetap dicoba dan tiap kegagalan dicatat; entry yang tak bisa kembali tetap di `.workflow/data.migrating/` (staging dipertahankan, bukan dihapus), pesan `workspace migration failed and the rollback is INCOMPLETE: ...`. Pindahkan entry itu ke `.workflow/` manual, atau jalankan ulang `upgrade` — ia memulihkan staging sisa lebih dulu. Salinan pra-migrasi mungkin ada di `.workflow/migration-backup-*`;
+  - **gagal setelah rename** (`MigrationIncomplete`) → tak ada yang dikembalikan; workspace sudah di `data/` dan jalan. Pesan `workspace migration incomplete: ...` menyebut langkah yang belum selesai — perbaiki penyebabnya (biasanya file dipegang editor/antivirus) lalu jalankan ulang `upgrade`, ia melanjutkan dari langkah itu;
 - `config.json` dipangkas jadi **override saja**: nilai yang sama dengan default dan key pensiun/tak dikenal dibuang dan dilaporkan; `second_agent.json` tetap di-backfill additive;
 - mempertahankan nilai user dan seluruh `sessions/`;
 - tidak mengirim prompt, tidak memanggil second_agent, dan tidak menjalankan verify.
@@ -579,13 +591,15 @@ Saat `init`, source-nya adalah `config/second_agent.seed.json` bila ada, atau `c
 
 #### Memilih provider — dan konsekuensi keamanannya
 
-`provider` menerima `opencode` atau `codex`. Keduanya bukan pilihan setara:
+`provider` menerima `opencode`, `codex`, atau `agy`. Ketiganya bukan pilihan setara:
 
-| | `opencode` | `codex` |
-| --- | --- | --- |
-| Boundary baca file rahasia | **ditegakkan** lewat `<project_root>/opencode.json` | **tidak ada** |
-| Sandbox tulis | ya | ya (`--sandbox read-only`) |
-| Config boundary project-root | file, di-refresh tiap `init`/`upgrade` | tak ada layer-nya |
+| | `opencode` | `codex` | `agy` |
+| --- | --- | --- | --- |
+| Boundary baca file rahasia | **ditegakkan** lewat `<project_root>/opencode.json` | **tidak ada** | **tidak ada** |
+| Sandbox tulis | ya | ya (`--sandbox read-only`) | **tidak** — tulis di working tree hanya *dideteksi* (`core/policy/agy_guard.py`), tidak dicegah |
+| Config boundary project-root | file, di-refresh tiap `init`/`upgrade` | tak ada layer-nya | tak ada layer-nya |
+
+`codex` dan `agy` sama-sama dilaporkan `doctor` sebagai `not_enforceable` dengan `trusted: true`: keduanya bisa membaca tiap file project dan menerima environment proses penuh — boundary-nya kewajiban agent, bukan penegakan runtime. Memilih `agy` juga butuh acknowledgement eksplisit (`requires_opt_in`); `/.provider` menolak menulisnya tanpa itu.
 
 Codex mengirim daftar deny yang sama sebagai flag `-c permissions.workflow.filesystem` di tiap panggilan, tetapi flag itu tidak menghentikan apa pun. Diuji terhadap codex-cli 0.147.0 mode `exec`: men-deny `**` dan `**/*` untuk `:workspace_roots` lalu meminta sebuah file di root itu tetap mengembalikan isinya, exit 0. Codex membaca dengan menjalankan shell, dan `--sandbox read-only` membatasi **tulis**, bukan baca.
 
@@ -593,7 +607,9 @@ Artinya second_agent codex bisa membaca tiap file di project yang kamu tunjuk, `
 
 Pakai `codex` bila project-nya memang tak menyimpan rahasia, atau bila kamu menerima risikonya. Untuk project yang rahasianya harus tetap tak terbaca second_agent, pakai `opencode`.
 
-Kunci reliability (v3.7.0):
+Sejak v3.7.1 posisi ini eksplisit: `codex` dan `agy` diperlakukan sebagai **trusted provider**. Selain tanpa batas baca, adapter keduanya meneruskan seluruh environment proses ke CLI provider (credential di env ikut terlihat). Itu diterima sebagai risiko, bukan diperbaiki dengan allowlist — allowlist bisa memutus auth CLI provider, dan provider yang sudah bisa membaca `.env` tak dijaga apa pun oleh env yang dipangkas. Sebagai gantinya risikonya selalu terlihat: `/.doctor` menulis cek `second_agent_read_boundary` dan satu `WARNING` di `recommended_fixes` tiap kali provider aktif `codex`/`agy` (bukan issue — readiness tetap READY), dan `/.provider` menyebutnya saat memilih.
+
+Kunci reliability (v3.7.1):
 
 | Kunci | Default | Arti |
 | --- | --- | --- |
@@ -717,8 +733,18 @@ reuse untuk invocation tersebut.
 
 Sebelum delegasi, path relatif di-resolve terhadap project root; traversal, path absolut
 di luar root, home-relative path, dan bare sensitive file seperti `credentials.json`
-ditolak. Primary OpenCode juga memakai `external_directory: deny`; file discovery harus
-melalui Read/Grep/Glob built-in. Bash hanya mengizinkan command Git read-only yang terdaftar.
+ditolak. OpenCode memakai `external_directory: deny` di level root `opencode.json` project
+(berlaku untuk agent apa pun, termasuk override `AI_PROXY_OPENCODE_AGENT`) dan di
+`agent.plan`; file discovery harus melalui Read/Grep/Glob built-in. Bash hanya mengizinkan
+command Git read-only yang terdaftar.
+
+Environment proses OpenCode (bootstrap, probe, run) tidak lagi mewarisi `os.environ`.
+Child mendapat allowlist variabel OS/jaringan (`PATH`, temp, locale, proxy/CA,
+`HOME`/`USERPROFILE`/`APPDATA`/`XDG_*`, `OPENCODE_*`) ditambah key dari `.env` di project
+root aktif (`adapters/shared/child_env.py`). Auth `opencode auth login` tetap terbaca dari
+`~/.local/share/opencode/auth.json`; key provider yang dirujuk config sebagai `{env:NAME}`
+harus ada di `.env` project. Call meta mencatat `env_policy`, `project_dotenv`,
+`project_dotenv_keys`, `parent_env_dropped` (jumlah, tanpa nilai). Codex/agy tidak berubah.
 
 Semua content dan metadata adapter, termasuk error, timeout, bootstrap, probe, dan
 `call.meta.json`, melewati redaksi recursive. Argumen proses mentah tidak disimpan;
@@ -814,7 +840,7 @@ pernah tercatat, runtime gagal sebagai `session_capture_failed` dan clean run di
 Request berbeda pada session yang masih terkunci tetap ditolak sebagai
 `job_already_running`.
 
-### Liveness worker (v3.7.0)
+### Liveness worker (v3.7.1)
 
 PID yang hidup **tidak** berarti sedang bekerja. Worker karena itu melaporkan heartbeat sekaligus usia output stream, lalu job diklasifikasi tiga keadaan:
 
@@ -1026,7 +1052,7 @@ dengan baris bergerbang penuh.
 
 ## Referensi
 
-- Catatan rilis: [`prompt/v3.7.0/changelog.md`](../prompt/v3.7.0/changelog.md)
+- Catatan rilis: [`prompt/v3.7.1/changelog.md`](../prompt/v3.7.1/changelog.md)
 - Kontrak canonical main_agent: [`dist/config/claude/CLAUDE.md`](../dist/config/claude/CLAUDE.md)
 - Kontrak canonical second_agent: [`dist/config/opencode/AGENTS.md`](../dist/config/opencode/AGENTS.md)
 - Runtime entry point: [`main.py`](main.py)

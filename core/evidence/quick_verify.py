@@ -22,20 +22,31 @@ MAX_FILE_BYTES = 2 * 1024 * 1024
 # Build artifacts and vendored trees: never the subject of a verification.
 _IGNORED_PARTS = {"__pycache__", "node_modules", ".git", "vendor", ".venv", "venv"}
 
+
+def _path_arg(rel: str) -> str:
+    """A git-reported path as a checker argument that cannot be read as an option.
+
+    File names come from `git diff --name-only`, so a file named `--eval=...` or `-r x`
+    reached the checker's argv as a flag. Anchoring every path at `./` makes it a path to
+    node, php and pyflakes alike; `--` would do it for some of them and not others.
+    """
+    return rel if rel.startswith(("./", ".\\")) else f"./{rel}"
+
+
 # extension -> (language, argv builder). argv is run with cwd=project_root, no shell.
 # Python is checked in-process instead: `py_compile` would drop .pyc files into the
 # user's tree, and a verification command must not leave artifacts behind.
 _SYNTAX_CHECKS: dict[str, tuple[str, object]] = {
-    ".js": ("node", lambda rel: ["node", "--check", rel]),
-    ".mjs": ("node", lambda rel: ["node", "--check", rel]),
-    ".cjs": ("node", lambda rel: ["node", "--check", rel]),
-    ".php": ("php", lambda rel: ["php", "-l", rel]),
+    ".js": ("node", lambda rel: ["node", "--check", _path_arg(rel)]),
+    ".mjs": ("node", lambda rel: ["node", "--check", _path_arg(rel)]),
+    ".cjs": ("node", lambda rel: ["node", "--check", _path_arg(rel)]),
+    ".php": ("php", lambda rel: ["php", "-l", _path_arg(rel)]),
 }
 
 # Syntax checkers prove the file parses; they do not catch a misspelled name.
 # These optional linters do — when the toolchain happens to be present.
 _NAME_CHECKS: dict[str, tuple[str, object]] = {
-    ".py": ("pyflakes", lambda rel: ["pyflakes", rel]),
+    ".py": ("pyflakes", lambda rel: ["pyflakes", _path_arg(rel)]),
 }
 
 

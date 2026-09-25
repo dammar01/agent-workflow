@@ -406,22 +406,47 @@ class JobManager:
             return job
 
     def complete_job(self, job_id: str, output: dict) -> dict:
-        with self._job_mutation(job_id):
-            job = self._load(job_id)
-            if job.get("status") == "completed":
-                pass
-            elif job.get("reaped") or job.get("status") == "failed":
-                job["late_output"] = output
-                self._save(job)
-            else:
-                job["status"] = "completed"
-                job.pop("recovery_in_progress", None)
-                job["completed_at"] = self._now()
-                job["output"] = output
-                job["error"] = None
-                self._save(job)
-        self._release_session_lock(job)
+        # Release in `finally`, outside the mutation: a failed save used to raise past the
+        # release, leaving the job "running" AND its session locked until a reaper ran. The
+        # release is token-checked, so freeing it after a failed save cannot free a lock a
+        # newer job holds.
+        job = None
+        try:
+            with self._job_mutation(job_id):
+                job = self._load(job_id)
+                if job.get("status") == "completed":
+                    pass
+                elif job.get("reaped") or job.get("status") == "failed":
+                    job["late_output"] = output
+                    self._save(job)
+                else:
+                    job["status"] = "completed"
+                    job.pop("recovery_in_progress", None)
+                    job["completed_at"] = self._now()
+                    job["output"] = output
+                    job["error"] = None
+                    self._save(job)
+        finally:
+            self._release_after_finish(job_id, job)
         return job
+
+    def _release_after_finish(self, job_id: str, job: dict | None) -> None:
+        """Release a finished job's session lock, even when its record could not be read.
+
+        A missing or corrupt job file used to leave `job` unset, so the release was
+        skipped and the session stayed locked. The lock file itself names its job, so the
+        lock is found by that and released with the token it carries — still never a lock
+        some other job holds.
+        """
+        if job is not None:
+            self._release_session_lock(job)
+            return
+        for path in sorted(self.lock_dir.glob("*.lock")):
+            current = self._read_lock(path)
+            if current and current.get("job_id") == job_id:
+                self._release_lock_path(
+                    path, expected_job_id=job_id, expected_token=current.get("token")
+                )
 
     def fail_job(
         self,
@@ -430,32 +455,41 @@ class JobManager:
         output: dict | None = None,
         reaped: bool = False,
     ) -> dict:
-        with self._job_mutation(job_id):
-            job = self._load(job_id)
-            if job.get("status") == "completed":
-                pass
-            elif job.get("status") == "failed":
-                changed = False
-                if output is not None and job.get("output") is None:
-                    job["output"] = output
-                    changed = True
-                if reaped and not job.get("reaped"):
-                    job["reaped"] = True
-                    changed = True
-                if changed:
-                    self._save(job)
-            else:
-                job["status"] = "failed"
-                job.pop("recovery_in_progress", None)
-                job["completed_at"] = self._now()
-                job["error"] = error
-                if output is not None:
-                    job["output"] = output
-                if reaped:
-                    job["reaped"] = True
-                self._save(job)
-        self._release_session_lock(job)
+        job = None
+        try:
+            with self._job_mutation(job_id):
+                job = self._load(job_id)
+                self._apply_failure(job, error, output, reaped)
+        finally:
+            # Same reasoning as complete_job: the lock is released even when the save fails.
+            self._release_after_finish(job_id, job)
         return job
+
+    def _apply_failure(
+        self, job: dict, error: str, output: dict | None, reaped: bool
+    ) -> None:
+        if job.get("status") == "completed":
+            pass
+        elif job.get("status") == "failed":
+            changed = False
+            if output is not None and job.get("output") is None:
+                job["output"] = output
+                changed = True
+            if reaped and not job.get("reaped"):
+                job["reaped"] = True
+                changed = True
+            if changed:
+                self._save(job)
+        else:
+            job["status"] = "failed"
+            job.pop("recovery_in_progress", None)
+            job["completed_at"] = self._now()
+            job["error"] = error
+            if output is not None:
+                job["output"] = output
+            if reaped:
+                job["reaped"] = True
+            self._save(job)
 
     def get_job(self, job_id: str) -> dict | None:
         path = self._path(job_id)

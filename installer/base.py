@@ -6,6 +6,7 @@ below install.py, and every dist path is derived from it.
 """
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -72,6 +73,68 @@ class Plan:
 # rather than restored.
 _RECEIPT_SCHEMA_VERSION = 2
 _RECEIPT: list[dict] = []
+# Where the receipt is being written, and the header that goes with it. The receipt used to
+# be written once, after every step had run, so an install that died partway — a locked
+# file, a full disk, Ctrl+C — left changed files with no receipt, and --rollback refuses a
+# backup without one. It is now rewritten after every recorded step, marked `complete:
+# false` until the final write, so whatever did change can always be undone.
+_RECEIPT_TARGET: dict = {"path": None, "header": {}}
+
+
+def _begin_receipt(path: Path, header: dict) -> None:
+    """Start the receipt and write it at once, empty, before any destination changes.
+
+    Written up front rather than at the first entry: a failure to write it then surfaces
+    before anything was touched, not after a file had already been replaced.
+    """
+    _RECEIPT_TARGET["path"] = Path(path)
+    _RECEIPT_TARGET["header"] = dict(header)
+    _flush_receipt(allow_empty=True)
+
+
+def _discard_empty_receipt() -> None:
+    """An apply that changed nothing leaves no receipt, as before this was incremental."""
+    path = _RECEIPT_TARGET["path"]
+    if path is not None and not _RECEIPT:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        try:
+            path.parent.rmdir()  # only if the backup dir is empty too
+        except OSError:
+            pass
+
+
+def _reset_receipt() -> None:
+    _RECEIPT.clear()
+    _RECEIPT_TARGET["path"] = None
+    _RECEIPT_TARGET["header"] = {}
+
+
+def _flush_receipt(complete: bool = False, allow_empty: bool = False) -> None:
+    """Rewrite the receipt with every entry so far. No-op until an install begins one."""
+    path = _RECEIPT_TARGET["path"]
+    if path is None or (not _RECEIPT and not allow_empty):
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Unique temp per process: two installs sharing one backup name must not interleave
+    # into the same temp file before the rename.
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(
+        json.dumps(
+            {
+                "schema_version": _RECEIPT_SCHEMA_VERSION,
+                **_RECEIPT_TARGET["header"],
+                "complete": complete,
+                "entries": _RECEIPT,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    os.replace(tmp, path)
 
 
 def _file_sha256(path: Path) -> str | None:
@@ -104,6 +167,7 @@ def _record(
             "post_sha256": post_sha256,
         }
     )
+    _flush_receipt()
 
 
 _ENV_CACHE: dict | None = None

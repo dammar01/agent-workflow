@@ -27,6 +27,7 @@ from installer.base import (
     DIST_CONFIG,
     HOME,
     _RECEIPT,
+    _flush_receipt,
     Plan,
     _backup,
     _file_sha256,
@@ -125,6 +126,7 @@ def prune(current_dests: set[str], plan: Plan, apply: bool, backup_root: Path) -
                     "post_sha256": None,
                 }
             )
+            _flush_receipt()
     for path in edited:
         plan.warn(
             f"{path} was installed by an earlier release and is no longer shipped, but it "

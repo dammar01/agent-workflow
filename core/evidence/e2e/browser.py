@@ -123,7 +123,7 @@ _REFUSAL_TEXT = {
     "destructive_unapproved": "a delete needs its exact endpoint in settings.allowed_destructive_requests — approve it and run again",
     "override_unapproved": "this request carries a _method override field, so its verb does not decide what it does — approve the endpoint in settings.allowed_destructive_requests, or remove the field",
     "blocked_by_policy": "the project's e2e/permissions.json lists this endpoint under blocked_requests; no run setting can override it",
-    "uninspectable_body": "neither post_data nor post_data_buffer could produce this request's body, so it was never cleared of carrying a _method override. No run setting sends it: allowed_destructive_requests approves DELETEs, and this request never reaches that rule. Drive an upload like this through the project's own test command (settings.existing_test_command) instead",
+    "uninspectable_body": "neither post_data nor post_data_buffer could produce this request's body, so it was never cleared of carrying a _method override. No run setting sends it: allowed_destructive_requests approves DELETEs, and this request never reaches that rule. Drive an upload like this through the project's own test command (config.json e2e.existing_test_command) instead",
 }
 
 

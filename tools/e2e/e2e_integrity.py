@@ -136,9 +136,14 @@ def integrity_checks(report: Report) -> None:
             bool(stored) and stored[0].get("origin") == "discovered",
             str(stored[0].get("origin") if stored else "no fact"),
         )
+        # config.json holds overrides only, so this fallback is the value every project
+        # without the key actually runs on; it must be the documented default, not a copy.
+        from core.runtime.config_defaults import default_policies
+
         report.check(
-            "fact_store: recurrence threshold lowered to 3",
-            fact_store.RECURRENCE_THRESHOLD == 3,
+            "fact_store: recurrence fallback equals the config default",
+            fact_store.RECURRENCE_THRESHOLD
+            == default_policies()["fact_recurrence_threshold"],
             str(fact_store.RECURRENCE_THRESHOLD),
         )
         # lock is re-entrant per call and releases cleanly

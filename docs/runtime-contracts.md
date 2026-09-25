@@ -74,11 +74,21 @@ the shipped default (named in `meta.e2e.config_warnings`), because config.json i
 every command and one typo there must not stop work that never reads it; the same value in a
 request is `request_invalid`, because the user confirmed it for this run.
 
+Five keys skip the request layer entirely (`CONFIG_ONLY_SETTINGS`): `allow_remote`,
+`allowed_origins`, `existing_test_command`, `existing_test_allowlist`,
+`existing_test_timeout_s`. They are policy over the request — which origins a run may reach
+off loopback, and which argv the runtime executes with the user's environment — and the
+request is written by an agent, so a request able to set them would authorise itself. They
+resolve from the defaults and `config.json` only; a request naming one is `request_invalid`
+with a message pointing at `config.json`, never a silently dropped value. `base_url` stays a
+request key: a run may pick its target, and that target is judged by the config's origin
+policy.
+
 `settings` keys (defaults are smoke-test starting points, not calibrated limits):
 `base_url`, `browser`, `headless`, `slow_mo_ms` (pause after each browser action for a
 watchable headed run; 0..5000, counts against `total_timeout_s`), `nav_timeout_ms`,
 `step_timeout_ms`, `idle_timeout_s`, `total_timeout_s`, `probe_max_elements`,
-`allow_remote`, `allowed_origins`, `allow_side_effects` (judged by the addresses the write
+`allow_remote` and `allowed_origins` (config-only), `allow_side_effects` (judged by the addresses the write
 hosts resolve to; see below), `allow_local_side_effects` (default `true`: non-destructive
 writes to loopback, `*.localhost` and `.test` need no further opt-in; see below),
 `allowed_read_only_requests` (`"POST /path"` or `"POST http(s)://host/path"`,
@@ -88,9 +98,9 @@ wildcards are not, at most 20; see below), `secrets_profile` (a
 `secrets.json` profile name; empty = the file's `default`), `secrets_template_profiles`
 (profile names a newly created `secrets.json` gets; at most 20, unique),
 `fail_on_console_error`, `max_retries` (how many extra browsers one run may start; see
-below), `artifact_max_mb`, `existing_test_command` (an argv template run
-without a shell; `{files}` and `{base_url}` expand), `existing_test_allowlist`,
-`existing_test_timeout_s`. An unknown key or a wrong type is `request_invalid`, not a silent
+below), `artifact_max_mb`, `existing_test_command` (config-only; an argv template run
+without a shell; `{files}` and `{base_url}` expand), `existing_test_allowlist` and
+`existing_test_timeout_s` (both config-only). An unknown key or a wrong type is `request_invalid`, not a silent
 fallback; `allowed_mutation_paths`, removed, is `request_invalid` with a message naming
 what replaced it. Hybrid review is not a setting: it always runs.
 
@@ -100,7 +110,7 @@ what replaced it. Hybrid review is not a setting: it always runs.
 | both | preflight | — | — | `base_url` policy, write policy (`allow_side_effects` with a write host that is not loopback or `.test` and resolves public, link-local or nowhere → `spec_invalid`), Playwright, browser, or URL reachability fails → draft `blocked`, run `incomplete` with that reason |
 | draft | 1 | `e2e_spec` (internal route, role exploration; refused by `main.run()` and absent from the CLI) | standard `[EVIDENCE]` … `[DIGEST]` with an `[E2E SPEC]` section inside | a proxy failure (returned as-is); otherwise always — `[E2E DRAFT]` with status `ready` or `invalid` (spec missing after one targeted continuation, refused by policy, ungrounded) |
 | run | spec | the request's `scenario` | — | refused by validation → `incomplete: spec_invalid`; malformed secrets.json, an unknown profile, or several profiles and none selected → `secrets_invalid`; an unresolved `${ENV}` → `env_missing` |
-| run | existing tests | `settings.existing_test_command` over allow-listed files | exit code | never by itself — covered claims become proven (exit 0) or `unknown` (anything else) |
+| run | existing tests | `config.json e2e.existing_test_command` over allow-listed files | exit code | never by itself — covered claims become proven (exit 0) or `unknown` (anything else) |
 | run | 2 | local player child process (`python -m core.evidence.e2e.player` → `browser.run_scenario`) | JSONL events (`progress`, `request`, `cleanup`, `observation`, `artifact`, `harness`, `heartbeat`, `result`; shapes in `classify.py`) | never by itself — its report decides; skipped when the scenario has no steps; retried under the rules below |
 | run | 3 | `verify` with an `[E2E EVIDENCE]` block in the prompt | ordinary `[VERIFICATION]` | skipped when the browser could not finish; a failed review is a declared gap, never a softer verdict |
 | run | normalise | — | canonical `[VERIFICATION]` on `result.content`; `meta.verdict` set before `_finalize_verify_result` | — |
@@ -556,6 +566,19 @@ Selectable routes are `explore plan analyze verify e2e_spec`. An opencode call w
 resolves no model is refused as `model_unset`: without `-m`, opencode answers with the model
 it used last on the machine. `/.doctor` names `-free` models as a recommended fix.
 
+Only opencode's read boundary is enforced (`<project_root>/opencode.json`, whose root
+`permission` carries `external_directory: deny` next to the secret `read`/`grep` denials).
+Its child process gets an allowlisted environment plus the active project's `.env`, not the
+parent's (`adapters/shared/child_env.py`; counts, never values, land in the call meta as
+`env_policy`/`project_dotenv`/`parent_env_dropped`). `codex` and `agy`
+install as `not_enforceable`, and their adapters pass the full process environment to the
+provider CLI. Both are treated as trusted providers — an accepted risk, not a defect waiting
+for an env allowlist: an allowlist can break the CLI's own auth, and it protects nothing from
+a provider that can already read `.env`. What the runtime guarantees instead is visibility:
+`/.doctor` reports `checks.second_agent_read_boundary` (`not_enforceable` + `trusted: true`,
+or `enforceable` for opencode) and one `WARNING: second_agent provider ...` entry in
+`recommended_fixes` — never an issue, so readiness is unaffected.
+
 opencode's prompt travels as a FILE: it is written to
 `sessions/<session>/runtime/opencode-prompt.md` and attached with `-f`, and argv carries one
 static sentence (transport `file` in `config/providers.py`, so the task cap is the policy
@@ -581,6 +604,51 @@ user's own script is theirs. `--check` reports leftovers. `init`/`upgrade` point
 at the build running the command first, then `$AGENT_PATH`, and only then the path recorded
 in config.json.
 
+The receipt (`backups/install_<timestamp>/install_receipt.json`, `schema_version: 2`) is
+written incrementally: once, empty, before any destination changes — so a receipt that cannot
+be written fails the apply before anything was touched — and again after every recorded step,
+with `complete: false` until the final write. Each entry (`action`, `key`, `dest`, `backup`,
+`pre_sha256`, `post_sha256`) is recorded after its file is written, so every entry is a step
+that finished. An apply that changed nothing leaves no receipt. `--rollback` accepts a
+`complete: false` receipt, prints `NOTE: that install was interrupted; undoing the steps it
+recorded.` and `Any step it did not record still has its backup under <dir>.`, and undoes the
+recorded entries with the same conflict checks as a complete one. A step that died mid-write
+has no entry; its backup is copied back by hand. A backup directory with no receipt, an
+unreadable receipt, or another schema is refused, never rolled back blind.
+
+## Store locks
+
+The fact store, the knowledge store and the browser-knowledge store serialise their
+read-modify-write through `utils/owned_lock.OwnedFileLock`. The lock file is created with
+`O_EXCL` and holds `{pid, token, at}`. A lock is taken over only when its owner is provably
+gone: the recorded pid is not running, or the file has no readable owner and is older than
+the TTL (default 30 s — a writer that crashed between create and write). A live owner is
+waited for up to the deadline (default: the TTL) and then reported as
+`TimeoutError("lock <name> is still held by a running process")`; an old lock of a live
+process is never stolen. Reclaim is serialised through an OS advisory lock on
+`<lock>.reclaim`, and the owner is judged again inside it, so two writers that both saw the
+same dead pid cannot delete each other's fresh lock. Release removes the file only while it
+still carries the holder's token. A reused pid keeps a dead owner's lock looking alive, which
+ends in a timeout, not a concurrent write. The evidence store still uses its own lock
+(`core/evidence/evidence_store._EvidenceLock`); migration takes all four store locks before
+moving anything.
+
+## Call telemetry
+
+Telemetry written by `Executor` is best-effort; the provider's result, or the provider's own
+exception, is what the call returns, and a telemetry failure never replaces it. Two parts
+fail differently:
+
+- **Call meta** runs in the call's `finally`. Any exception inside it — a malformed handoff
+  meta, a redaction failure, a write error — is caught and recorded as
+  `"<ExceptionType>: <message>"`: on the result as `meta.call_meta_error` when the provider
+  returned one, and in the executor's last call meta either way, so the previous call's meta
+  is never left standing in for this one.
+- **Usage and audit rows** (`_record_usage`: `write_usage_record`, then `write_audit_record`)
+  are written separately, on the return path. A failure there is swallowed silently — no
+  `call_meta_error`, no field on the result. A missing usage or audit row is therefore not
+  evidence that the call failed.
+
 ## Workspace layout
 
 `.workflow/` holds what a person edits: `config.json`, `second_agent.json`,
@@ -598,8 +666,26 @@ moment. `upgrade` (and init's auto-upgrade) runs `core/runtime/migrations.py`: b
 `data/backups/<stamp>/`, store locks held, internal items staged in `data.migrating/` and
 renamed to `data/` in one step, evidence artifact paths rewritten, pre-session leftovers and
 old locks removed, config stripped to overrides, a pre-list `secrets.json` converted.
-A failure before the rename puts everything back and keeps the copy as
-`migration-backup-<stamp>/`. A live job refuses the upgrade before anything moves. `doctor`
+A leftover `data.migrating/` from an interrupted attempt is put back first; if it holds a
+name that also exists at the `.workflow` root, `MigrationConflict` is raised and nothing is
+moved — keep one copy of each (compare first), remove the other, rerun upgrade. Past that
+check, a failure has three distinct outcomes, and upgrade reports each differently:
+
+- **Before the rename, clean rollback** — every moved entry goes back to `.workflow/`, the
+  backup is kept as `migration-backup-<stamp>/`, and upgrade says `workspace migration failed
+  and was rolled back`.
+- **Before the rename, rollback incomplete** — every move-back is attempted and every failure
+  collected (a move-back, a backup move, or removing the emptied staging tree). Any failure
+  raises `MigrationRollbackIncomplete` (`.failures`, `.staging`); `data.migrating/` is kept,
+  because it holds the only copy of what could not move back. Upgrade says `workspace
+  migration failed and the rollback is INCOMPLETE: ...` and names the staging path: move its
+  entries to `.workflow/` by hand, or rerun upgrade, which recovers a leftover staging
+  directory first.
+- **After the rename** — `MigrationIncomplete`. Nothing is moved back: the workspace is on
+  `data/` and working. Upgrade says `workspace migration incomplete: ...`; rerunning resumes
+  from the unfinished step recorded in the pending file.
+
+A live job refuses the upgrade before anything moves. `doctor`
 reports `workspace_layout` (layout version, data dir, unrecognised root files).
 
 `current/` is a mirror of the latest delegated dispatch, written by `Executor.execute` and the

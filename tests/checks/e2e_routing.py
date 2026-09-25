@@ -6,8 +6,8 @@ without starting a browser or recording a run; a run executes the confirmed scen
 always ends in stage 3 (`verify` with the compact evidence), both reached through
 `_run_delegated` under the ONE lock; the result is a canonical `[VERIFICATION]` the shared
 validator agrees with; every way the run can fail short ends `incomplete` with a named
-reason; config.json's `e2e` section supplies the defaults a request may override and is
-never written by a run; an environmental incomplete is retried and an application failure
+reason; config.json's `e2e` section supplies the defaults a request may override, alone
+holds the config-only policy a request may not name, and is never written by a run; an environmental incomplete is retried and an application failure
 is not; and `/.verify` itself is back to delegated | syntax.
 """
 
@@ -25,7 +25,7 @@ from urllib.parse import quote
 from core.evidence.contract import validate_verification_contract
 from core.evidence.e2e import preflight as e2e_preflight
 from core.evidence.e2e import runner as e2e_runner
-from core.evidence.e2e.request import draft_path, ensure_secrets_template, load_secrets, request_path, secrets_path, settings_from
+from core.evidence.e2e.request import CONFIG_ONLY_SETTINGS, config_settings, draft_path, load_request, ensure_secrets_template, load_secrets, request_path, secrets_path, settings_from
 from core.evidence.e2e.runner import FAKE_ENV
 from core.evidence.e2e.spec import parse_spec
 from core.evidence.result_shaping import _finalize_verify_result, _verify_exit_code
@@ -217,12 +217,35 @@ def _session(session_id: str = _SESSION_ID) -> dict:
     return {"session_id": session_id, "provider_session_id": "ses_e2e"}
 
 
+def _pin_config_only(root: Path, settings: dict) -> dict:
+    """Split CONFIG_ONLY_SETTINGS out of a fixture's settings into config.json's e2e section.
+
+    A request may no longer carry them, so the checks that exercise remote origins and the
+    project's test command pin them where the user would. The pinned set is exactly the
+    one given — keys not given are unpinned — so one call's policy never leaks into the
+    next call on a shared workspace, the way a per-request value never did. config.json is
+    written only when that set changes."""
+    config_path = workflow_paths(root)["config"]
+    config = read_json_file(config_path)
+    section = dict(config.get("e2e") or {})
+    wanted = {key: settings[key] for key in CONFIG_ONLY_SETTINGS if key in settings}
+    updated = {key: value for key, value in section.items() if key not in CONFIG_ONLY_SETTINGS}
+    updated.update(wanted)
+    if updated != section:
+        if updated:
+            config["e2e"] = updated
+        else:
+            config.pop("e2e", None)
+        config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    return {key: value for key, value in settings.items() if key not in CONFIG_ONLY_SETTINGS}
+
+
 def _write_request(root: Path, phase: str, *, settings: dict | None = None, scenario=None, existing_tests=None, spec_notes=None, raw=None, session_id: str = _SESSION_ID) -> Path:
     path = request_path(root, session_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     body = raw
     if body is None:
-        body = {"version": 1, "phase": phase, "settings": settings or {}}
+        body = {"version": 1, "phase": phase, "settings": _pin_config_only(root, settings or {})}
         for key, value in (("scenario", scenario), ("existing_tests", existing_tests), ("spec_notes", spec_notes)):
             if value is not None:
                 body[key] = value
@@ -816,6 +839,56 @@ def _test_e2e_routing() -> None:
         _write_request(root, "draft", settings={"allowed_mutation_paths": ["/login"]})
         result = _execute(root, adapter, "verify-browser")
         assert_true(result["meta"]["e2e"].get("reason") == "request_invalid" and "allowed_mutation_paths: removed" in result["content"], "a request still using it stops before anything runs")
+        # Config-only policy: a request that could set the command the runtime executes, or
+        # the origins it may reach, would authorise itself. Each such key is refused by name
+        # with the way forward, never dropped in silence.
+        for key in CONFIG_ONLY_SETTINGS:
+            value = settings_from(None)[0][key]
+            errors = settings_from({key: value})[1]
+            assert_true(
+                len(errors) == 1 and f"settings.{key}: config-only" in errors[0] and ".workflow/config.json" in errors[0],
+                f"{key} in a request is an error naming config.json: {errors}",
+            )
+        calls_before = len(adapter.calls)
+        smuggled = {"existing_test_command": [sys.executable, "-c", "print('ran')", "{files}"], "allow_remote": True, "allowed_origins": ["http://169.254.169.254"]}
+        _write_request(root, "draft", raw={"version": 1, "phase": "draft", "settings": smuggled})
+        _, reason, load_errors = load_request(root, _SESSION_ID)
+        assert_true(
+            reason == "request_invalid" and all(any(f"settings.{key}: config-only" in e for e in load_errors) for key in smuggled),
+            f"every smuggled policy key is named, none dropped: {load_errors}",
+        )
+        result = _execute(root, adapter, "verify-browser")
+        assert_true(
+            result["meta"]["e2e"].get("reason") == "request_invalid"
+            and "config-only" in result["content"]
+            and len(adapter.calls) == calls_before,
+            f"a request carrying policy stops before any call: {result['content'][:400]}",
+        )
+        config_path = workflow_paths(root)["config"]
+        config = read_json_file(config_path)
+        config["e2e"] = {"allow_remote": True, "allowed_origins": ["http://staging.example.com"]}
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        pinned_settings, pinned_errors = settings_from({"base_url": "http://other.example.com"}, base=config_settings(root)[0])
+        assert_true(
+            pinned_errors == [] and pinned_settings["allow_remote"] is True and pinned_settings["allowed_origins"] == ["http://staging.example.com"],
+            f"the same policy pinned in config.json is read, and a request may still pick base_url: {pinned_errors}",
+        )
+        ok, detail = e2e_preflight.safe_base_url(pinned_settings["base_url"], pinned_settings)
+        assert_true(not ok and "not in config.json e2e.allowed_origins" in detail, f"and that base_url is judged by the config's origins: {detail}")
+        # Persistence: policy pinned once in config.json holds for every later request that
+        # says nothing about it — the production shape, which the fixture helper's per-call
+        # reset does not exercise. Written raw so no helper touches config.json in between.
+        for _ in range(2):
+            _write_request(root, "draft", raw={"version": 1, "phase": "draft", "settings": {"base_url": "http://staging.example.com"}})
+            # its own adapter: the checks after this one assert the shared adapter was never called
+            persisted = _execute(root, _adapter(), "verify-browser")
+            policy = next((c for c in persisted["meta"]["e2e"].get("preflight") or [] if c["name"] == "base_url_policy"), {})
+            assert_true(
+                policy.get("detail") == "remote origin allow-listed",
+                f"a request without policy keys runs on the policy config.json pinned: {policy} {persisted['content'][:300]}",
+            )
+        del config["e2e"]
+        config_path.write_text(json.dumps(config), encoding="utf-8")
         _write_request(root, "run")
         result = _execute(root, adapter, "verify-browser")
         assert_true(result["meta"]["e2e"].get("reason") == "request_invalid" and "needs the confirmed scenario" in result["content"], "a run without a scenario is refused")

@@ -880,73 +880,90 @@ class Executor:
                     self.adapter.on_session_created = None
                 except Exception:
                     pass
-            # Archive exit, duration, kill, and stderr metadata for failure diagnosis,
-            # plus minimal cost telemetry. Char counts are exact; token counts are
-            # rough len/4 estimates and are labelled token_source=estimated so they are
-            # never confused with provider-reported actuals (those would land in
-            # actual_input_tokens/actual_output_tokens with token_source=provider).
-            _result = locals().get("result")
-            _content = _result.get("content") if isinstance(_result, dict) else None
-            _prompt_chars = len(prompt)
-            _resp_chars = len(_content) if isinstance(_content, str) else None
-            _adapter_meta = getattr(self.adapter, "last_call_meta", None) or {}
-            if not self._reached_a_provider(_adapter_meta) and self._call_metas:
-                # The LAST invocation reached no provider — a continuation refused before
-                # Popen is the case — but an earlier one did, and its numbers are the only
-                # measurement this command has. Reading the cleared attribute here would
-                # write `token_source: estimated` over a call that was actually counted,
-                # which is a silent downgrade: the row still looks like a row.
-                _adapter_meta = self._call_metas[-1].get("adapter_meta") or {}
-            adapter_meta, meta_redactions = redact_value(
-                _without_raw_args(_adapter_meta)
-            )
-            if not isinstance(adapter_meta, dict):
-                adapter_meta = {}
-            call_meta = {
-                "command": command,
-                "role": route.get("role"),
-                "model": route.get("model"),
-                "timeout_seconds": self.adapter.timeout_seconds,
-                "prompt_chars": _prompt_chars,
-                "response_chars": _resp_chars,
-                "estimated_input_tokens": _prompt_chars // 4,
-                "estimated_output_tokens": (
-                    _resp_chars // 4 if _resp_chars is not None else None
-                ),
-                "token_source": "estimated",
-                **self._config_provenance(project_root),
-                **prompt_meta,
-                **adapter_meta,
-                **continuation_meta,
-            }
-            call_meta, persisted_meta_redactions = redact_value(call_meta)
-            _attach_redactions(
-                call_meta, [*meta_redactions, *persisted_meta_redactions]
-            )
-            call_meta["prompt_id"] = handoff.get("meta", {}).get("prompt_id")
-            # Applied after the literal above, not inside it: `**adapter_meta` merges the
-            # adapter's own keys last, so a token_source written earlier would be decided
-            # by merge order rather than by what was actually measured.
-            _apply_provider_usage(call_meta, adapter_meta.get("provider_usage"))
-            # Same reason, and the field usage rows were missing entirely: the route knows
-            # which provider was picked, but nothing carried the name down, so every row
-            # in the stream said `provider: null`. That is readable while one provider is
-            # measured and the rest are not — a report can then show both `provider` and
-            # `estimated` in `token_source` without being able to say which provider is
-            # which half.
-            call_meta["provider"] = route.get("provider")
-            call_meta["provider_command"] = route.get("provider_command")
-            self._last_call_meta = call_meta
-            # `_call_metas` deliberately keeps the RAW snapshots here. Expansion happens
-            # once, in `_record_usage`; expanding into the same attribute would feed the
-            # expansion its own output on the second pass and blank every count in it.
-            write_call_meta(
-                project_root,
-                handoff.get("meta", {}).get("prompt_id"),
-                session_id,
-                call_meta,
-            )
+            # The whole telemetry block is guarded. It runs in `finally`, so anything it
+            # raised — a non-dict handoff meta, a redaction failure, a write error outside
+            # write_call_meta's own I/O guard — REPLACED the provider's result or its real
+            # exception. Telemetry may be lost; the answer and the original error may not.
+            call_meta_error = None
+            try:
+                # Archive exit, duration, kill, and stderr metadata for failure diagnosis,
+                # plus minimal cost telemetry. Char counts are exact; token counts are
+                # rough len/4 estimates and are labelled token_source=estimated so they are
+                # never confused with provider-reported actuals (those would land in
+                # actual_input_tokens/actual_output_tokens with token_source=provider).
+                _result = locals().get("result")
+                _content = _result.get("content") if isinstance(_result, dict) else None
+                _prompt_chars = len(prompt)
+                _resp_chars = len(_content) if isinstance(_content, str) else None
+                _adapter_meta = getattr(self.adapter, "last_call_meta", None) or {}
+                if not self._reached_a_provider(_adapter_meta) and self._call_metas:
+                    # The LAST invocation reached no provider — a continuation refused before
+                    # Popen is the case — but an earlier one did, and its numbers are the only
+                    # measurement this command has. Reading the cleared attribute here would
+                    # write `token_source: estimated` over a call that was actually counted,
+                    # which is a silent downgrade: the row still looks like a row.
+                    _adapter_meta = self._call_metas[-1].get("adapter_meta") or {}
+                adapter_meta, meta_redactions = redact_value(
+                    _without_raw_args(_adapter_meta)
+                )
+                if not isinstance(adapter_meta, dict):
+                    adapter_meta = {}
+                call_meta = {
+                    "command": command,
+                    "role": route.get("role"),
+                    "model": route.get("model"),
+                    "timeout_seconds": self.adapter.timeout_seconds,
+                    "prompt_chars": _prompt_chars,
+                    "response_chars": _resp_chars,
+                    "estimated_input_tokens": _prompt_chars // 4,
+                    "estimated_output_tokens": (
+                        _resp_chars // 4 if _resp_chars is not None else None
+                    ),
+                    "token_source": "estimated",
+                    **self._config_provenance(project_root),
+                    **prompt_meta,
+                    **adapter_meta,
+                    **continuation_meta,
+                }
+                call_meta, persisted_meta_redactions = redact_value(call_meta)
+                _attach_redactions(
+                    call_meta, [*meta_redactions, *persisted_meta_redactions]
+                )
+                call_meta["prompt_id"] = handoff.get("meta", {}).get("prompt_id")
+                # Applied after the literal above, not inside it: `**adapter_meta` merges the
+                # adapter's own keys last, so a token_source written earlier would be decided
+                # by merge order rather than by what was actually measured.
+                _apply_provider_usage(call_meta, adapter_meta.get("provider_usage"))
+                # Same reason, and the field usage rows were missing entirely: the route knows
+                # which provider was picked, but nothing carried the name down, so every row
+                # in the stream said `provider: null`. That is readable while one provider is
+                # measured and the rest are not — a report can then show both `provider` and
+                # `estimated` in `token_source` without being able to say which provider is
+                # which half.
+                call_meta["provider"] = route.get("provider")
+                call_meta["provider_command"] = route.get("provider_command")
+                self._last_call_meta = call_meta
+                # `_call_metas` deliberately keeps the RAW snapshots here. Expansion happens
+                # once, in `_record_usage`; expanding into the same attribute would feed the
+                # expansion its own output on the second pass and blank every count in it.
+                write_call_meta(
+                    project_root,
+                    handoff.get("meta", {}).get("prompt_id"),
+                    session_id,
+                    call_meta,
+                )
+            except Exception as telemetry_exc:  # noqa: BLE001 — recorded, never raised
+                call_meta_error = f"{type(telemetry_exc).__name__}: {telemetry_exc}"
+                # Never leave the previous call's meta standing in for this one.
+                self._last_call_meta = {
+                    "command": command,
+                    "role": route.get("role"),
+                    "provider": route.get("provider"),
+                    "call_meta_error": call_meta_error,
+                }
 
+        if call_meta_error:
+            result.setdefault("meta", {})["call_meta_error"] = call_meta_error
         if continuation_meta:
             # Rides out on the result too, not just the archived call meta: whether an
             # answer arrived first-try or needed a nudge changes how much to trust it.

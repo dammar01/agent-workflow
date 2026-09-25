@@ -62,13 +62,15 @@
     "caveman": {
       "source": {
         "source": "github",
-        "repo": "JuliusBrussee/caveman"
+        "repo": "JuliusBrussee/caveman",
+        "ref": "v2.7.0"
       }
     },
     "ui-ux-pro-max-skill": {
       "source": {
         "source": "github",
-        "repo": "nextlevelbuilder/ui-ux-pro-max-skill"
+        "repo": "nextlevelbuilder/ui-ux-pro-max-skill",
+        "ref": "v2.15.0"
       }
     }
   },

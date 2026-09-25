@@ -94,12 +94,14 @@ from tests.checks.installer import (
 from tests.checks.deps import _test_runtime_is_stdlib_only
 from tests.checks.governance import _test_governance_controls
 from tests.checks.graph_verification import _test_graph_verification
+from tests.checks.hardening import _test_hardening
 from tests.checks.telemetry import _test_telemetry_metrics
 from tests.checks.transcript import _test_transcript_parsing
 from tests.checks.usage_tokens import _test_usage_token_accounting
 from tests.checks.messages import _test_no_code_in_messages
 from tests.checks.provider import (
     _test_agy_provider,
+    _test_doctor_read_boundary_warning,
     _test_provider_seam,
     _test_provider_selection,
 )
@@ -150,6 +152,7 @@ def run_tests() -> None:
     _test_provider_threads_are_kept_per_provider()
     _test_provider_selection()
     _test_agy_provider()
+    _test_doctor_read_boundary_warning()
     _test_no_code_in_messages()
     _test_adapter_error_normalization()
     _test_adapter_redaction_is_shared()
@@ -713,6 +716,22 @@ confidence: high — all requested checks ran
             policy_grep.get("*.env") == "deny",
             "grep must be denied too: it returns file CONTENTS, so read-only denial alone leaks",
         )
+        # Root-level, not only on agent.plan: the plan agent's deny covers the default
+        # launch, but AI_PROXY_OPENCODE_AGENT can name another agent, and path_guard counts
+        # this key as part of the boundary it no longer checks itself.
+        assert_true(
+            project_policy["permission"].get("external_directory") == "deny",
+            "project policy must deny out-of-root access for every agent, not just plan",
+        )
+        plan_permission = json.loads(
+            (REPO_ROOT / "dist" / "config" / "opencode" / "opencode.template.json").read_text(
+                encoding="utf-8"
+            )
+        )["agent"]["plan"]["permission"]
+        assert_true(
+            plan_permission.get("external_directory") == "deny",
+            "the plan agent's own out-of-root deny must stay beside the root one",
+        )
         assert_true(
             policy_read.get("*.env.example") == "allow",
             "example env files carry no secret and must stay readable",
@@ -1165,6 +1184,7 @@ confidence: high — all requested checks ran
         _test_transcript_parsing()
         _test_governance_controls()
         _test_graph_verification()
+        _test_hardening()
 
         print("tests/scenario: success")
     finally:

@@ -456,7 +456,7 @@ def navigation_error(url: str, policy: Mapping | None) -> str | None:
     origin = f"{target.scheme}://{target.netloc}".lower()
     allowed = {str(o).lower().rstrip("/") for o in policy.get("allowed_origins") or []}
     if origin not in allowed:
-        return f"cross-origin navigation to '{origin}' refused: not base_url's origin and not in settings.allowed_origins"
+        return f"cross-origin navigation to '{origin}' refused: not base_url's origin and not in config.json e2e.allowed_origins"
     ok, detail = safe_base_url(absolute, policy)
     return None if ok else f"cross-origin navigation to '{origin}' refused: {detail}"
 
@@ -727,7 +727,7 @@ def validate_scenario(scenario: object, policy: Mapping | None = None, *, covere
         # would report pass on a claim nobody tested. Refused up front, not at verdict.
         errors.append(
             f"claims never asserted: {', '.join(sorted(unasserted))} (assert them in steps, or cover them with an "
-            "existing test the project runs through settings.existing_test_command)"
+            "existing test the project runs through config.json e2e.existing_test_command)"
         )
     return errors
 

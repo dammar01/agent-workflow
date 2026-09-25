@@ -309,6 +309,23 @@ class AgyAdapter:
                 meta={"argv_chars": oversize, "limit": _CMD_LINE_LIMIT},
             )
 
+        # agy takes its prompt on argv. Launched through a .cmd/.bat shim, that argv is
+        # re-parsed by cmd.exe, where `"`, `&`, `|`, `%` in the prompt become commands.
+        # Same guard as opencode's, called through its module so its test seam applies.
+        from adapters.providers import opencode_adapter
+
+        hazards = opencode_adapter._cmd_shell_hazards(args)
+        if hazards:
+            return make_error(
+                "unsafe_command_line",
+                "refused to run agy: cmd.exe would interpret characters in its arguments",
+                next_action=(
+                    "Point AGY_COMMAND / provider_command at agy's executable rather than "
+                    "its .cmd/.bat shim; the prompt travels on argv and cmd.exe re-parses it."
+                ),
+                meta={"hazards": hazards, "cwd": cwd, "checked": "pre_spawn"},
+            )
+
         # The guard's first half. Taken before the process starts so that anything the
         # call leaves behind is attributable to the call (see core/agy_guard.py).
         guard_before = agy_guard.snapshot(cwd)

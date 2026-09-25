@@ -12,23 +12,27 @@ import hashlib
 import json
 import os
 import re
-import time
 from pathlib import Path
 
+from core.runtime.config_defaults import default_policies
 from core.workspace.workspace_paths import (
     _safe_component,
     now_iso,
     read_json_file,
     workflow_paths,
 )
+from utils.owned_lock import OwnedFileLock
 
 FACTS_FILENAME = "facts.jsonl"
 LOCK_FILENAME = "facts.jsonl.lock"
-# A held lock older than this is presumed orphaned (the writer crashed) and stolen. ingest
-# is sub-second, so any lock older than this window is not a live writer; the generous
-# margin only avoids stealing from a writer swapped out under heavy load.
+# How long a writer waits for a live holder, and how old an ownerless lock file must be
+# before it counts as a crashed writer's. ingest is sub-second, so 30s is generous.
 LOCK_TTL_SECONDS = 30
-RECURRENCE_THRESHOLD = 3   # distinct OTHER sessions a grounded claim must appear in to auto-promote
+# Distinct OTHER sessions a grounded claim must appear in to auto-promote. Read from the
+# one default rather than restated: config.json holds overrides only, so this fallback IS
+# the effective value for every project that never set the key, and a separate literal
+# here (it was 3 while the documented default said 5) silently promoted claims early.
+RECURRENCE_THRESHOLD = default_policies()["fact_recurrence_threshold"]
 MAX_FACTS = 500
 
 # Provenance of a stored fact. Only `discovered` (a run read code and grounded the claim)
@@ -75,58 +79,21 @@ def _facts_path(project_root: Path) -> Path:
     return workflow_paths(project_root)["facts_store"]
 
 
-class _FactLock:
+class _FactLock(OwnedFileLock):
     """Cross-process advisory lock around the facts.jsonl read-modify-write.
 
     ingest/prune both load the whole store, mutate it, and rewrite it. Two sessions doing
     that at once (the norm for one project) would each save their own view, and the second
     write would silently drop the first's additions. An O_EXCL lock-file serialises them.
 
-    Failure posture is best-effort, never blocking forever: a lock older than LOCK_TTL is
-    treated as orphaned and stolen, and if the lock is still not free by the deadline the
-    stale one is removed and re-created. Facts are recoverable best-effort memory; a stuck
-    lock starving every future ingest would be worse than a rare lost update. On Windows a
-    LIVE holder's file cannot be unlinked (its handle is open), so a real writer is never
-    stolen from — only a genuinely dead one is.
+    Ownership lives in utils/owned_lock.py: a lock is taken over only when its recorded
+    owner is no longer running, and release removes only a lock this holder still owns.
+    A live holder past the wait raises TimeoutError; ingest reports that as
+    `fact_ingest_error` rather than writing beside it.
     """
 
     def __init__(self, project_root: Path):
-        self.path = _facts_path(project_root).with_name(LOCK_FILENAME)
-        self.fd: int | None = None
-
-    def __enter__(self) -> "_FactLock":
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        deadline = time.time() + LOCK_TTL_SECONDS
-        while True:
-            try:
-                self.fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(self.fd, f"{os.getpid()} {time.time()}".encode("utf-8"))
-                return self
-            except FileExistsError:
-                if self._is_orphaned() or time.time() > deadline:
-                    self._steal()
-                time.sleep(0.05)
-
-    def _is_orphaned(self) -> bool:
-        try:
-            return time.time() - self.path.stat().st_mtime > LOCK_TTL_SECONDS
-        except OSError:
-            return True  # vanished between EEXIST and stat -> free to retry
-
-    def _steal(self) -> None:
-        try:
-            self.path.unlink()
-        except OSError:
-            pass  # live holder on Windows, or already gone — retry the O_EXCL open
-
-    def __exit__(self, *exc) -> None:
-        if self.fd is not None:
-            try:
-                os.close(self.fd)
-            except OSError:
-                pass
-            self.fd = None
-        self._steal()
+        super().__init__(_facts_path(project_root).with_name(LOCK_FILENAME), LOCK_TTL_SECONDS)
 
 
 def _policies(project_root: Path) -> dict:

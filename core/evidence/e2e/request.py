@@ -14,6 +14,11 @@ before it: the shipped defaults below, the project's `e2e` section in `.workflow
 project still diverge freely — they just start from the same pinned base. Hybrid review is
 not a knob — it always runs.
 
+The request is written by an agent, so it cannot also be where the policy that governs it
+lives. CONFIG_ONLY_SETTINGS — which remote origins a run may reach and which command runs
+the project's own tests — resolve from config.json alone; a request naming one is refused.
+A request may still pick its `base_url`, and that URL is judged by the config's policy.
+
 Credentials never travel in the request. `${NAME}` placeholders resolve from one profile of
 `.workflow/e2e/secrets.json`, then from the process environment:
 
@@ -56,6 +61,17 @@ REMOVED_SETTINGS = {
         "a POST that only reads goes in settings.allowed_read_only_requests"
     ),
 }
+# Settings that are policy over the request rather than choices within it: the origins a run
+# may reach off loopback, and the argv the runtime executes with the user's environment. A
+# request that could set them would authorise itself, so they are read only from the
+# project's config.json `e2e` section, which the user edits and Git reviews.
+CONFIG_ONLY_SETTINGS = (
+    "allow_remote",
+    "allowed_origins",
+    "existing_test_command",
+    "existing_test_allowlist",
+    "existing_test_timeout_s",
+)
 
 
 def default_settings() -> dict:
@@ -346,7 +362,8 @@ def settings_from(overrides: object, base: dict | None = None) -> tuple[dict, li
     """`base` (the project's pinned defaults) with the request's overrides applied.
 
     A wrong key or type is an error, not a silent fallback: the user confirmed these
-    values, so a typo must stop the run."""
+    values, so a typo must stop the run. A CONFIG_ONLY_SETTINGS key is an error too, not
+    an ignored value: a run that silently dropped it would look like it ran with it."""
     settings = dict(base) if base is not None else default_settings()
     if overrides is None:
         return settings, []
@@ -356,6 +373,12 @@ def settings_from(overrides: object, base: dict | None = None) -> tuple[dict, li
     for key, value in overrides.items():
         if key in REMOVED_SETTINGS:
             errors.append(f"settings.{key}: {REMOVED_SETTINGS[key]}")
+            continue
+        if key in CONFIG_ONLY_SETTINGS:
+            errors.append(
+                f"settings.{key}: config-only, a request cannot set it; "
+                f"move it to the e2e section of .workflow/config.json"
+            )
             continue
         if key not in settings:
             errors.append(f"settings.{key}: unknown key")

@@ -23,6 +23,9 @@ Renderer = AskUserQuestion, satu pertanyaan per call, jawaban sebelumnya memoton
 
 1. **Provider** — opsi dari `providers[]`. `installed:false` → tetap tampilkan, tulis di `description`
    bahwa CLI-nya tak ada di PATH; jangan jadikan opsi utama.
+   `codex` dan `agy` → `description` WAJIB menyebut: tanpa batas baca (bisa membaca semua file
+   project, `.env` termasuk) dan menerima seluruh environment — dianggap trusted provider. Batas
+   baca yang ditegakkan hanya milik `opencode`. Ini peringatan, bukan penolakan: pilihannya milik user.
 2. **Model** — opsi dari `models[]` provider terpilih. Lebih dari 4 → tampilkan 4 paling relevan;
    user selalu punya "Other" untuk mengetik id lain.
 3. **Effort** — opsi dari `efforts` MILIK MODEL yang barusan dipilih, bukan milik provider.
@@ -81,6 +84,7 @@ config_hint: <updated true|false + alasan>
 foreign_values: <isi meta.foreign_values, atau "kosong">  — TIDAK kosong = config menyebut provider
   lain di `provider_command`/`provider_agent`/model; tampilkan penuh, jangan diringkas hilang.
 warnings: <meta.warnings, atau "tidak ada">
+read_boundary: <opencode → "ditegakkan (opencode.json)" | codex/agy → "TIDAK ada — second_agent bisa baca semua file termasuk `.env` dan menerima seluruh environment (trusted provider)">
 status: APPLIED | REFUSED
 
 REFUSED → sebut alasan + next_action, jangan tawarkan lanjut ke command lain.

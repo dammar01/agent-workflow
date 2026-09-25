@@ -94,6 +94,23 @@ class MigrationIncomplete(RuntimeError):
         self.backup = backup
 
 
+class MigrationRollbackIncomplete(RuntimeError):
+    """A pre-rename step failed, and putting the moved entries back failed too.
+
+    Distinct from a clean rollback on purpose. Reporting "rolled back, nothing else changed"
+    here would send the user to a .workflow/ root that is missing files which are in fact
+    still sitting in data.migrating/ — the one place they would not think to look.
+    """
+
+    def __init__(self, cause: BaseException, failures: list[str], staging: Path) -> None:
+        super().__init__(
+            f"{type(cause).__name__}: {cause}; rollback left {len(failures)} item(s) behind: "
+            + "; ".join(failures)
+        )
+        self.failures = failures
+        self.staging = str(staging)
+
+
 _STAMP_PATTERN = re.compile(r"\d{8}_\d{6}_\d+")
 
 
@@ -277,19 +294,43 @@ def migrate_to_data_layout(project_root: Path) -> dict:
             # moment where data/ exists and the unfinished steps are not recorded.
             atomic_write_json(staging / PENDING_FILENAME, {"stamp": stamp, "pending": list(_POST_STEPS)})
             os.replace(staging, workflow_dir / DATA_DIRNAME)
-    except Exception:
+    except Exception as exc:
+        # Every rollback step is attempted and every failure kept. One unguarded move used
+        # to raise out of this block, replacing the original error and abandoning the
+        # remaining entries, while upgrade still reported a clean rollback.
+        failures: list[str] = []
         for name in moved:
             if (staging / name).exists():
-                shutil.move(str(staging / name), str(workflow_dir / name))
+                try:
+                    shutil.move(str(staging / name), str(workflow_dir / name))
+                except Exception as move_exc:  # noqa: BLE001 — collected, reported below
+                    failures.append(f"{name}: {type(move_exc).__name__}: {move_exc}")
         if staging.exists():
             # Backups are the one thing worth keeping from a failed attempt — every complete
             # one, including any an earlier interrupted attempt left; a half-copied one is not.
             backups = staging / "backups"
-            for kept in sorted(backups.iterdir()) if backups.is_dir() else ():
+            try:
+                kept_backups = sorted(backups.iterdir()) if backups.is_dir() else []
+            except OSError as list_exc:
+                kept_backups = []
+                failures.append(f"backups: {type(list_exc).__name__}: {list_exc}")
+            for kept in kept_backups:
                 if kept == backup_dir and not backed_up:
                     continue
-                shutil.move(str(kept), str(workflow_dir / f"migration-backup-{kept.name}"))
-            shutil.rmtree(staging, ignore_errors=True)
+                try:
+                    shutil.move(str(kept), str(workflow_dir / f"migration-backup-{kept.name}"))
+                except Exception as move_exc:  # noqa: BLE001 — collected, reported below
+                    failures.append(f"backup {kept.name}: {type(move_exc).__name__}: {move_exc}")
+            if not failures:
+                shutil.rmtree(staging, ignore_errors=True)
+                if staging.exists():
+                    # Everything moved back, but the empty staging tree would not go (a
+                    # handle held open). Reported, so "rolled back" never hides a leftover.
+                    failures.append(f"{staging.name}: could not be removed after rollback")
+            # With failures, staging holds the only copy of what could not move back; it
+            # stays for the user (or the next run's leftover recovery) to reconcile.
+        if failures:
+            raise MigrationRollbackIncomplete(exc, failures, staging) from exc
         raise
     report["moved"] = moved
     data = workflow_dir / DATA_DIRNAME

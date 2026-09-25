@@ -35,6 +35,10 @@ from core.audit.mcp_scan import (  # noqa: E402,F401
     _scan_mcp,
 )
 
+# Providers whose install reports `not_enforceable`: no read boundary holds, and the adapter
+# passes the full environment. Selecting one means trusting it; doctor says so every run.
+_UNBOUNDED_READ_PROVIDERS = ("codex", "agy")
+
 
 def check_writable(path: Path) -> tuple[bool, str | None]:
     try:
@@ -461,6 +465,26 @@ def run_doctor(
                 f"Review {resolved.get('path')}: {len(provider_warnings)} knob "
                 f"warning(s) — {'; '.join(provider_warnings)}"
             )
+
+        # The read boundary is opencode's alone: codex and agy report `not_enforceable` at
+        # install (adapters/install/{codex,agy}_install.py), and they inherit the full process
+        # environment. Choosing one is accepted as trusting it with every file and env var —
+        # a warning the user must see here, not a NOT_READY, because the choice is theirs.
+        active = str((resolved.get("config") or {}).get("provider") or "")
+        if active in _UNBOUNDED_READ_PROVIDERS:
+            checks["second_agent_read_boundary"] = {
+                "provider": active,
+                "status": "not_enforceable",
+                "trusted": True,
+            }
+            recommended_fixes.append(
+                f"WARNING: second_agent provider '{active}' can read every file in this project "
+                "(`.env` and key files included) and receives the full environment — it is "
+                "treated as a trusted provider. Switch to opencode with /.provider if the "
+                "project's secrets must stay unreadable to the second agent"
+            )
+        elif active:
+            checks["second_agent_read_boundary"] = {"provider": active, "status": "enforceable"}
 
         project_file = paths["workflow_dir"] / PROVIDER_CONFIG_NAME
         if resolved.get("error"):

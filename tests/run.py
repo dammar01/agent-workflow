@@ -65,6 +65,7 @@ from tests.checks.e2e_knowledge import _test_e2e_knowledge  # noqa: E402
 from tests.checks.deps import _test_runtime_is_stdlib_only  # noqa: E402
 from tests.checks.governance import _test_governance_controls  # noqa: E402
 from tests.checks.graph_verification import _test_graph_verification  # noqa: E402
+from tests.checks.hardening import _test_hardening  # noqa: E402
 from tests.checks.telemetry import _test_telemetry_metrics  # noqa: E402
 from tests.checks.transcript import _test_transcript_parsing  # noqa: E402
 from tests.checks.facts import (  # noqa: E402
@@ -90,6 +91,7 @@ from tests.checks.jobs import _test_submit_admission  # noqa: E402
 from tests.checks.messages import _test_no_code_in_messages  # noqa: E402
 from tests.checks.provider import (  # noqa: E402
     _test_agy_provider,
+    _test_doctor_read_boundary_warning,
     _test_provider_seam,
     _test_provider_selection,
 )
@@ -133,6 +135,7 @@ SUITES: dict[str, tuple] = {
     "provider-threads": (_test_provider_threads_are_kept_per_provider, "a provider thread is resumed only by the provider that issued it"),
     "provider-selection": (_test_provider_selection, "interactive provider/model/effort write"),
     "agy": (_test_agy_provider, "agy parsing, argv, and its read-boundary guard"),
+    "doctor-read-boundary": (_test_doctor_read_boundary_warning, "doctor warns that a codex/agy second agent reads every file and env var"),
     "cli": (_test_cli_script_reaches_its_exit_code, "main.py run as a script prints JSON and exits through its exit-code mapping"),
     "messages": (_test_no_code_in_messages, "AST scan: no code leaks into user-facing text"),
     "facts-concurrency": (_test_facts_concurrency, "fact store under concurrent writers"),
@@ -193,6 +196,7 @@ SUITES: dict[str, tuple] = {
     "audit": (_test_audit_report, "the governance trail reads back and keeps a null provider visible"),
     "audit-torn": (_test_audit_survives_a_torn_row, "a partial final line does not hide the readable trail"),
     "audit-separate": (_test_audit_is_not_telemetry, "audit and usage stay separate readers over separate files"),
+    "hardening": (_test_hardening, "v3.7.1: owned locks, honest rollback/receipt/job-lock/telemetry failure paths, project-scoped opencode env, read-path metadata refusal"),
 }
 
 

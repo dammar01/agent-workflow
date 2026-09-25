@@ -1,10 +1,12 @@
 """The project's own E2E tests, run only through a command the user wrote (plan §8, §18).
 
 `[E2E SPEC]` may name existing tests that cover a claim. This runtime never guesses how
-to run them: the request's `settings.existing_test_command` is an argv template, executed
+to run them: `config.json e2e.existing_test_command` is an argv template, executed
 without a shell, where `{files}` expands to the selected test files and `{base_url}` to the
-run's base URL. A listed file runs only when it is a plain project-relative path,
-exists, and matches `settings.existing_test_allowlist`. With no command or no
+run's base URL. It is config-only (`request.CONFIG_ONLY_SETTINGS`): the command runs with
+the user's environment, so it comes from the file the user edits, never from a request.
+A listed file runs only when it is a plain project-relative path, exists, and matches
+`config.json e2e.existing_test_allowlist`. With no command or no
 allowlist match nothing runs, and a claim covered only by such a test has to be asserted
 by the scenario instead.
 
@@ -48,11 +50,11 @@ def select(existing_tests: object, config: dict, project_root: Path) -> tuple[li
         path = str(test.get("path") or "")
         entry = {"path": path, "covers": [str(cid) for cid in test.get("covers") or []]}
         if not command:
-            reason = "settings.existing_test_command is not set"
+            reason = "config.json e2e.existing_test_command is not set"
         elif not _PLAIN_PATH.match(path) or ".." in PurePosixPath(path).parts:
             reason = "path is not a plain project-relative path"
         elif not any(fnmatchcase(path, pattern) for pattern in allowlist):
-            reason = "not in settings.existing_test_allowlist"
+            reason = "not in config.json e2e.existing_test_allowlist"
         elif not (root / path).resolve().is_file():
             reason = "file does not exist"
         else:

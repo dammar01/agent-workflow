@@ -9,10 +9,15 @@ SECRET_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"AKIA[0-9A-Z]{16}"), "aws access key"),
     (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"), "private key"),
     (re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-]{20,}"), "bearer token"),
+    # A value named by its key. The 12-character floor let a short real password through
+    # (`password: "hunter2x"`); quoting is intent enough to lower it to 6. An unquoted
+    # value keeps the 12 floor, or 8 when it carries a digit — `password: required` is
+    # prose, `password: s3cretpw` is not.
     (
         re.compile(
-            r"(?i)\"?(api[_-]?key|secret|password|access[_-]?token)\"?\s*[:=]\s*"
-            r"(?:\"[^\"]{12,}\"|'[^']{12,}'|(?!\[REDACTED:)[^\s,;]{12,})"
+            r"(?i)\"?(api[_-]?key|secret|password|passwd|access[_-]?token)\"?\s*[:=]\s*"
+            r"(?:\"[^\"]{6,}\"|'[^']{6,}'"
+            r"|(?!\[REDACTED:)(?:[^\s,;]{12,}|(?=[^\s,;]*\d)[^\s,;]{8,}))"
         ),
         "inline credential",
     ),
@@ -20,6 +25,12 @@ SECRET_PATTERNS: list[tuple[re.Pattern, str]] = [
         re.compile(
             r"(?i)\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^@\s]+@"
         ),
+        "credential-bearing URL",
+    ),
+    # Any other scheme carrying `user:password@` — https, amqp, ftp, smtp. Only the form
+    # with a password: a bare `user@host` is an address, not a credential.
+    (
+        re.compile(r"(?i)\b[a-z][a-z0-9+.\-]*://[^/\s:@\[\]]+:[^/\s@]+@"),
         "credential-bearing URL",
     ),
 ]

@@ -114,6 +114,12 @@ def _run_rollback(which: str | None, apply: bool) -> int:
         return 1
 
     print(f"[ROLLBACK] {chosen.name} ({'APPLY' if apply else 'DRY RUN'})")
+    if receipt.get("complete") is False:
+        # Written step by step, and this install never reached its final write. Every entry
+        # is a step that finished (the entry is recorded after its file), so undoing them is
+        # sound; a step that died mid-write has no entry and its backup is copied by hand.
+        print("  NOTE: that install was interrupted; undoing the steps it recorded.")
+        print(f"  Any step it did not record still has its backup under {chosen}.")
     conflicts: list[str] = []
     for item in entries:
         if not isinstance(item, dict) or not item.get("dest"):

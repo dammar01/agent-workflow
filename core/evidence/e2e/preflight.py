@@ -181,6 +181,124 @@ def write_network(config: dict) -> tuple[str | None, dict]:
     return None, decision
 
 
+# Addresses that answer as cloud instance-metadata services. Link-local covers AWS/GCP/Azure
+# (169.254.169.254) and fe80::; these are the ones outside it: AWS's IPv6 endpoint is a ULA
+# (so "private"), and Alibaba's sits in carrier-grade NAT space (neither private nor public
+# to `ipaddress`).
+_METADATA_ADDRESSES = frozenset({"fd00:ec2::254", "100.100.100.200"})
+
+# IPv6 forms that carry an IPv4 address a translator or relay may deliver to: NAT64's
+# well-known prefix (RFC 6052), its local-use range (RFC 8215) and the deprecated
+# IPv4-compatible range (RFC 4291). A network-specific NAT64 prefix an operator picks for
+# itself cannot be recognised from here; that residual is recorded in the v3.7.1 changelog.
+_NAT64_WELL_KNOWN = ipaddress.IPv6Network("64:ff9b::/96")
+_NAT64_LOCAL_USE = ipaddress.IPv6Network("64:ff9b:1::/48")
+_IPV4_COMPATIBLE = ipaddress.IPv6Network("::/96")
+
+# Where RFC 6052 section 2.2 puts the IPv4 bytes for each prefix length; byte 8 is the
+# reserved "u" octet and never carries address bits.
+_RFC6052_IPV4_BYTES = {
+    32: (4, 5, 6, 7),
+    40: (5, 6, 7, 9),
+    48: (6, 7, 9, 10),
+    56: (7, 9, 10, 11),
+    64: (9, 10, 11, 12),
+    96: (12, 13, 14, 15),
+}
+
+
+def _rfc6052_ipv4(ip: ipaddress.IPv6Address, prefix_length: int) -> ipaddress.IPv4Address:
+    packed = ip.packed
+    return ipaddress.IPv4Address(bytes(packed[i] for i in _RFC6052_IPV4_BYTES[prefix_length]))
+
+
+def _nat64_local_use_blocked(ip: ipaddress.IPv6Address) -> str | None:
+    """A local-use NAT64 address that lands on metadata under any prefix length it allows.
+
+    Inside `64:ff9b:1::/48` the operator picks the prefix length, and with it where the
+    IPv4 bytes sit, so every layout RFC 6052 allows there is decoded. Only metadata and
+    link-local results refuse: a zero run decodes as 0.0.0.0 under the layouts that do not
+    apply, and refusing on that would turn every ordinary NAT64 target away.
+    """
+    if ip not in _NAT64_LOCAL_USE:
+        return None
+    for prefix_length in (48, 56, 64, 96):
+        embedded = _rfc6052_ipv4(ip, prefix_length)
+        if str(embedded) in _METADATA_ADDRESSES:
+            return "a cloud metadata address"
+        if embedded.is_link_local:
+            return "link-local (where cloud metadata services answer)"
+    return None
+
+
+def _embedded_ipv4(ip: ipaddress.IPv6Address) -> ipaddress.IPv4Address | None:
+    """The IPv4 address an IPv6 address stands in for, or None.
+
+    `::ffff:169.254.169.254`, `64:ff9b::a9fe:a9fe`, `::a9fe:a9fe` and `2002:a9fe:a9fe::`
+    can all end at 169.254.169.254, and before 3.13 `ipaddress` judged them by their IPv6
+    bits alone. `::1` and `::` sit inside the IPv4-compatible range but are loopback and
+    unspecified in their own right, so they are left as they are.
+    """
+    if ip.ipv4_mapped is not None:
+        return ip.ipv4_mapped
+    if ip.sixtofour is not None:
+        return ip.sixtofour
+    if ip in _NAT64_WELL_KNOWN or (ip in _IPV4_COMPATIBLE and not (ip.is_loopback or ip.is_unspecified)):
+        return _rfc6052_ipv4(ip, 96)
+    return None
+
+
+def _read_blocked(address: str) -> str | None:
+    """Why the browser may not be pointed at `address` at all, or None."""
+    try:
+        ip = ipaddress.ip_address(address.split("%", 1)[0])
+    except ValueError:
+        return None
+    if isinstance(ip, ipaddress.IPv6Address):
+        reason = _nat64_local_use_blocked(ip)
+        if reason:
+            return reason
+        ip = _embedded_ipv4(ip) or ip
+    if str(ip) in _METADATA_ADDRESSES:
+        return "a cloud metadata address"
+    if ip.is_link_local:
+        return "link-local (where cloud metadata services answer)"
+    if ip.is_unspecified or ip.is_multicast:
+        return "unspecified or multicast"
+    return None
+
+
+def read_network(config: dict) -> tuple[str | None, list[dict]]:
+    """Refuse a remote origin that resolves somewhere no browser run should read from.
+
+    `allow_remote` + `allowed_origins` is the opt-in to reach another host, and it came
+    from config.json, not from the agent-written request. But the opt-in names a HOST, and
+    a host is only a name: one that resolves to 169.254.169.254 turns an allow-listed
+    staging URL into a read of the machine's cloud credentials. Writes were already judged
+    by address (write_network); reads now are too. Private addresses stay allowed here —
+    an internal staging server is the ordinary reason to set allow_remote — and loopback
+    and `.test` names need no lookup. A name that does not resolve is left to the
+    reachability check, which reports it in the user's terms.
+    """
+    verdicts: list[dict] = []
+    for host in _origin_hosts(config):
+        if is_local_dev_host(host):
+            continue
+        verdict = classify_host(host)
+        verdicts.append(verdict)
+        for address in verdict["addresses"]:
+            why = _read_blocked(address)
+            if why:
+                return (
+                    f"origin host '{host}' resolves to {address}, {why}: a browser run never "
+                    "reads from it, allow-listed or not"
+                ), verdicts
+        literal = _read_blocked(host)
+        if literal:
+            return f"origin host '{host}' is {literal}: a browser run never reads from it", verdicts
+    return None, verdicts
+
+
 def display_available() -> bool:
     """Whether a headed browser has a screen to open on.
 
@@ -211,11 +329,11 @@ def safe_base_url(url: str, config: dict) -> tuple[bool, str]:
     if is_virtual_dev_host(host):
         return True, "virtual dev host"
     if not config.get("allow_remote"):
-        return False, f"base_url host '{host}' is not loopback or a .test name, and settings.allow_remote is false"
+        return False, f"base_url host '{host}' is not loopback or a .test name, and config.json e2e.allow_remote is false"
     origin = f"{parts.scheme}://{parts.netloc}".lower()
     allowed = {str(o).lower().rstrip("/") for o in config.get("allowed_origins") or []}
     if origin not in allowed:
-        return False, f"origin '{origin}' is not in settings.allowed_origins"
+        return False, f"origin '{origin}' is not in config.json e2e.allowed_origins"
     return True, "remote origin allow-listed"
 
 
@@ -256,11 +374,26 @@ def browser_available(browser: str) -> tuple[bool, str]:
     return True, f"{browser} provisioned"
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Report a redirect instead of following it.
+
+    urlopen followed redirects to any host, so an allow-listed origin answering 302 to
+    http://169.254.169.254/ made this probe fetch the metadata service itself. A redirect
+    is already proof that a server answered, which is all this check asks.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+_PROBE_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def base_url_reachable(url: str, timeout_s: float = 3.0) -> tuple[bool, str]:
     """Any HTTP response counts — a 404 is a server, no server is the failure."""
     request = urllib.request.Request(url, method="GET", headers={"User-Agent": "agent-workflow-e2e-preflight"})
     try:
-        with urllib.request.urlopen(request, timeout=timeout_s) as response:  # noqa: S310 - loopback/allow-listed only
+        with _PROBE_OPENER.open(request, timeout=timeout_s) as response:  # noqa: S310 - loopback/allow-listed only, redirects not followed
             return True, f"HTTP {response.status}"
     except urllib.error.HTTPError as exc:
         return True, f"HTTP {exc.code}"
@@ -337,6 +470,16 @@ def preflight(config: dict, *, fake: bool = False) -> dict:
     checks.append({"name": "base_url_policy", "ok": ok, "detail": detail})
     if not ok:
         return {"ok": False, "reason": "spec_invalid", "detail": detail, "checks": checks}
+    blocked, read_hosts = read_network(config)
+    checks.append(
+        {
+            "name": "read_policy",
+            "ok": blocked is None,
+            "detail": blocked or (f"{len(read_hosts)} remote host(s) resolved outside link-local/metadata" if read_hosts else "no remote origins"),
+        }
+    )
+    if blocked:
+        return {"ok": False, "reason": "spec_invalid", "detail": blocked, "checks": checks}
     refused, network = write_network(config)
     detail = refused or (
         f"writes pinned to {', '.join(f'{h}={ip}' for h, ip in sorted(network['pins'].items()))}"

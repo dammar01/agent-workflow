@@ -16,10 +16,12 @@ from config.settings import (
 )
 from core.evidence.contract import make_error as _contract_make_error
 from core.evidence.contract import make_ok as _contract_make_ok
+from core.workspace.workspace_paths import detect_project_root
 from utils import osutil
 from utils.redact import redact, redact_value
 from utils.parser import ensure_text, first_non_empty
 
+from adapters.shared.child_env import project_scoped_env
 from adapters.shared.usage import merge_usage, normalize_usage
 
 # OpenCode's own output shapes. They belong to the adapter, not to a shared parser:
@@ -454,7 +456,13 @@ class OpenCodeAdapter:
         """
         started = time.monotonic()
         self.last_call_meta = _sanitize_meta(
-            {"phase": phase, **_argv_meta(args), "cwd": cwd, "timeout_seconds": timeout}
+            {
+                "phase": phase,
+                **_argv_meta(args),
+                "cwd": cwd,
+                "timeout_seconds": timeout,
+                **(getattr(self, "_env_meta", None) or {}),
+            }
         )
         proc = subprocess.Popen(
             args,
@@ -571,6 +579,9 @@ class OpenCodeAdapter:
                 # None on current OpenCode builds; see extract_usage for why that is
                 # recorded as an absent measurement rather than as a zero.
                 "provider_usage": self.extract_usage(meta["stdout"]),
+                # Which environment the child ran with, as counts — so an auth failure
+                # after the switch to project-scoped env reads as that, not as a mystery.
+                **(getattr(self, "_env_meta", None) or {}),
             }
         )
         return meta
@@ -615,9 +626,7 @@ class OpenCodeAdapter:
         args.extend(self._effort_args())
         args.extend(["--print-logs", "--log-level", "INFO"])
 
-        env = os.environ.copy()
-        env["PYTHONUTF8"] = "1"
-        env["PYTHONIOENCODING"] = "utf-8"
+        env = self._child_env(work_dir)
 
         cwd = self._resolve_work_dir(work_dir)
         meta: dict = {**_argv_meta(args), "cwd": cwd}
@@ -894,9 +903,7 @@ class OpenCodeAdapter:
         if model:
             args.extend(["-m", model])
 
-        env = os.environ.copy()
-        env["PYTHONUTF8"] = "1"
-        env["PYTHONIOENCODING"] = "utf-8"
+        env = self._child_env(work_dir)
         cwd = self._resolve_work_dir(work_dir)
 
         hazards = _cmd_shell_hazards(args)
@@ -980,9 +987,7 @@ class OpenCodeAdapter:
                 },
             )
 
-        env = os.environ.copy()
-        env["PYTHONUTF8"] = "1"
-        env["PYTHONIOENCODING"] = "utf-8"
+        env = self._child_env(work_dir)
         cwd = self._resolve_work_dir(work_dir)
 
         try:
@@ -1122,6 +1127,11 @@ class OpenCodeAdapter:
 
     def _resolve_command(self) -> str:
         return osutil.resolve_exe(self.command)
+
+    def _child_env(self, work_dir: str | None) -> dict:
+        """Allowlisted environment plus the active project's .env; see adapters/shared/child_env.py."""
+        env, self._env_meta = project_scoped_env(detect_project_root(work_dir))
+        return env
 
     @staticmethod
     def _resolve_work_dir(work_dir: str | None) -> str | None:

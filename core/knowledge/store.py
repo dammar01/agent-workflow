@@ -11,9 +11,7 @@ makes "no semantic change" and "no diff" the same event.
 """
 
 import json
-import os
 import re
-import time
 from pathlib import Path
 
 from core.knowledge import schema
@@ -23,6 +21,7 @@ from core.workspace.workspace_paths import (
     workflow_paths,
 )
 from utils import git
+from utils.owned_lock import OwnedFileLock
 from utils.redact import scan
 
 DEFAULT_KNOWLEDGE_DIR = "docs/project-knowledge"
@@ -33,19 +32,13 @@ LOCK_TTL_SECONDS = 30
 _JSON_INDENT = 2
 
 
-class _KnowledgeLock:
+class _KnowledgeLock(OwnedFileLock):
     """Cross-process advisory lock around one knowledge directory.
 
-    Same shape and same failure posture as core/evidence/fact_store.py's `_FactLock`,
-    for the same reason: two sessions promoting the same subject each read, mutate, and
-    rewrite a document, and without serialisation the second write silently drops the
-    first. Deliberately a copy of that pattern rather than an import — fact_store's lock
-    is bound to facts.jsonl's own path, and generalising it would mean editing a verified
-    file to serve a caller it was not written for.
-
-    Best-effort, never blocking forever: a lock older than the TTL is treated as orphaned
-    and stolen. On Windows a live holder's file cannot be unlinked while its handle is
-    open, so only a genuinely dead lock is ever taken.
+    Two sessions promoting the same subject each read, mutate, and rewrite a document,
+    and without serialisation the second write silently drops the first. Ownership and
+    takeover rules are utils/owned_lock.py's, shared with the fact store: only a holder
+    that is no longer running is replaced, and release removes only its own lock.
 
     The lock file lives under .workflow/, not beside the documents it guards. The
     knowledge directory is Git-tracked, and a lock file there would surface in every
@@ -53,42 +46,7 @@ class _KnowledgeLock:
     """
 
     def __init__(self, project_root: Path):
-        self.path = workflow_paths(Path(project_root))["promote_lock"]
-        self.fd: int | None = None
-
-    def __enter__(self) -> "_KnowledgeLock":
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        deadline = time.time() + LOCK_TTL_SECONDS
-        while True:
-            try:
-                self.fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(self.fd, f"{os.getpid()} {time.time()}".encode("utf-8"))
-                return self
-            except FileExistsError:
-                if self._is_orphaned() or time.time() > deadline:
-                    self._steal()
-                time.sleep(0.05)
-
-    def _is_orphaned(self) -> bool:
-        try:
-            return time.time() - self.path.stat().st_mtime > LOCK_TTL_SECONDS
-        except OSError:
-            return True
-
-    def _steal(self) -> None:
-        try:
-            self.path.unlink()
-        except OSError:
-            pass
-
-    def __exit__(self, *exc) -> None:
-        if self.fd is not None:
-            try:
-                os.close(self.fd)
-            except OSError:
-                pass
-            self.fd = None
-        self._steal()
+        super().__init__(workflow_paths(Path(project_root))["promote_lock"], LOCK_TTL_SECONDS)
 
 
 def knowledge_dir(project_root: Path) -> Path:
