@@ -2,130 +2,95 @@
 
 # agent-workflow
 
-**Stop burning premium context on reading code.**
+**An external control plane for coding agents.**
 
-A two-agent orchestration runtime that delegates codebase reading and search to a
-cheaper agent, so Claude Code spends its context window on reasoning instead of raw
-file contents.
+Delegate repository exploration, evidence gathering, and workflow control to a secondary
+agent, while reasoning and implementation stay with your primary coding agent.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](#requirements)
-[![Version](https://img.shields.io/badge/version-3.7.1-informational.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.7.2-informational.svg)](CHANGELOG.md)
 
 <br>
 
-<img src="docs/assets/flow.png" alt="agent-workflow architecture: the user asks a question; the main agent detects intent and calls the runtime; the runtime builds context, launches the read-only second agent, validates and redacts the response, then returns a digest with file:line anchors; the main agent reasons, writes the code, verifies, and commits. Only the main agent has write access." width="900">
+<img src="docs/assets/flow.png" alt="agent-workflow architecture: the user gives a task to the primary coding agent; the primary agent calls the workflow runtime; the runtime routes the task, builds context, launches a secondary agent to read the repository, then redacts and checks the returned evidence and hands the primary agent a digest with file and line anchors. The primary agent remains responsible for reasoning, code changes, and verification." width="900">
+
+<sub>Simplified overview. "Read-only" is the secondary agent's role; how strictly it is
+enforced depends on the provider (see <a href="#security">Security</a>). Verified text
+version: <a href="docs/architecture/README.md">docs/architecture</a>.</sub>
 
 </div>
 
 ---
 
-## What it does
+## What is agent-workflow?
 
-Two agents, one strict division of labour:
+`agent-workflow` is an external runtime for AI-assisted software development. It separates
+work that needs **broad repository inspection** from work that needs the **primary agent's
+reasoning and implementation context**.
+
+A coding agent on a mature repository spends much of its effort locating modules, tracing
+call sites, and reading conventions before it changes anything. `agent-workflow` moves that
+inspection into a separate execution context and returns structured evidence: a digest,
+`file:line` anchors, and a reference to the full evidence on disk.
+
+It is **not a replacement** for Claude Code or any other coding agent. It is an additional
+control layer around them.
+
+Delegated results are treated as **evidence candidates**, not truth. Every delegated call
+returns the same envelope:
+
+```json
+{ "ok": true, "content": "...", "meta": {}, "digest": {}, "evidence_ref": {} }
+```
+
+The primary agent decides what the evidence means and whether to act on it. A secondary
+agent can be incomplete or wrong even when its output looks plausible.
+
+---
+
+## Core responsibilities
 
 | Role | Who | Responsibility |
 | --- | --- | --- |
-| **main_agent** | Claude Code, Codex, Cursor | Reasoning, decisions, and the **only** party allowed to write files |
-| **second_agent** | OpenCode, Codex, or Agy — a cheaper model | Reading and searching the codebase, strictly **read-only** |
+| **Primary agent** | Claude Code (the integration target) | Reasoning, decisions, code changes, and final review |
+| **Workflow runtime** | This repository, Python standard library only | Routing, sessions and locks, policy, prompt building, redaction, evidence contracts, digests, persistence, recovery |
+| **Secondary agent** | `opencode`, `codex`, or `agy` | Repository exploration, analysis, planning, and verification evidence |
 
-Most of what a coding agent does is not reasoning. It is reading files, grepping, and
-tracing call sites — mechanical work that does not need a frontier model. That work gets
-delegated. The cheaper agent reads forty files; your agent receives a digest plus
-`file:line` anchors, and the full evidence stays on disk in `.workflow/` until it is
-actually needed.
+The design keeps code-writing with the primary agent. The secondary agent's role is
+read-only; the degree to which each provider **enforces** that differs, and the runtime
+states it rather than assuming it. See [Security](#security).
 
-Every delegated call returns the same envelope, so the caller never has to guess:
-
-```json
-{ "ok": true, "content": "...", "meta": {}, "digest": {} }
-```
-
-Zero third-party dependencies — the Python standard library is the whole runtime.
-
-**Writing code is never delegated.** All file modifications stay with the main agent,
-under your review. That is a design constraint, not a gap.
+The principle: let the model do the semantic reasoning, and let deterministic software
+enforce state, contracts, policy, provenance, and execution control.
 
 ---
 
-## Measured
+## When it is useful
 
-The status line reports two numbers while you work, and they are the two the design is
-about:
+The benefit grows with the **breadth** of a task — many files, many touch points.
 
-```
-Second Agent 62.0M / 107 calls | Saved 3.2M
-```
-
-**Second Agent** is everything the delegate read and wrote. **Saved** is the part of that
-which never entered your premium context window. The gap between them is the whole point.
-
-From 107 delegated calls logged on the maintainer's machine (`.workflow/usage.jsonl`; not
-committed, since `init` gitignores `.workflow/`):
-
-| Metric | Value |
-| --- | --- |
-| Tokens handled by the second agent | 61,939,405 |
-| ↳ of which cache reads | 58,468,608 |
-| **Kept out of the premium context** | **3,203,403** |
-| Evidence produced by the second agent | 836,812 chars |
-| Digest handed to the main agent | 92,192 chars |
-| **Share that entered the premium context** | **11.0% — 9.1× smaller** |
-| Call mix | `verify` 49, `explore` 30, `analyze` 17, `plan` 16 |
-
-Read that as a usage log from one machine, not as a comparison. It says how much text the
-digest contract kept out of the window; it does not say what the same work would have cost
-without the runtime, because nobody ran it that way. Two further caveats travel with the
-numbers rather than behind them:
-
-- **34 of the 112 rows carry provider-reported token counts.** The rest are `chars // 4`
-  estimates, and the row says which it is in `token_source` — a total mixing the two is a
-  total partly made of estimates.
-- **Cache reads are counted, not netted off.** A call that re-read 200k cached tokens still
-  handled 200k tokens; that is why the second-agent figure is large and the saved figure is
-  the smaller, stricter one.
-
----
-
-## When it pays off
-
-The benefit scales with the **breadth** of the task — many files, many touch points.
-
-| Task | Example question | Command |
+| Situation | Example question | Command |
 | --- | --- | --- |
-| **Mapping unfamiliar code** | "Where is the authentication logic?" | `explore` |
-| **Root-cause analysis** | "Why is this endpoint slow?" | `analyze` |
-| **Change planning** | "I want to add feature X — what are the steps?" | `plan` |
-| **Blast radius** | "What does the current working tree touch?" | `sweep` |
-| **Proving results** | "Is the change that was just made correct?" | `verify` |
+| Unfamiliar codebase | "Where is the authentication logic?" | `explore` |
+| Root-cause investigation | "Why is this endpoint slow?" | `analyze` |
+| Cross-module change | "I want to add feature X — what are the steps?" | `plan` |
+| Blast radius | "What does the current working tree touch?" | `sweep` |
+| Post-change verification | "Is the change that was just made correct?" | `verify` |
 
-Good fit: Claude Code daily, a large codebase, sessions that keep hitting the context
-limit. Poor fit: under ~50 files (the agent can just hold it), a single-file change whose
-location you already know, or anything needing an instant answer — a delegated call takes
-tens of seconds to a few minutes, because the second agent genuinely reads the code.
-
----
-
-## Requirements
-
-| Requirement | Required | Notes |
-| --- | --- | --- |
-| **Python 3.10+** | Yes | No dependencies to install |
-| **A second-agent CLI** | Yes | One of `opencode` (recommended), `codex`, or `agy`, on `PATH` |
-| **git** | Recommended | Used by `sweep`, `syntax` verify mode, and the workspace guard |
-| **Claude Code** | Recommended | The intended main agent; others work as well |
-
-> **Choose `opencode` if you are unsure.** Only OpenCode has mechanically enforced
-> permissions: write and edit tools denied, `.env` and key material unreadable, shell
-> restricted to a read-only git allowlist. On `codex` and `agy` those boundaries are not
-> machine-enforced — see [Security](#security).
+It is less attractive when the change is already localized, the relevant file is known,
+the task is very small, or you need an instant answer: a delegated call takes from under a
+minute to several minutes for broad analysis or planning, because the secondary agent
+actually reads the code. These are usage heuristics, not measured thresholds; the
+[team guide](docs/team-guide/when-to-use.md) covers choosing per task and how to phrase
+requests so the workflow can help.
 
 ---
 
 ## Install
 
-Four steps. Steps 1–2 run once per machine; steps 3–4 once per project.
+Steps 1–2 run once per machine; steps 3–4 once per project.
 
 ### 1. Clone
 
@@ -142,22 +107,13 @@ Keep this directory somewhere permanent — the runtime records its absolute pat
 python install.py --apply --set-env
 ```
 
-Installs the Claude Code skills and hooks, the **permission block for the delegated
-agent** (write/edit denials and the shell allowlist), and persists `AGENT_PATH` for
-future shells. Drop `--apply` for a dry run that writes nothing; drop `--set-env` to
-skip the environment variable and set it yourself.
+Installs the Claude Code skills and hooks, the **permission block for the delegated agent**
+(write/edit denials and the shell allowlist), and persists `AGENT_PATH`. Drop `--apply` for
+a dry run; drop `--set-env` to set the variable yourself; pass `--provider`/`--model` to
+skip the interactive choice. Reopen the terminal so `AGENT_PATH` takes effect.
 
-It also rebuilds `config/second_agent.seed.json` — the template every later `init` copies
-into a new project — from the shipped example, keeping the provider and model you chose last
-time; on a first run from a terminal it asks. Answer with `--provider`/`--model` instead to
-skip the questions; a non-interactive run with no earlier choice copies the example. The
-runtime never reads the seed: a project without its own `.workflow/second_agent.json` is
-refused, not run on a machine-wide default. Files an earlier release installed and this one
-no longer ships are removed (backed up, and restored by `--rollback`); a file you edited is
-kept and named.
-
-Skipping this step leaves the delegated agent running without write restrictions.
-Reopen the terminal so `AGENT_PATH` takes effect.
+> **Skipping this step leaves the delegated agent running without write restrictions.**
+> The restrictions it installs are fully enforced only for `opencode`; see [Security](#security).
 
 ### 3. Enable it in your project
 
@@ -169,21 +125,10 @@ python "$AGENT_PATH" --command init --work-dir /path/to/your-project --pretty
 python $env:AGENT_PATH --command init --work-dir "C:/path/to/your-project" --pretty
 ```
 
-Creates, inside the project:
-
-| Path | Purpose |
-| --- | --- |
-| `.workflow/config.json` | Your overrides only (absent key = shipped default), plus absolute paths back to the tool |
-| `.workflow/second_agent.json` | Provider and model selection; safe to edit |
-| `.workflow/e2e/secrets.json` | Browser-test credentials by profile (created by the first `/.verify-browser` draft that needs it) |
-| `.workflow/run.*`, `inspect.*`, `check.*` | Entry-point scripts (`.ps1` on Windows, `.sh` on POSIX) |
-| `.workflow/current/` | What is running now: `session.json`, `progress.jsonl`, and a browser run's live `e2e/` events and results |
-| `.workflow/data/` | Everything internal — sessions, logs, usage/audit/quality streams, facts, evidence, browser knowledge, backups. Not meant to be edited |
-| `opencode.json` | Deny-list of secret files the delegated agent may not read |
-
-`.workflow/` is added to the project's `.gitignore` automatically. A workspace created by
-v3.5.x or earlier keeps its data at the `.workflow/` root until `upgrade` moves it into
-`data/` (backed up first); it works unchanged until then, and `doctor` recommends the move.
+This creates `.workflow/` in the project — your config overrides, provider selection,
+entry-point scripts (`run`, `inspect`, `check`), live progress in `current/`, and internal
+data (sessions, evidence, facts, usage, audit) in `data/` — plus an `opencode.json` that
+denies secret-file reads. `.workflow/` is added to `.gitignore` automatically.
 
 > **Do not commit `.workflow/`.** The generated scripts bake in absolute paths from the
 > machine where `init` ran. Each team member runs this step themselves.
@@ -195,70 +140,56 @@ cd /path/to/your-project
 .workflow/run.sh doctor          # Windows: .workflow\run.ps1 doctor
 ```
 
-`doctor` must report **`READY`** with zero issues. `NOT_READY` means an entry point is
-genuinely broken — read `recommended_fixes` before proceeding. Add
-`python install.py --check` to audit the global bundle for drift.
+`doctor` must report **`READY`**. `NOT_READY` means an entry point is broken — read
+`recommended_fixes`. `python install.py --check` audits the global bundle for drift.
 
----
+### Quick start
 
-## Usage
-
-The main agent invokes the runtime for you from natural language:
+Ask in natural language; the primary agent routes it:
 
 ```text
-you:  where is the authentication logic in this project?
-
+you:          where is the authentication logic in this project?
 Claude Code:  [INTENT] explore — location question
               (runs .workflow/run.ps1 explore "...")
 ```
 
-Directly:
+Or call the runtime directly:
 
 ```bash
 .workflow/run.sh explore "find the authentication entry point" "<SESSION_ID>"
 ```
 
-```powershell
-& ".workflow\run.ps1" explore "find the authentication entry point" "<SESSION_ID>"
-```
-
-The session id is **required**. Without it, concurrent sessions fall back to a shared
-identifier and overwrite each other's state.
-
-| Symptom | Likely cause | Action |
-| --- | --- | --- |
-| `doctor` reports `NOT_READY` | Scripts or config have drifted | `.workflow/run.sh upgrade` |
-| `run_script_drift` | Tool was updated, scripts were not | Run `upgrade` from that machine |
-| Provider not found | The agent CLI is not on `PATH` | Install it, then re-check `--version` |
-| Commands fail after moving the repository | Baked absolute paths are stale | Run `upgrade` from the new location |
-
----
-
-## Commands
+The generated runner refuses a delegated call without a session id: without one,
+concurrent sessions would share an identifier and overwrite each other's state.
 
 | Command | Type | Purpose |
 | --- | --- | --- |
-| `init` | local | Enable the runtime in a project |
-| `upgrade` | local | Refresh a workspace after the tool is updated |
+| `init` / `upgrade` | local | Enable the runtime in a project / refresh it after the tool is updated |
 | `doctor` | local | Readiness check; writes a report |
 | `sweep` | local | Scan the working tree for changes |
 | `clean` | local | Prune jobs, stale facts, and old sessions |
 | `explore` | delegated | Code map, entry points, ownership |
 | `analyze` | delegated | Causal analysis; no code changes |
 | `plan` | delegated | Evidence-backed implementation steps |
-| `verify` | delegated | Prove that completed work is correct |
-| `promote-*` | local | Turn verified evidence into a Git-tracked knowledge document |
+| `verify` | delegated | Evidence that completed work is correct |
+| `promote-validate` → `promote-verify` → `promote-write` | local | Turn verified evidence into a Git-tracked knowledge document |
 
-Asynchronous job commands (`submit`, `await`, `status`, `result`), the remaining local
-ones (`inspect`, `provider`, `report`, `audit`, `graph-meta`), and the three `promote-*`
-stages are documented in the [full reference](docs/reference.md#command).
+Implementation itself (`/.execute` in Claude Code) is a primary-agent skill, not a runtime
+command. Asynchronous job commands and the remaining local commands are in the
+[full reference](docs/reference.md#command).
+
+| Symptom | Likely cause | Action |
+| --- | --- | --- |
+| `doctor` reports `NOT_READY` / `run_script_drift` | Tool updated, workspace scripts not | `.workflow/run.sh upgrade` |
+| Provider not found | The agent CLI is not on `PATH` | Install it, then re-check `--version` |
+| Commands fail after moving the repository | Baked absolute paths are stale | Run `upgrade` from the new location |
 
 ---
 
 ## Security
 
-The delegated agent reads your source code. How strictly it is confined depends entirely
-on the provider you select.
+The secondary agent reads your source code. How strictly it is confined depends on the
+provider you select.
 
 | | `opencode` | `codex` | `agy` |
 | --- | --- | --- | --- |
@@ -267,36 +198,71 @@ on the provider you select.
 | Shell commands restricted | **Yes**, read-only git allowlist | No | No |
 | Workspace mutation handling | Prevented | Prevented for writes | Detected after the fact |
 
-1. **The write boundary lives in the global configuration** installed by step 2. A project
-   initialised on a machine where that step never ran has no write restriction; the
+1. **The write boundary lives in the global configuration** installed by step 2. The
    project-local `opencode.json` covers secret-file *reads* only.
 2. **`codex` passes filesystem permission flags on every call, but their runtime effect is
    unverified** against the current CLI. Treat the boundary as unproven.
-3. **`agy` runs with permissions skipped**, guarded by detection rather than prevention:
-   it diffs `git status` around each call, so `.gitignore`d files — including `.env` — are
+3. **`agy` runs with permissions skipped**, guarded by detection rather than prevention: it
+   diffs `git status` around each call, so `.gitignore`d files — including `.env` — are
    invisible to it.
 
-For projects holding secrets the delegated agent must not read, use `opencode`. Known
-limitations: [reference](docs/reference.md#batasan-yang-diketahui).
+For projects holding secrets the secondary agent must not read, use `opencode`.
+
+## Requirements
+
+| Requirement | Required | Notes |
+| --- | --- | --- |
+| **Python 3.10+** | Yes | The runtime needs no third-party packages. Optional browser verification uses Playwright (`requirements-e2e.txt`) |
+| **A secondary-agent CLI** | Yes | `opencode` (recommended), `codex`, or `agy`, on `PATH` |
+| **git** | Recommended | Used by `sweep`, `syntax` verify mode, and the workspace guard |
+| **Claude Code** | Recommended | The primary integration target |
+
+---
+
+## Research & evaluation
+
+`agent-workflow` is developed as an open engineering and research artifact. Design
+decisions, hypotheses, experiments, and sanitized real-world observations are recorded in
+[docs/research/](docs/research/), with explicit provenance: a related paper is not presented
+as the origin of an implementation unless that is known, and an implementation working in
+one project is not presented as a general result.
+
+The project does not assume that more orchestration makes a coding agent better. The
+controlled benchmark and the maintainer's usage telemetry are kept apart in
+[docs/evaluation/](docs/evaluation/), and telemetry is read as evidence for specific
+conditions, not as a performance claim.
 
 ---
 
 ## Documentation
 
+Documentation is layered: the team guide says **how and when**, research says **why**, and
+the reference says **exactly what the runtime does** — see [docs/](docs/README.md).
+
 | Document | Contents |
 | --- | --- |
-| [docs/reference.md](docs/reference.md) | Complete technical reference: configuration schema, asynchronous jobs, fact store, evidence reuse, verify modes, sessions, tests, CI *(written in Bahasa Indonesia)* |
-| [docs/runtime-contracts.md](docs/runtime-contracts.md) | Which `.workflow/config.json` keys the runtime actually obeys, and which it structurally cannot enforce |
-| [CHANGELOG.md](CHANGELOG.md) | Release history |
-| [RELEASE.md](RELEASE.md) | Release procedure, and which steps CI already covers |
+| [docs/team-guide](docs/team-guide/README.md) | For developers: getting started, when to use it, task framing, examples, troubleshooting |
+| [docs/architecture](docs/architecture/README.md) | Verified request flow, components, and storage |
+| [docs/reference.md](docs/reference.md) | Complete technical reference: configuration, jobs, fact store, evidence reuse, verify modes, sessions, tests, CI *(Bahasa Indonesia)* |
+| [docs/runtime-contracts.md](docs/runtime-contracts.md) | Which `.workflow/config.json` keys the runtime obeys, and which it cannot enforce |
+| [docs/limitations.md](docs/limitations.md) | Known limitations |
+| [docs/research](docs/research/README.md) | Research method, contract, and records |
+| [docs/evaluation](docs/evaluation/README.md) | Benchmark and observed usage |
+| [CHANGELOG.md](CHANGELOG.md) / [RELEASE.md](RELEASE.md) | Release history and procedure |
 
-Two GitHub Actions workflows guard the repository:
-[ci.yml](.github/workflows/ci.yml) runs the version stamp, manifest, stdlib-only gate and
-test suites on every push across both operating systems, spending no provider quota;
-[e2e-full.yml](.github/workflows/e2e-full.yml) is `workflow_dispatch` only, because it
-calls a real second agent. Neither bumps, tags, nor publishes.
+[ci.yml](.github/workflows/ci.yml) runs the version stamp, manifest, stdlib-only gate, and
+test suites on every push on Linux and Windows, spending no provider quota;
+[e2e-full.yml](.github/workflows/e2e-full.yml) is manual because it calls a real secondary
+agent.
 
 ---
+
+## Limitations
+
+`agent-workflow` adds an execution layer, and with it additional latency, additional
+provider calls and compute, new failure modes, provider-specific security limits, and
+maintenance complexity. It is not preferable for every task; the project is exploring
+**when** external orchestration pays off. Full list: [docs/limitations.md](docs/limitations.md).
 
 ## License
 

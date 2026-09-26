@@ -1,5 +1,10 @@
 # Benchmark 3-Arm: Ekonomi Quality-Adjusted agent-workflow
 
+> **Catatan path (ditambahkan 2026-09-26).** Path source di dokumen ini (mis.
+> `core/executor.py`, `core/workflow_runtime.py`, `config/settings.py:20`) merujuk tag SUT
+> `v3.4.5` yang dibekukan, bukan source tree HEAD. Sengaja tidak diperbarui: memindahkannya
+> ke HEAD membuat hasil tak bisa diatribusikan ke versi yang diukur.
+
 **Status:** rencana disetujui, belum dieksekusi
 **Dibuat:** 2026-08-15
 **Versi SUT:** agent-workflow v3.4.5 (`config/settings.py:20`)

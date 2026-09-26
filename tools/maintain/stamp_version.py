@@ -94,6 +94,8 @@ EXEMPT: dict[str, tuple[str, ...]] = {
         "System under test dibekukan",
         # The v3.6.0 `data/` layout upgrade, described as history.
         "Upgrade ke layout `data/`",
+        # The v3.7.1 trusted-provider stance for codex/agy, described as history.
+        "Sejak v3.7.1 posisi ini",
     ),
     "dist/config/claude/settings.template.json": (
         # Marketplace pins: the plugin repos' own release tags, not ours.

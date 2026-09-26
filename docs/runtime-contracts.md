@@ -1,9 +1,10 @@
 # Runtime contracts
 
 Which parts of `.workflow/config.json` the Python runtime actually obeys, and which
-contracts it structurally cannot enforce. Both lists lived in `core/workflow_runtime.py`
-as tuples no code ever read — they were documentation wearing a data structure. Moved
-here during the folder restructure so they stay findable without pretending to be code.
+contracts it structurally cannot enforce. Both lists once lived in the since-removed
+`core/workflow_runtime.py` as tuples no code ever read — documentation wearing a data
+structure — and were moved here during the folder restructure. Shipped defaults now live
+in `core/runtime/config_defaults.py`.
 
 ## Keys the runtime reads
 

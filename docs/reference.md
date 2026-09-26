@@ -1,4 +1,4 @@
-# agent-workflow v3.7.1
+# agent-workflow v3.7.2
 
 Runtime orkestrasi mandiri untuk alur kerja dua-agent. Tanpa dependency pihak ketiga.
 
@@ -70,7 +70,7 @@ git --version
 
 ---
 
-## Install (v3.7.1)
+## Install (v3.7.2)
 
 ### Anggota tim baru — urutan lengkap dari nol
 
@@ -609,7 +609,7 @@ Pakai `codex` bila project-nya memang tak menyimpan rahasia, atau bila kamu mene
 
 Sejak v3.7.1 posisi ini eksplisit: `codex` dan `agy` diperlakukan sebagai **trusted provider**. Selain tanpa batas baca, adapter keduanya meneruskan seluruh environment proses ke CLI provider (credential di env ikut terlihat). Itu diterima sebagai risiko, bukan diperbaiki dengan allowlist — allowlist bisa memutus auth CLI provider, dan provider yang sudah bisa membaca `.env` tak dijaga apa pun oleh env yang dipangkas. Sebagai gantinya risikonya selalu terlihat: `/.doctor` menulis cek `second_agent_read_boundary` dan satu `WARNING` di `recommended_fixes` tiap kali provider aktif `codex`/`agy` (bukan issue — readiness tetap READY), dan `/.provider` menyebutnya saat memilih.
 
-Kunci reliability (v3.7.1):
+Kunci reliability (v3.7.2):
 
 | Kunci | Default | Arti |
 | --- | --- | --- |
@@ -840,7 +840,7 @@ pernah tercatat, runtime gagal sebagai `session_capture_failed` dan clean run di
 Request berbeda pada session yang masih terkunci tetap ditolak sebagai
 `job_already_running`.
 
-### Liveness worker (v3.7.1)
+### Liveness worker (v3.7.2)
 
 PID yang hidup **tidak** berarti sedang bekerja. Worker karena itu melaporkan heartbeat sekaligus usia output stream, lalu job diklasifikasi tiga keadaan:
 
@@ -963,97 +963,26 @@ manusia ada di `RELEASE.md`.
 
 ## Batasan yang diketahui
 
-Disebut terbuka karena diam soal ini akan membuat runtime terlihat lebih menjamin daripada kenyataannya:
-
-- **Mutasi main_agent tak terlihat oleh runtime ini.** `/.execute` tak punya jalur Python sama sekali. Audit scope, penjaga operasi destruktif, dan atribusi perubahan file karena itu belum ada — perlu lapisan hook di sisi main_agent.
-- **Kontrak masih sebagian berbasis prompt.** Runtime memvalidasi struktur dan routing finding verify, tetapi kebenaran semantik klaim serta output kontrak milik main_agent tetap tidak dapat dibuktikan hanya dari penanda.
-- **Telemetry masih parsial.** Durasi, exit code, hasil kill, ukuran prompt/output, dan estimasi token dicatat per panggilan di `call.meta.json`; jumlah pemanggilan tool dan token provider aktual belum selalu tersedia.
-- **OpenCode nyata hanya diuji opt-in.** Suite default mensimulasikan provider; jalur `Popen`, persistence, installer, dan process lifecycle tetap dijalankan lokal. Gunakan `tools/e2e/e2e.py --full` untuk smoke test berkuota.
-- **Probe PING memakai kuota.** Job yang terus stalled dapat diprobe berulang sesuai cadence; default `await` adalah 120 detik.
-- **Tuning liveness belum seragam di jalur attach.** `check.py --wait` memakai default tool untuk ambang stalled dan probe ulang, bukan nilai project-local.
-- **Deteksi upgrade dapat tertutupi stamp parsial.** Delegated load memperbarui marker versi `config.json` tanpa meregenerasi scripts atau `second_agent.json`, sehingga warning berikutnya dapat menganggap workspace current. Layout lama tetap terdeteksi dari isinya, bukan dari stamp.
-- **Deteksi staleness graph hanya mengikuti source `.py`.** Perubahan bahasa lain tidak masuk fingerprint runtime; Stop hook Graphify merupakan layer Claude terpisah dan tidak tersedia di semua main agent.
-- **Path graph lintas-OS belum dinormalisasi penuh.** Snapshot yang dibuat di Windows lalu dibaca dari POSIX/WSL dapat tetap menghasilkan candidate path ber-backslash; refresh graph secara manual dari environment aktif bila ini terjadi.
-- **Skrip runner tidak portabel lintas-OS.** Path absolut dipanggang saat init/upgrade; pindah repo, path, atau OS berarti jalankan upgrade dari environment baru.
+Dipindah ke [`docs/limitations.md`](limitations.md). Heading ini dipertahankan supaya tautan
+lama ke `#batasan-yang-diketahui` tetap berfungsi.
 
 ---
 
 ## Benchmark
 
-`bench/` berisi harness benchmark 3-arm yang mengukur ekonomi quality-adjusted tool ini
-terhadap dirinya sendiri. Rencananya di [`bench/BENCHMARK-PLAN.md`](../bench/BENCHMARK-PLAN.md),
-progres eksekusi di [`bench/STATE.md`](../bench/STATE.md).
-
-Tiga arm: **A** = Claude langsung, **B** = native sub-agent, **C** = agent-workflow (repo
-ini). Arm A dan B dijalankan operator secara manual dan harness memanen biayanya per
-`sessionId`; arm C jalan lewat `python main.py --command ...` dan itu satu-satunya arm yang
-bisa dibuat deterministik.
-
-System under test dibekukan di tag `v3.4.5`. Versi itu tidak ikut naik saat `TOOL_VERSION`
-naik: SUT yang bergeser di tengah pengukuran membuat hasilnya tidak bisa diatribusikan ke
-versi mana pun. `tools/maintain/stamp_version.py` menstempel baris `**Versi SUT:**` di
-`bench/BENCHMARK-PLAN.md` — kalau SUT dan versi berjalan sudah berpisah, baris itu harus
-diperbarui sadar, bukan dibiarkan ikut stempel.
-
-`bench/` sengaja berada di luar scope task apa pun. Agen yang sedang diuji tidak boleh
-menyentuh instrumen yang menilainya.
-
-Verdict per unit ditentukan `bench/oracle.py`, yang dibekukan sebelum unit pertama dipanen;
-setiap perubahan sesudah klaim beku itu wajib tercatat di log pembekuan di kepala file.
-Empat verdict: `accepted`, `rejected`, `security_violation`, `incomplete`. `not_checked` dan
-`skipped` bukan pass — stage yang tidak dijalankan menghasilkan `incomplete`, dan
-`incomplete` bukan diterima.
-
-Pemetaan verdict dikunci [`bench/test_oracle.py`](../bench/test_oracle.py), dijalankan
-terpisah dari `tests/run.py`:
-
-```
-python bench/test_oracle.py
-```
-
-Terpisah karena oracle menjalankan `tests/run.py` sebagai stage-nya sendiri; test bench di
-dalam suite itu membuat oracle menilai instrumennya sendiri.
-
-Satu unit dijalankan [`bench/driver.py`](../bench/driver.py) dalam enam fase, dan tiga di
-antaranya bukan milik mesin:
-
-```
-python bench/driver.py prepare  --task T01 --arm C --repeat 1
-#   jalankan sesi agen di dalam worktree yang dicetak
-python bench/driver.py delegate --unit T01_C_1 --command explore   # opsional, arm C
-python bench/driver.py judge    --unit T01_C_1
-python bench/driver.py finish   --unit T01_C_1 --rework-cycles 0
-python bench/driver.py teardown --unit T01_C_1
-```
-
-`prepare`, `judge`, dan `teardown` berulang identik; sesi agennya tidak. `finish` menstempel
-dua angka yang cuma operator lihat — `rework_cycles` dan `main_agent_rewrote` — dan itu
-disengaja: apakah main agent menulis ulang kerja delegatnya adalah fakta tentang sesi, bukan
-bentuk yang bisa dibaca dari patch akhir.
-
-[`bench/collect.py`](../bench/collect.py) mengubah unit selesai jadi `ledger.jsonl`. Jalankan
-**sebelum** `teardown` — angka sisi worker arm C ada di dalam `.workflow` milik worktree.
-Baris tanpa biaya premium ditolak kecuali diminta eksplisit: `aggregate.py` memaksa biaya
-yang hilang jadi `$0`, jadi arm yang ekspornya tak pernah datang akan terbaca sebagai arm
-termurah.
-
-Batas run terkumpul di [`bench/policy.py`](../bench/policy.py) — `python bench/policy.py`
-mencetaknya. Waktu per unit, cap `rework_cycles`, dan cap panggilan terdelegasi ditegakkan
-saat jalan; budget per unit dan per run **tidak** — biaya datang dari tokenburn sesudah run
-selesai, jadi `collect.py` melaporkan pelampauan alih-alih mencegahnya.
-
-Daftar karantina flaky di file yang sama, dan kosong. Empat run hijau berturut bukan bukti
-suite ini stabil, cuma ketiadaan bukti sebaliknya; nol suite dikarantina atas dasar curiga.
-Mengisi daftar itu mengeluarkan suite tersebut dari gerbang penerimaan **setiap** unit dalam
-studi, jadi baris yang terkena dicap `quarantined_suites` di ledger dan tidak sebanding
-dengan baris bergerbang penuh.
+Dipindah ke [`docs/evaluation/benchmark.md`](evaluation/benchmark.md). Telemetry pemakaian
+nyata ada di [`docs/evaluation/observed-usage.md`](evaluation/observed-usage.md).
 
 ---
 
 ## Referensi
 
-- Catatan rilis: [`prompt/v3.7.1/changelog.md`](../prompt/v3.7.1/changelog.md)
+- Catatan rilis: [`prompt/v3.7.2/changelog.md`](../prompt/v3.7.2/changelog.md)
 - Kontrak canonical main_agent: [`dist/config/claude/CLAUDE.md`](../dist/config/claude/CLAUDE.md)
 - Kontrak canonical second_agent: [`dist/config/opencode/AGENTS.md`](../dist/config/opencode/AGENTS.md)
-- Runtime entry point: [`main.py`](main.py)
+- Runtime entry point: [`main.py`](../main.py)
 - Rencana benchmark: [`bench/BENCHMARK-PLAN.md`](../bench/BENCHMARK-PLAN.md)
+- Arsitektur (diagram terverifikasi): [`docs/architecture/`](architecture/README.md)
+- Batasan: [`docs/limitations.md`](limitations.md)
+- Evaluasi (benchmark dan telemetry): [`docs/evaluation/`](evaluation/README.md)
+- Catatan riset dan keputusan desain: [`docs/research/`](research/README.md)

@@ -2,6 +2,9 @@
 
 Rencana: `bench/BENCHMARK-PLAN.md`. Perbarui file ini setiap fase selesai.
 
+> **Catatan path (ditambahkan 2026-09-26).** Path source yang disebut di catatan bug di
+> bawah merujuk tag SUT `v3.4.5`, bukan source tree HEAD.
+
 ## Progres
 
 | Fase | Status | Tanggal | Keluaran |

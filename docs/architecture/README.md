@@ -1,0 +1,123 @@
+# Architecture
+
+How a request moves through `agent-workflow`, verified against the source tree. The
+README image (`docs/assets/flow.png`) is the simplified overview; this page is the
+authoritative text version.
+
+## Overview
+
+Three roles. The primary agent owns reasoning and code changes; the runtime owns state,
+contracts, and execution control; the secondary agent gathers repository evidence.
+
+```text
+┌─────────────────────┐   ┌───────────────────────────┐   ┌─────────────────────┐
+│   PRIMARY AGENT     │   │     WORKFLOW RUNTIME      │   │   SECONDARY AGENT   │
+│   (Claude Code)     │   │   (Python, stdlib only)   │   │ opencode|codex|agy  │
+│                     │   │                           │   │                     │
+│ • detect intent     │──►│ • job + session + lock    │──►│ • read files        │
+│ • call .workflow/run│   │ • route + policy          │   │ • search symbols    │
+│                     │   │ • build context & prompt  │   │ • trace callers     │
+│ • read digest       │◄──│ • redact + contract check │◄──│ • return evidence   │
+│ • reason / decide   │   │ • digest + anchors        │   │   with file:line    │
+│ • write code        │   │ • persist evidence/facts  │   │                     │
+│ • verify            │   │                           │   │ role: read-only     │
+│                     │   │                           │   │ enforcement varies  │
+│ writes code         │   │ enforces state, contracts │   │ per provider        │
+└─────────────────────┘   └───────────────────────────┘   └─────────────────────┘
+                                       │
+                                       ▼
+                ┌───────────────────────────────────────────┐
+                │ .workflow/data   facts · evidence · usage │
+                │                  audit · redactions       │
+                │ graphify-out/    graph.json (read-only)   │
+                └───────────────────────────────────────────┘
+```
+
+"Read-only" is the secondary agent's role in the contract. How much of it is enforced
+depends on the provider: see [Security in the README](../../README.md#security) and
+[limitations](../limitations.md).
+
+## Delegated path (explore, plan, analyze, verify)
+
+```text
+ PRIMARY AGENT                    RUNTIME                                 SECONDARY AGENT
+ ─────────────                    ───────                                 ───────────────
+ 1 user asks
+ 2 intent detected
+   (hook: intent-gate-set
+    writes marker; gate-check
+    blocks gather tools)
+ 3 .workflow/run <cmd> <task> <session_id>
+        │
+        └──────────► 4  runner ► main.py await --job-command
+                     5  submit ► JobManager (job record, heartbeat, recovery)
+                        ► detached worker
+                     6  main.run: session + runtime lock
+                     7  Executor
+                     8  Router: command / role / provider / model / timeout
+                     9  context (conditional):
+                          graph leads   ◄ graphify-out/graph.json
+                          facts         ◄ .workflow/data/facts
+                          knowledge     ◄ docs/project-knowledge
+                    10  PromptBuilder: prompt + sidecars
+                    11  adapter from registry ─────────────────────► 12 read / search / trace
+                                                                        (optional sub-agent fan-out)
+                    13  redact output        ◄───────────────────────   raw [EVIDENCE]+[DIGEST] text
+                    14  contract check (shape only)
+                          truncated? ► max 1 continuation
+                    15  digest extraction + result shaping
+                          (full | slim | ref_only + evidence_ref)
+                    16  persist:
+                          explore/plan/analyze ► facts + evidence (immutable, anchored)
+                          all delegated        ► usage + audit
+                          progress             ► .workflow/current
+                    17  job done ► await returns JSON
+        ┌──────────────────┘
+ 18 read digest
+ 19 reason, write code, verify
+```
+
+The secondary agent returns plain text. `digest`, `evidence_ref`, and every validation
+result are added by the runtime after the adapter returns.
+
+| Step | Component | Source |
+| --- | --- | --- |
+| 2 | intent-gate hooks (Claude hook layer, not the Python runtime) | `dist/config/claude/hooks/intent-gate-{set,check}.*` |
+| 4 | generated runner | `core/runtime/scripts.py` |
+| 5 | job submit, detached worker, await | `core/jobs/job_lifecycle.py`, `core/jobs/job_manager.py` |
+| 6 | session and runtime lock | `core/workspace/session_manager.py`, `core/workspace/runtime_lock.py` |
+| 7 | Executor | `core/provider/executor.py` |
+| 8 | Router | `core/prompt/router.py` |
+| 9 | graph leads, fact store, knowledge retrieval | `core/graph/graph_index.py`, `core/evidence/fact_store.py`, `core/knowledge/retrieve.py` |
+| 10 | PromptBuilder | `core/prompt/prompt_builder.py` |
+| 11 | provider registry and adapters | `adapters/contract/registry.py`, `adapters/providers/*_adapter.py` |
+| 13 | redaction | `utils/redact.py` |
+| 14 | contract check, continuation | `core/evidence/contract.py`, `core/provider/continuation.py` |
+| 15 | digest and result shaping | `core/evidence/contract.py`, `core/evidence/result_shaping.py` |
+| 16 | evidence store, runtime I/O, progress mirror | `core/evidence/evidence_store.py`, `core/evidence/runtime_io.py`, `core/workspace/current.py` |
+
+## Side paths
+
+```text
+ local command (doctor/sweep/init/clean...) ► main.run ► Executor      (no job, no await)
+ verify, verify_mode=syntax                 ► Executor ► quick_verify   (no Router, no provider)
+ verify-browser                             ► Executor ► e2e runner     (Playwright pipeline)
+ promote-validate ► promote-verify ► promote-write ► docs/project-knowledge   (manual; write only on production_branch, default main)
+ graphify update (external hook, fail-open) ► graphify-out/graph.json
+ runtime ► graph-meta.json / graph-stale.json   (runtime only marks staleness)
+```
+
+## Storage
+
+| Location | Tracked | Written by | Contents |
+| --- | --- | --- | --- |
+| `.workflow/data/` | no | runtime | facts, evidence, usage, audit, redactions, graph-meta, graph-stale, sessions |
+| `.workflow/current/` | no | runtime | what is running now: session, progress, live browser-run events |
+| `storage/jobs/` in the tool checkout (`AGENT_PATH`) | no | JobManager | job records, heartbeat, logs |
+| `graphify-out/graph.json` | project choice | external Graphify hook | candidate-file graph, read-only for the runtime |
+| `docs/project-knowledge/` | yes | `promote-write` only | verified operational knowledge, injected into delegated prompts |
+
+Facts and promoted knowledge are separate systems. A fact enters the fact store after
+recurring in 5 distinct other sessions (`fact_recurrence_threshold`, default in
+`core/runtime/config_defaults.py`), or directly as a `durable_facts` entry once its anchor
+validates. Nothing moves from the fact store into `docs/project-knowledge/` automatically.

@@ -1,0 +1,40 @@
+# When to use it
+
+You do not have to route every task through agent-workflow. Choose per task.
+
+## Use the coding agent directly when
+
+- the change is small and local,
+- you already know the exact file or code path,
+- it is a trivial bug fix, rename, or copy change,
+- you need an answer in seconds.
+
+## Use agent-workflow when
+
+- the repository, or this part of it, is unfamiliar to you,
+- several modules are involved,
+- the feature crosses domains (data, API, UI, jobs, permissions…),
+- it is a large refactor,
+- you are looking for a root cause,
+- you do not know all the areas a change will affect.
+
+## Benefits and costs
+
+| Benefit | Cost |
+| --- | --- |
+| Broader awareness of the repository before code is written | Additional latency: a delegated call takes from under a minute to several minutes |
+| Exploration happens outside your main conversation, so its context stays focused | Additional provider calls and compute |
+| Findings come back as evidence with `file:line` anchors you can check | One more layer that can fail (see [troubleshooting](troubleshooting.md)) |
+| Structured planning: risks, open questions, and options before implementation | More steps than a direct request |
+
+The decision is yours to make per task: *"This change touches parts of the system I don't
+know; a few extra minutes of exploration is worth it"*, or *"This is a two-line fix, I'll ask
+the agent directly."* Both are correct uses.
+
+## A quick check
+
+If you can already write the list of files you are going to change, go direct. If you
+cannot, start with the workflow.
+
+These are heuristics, not measured thresholds. Known limitations of the runtime:
+[limitations.md](../limitations.md).
