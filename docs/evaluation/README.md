@@ -8,7 +8,39 @@ here, and they must not be read as the same kind of evidence:
 | [benchmark.md](benchmark.md) | Controlled study (3 arms, frozen SUT, fixed oracle) | Comparisons between direct Claude, native sub-agents, and agent-workflow |
 | [observed-usage.md](observed-usage.md) | Uncontrolled telemetry from one machine | How much text the digest contract kept out of the primary context in practice |
 
-Open questions the evaluation is meant to answer:
+## Net value
+
+The evaluation question is not "does the workflow work?" but **"under what conditions does
+it provide net value?"** Conceptually:
+
+```text
+net value = engineering benefit
+          − latency cost
+          − compute cost
+          − human attention cost
+          − complexity cost
+          − failure risk
+```
+
+The target is therefore neither minimum latency nor maximum autonomy, but **the minimum total
+human cost for an acceptable engineering outcome**. More autonomy (explore, plan, verify
+before returning) lengthens the wait; more procedural use shortens each wait but raises the
+number of human interactions.
+
+This is a framing, not a measured formula: several of its terms (human attention in
+particular) have no instrumentation yet. Today `main.py --command report` gives aggregate
+durations, reuse, and acceptance; per-task observability of what the agents read, how often
+exploration repeated, and how often a human intervened does not exist.
+
+Model benchmarks alone cannot evaluate a system like this: outcomes depend on the
+interaction of human behavior, agent behavior, harness behavior, and the repository. See
+[H-002](../research/hypotheses/H-002-objective-delegation-reduces-orchestration-overhead.md)
+and [EXP-001](../research/experiments/EXP-001-workflow-by-prompt-strategy.md).
+
+## Open questions
+
+Open questions the evaluation is meant to answer (the full list with status is in
+[research/questions.md](../research/questions.md)):
 
 - Which task types benefit from external exploration?
 - When does orchestration overhead outweigh its benefit?

@@ -63,6 +63,34 @@ limited in sample size.
 
 Such observations are labeled accordingly and are not automatically generalized.
 
+## Evidence tiers
+
+The project is built, used, and mostly evaluated by its maintainer. That invites
+confirmation bias: *I built it, I understand it, I use it often, so I see its value.*
+Every observation therefore declares its tier, and a lower tier is never presented as a
+higher one:
+
+| Tier | Example | What it can support |
+| --- | --- | --- |
+| `creator_observation` | the maintainer's own sessions | that something can happen |
+| `team_observation` | colleagues' use and feedback | that it happens outside the creator's hands |
+| `controlled_experiment` | a designed comparison (`EXP-XXX`) | an effect under stated conditions |
+| `independent_evaluation` | assessment by people not involved in building it | that the effect holds without the builder's influence |
+
+"The workflow feels better" is not equivalent to "the workflow improves task completion
+under controlled conditions".
+
+## Principles
+
+1. AI discussion is not evidence.
+2. A paper's relationship to a design is not the design's origin.
+3. Implementation is not validation.
+4. Real-world success is not universal proof.
+5. Unknown provenance is better than fabricated provenance.
+6. More orchestration is not better engineering.
+7. The workflow must justify its own cost.
+8. Human behavior is part of the agent system.
+
 ## Research integrity
 
 The project prefers an incomplete but accurate history over a complete-looking history

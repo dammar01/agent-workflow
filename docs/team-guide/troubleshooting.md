@@ -39,6 +39,9 @@ each call's `call.meta.json`.
 
 - **Skip the workflow for small tasks.** See [when-to-use.md](when-to-use.md). This is the
   biggest saving.
+- **Do something else while it runs.** A delegated call runs as a background job, and
+  Claude Code hands control back to you while it works. You cannot continue *that* line of
+  reasoning until the result arrives, but you can review, write, or start another task.
 - **Use the local commands.** `sweep` and `doctor` never call the secondary agent.
 - **Scope the request.** "How does checkout validate addresses" finishes sooner than "explain
   checkout".

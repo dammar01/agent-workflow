@@ -25,6 +25,17 @@ question is when secondary exploration is necessary at all: if the workflow coul
 a task does not need it, the latency would not be paid on those tasks.
 
 Today that decision is made entirely by the developer (docs/team-guide/when-to-use.md).
+`scope_width` and sub-agent fan-out are recorded as metadata on each call, but no routing
+policy acts on them.
+
+A related but separate question is whether the developer has to wait at all. The runtime
+already runs delegated work as asynchronous jobs (`submit`, `await`, `status`, `result`),
+and the shipped Claude Code configuration starts the runner as a background task. What
+still blocks is the primary agent's reasoning, which needs the digest before it can
+continue. That is a user-experience question, tracked as RQ-05 in
+[questions.md](../questions.md), not a missing runtime capability.
+
+Research question: RQ-04 in [questions.md](../questions.md).
 
 ## Supporting sources
 

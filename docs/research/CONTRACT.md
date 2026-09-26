@@ -82,7 +82,7 @@ Research observations must not automatically become operational knowledge.
 
 Operational knowledge lives in `docs/project-knowledge/`, is written only through the
 `promote-validate` → `promote-verify` → `promote-write` stages, and is injected into
-delegated prompts by the runtime. Promote a claim there only when it is sufficiently
+exploration and reasoning prompts by the runtime. Promote a claim there only when it is sufficiently
 supported and useful for future runtime behavior, and keep a reference to the originating
 research record whenever possible.
 
@@ -101,7 +101,21 @@ relevant), synthesis (when multiple sources are involved), hypothesis or decisio
 implementation, validation, observation or experiment result, and finally an update to the
 record. Not every change requires every stage.
 
-## 12. Completion rule
+## 12. New mechanisms
+
+The runtime already has many subsystems, and infrastructure can grow faster than
+capability. A harness that becomes too complex becomes the engineering problem itself.
+
+Before adding a subsystem, mechanism, or record type, the change record answers:
+
+1. What problem does this solve?
+2. What measurable benefit is expected?
+3. What complexity does it add?
+4. Can an existing mechanism solve the same problem?
+
+"Build first, justify later" is not accepted for significant changes.
+
+## 13. Completion rule
 
 A significant feature is not considered fully documented until a future maintainer can
 answer:

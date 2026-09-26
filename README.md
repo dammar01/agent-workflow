@@ -14,13 +14,14 @@ agent, while reasoning and implementation stay with your primary coding agent.
 
 <br>
 
-<img src="docs/assets/flow.png" alt="agent-workflow architecture: the user gives a task to the primary coding agent; the primary agent calls the workflow runtime; the runtime routes the task, builds context, launches a secondary agent to read the repository, then redacts and checks the returned evidence and hands the primary agent a digest with file and line anchors. The primary agent remains responsible for reasoning, code changes, and verification." width="900">
-
-<sub>Simplified overview. "Read-only" is the secondary agent's role; how strictly it is
-enforced depends on the provider (see <a href="#security">Security</a>). Verified text
-version: <a href="docs/architecture/README.md">docs/architecture</a>.</sub>
+<img src="docs/assets/architecture.png" alt="agent-workflow architecture. The developer briefs the primary agent (Claude Code) with an objective and constraints and receives the plan, verdict, and questions back. The primary agent delegates to the runtime control plane, which handles job, session, and lock, routing, context, and prompt, then sends a bounded task to the secondary agent. The secondary agent reads, searches, and traces the repository and returns candidate evidence; its intended role is read-only, and enforcement varies by provider. The runtime redacts it, checks the contract, shapes a digest with file:line anchors for the primary agent, and reads and writes sessions, facts, evidence, usage, audit, and response artifacts in .workflow/data/ with source anchors and hashes. Evidence candidates are not ground truth." width="900">
 
 </div>
+
+<sub>The primary agent reasons and writes the code; the developer answers open questions and
+approves implementation. "Read-only" is the secondary agent's role, and how strictly it is
+enforced depends on the provider (see [Security](#security)). Text version, full verified
+flow, side paths, and storage: [docs/architecture](docs/architecture/README.md).</sub>
 
 ---
 
@@ -171,7 +172,7 @@ concurrent sessions would share an identifier and overwrite each other's state.
 | `explore` | delegated | Code map, entry points, ownership |
 | `analyze` | delegated | Causal analysis; no code changes |
 | `plan` | delegated | Evidence-backed implementation steps |
-| `verify` | delegated | Evidence that completed work is correct |
+| `verify` | delegated | Verdict on completed work, with evidence — produced by the secondary agent, not an independent check |
 | `promote-validate` → `promote-verify` → `promote-write` | local | Turn verified evidence into a Git-tracked knowledge document |
 
 Implementation itself (`/.execute` in Claude Code) is a primary-agent skill, not a runtime
@@ -221,7 +222,11 @@ For projects holding secrets the secondary agent must not read, use `opencode`.
 
 ## Research & evaluation
 
-`agent-workflow` is developed as an open engineering and research artifact. Design
+> `agent-workflow` explores whether externalizing repository exploration, evidence
+> handling, and execution control from a primary coding agent can improve
+> software-engineering workflows on complex real-world repositories.
+
+It is developed as an open engineering and research artifact. Design
 decisions, hypotheses, experiments, and sanitized real-world observations are recorded in
 [docs/research/](docs/research/), with explicit provenance: a related paper is not presented
 as the origin of an implementation unless that is known, and an implementation working in

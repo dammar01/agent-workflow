@@ -1,36 +1,42 @@
 # Architecture
 
 How a request moves through `agent-workflow`, verified against the source tree. The
-README image (`docs/assets/flow.png`) is the simplified overview; this page is the
-authoritative text version.
+README image (`docs/assets/architecture.png`) is the illustrated overview; the diagram
+below is its text version, and the rest of this page is the authoritative detail (its
+steps 1–7 compress the 19 of the delegated path).
 
 ## Overview
 
-Three roles. The primary agent owns reasoning and code changes; the runtime owns state,
-contracts, and execution control; the secondary agent gathers repository evidence.
+The developer states the objective and approves the result; the primary agent reasons and
+writes code; the runtime owns state, contracts, and execution control; the secondary agent
+gathers repository evidence.
 
 ```text
-┌─────────────────────┐   ┌───────────────────────────┐   ┌─────────────────────┐
-│   PRIMARY AGENT     │   │     WORKFLOW RUNTIME      │   │   SECONDARY AGENT   │
-│   (Claude Code)     │   │   (Python, stdlib only)   │   │ opencode|codex|agy  │
-│                     │   │                           │   │                     │
-│ • detect intent     │──►│ • job + session + lock    │──►│ • read files        │
-│ • call .workflow/run│   │ • route + policy          │   │ • search symbols    │
-│                     │   │ • build context & prompt  │   │ • trace callers     │
-│ • read digest       │◄──│ • redact + contract check │◄──│ • return evidence   │
-│ • reason / decide   │   │ • digest + anchors        │   │   with file:line    │
-│ • write code        │   │ • persist evidence/facts  │   │                     │
-│ • verify            │   │                           │   │ role: read-only     │
-│                     │   │                           │   │ enforcement varies  │
-│ writes code         │   │ enforces state, contracts │   │ per provider        │
-└─────────────────────┘   └───────────────────────────┘   └─────────────────────┘
-                                       │
-                                       ▼
-                ┌───────────────────────────────────────────┐
-                │ .workflow/data   facts · evidence · usage │
-                │                  audit · redactions       │
-                │ graphify-out/    graph.json (read-only)   │
-                └───────────────────────────────────────────┘
+                           DEVELOPER
+          objective + constraints │  ▲ plan · verdict · questions
+                                  ▼  │
+┌──────────────────────────────────────────────────────────────┐
+│ PRIMARY AGENT                                   Claude Code  │
+│ reasoning · decisions · writes code · final review           │
+└────────────┬──────────────────────────────────────▲──────────┘
+             │ .workflow/run <cmd> <task> <session> │ digest
+             ▼                                      │ + file:line anchors
+┌───────────────────────────────────────────────────┴──────────┐
+│ AGENT-WORKFLOW RUNTIME            deterministic · stdlib     │
+│                                                              │
+│  1 job · session · lock     ┌─► 5 redact · contract check    │
+│  2 route · policy           │   6 digest · anchors · shape   │
+│  3 context · prompt ───┐    │   7 persist                    │
+└────────────────────────┼────┼────────────────────────┬───────┘
+                   task  │    │ raw evidence           │
+                         ▼    │                        ▼
+┌─────────────────────────────┴─────┐  ┌───────────────────────┐
+│ SECONDARY AGENT                   │  │ STATE  .workflow/data │
+│ opencode · codex · agy            │  │ facts · evidence      │
+│ 4 read · search · trace callers   │  │ usage · audit         │
+│ role: read-only                   │  │ provenance: anchors   │
+│ enforcement varies by provider    │  │ + hashes              │
+└───────────────────────────────────┘  └───────────────────────┘
 ```
 
 "Read-only" is the secondary agent's role in the contract. How much of it is enforced
@@ -115,7 +121,7 @@ result are added by the runtime after the adapter returns.
 | `.workflow/current/` | no | runtime | what is running now: session, progress, live browser-run events |
 | `storage/jobs/` in the tool checkout (`AGENT_PATH`) | no | JobManager | job records, heartbeat, logs |
 | `graphify-out/graph.json` | project choice | external Graphify hook | candidate-file graph, read-only for the runtime |
-| `docs/project-knowledge/` | yes | `promote-write` only | verified operational knowledge, injected into delegated prompts |
+| `docs/project-knowledge/` | yes | `promote-write` only | verified operational knowledge, injected into exploration and reasoning prompts |
 
 Facts and promoted knowledge are separate systems. A fact enters the fact store after
 recurring in 5 distinct other sessions (`fact_recurrence_threshold`, default in

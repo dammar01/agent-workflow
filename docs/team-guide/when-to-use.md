@@ -18,6 +18,14 @@ You do not have to route every task through agent-workflow. Choose per task.
 - you are looking for a root cause,
 - you do not know all the areas a change will affect.
 
+## Three modes
+
+| Mode | You provide | What happens | Available |
+| --- | --- | --- | --- |
+| **Direct** | the exact change | the coding agent edits right away | yes |
+| **Assisted** | an objective and constraints | the workflow explores and plans; you answer open questions and approve with `/.execute -y`; then `/.verify` | yes — this is how agent-workflow works today |
+| **Autonomous** | an outcome and constraints | explore, plan, implement, and verify without a checkpoint | **no** — `/.execute` always needs your explicit `-y`; it is an open research question ([RQ-09](../research/questions.md)) |
+
 ## Benefits and costs
 
 | Benefit | Cost |

@@ -22,7 +22,7 @@ For a significant architecture or behavior change:
    internal URLs, customer data, or proprietary code. Abstract and sanitize.
 
 Research records stay in `docs/research/`. Never write them into `docs/project-knowledge/`:
-the runtime injects that directory into delegated prompts, and only `promote-write` may
+the runtime injects that directory into exploration and reasoning prompts, and only `promote-write` may
 write there.
 
 ## Documentation layers
