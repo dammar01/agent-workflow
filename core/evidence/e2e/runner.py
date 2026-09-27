@@ -40,15 +40,18 @@ from core.workspace import current as e2e_current
 from core.evidence.e2e import redact as e2e_redact
 from core.evidence.e2e import request as e2e_request
 from core.evidence.e2e import tagging as e2e_tagging
-from core.evidence.e2e.classify import build_report, repeat_bucket
+from core.evidence.e2e.classify import build_report, failure_signature, repeat_bucket
+from core.evidence.e2e.fingerprint import project_fingerprint
 from core.evidence.e2e.normalize import evidence_block, to_verification
 from core.evidence.e2e.preflight import display_available, preflight
 from core.evidence.e2e.spec import (
+    MAX_REPAIR_ERRORS,
     env_references,
     ground_claims,
     parse_spec,
     spec_continuation_prompt,
     spec_gap,
+    spec_repair_prompt,
     substitute_env,
     validate_existing_tests,
     validate_scenario,
@@ -108,6 +111,31 @@ _INHERITED_ENV = (
 )
 _UNPROVEN = "unproven"
 # What to call a repeat streak that has no reason of its own to quote.
+_RUNTIME_IDENTITY: list[str] = []
+
+
+def runtime_identity() -> str:
+    """This runtime, as the repeat brake needs to know it: version plus a digest of the
+    browser package's source.
+
+    The project fingerprint sees the application, never the runtime driving it — so a
+    streak built on a runtime bug (a poll that held the page's events until the assertion
+    had failed) survived the runtime fix and refused the run that would have shown it. The
+    version alone is not enough: a fix made during development does not bump it.
+    """
+    if not _RUNTIME_IDENTITY:
+        from config.settings import TOOL_VERSION
+
+        digest = hashlib.sha256(TOOL_VERSION.encode("utf-8"))
+        for path in sorted(Path(__file__).resolve().parent.glob("*.py")):
+            try:
+                digest.update(path.name.encode("utf-8") + b"\0" + path.read_bytes())
+            except OSError:
+                digest.update(path.name.encode("utf-8") + b"\0unreadable")
+        _RUNTIME_IDENTITY.append(f"{TOOL_VERSION}+{digest.hexdigest()[:12]}")
+    return _RUNTIME_IDENTITY[0]
+
+
 _REPEAT_PHRASE = {
     "app": "a failing application",
     "harness": "the same harness problem",
@@ -456,10 +484,18 @@ def run(
         e2e_meta["next_action"] = (
             "the last "
             f"{record.get('streak')} runs against {repeat_origin} all ended in "
-            f"'{reason_text}' — fix that before running again, then set "
-            "settings.ignore_repeat_brake true in the request to get past this once "
+            f"'{reason_text}' — fix that outside the scenario and run again: a change to the "
+            "project (code, config, fixtures) releases the brake by itself, no new session "
+            "needed. A fix that changes no file (server restarted, data reset): set "
+            "settings.ignore_repeat_brake true in the request for that one run "
             "(pinned in config.json it turns the brake off for every run)"
         )
+        # Outlives the session and the brake: the next draft reads that this origin kept
+        # failing, and why, before it proposes the same run.
+        try:
+            e2e_knowledge.note_repeat_failure(project_root, repeat_origin, record, session_id)
+        except Exception:  # observing the run must never be able to fail it
+            pass
         return _finish(
             to_verification(
                 {"claims": {}, "browser_verdict": None},
@@ -497,6 +533,58 @@ def run(
     # environment recovered, and still ahead of every browser this run might start.
     repeat = e2e_repeat_state(project_root, session_id)
     repeat_origin = e2e_knowledge.origin_of(str(config.get("base_url") or ""))
+    fingerprint_cache: list[str | None] = []
+
+    def current_fingerprint() -> str | None:
+        # Computed at most once per run, and only when something needs it: a failure being
+        # counted, or a streak at the limit being weighed.
+        if not fingerprint_cache:
+            try:
+                fingerprint_cache.append(project_fingerprint(project_root))
+            except Exception:  # a brake that cannot fingerprint behaves as it always did
+                fingerprint_cache.append(None)
+        return fingerprint_cache[0]
+
+    # A streak at the limit whose last failure saw a different project than this run sees:
+    # someone changed the application since. That is the fix the brake asks for, so it lets
+    # this run through — a new session used to be the only way out that did not require a
+    # per-request setting. The record is cleared rather than bypassed: the run that follows
+    # starts counting afresh, and if the change did not help, three more failures brake again.
+    # Scenario edits live under `.workflow/` and never change the fingerprint.
+    if (
+        repeat.get("origin") == repeat_origin
+        and int(repeat.get("streak") or 0) >= E2E_REPEAT_LIMIT
+        and repeat.get("fingerprint")
+    ):
+        now_seen = current_fingerprint()
+        if now_seen and now_seen != repeat.get("fingerprint"):
+            try:
+                note_e2e_outcome(project_root, session_id, repeat_origin, None)
+                e2e_meta["repeat_released"] = {
+                    "by": "change_detected",
+                    **{key: repeat.get(key) for key in ("bucket", "reason", "streak", "source")},
+                }
+                repeat = {}
+            except Exception:  # observing the run must never be able to fail it
+                pass
+    # The same release for the other half of what a run depends on. A streak written by a
+    # different runtime counted failures this runtime may not have: the fix was the change.
+    # A record with no runtime at all predates this field, and says nothing either way.
+    if (
+        repeat.get("origin") == repeat_origin
+        and int(repeat.get("streak") or 0) >= E2E_REPEAT_LIMIT
+        and repeat.get("runtime")
+        and repeat.get("runtime") != runtime_identity()
+    ):
+        try:
+            note_e2e_outcome(project_root, session_id, repeat_origin, None)
+            e2e_meta["repeat_released"] = {
+                "by": "runtime_changed",
+                **{key: repeat.get(key) for key in ("bucket", "reason", "streak", "source", "runtime")},
+            }
+            repeat = {}
+        except Exception:  # observing the run must never be able to fail it
+            pass
 
     pre = preflight(config, fake=bool(fake))
     e2e_meta["preflight"] = pre["checks"]
@@ -545,6 +633,8 @@ def run(
                     repeat_bucket("incomplete", pre["reason"]),
                     pre["reason"],
                     source="preflight",
+                    fingerprint=current_fingerprint(),
+                    runtime=runtime_identity(),
                 )
                 if streak > 1:
                     e2e_meta["repeat_streak"] = streak
@@ -900,15 +990,24 @@ def run(
     # Feeds the brake above on the next invocation. A pass clears the streak; only a
     # non-pass verdict carries a reason worth counting.
     try:
+        bucket = repeat_bucket(report["browser_verdict"], report["reason"])
         streak = note_e2e_outcome(
             project_root,
             session_id,
             repeat_origin,
-            repeat_bucket(report["browser_verdict"], report["reason"]),
+            bucket,
             report["reason"],
+            fingerprint=current_fingerprint() if bucket else None,
+            signature=failure_signature(report, scenario) if bucket == "app" else None,
+            runtime=runtime_identity() if bucket else None,
         )
         if streak > 1:
             e2e_meta["repeat_streak"] = streak
+        if report["browser_verdict"] == "pass":
+            # A pass is the proof a recorded repeat failure is over.
+            resolved = e2e_knowledge.resolve_repeat_failures(project_root, repeat_origin)
+            if resolved:
+                e2e_meta["repeat_failures_resolved"] = resolved
     except Exception:  # observing the run must never be able to fail it
         pass
 
@@ -1005,8 +1104,9 @@ def _draft(
         first.setdefault("meta", {}).update({"invocation": INVOCATION, "phase": "draft", "e2e": e2e_meta})
         return executor._record_failed_call(first, project_root, INVOCATION, task, session_id)
     content = first.get("content") or ""
+    has_thread = bool(session.get("provider_session_id"))
     gap = spec_gap(content)
-    if gap and gap.get("recoverable") and session.get("provider_session_id"):
+    if gap and gap.get("recoverable") and has_thread:
         follow_up = executor._run_delegated(
             spec_route, "e2e_spec", task, session, session_id, project_root, work_dir,
             on_progress, session_manager, prompt=spec_continuation_prompt(gap), prompt_meta={}, lock_claim=lock_claim,
@@ -1016,17 +1116,46 @@ def _draft(
         if follow_up.get("ok"):
             content = content.rstrip() + "\n\n" + (follow_up.get("content") or "")
             gap = spec_gap(content)
+
+    def validated(text: str) -> tuple[dict, list[str], list[str]]:
+        parsed_text = parse_spec(text)
+        found, _runnable, _skipped = _spec_errors(parsed_text["scenario"], parsed_text.get("existing_tests") or [], config, project_root)
+        # A proposed read-only POST is only a proposal: the draft lists it for the user to
+        # confirm, and nothing reaches the guard until the request's settings name it. An
+        # ungrounded proposal still makes the draft invalid, like an ungrounded claim.
+        return parsed_text, found, validate_read_only_requests(parsed_text.get("read_only_requests") or [], project_root)
+
+    parsed, spec_errors, read_only_errors = ({}, [], []) if gap else validated(content)
+    # One repair, in the same thread, for a section that arrived but did not validate: a
+    # scenario outside its fence, invalid JSON, a value outside an enum, a retired selector
+    # key. These are the shapes a first draft most often has, and each used to end the draft
+    # as `spec_invalid` although the model that wrote it could fix it from the validator's
+    # own message. Bounded to one: a second failure is the model's answer, not a typo.
+    repair_errors = list(gap.get("missing") or []) if gap and gap.get("repairable") else [*spec_errors, *read_only_errors]
+    if repair_errors:
+        repair = {"attempted": has_thread, "errors": repair_errors[:MAX_REPAIR_ERRORS], "recovered": False}
+        if has_thread:
+            fixed = executor._run_delegated(
+                spec_route, "e2e_spec", task, session, session_id, project_root, work_dir,
+                on_progress, session_manager, prompt=spec_repair_prompt(repair_errors), prompt_meta={}, lock_claim=lock_claim,
+                record_failure=False,
+            )
+            stages.append({"stage": 1, "command": "e2e_spec", "repair": True, "ok": bool(fixed.get("ok"))})
+            candidate = (fixed.get("content") or "") if fixed.get("ok") else ""
+            if candidate and spec_gap(candidate) is None:
+                content, gap = candidate, None
+                parsed, spec_errors, read_only_errors = validated(content)
+                repair["recovered"] = not (spec_errors or read_only_errors)
+        else:
+            # Said, not skipped silently: without a provider thread there is no model to ask
+            # that still holds the evidence, and a fresh call would re-explore from nothing.
+            repair["reason"] = "no_provider_session"
+        e2e_meta["repair"] = repair
     if gap:
         e2e_meta["reason"] = "spec_invalid"
         return _draft_result(project_root, session_id, e2e_meta, status="invalid", errors=list(gap.get("missing") or [gap.get("reason", "")]))
-    parsed = parse_spec(content)
     e2e_meta["spec_source"] = "e2e_spec"
     scenario = parsed["scenario"]
-    spec_errors, _runnable, _skipped = _spec_errors(scenario, parsed.get("existing_tests") or [], config, project_root)
-    # A proposed read-only POST is only a proposal: the draft lists it for the user to
-    # confirm, and nothing reaches the guard until the request's settings name it. An
-    # ungrounded proposal still makes the draft invalid, like an ungrounded claim.
-    read_only_errors = validate_read_only_requests(parsed.get("read_only_requests") or [], project_root)
     errors = [*spec_errors, *read_only_errors, *secret_errors]
     names = env_references(scenario)
     # Not an error at draft time: the user may fill secrets.json after reading the draft.

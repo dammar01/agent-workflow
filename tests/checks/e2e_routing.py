@@ -612,7 +612,7 @@ def _test_e2e_routing() -> None:
         assert_true(origin, "a counted preflight failure names the origin it was counted against")
         note_e2e_outcome(root, _SESSION_ID, origin, None)
         for _ in range(E2E_REPEAT_LIMIT):
-            note_e2e_outcome(root, _SESSION_ID, origin, "app", None, source="browser")
+            note_e2e_outcome(root, _SESSION_ID, origin, "app", None, source="browser", signature="v1:same")
 
         held = _run(root, adapter, _scenario(), env={"E2E_USER": "u"})
         assert_true(
@@ -646,6 +646,103 @@ def _test_e2e_routing() -> None:
             f"the setting lets a run past an app streak, and says so in its config: {bypassed['meta']}",
         )
 
+        # --- a change to the runtime releases the brake too ---------------------------------
+        # The project fingerprint cannot see the runtime. A streak built on a runtime bug
+        # (a poll that held the page's events back) survived the runtime fix and refused the
+        # run that would have shown it. A record written by another runtime is let go.
+        from core.evidence.e2e.runner import runtime_identity
+
+        note_e2e_outcome(root, _SESSION_ID, origin, None)
+        for _ in range(E2E_REPEAT_LIMIT):
+            note_e2e_outcome(root, _SESSION_ID, origin, "app", None, source="browser", signature="v1:same", runtime="3.7.3+000000000000")
+        released = _run(root, adapter, _scenario(), env={"E2E_USER": "u"})
+        assert_true(
+            (released["meta"]["e2e"].get("repeat_released") or {}).get("by") == "runtime_changed"
+            and released["meta"].get("verdict") == "pass",
+            f"a streak written by another runtime is released: {released['meta']['e2e'].get('repeat_released')}",
+        )
+        for _ in range(E2E_REPEAT_LIMIT):
+            note_e2e_outcome(root, _SESSION_ID, origin, "app", None, source="browser", signature="v1:same", runtime=runtime_identity())
+        same_runtime = _run(root, adapter, _scenario(), env={"E2E_USER": "u"})
+        assert_true(
+            same_runtime["meta"]["e2e"].get("reason") == "repeat_failure",
+            f"and one written by this runtime still brakes: {same_runtime['meta']['e2e']}",
+        )
+        note_e2e_outcome(root, _SESSION_ID, origin, None)
+
+        # The runner signs a real app failure and the same failure continues its streak.
+        for expected_streak in (1, 2):
+            _run(root, adapter, _scenario(), fake="app_fail", env={"E2E_USER": "u"})
+            signed = e2e_repeat_state(root, _SESSION_ID)
+            assert_true(
+                signed.get("bucket") == "app"
+                and str(signed.get("signature") or "").startswith("v1:")
+                and signed.get("streak") == expected_streak
+                and signed.get("runtime") == runtime_identity(),
+                f"an app failure is recorded with its signature and runtime, streak {expected_streak}: {signed}",
+            )
+        note_e2e_outcome(root, _SESSION_ID, origin, None)
+
+        # --- a change to the project releases the brake; a scenario edit does not ----------
+        # The loop the brake stops is scenario edits against an unchanged environment. A
+        # person who changed the application answered the brake, and used to need a new
+        # session anyway. The streak also becomes knowledge the next draft reads, and a pass
+        # retires it.
+        import subprocess
+
+        from core.evidence.e2e import knowledge as e2e_knowledge
+        from core.evidence.e2e.fingerprint import project_fingerprint
+
+        root = workspace("e2e-release-")
+        git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+        subprocess.run([*git, "init", "-q"], check=True)
+        subprocess.run([*git, "add", "src"], check=True)
+        subprocess.run([*git, "commit", "-q", "-m", "app"], check=True)
+        before = project_fingerprint(root)
+        assert_true(bool(before), "a Git project has a fingerprint")
+        adapter = _adapter()
+        e2e_preflight.playwright_available = lambda: (False, "pinned absent for the test")
+        try:
+            _run(root, adapter, _scenario(), fake=None, env={"E2E_USER": "u"})
+        finally:
+            e2e_preflight.playwright_available = real_probe
+        origin = e2e_repeat_state(root, _SESSION_ID).get("origin")
+        note_e2e_outcome(root, _SESSION_ID, origin, None)
+        for _ in range(E2E_REPEAT_LIMIT):
+            note_e2e_outcome(root, _SESSION_ID, origin, "app", None, source="browser", fingerprint=before, signature="v1:same")
+        assert_true(project_fingerprint(root) == before, f"runs and requests under .workflow/ leave the fingerprint alone: {project_fingerprint(root)} != {before}")
+
+        held = _run(root, adapter, _scenario(), env={"E2E_USER": "u"})
+        assert_true(held["meta"]["e2e"].get("reason") == "repeat_failure", "an unchanged project is still braked")
+        remembered = [e for e in e2e_knowledge.load(root) if e.get("kind") == e2e_knowledge.REPEAT_FAILURE]
+        assert_true(
+            len(remembered) == 1 and remembered[0].get("bucket") == "app" and not remembered[0].get("stale"),
+            f"the brake is recorded as knowledge for the next draft: {remembered}",
+        )
+        assert_true(
+            any(e.get("kind") == e2e_knowledge.REPEAT_FAILURE for e in e2e_knowledge.relevant(root, origin)),
+            "and offered to the next draft",
+        )
+        edited = json.loads(json.dumps(_scenario()))
+        edited["steps"][0]["id"] = "open-login-again"
+        still = _run(root, adapter, edited, env={"E2E_USER": "u"})
+        assert_true(still["meta"]["e2e"].get("reason") == "repeat_failure", "a scenario edit is not a change to the project")
+
+        (root / "src" / "pages" / "Login.tsx").write_text(
+            (root / "src" / "pages" / "Login.tsx").read_text(encoding="utf-8") + "export const fixed = true;\n", encoding="utf-8"
+        )
+        released = _run(root, adapter, _scenario(), env={"E2E_USER": "u"})
+        assert_true(
+            (released["meta"]["e2e"].get("reason") or "") != "repeat_failure"
+            and released["meta"].get("verdict") == "pass"
+            and (released["meta"]["e2e"].get("repeat_released") or {}).get("by") == "change_detected",
+            f"a changed project releases the brake without a new session: {released['meta']['e2e']}",
+        )
+        assert_true(
+            all(e.get("stale") for e in e2e_knowledge.load(root) if e.get("kind") == e2e_knowledge.REPEAT_FAILURE),
+            "and the pass retires the recorded repeat failure",
+        )
+
         # --- spec section missing → one targeted continuation, then an invalid draft --------
         root = workspace("e2e-nospec-")
         adapter = _adapter(spec=[_EVIDENCE_ONLY, _EVIDENCE_ONLY])
@@ -658,6 +755,38 @@ def _test_e2e_routing() -> None:
         root = workspace("e2e-recover-")
         _, result = _flow(root, _adapter(spec=[_EVIDENCE_ONLY, _SPEC_ONLY]), "pass", {"E2E_USER": "u"})
         assert_true(result["meta"].get("verdict") == "pass", f"a recovered spec runs to a verdict: {result['meta'].get('verdict')}")
+
+        # --- section present but unparsed (no fence) → one repair quoting the parser ---------
+        unfenced = _SPEC_REPLY.replace("```json\n", "").replace("\n```", "")
+        assert_true(unfenced != _SPEC_REPLY and "```" not in unfenced.split("[E2E SPEC]")[1], "fixture assumption: the scenario fence is removable")
+        root = workspace("e2e-repair-fence-")
+        adapter = _adapter(spec=[unfenced, _SPEC_ONLY])
+        draft = _draft(root, adapter)
+        repair = draft["meta"]["e2e"].get("repair") or {}
+        assert_true(_draft_info(draft).get("status") == "ready", f"a draft whose scenario lost its fence is repaired, not refused: {_draft_info(draft).get('errors')}")
+        assert_true(repair.get("attempted") is True and repair.get("recovered") is True, f"the repair is recorded as recovered: {repair}")
+        assert_true(
+            len(adapter.calls) == 2 and "no JSON code fence" in adapter.calls[1]["prompt"],
+            "exactly one repair, quoting the parser's own message",
+        )
+
+        # --- a retired selector key → repaired to `e2e` in one continuation -------------------
+        retired = _SPEC_REPLY.replace('{"role": "button", "name": "Masuk"}', '{"testid": "login-submit"}')
+        assert_true(retired != _SPEC_REPLY, "fixture assumption: the submit selector is where the replace expects it")
+        root = workspace("e2e-repair-testid-")
+        adapter = _adapter(spec=[retired, _SPEC_ONLY])
+        draft = _draft(root, adapter)
+        assert_true(_draft_info(draft).get("status") == "ready", f"a testid selector is repaired, not a dead draft: {_draft_info(draft).get('errors')}")
+        assert_true("use 'e2e'" in adapter.calls[1]["prompt"], "the repair names the key to use instead")
+
+        # --- still invalid after the repair: one repair only, then spec_invalid ---------------
+        root = workspace("e2e-repair-twice-")
+        adapter = _adapter(spec=[retired, retired, retired])
+        draft = _draft(root, adapter)
+        assert_true(
+            _draft_info(draft).get("status") == "invalid" and len(adapter.calls) == 2 and (draft["meta"]["e2e"].get("repair") or {}).get("recovered") is False,
+            f"a repair that did not fix it ends the draft; no second repair: {len(adapter.calls)}",
+        )
 
         # --- env placeholder unset: named in the draft, env_missing at run --------------------
         root = workspace("e2e-env-")
@@ -1020,9 +1149,14 @@ def _test_e2e_routing() -> None:
         adapter = _adapter(spec=off_origin)
         draft = _draft(root, adapter)
         assert_true(_draft_info(draft).get("status") == "invalid" and draft["meta"]["e2e"].get("reason") == "spec_invalid", "off-origin navigation is an invalid draft")
+        repair = draft["meta"]["e2e"].get("repair") or {}
+        assert_true(
+            repair.get("attempted") is True and repair.get("recovered") is False and any("evil.example" in e or "origin" in e for e in repair.get("errors") or []),
+            f"the invalid draft got one repair, quoting the validator, and the unchanged reply stayed invalid: {repair}",
+        )
         result = _run(root, adapter, _scenario(off_origin), env={"E2E_USER": "u"})
         assert_true(result["meta"]["e2e"].get("reason") == "spec_invalid" and result["meta"].get("verdict") == "incomplete", "and a run that ignores the draft is refused again")
-        assert_true(_commands(adapter) == ["e2e_spec"], "no player run and no reviewer after a refused spec")
+        assert_true(_commands(adapter) == ["e2e_spec", "e2e_spec"], f"draft plus one repair, then no player run and no reviewer after a refused spec: {_commands(adapter)}")
         assert_true("artifacts" not in result["meta"]["e2e"], "nothing was archived for a run that never started")
 
         # --- grounding: a claim citing a file that does not exist ---------------------------------

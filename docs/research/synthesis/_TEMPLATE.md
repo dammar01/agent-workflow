@@ -6,6 +6,11 @@
 id: SYN-XXX
 title:
 status: draft
+disposition:        # see CONTRACT.md §14
+  implementation_status: not_implemented   # not_implemented | partially_implemented | implemented | not_applicable
+  validation_status: not_validated         # not_validated | observed | partially_validated | validated | rejected
+  validated_by:                            # maintainer; required once validation_status is not not_validated
+  validated_on:
 ```
 
 ## Question

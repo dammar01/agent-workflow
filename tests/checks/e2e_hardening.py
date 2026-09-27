@@ -256,7 +256,7 @@ def _check_repeat_brake_counts_reasons_not_scenarios(root: Path) -> None:
     # failure carries no reason, because the failing app IS the verdict, and a reason-keyed
     # record read that as nothing to count and cleared itself on every run.
     app = [
-        note_e2e_outcome(root, "sid-app", origin, repeat_bucket("fail", None), None)
+        note_e2e_outcome(root, "sid-app", origin, repeat_bucket("fail", None), None, signature="v1:same")
         for _ in range(3)
     ]
     assert_true(
@@ -268,8 +268,27 @@ def _check_repeat_brake_counts_reasons_not_scenarios(root: Path) -> None:
         "a pass, and an incomplete with nothing to name, are not counted",
     )
     assert_true(
-        note_e2e_outcome(root, "sid-app", "http://localhost:9000", "app", None) == 1,
+        note_e2e_outcome(root, "sid-app", "http://localhost:9000", "app", None, signature="v1:same") == 1,
         "a different origin is a different environment and starts its own count",
+    )
+    # An app streak continues only on the SAME failure: page, field and condition. Three
+    # different app failures on one origin are three things to fix, not one loop — keyed on
+    # the bucket alone, a form that had not rendered, a redirect the runtime held back and
+    # that redirect again refused the fourth run.
+    different = [
+        note_e2e_outcome(root, "sid-app-mixed", origin, "app", None, signature=sig)
+        for sig in ("v1:form-missing", "v1:url-assert", "v1:url-assert")
+    ]
+    assert_true(different == [1, 1, 2], f"a different app failure starts over, the same one continues: {different}")
+    assert_true(
+        note_e2e_outcome(root, "sid-app-mixed", origin, "app", None) == 1,
+        "an app failure with no signature matches nothing",
+    )
+    for _ in range(3):
+        note_e2e_outcome(root, "sid-env", origin, "harness", "harness_error")
+    assert_true(
+        e2e_repeat_state(root, "sid-env").get("streak") == 3,
+        "the environment buckets stay coarse: no signature, still counted to the limit",
     )
     assert_true(
         e2e_repeat_state(root, "sid-fresh") == {},
@@ -290,6 +309,15 @@ def _check_repeat_brake_counts_reasons_not_scenarios(root: Path) -> None:
         e2e_repeat_state(root, "sid-legacy").get("bucket") == "timeout",
         f"a record from before buckets is read with the bucket its reason maps to: "
         f"{e2e_repeat_state(root, 'sid-legacy')}",
+    )
+    # An `app` record from the bucket-only build cannot say WHICH failure repeated, so it
+    # is read as no streak rather than as a limit already reached.
+    loaded = load_workspace_state(root, "sid-legacy-app")
+    loaded["state"]["e2e_repeat"] = {"origin": origin, "bucket": "app", "reason": None, "streak": 3}
+    atomic_write_json(loaded["paths"]["state"], loaded["state"])
+    assert_true(
+        e2e_repeat_state(root, "sid-legacy-app") == {},
+        f"a bucket-only app streak does not brake under signatures: {e2e_repeat_state(root, 'sid-legacy-app')}",
     )
     assert_true(
         note_e2e_outcome(root, "sid-legacy", origin, repeat_bucket("incomplete", "timeout"), "timeout") == 3,
@@ -522,7 +550,7 @@ def _check_a_passing_preflight_clears_the_environment_streak(root: Path) -> None
     # call for a reason it did not write, and `app` carries no reason at all.
     session = "sid-keep-app"
     for _ in range(3):
-        note_e2e_outcome(root, session, origin, "app", None)
+        note_e2e_outcome(root, session, origin, "app", None, signature="v1:same")
     state = e2e_repeat_state(root, session)
     assert_true(
         state.get("bucket") == "app"
@@ -582,6 +610,71 @@ def _check_the_brake_has_one_way_past_it(root: Path) -> None:
     req.unlink()
 
 
+def _check_the_brake_remembers_the_newest_project_state(root: Path) -> None:
+    """The streak keeps the fingerprint of its LAST failure. Comparing against the first
+    would release the brake for a change made before the second failure, which that
+    failure already showed did not help."""
+    from core.evidence.e2e.fingerprint import project_fingerprint
+    from core.runtime.state import e2e_repeat_state, note_e2e_outcome
+
+    session = "sid-fingerprint"
+    origin = "http://localhost:3000"
+    note_e2e_outcome(root, session, origin, None)
+    note_e2e_outcome(root, session, origin, "app", None, fingerprint="aaaa", signature="v1:same")
+    note_e2e_outcome(root, session, origin, "app", None, fingerprint="bbbb", signature="v1:same")
+    record = e2e_repeat_state(root, session)
+    assert_true(record.get("streak") == 2 and record.get("fingerprint") == "bbbb", f"the newest fingerprint is kept: {record}")
+    note_e2e_outcome(root, session, origin, None)
+    assert_true(e2e_repeat_state(root, session) == {}, "a pass still clears everything")
+    plain = Path(tempfile.mkdtemp(prefix="aw-no-git-"))
+    try:
+        assert_true(project_fingerprint(plain) is None, "a directory outside Git has no fingerprint, and the brake behaves as before")
+    finally:
+        shutil.rmtree(plain, ignore_errors=True)
+
+
+def _check_failure_signature_names_page_field_and_condition() -> None:
+    """The signature is what makes two app failures "the same": page, field, condition."""
+    from core.evidence.e2e.classify import failure_signature
+
+    scenario = {"steps": [
+        {"id": "fill-email", "action": "fill", "selector": {"label": "Email Address"}, "value": "${E2E_USER}"},
+        {"id": "after-login", "action": "expect_url", "contains": "/home"},
+    ]}
+
+    def fail(step_id, action, kind, url, unmet=None):
+        return {"browser_verdict": "fail", "reason": None, "failures": [
+            {"step_id": step_id, "action": action, "error_kind": kind, "url_after": url, "ready_unmet": unmet}]}
+
+    form = failure_signature(fail("fill-email", "fill", "selector_missing", "http://localhost:3001/login"), scenario)
+    url = failure_signature(fail("after-login", "expect_url", "assertion", "http://localhost:3001/login"), scenario)
+    assert_true(form and url and form != url, "a missing form field and a URL that did not change are different failures")
+    assert_true(
+        url == failure_signature(fail("after-login", "expect_url", "assertion", "http://localhost:3001/login?next=%2Fhome#x"), scenario),
+        "the query and fragment of the page are not part of it",
+    )
+    assert_true(
+        failure_signature(fail("x", "expect_url", "assertion", "http://localhost:3001/items/42"), {"steps": [{"id": "x", "action": "expect_url", "contains": "/home"}]})
+        == failure_signature(fail("y", "expect_url", "assertion", "http://localhost:3001/items/97"), {"steps": [{"id": "y", "action": "expect_url", "contains": "/home"}]}),
+        "an id in the route is folded, and a renamed step is the same step",
+    )
+    assert_true(
+        url != failure_signature(fail("after-login", "expect_url", "assertion", "http://localhost:3001/login"),
+                                 {"steps": [{"id": "after-login", "action": "expect_url", "contains": "/dashboard"}]}),
+        "a different expectation is a different condition",
+    )
+    assert_true(
+        form != failure_signature(fail("fill-email", "fill", "selector_missing", "http://localhost:3001/login"),
+                                  {"steps": [{"id": "fill-email", "action": "fill", "selector": {"css": "#email"}, "value": "${E2E_USER}"}]}),
+        "a different selector is a different field",
+    )
+    assert_true(
+        failure_signature({"browser_verdict": "incomplete", "failures": []}, scenario) is None
+        and failure_signature({"browser_verdict": "fail", "reason": None, "failures": []}, scenario),
+        "only a fail is signed, and a fail with no failed step still is",
+    )
+
+
 def _test_e2e_hardening() -> None:
     root = Path(tempfile.mkdtemp(prefix="aw-e2e-hardening-"))
     try:
@@ -590,6 +683,8 @@ def _test_e2e_hardening() -> None:
         _check_a_passing_preflight_clears_the_environment_streak(root)
         _check_the_brake_has_one_way_past_it(root)
         _check_repeat_brake_counts_reasons_not_scenarios(root)
+        _check_failure_signature_names_page_field_and_condition()
+        _check_the_brake_remembers_the_newest_project_state(root)
         _check_a_blocked_delete_asks_instead_of_only_refusing()
         _check_retry_pass_is_not_clean()
         _check_expected_values_stay_placeholders()

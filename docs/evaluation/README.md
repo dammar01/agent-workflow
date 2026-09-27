@@ -34,8 +34,7 @@ exploration repeated, and how often a human intervened does not exist.
 
 Model benchmarks alone cannot evaluate a system like this: outcomes depend on the
 interaction of human behavior, agent behavior, harness behavior, and the repository. See
-[H-002](../research/hypotheses/H-002-objective-delegation-reduces-orchestration-overhead.md)
-and [EXP-001](../research/experiments/EXP-001-workflow-by-prompt-strategy.md).
+RQ-02 and RQ-03 in [research/questions.md](../research/questions.md).
 
 ## Open questions
 
@@ -49,4 +48,6 @@ Open questions the evaluation is meant to answer (the full list with status is i
 - What additional latency or compute does it introduce?
 - Which failures are caused by the agent, and which by the harness?
 
-New experiments are recorded as `EXP-XXX` in [docs/research/experiments/](../research/experiments/).
+New experiments are drafted locally as `EXP-XXX` and tracked in
+[docs/research/experiments/](../research/experiments/) once they have run and have a result
+([CONTRACT.md](../research/CONTRACT.md) §15).

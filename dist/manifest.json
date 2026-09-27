@@ -1,14 +1,14 @@
 {
-  "version": "3.7.2",
+  "version": "3.7.3",
   "versions": {
-    "prompt_bundle": "3.7.2",
-    "runtime": "3.7.2"
+    "prompt_bundle": "3.7.3",
+    "runtime": "3.7.3"
   },
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "1a8b01296384e310d76ea087e10537c0f67be5096c509b2b0d87b0f3de556ca9",
-      "bytes": 26663,
+      "sha256": "39d2060798626f573945ea058c022acd2c56c2017ebcffa6a0645ea616f6a3db",
+      "bytes": 26981,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -42,7 +42,7 @@
     },
     {
       "path": "claude/skills/doctor.md",
-      "sha256": "f377d8455192d71af3df623ca5831b12f5ce2152ed12eb9aa17c16c430b90b8e",
+      "sha256": "91895ac96e81e77d0bb98bed5b14f56063a97b1f485ef9baef430628f05ec20c",
       "bytes": 2410,
       "merge": "replace",
       "component": "prompt_bundle"
@@ -63,14 +63,14 @@
     },
     {
       "path": "claude/skills/help.md",
-      "sha256": "e0c0521d8b9e22a09abcd5793933cc351ff64565a23e7a1d55e2cc717d5f3924",
+      "sha256": "d4486e6ad2e99e87d8de060f0190d2da051920c628efec34b7cc5f75fcfac34a",
       "bytes": 1572,
       "merge": "replace",
       "component": "prompt_bundle"
     },
     {
       "path": "claude/skills/init.md",
-      "sha256": "23baa14d48e7d2c9e5b6b8dbd83d1634223cbb4ce72e97ec921a52cd586ace3e",
+      "sha256": "249e73aa69c634aba030b70960bfd5a5758dfd1a6822bb8be2e534444655d746",
       "bytes": 2093,
       "merge": "replace",
       "component": "prompt_bundle"
@@ -140,8 +140,8 @@
     },
     {
       "path": "claude/skills/verify-browser.md",
-      "sha256": "e0cd7c3e250b944459ca2cfde8a8e08ef5d804bcccb0164a69a0d45c7b18c67e",
-      "bytes": 27981,
+      "sha256": "c3a0c5b6e9b0f10b3b49114e3781daea1dae863b957d0efcbf3055af5f1a9cf3",
+      "bytes": 29766,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -336,8 +336,8 @@
     },
     {
       "path": "claude/hooks/intent-map.json",
-      "sha256": "f7ff5d97ec0485b1799a1c088d6b8a89c7ee6b590b5b2c91c335eef3d2d48819",
-      "bytes": 1251,
+      "sha256": "27d2cb497d1e12ff863baa5168cb40375b0a989a49233b6ca33ecdf7110c908e",
+      "bytes": 1462,
       "merge": "replace",
       "component": "runtime"
     },
@@ -371,7 +371,7 @@
     },
     {
       "path": "opencode/AGENTS.md",
-      "sha256": "465d2f25e5f825f7e9bbf9559d1036ca85b30398aa9cc6574d8e5bf3457a2af3",
+      "sha256": "86b361caaef089158838b6666667638e4cf69142e3ccbb0a39062a57fa1d286b",
       "bytes": 18158,
       "merge": "merge",
       "component": "prompt_bundle"
@@ -413,14 +413,14 @@
     },
     {
       "path": "codex/AGENTS.md",
-      "sha256": "058c9a4d2c5e9d4c3f1b9af58d7f97d6ae3a9e1e3c09a3e1aa5ae94f760e8807",
+      "sha256": "81a5a20b5e68bf45d59ecc0093e3a13e072b62603eb9108a274ecf84005ab187",
       "bytes": 15318,
       "merge": "merge",
       "component": "prompt_bundle"
     },
     {
       "path": "agy/AGENTS.md",
-      "sha256": "f1e790a23d808b13dd13a32434dca6081897a3fe5e7a8a86f889a2be6e1782f6",
+      "sha256": "101ffd36d9a2625a4c2a7d2d13cb139368c568d492d16a8b45f4989844f172ea",
       "bytes": 17693,
       "merge": "merge",
       "component": "prompt_bundle"

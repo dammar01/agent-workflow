@@ -38,7 +38,6 @@ TARGETS: dict[str, tuple[str, ...]] = {
         "## Install (v",
         "Kunci reliability (v",
         "### Liveness worker (v",
-        "Catatan rilis:",
     ),
     "dist/config/claude/CLAUDE.md": (
         "# Claude Code — Personal Global Config (v",

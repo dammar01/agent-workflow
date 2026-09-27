@@ -2,12 +2,12 @@
 <html lang="en">
 <head><meta charset="utf-8"><title>Dashboard</title></head>
 <body>
-  <h1 data-testid="banner">Welcome back</h1>
-  <p data-testid="who"></p>
+  <h1 data-e2e="banner">Welcome back</h1>
+  <p data-e2e="who"></p>
   <script>
     // Renders the typed address into the DOM: a captured HTML file would carry it.
     const who = new URLSearchParams(location.search).get("u") || "nobody";
-    document.querySelector("[data-testid=who]").textContent = "Signed in as " + who;
+    document.querySelector("[data-e2e=who]").textContent = "Signed in as " + who;
   </script>
 </body>
 </html>

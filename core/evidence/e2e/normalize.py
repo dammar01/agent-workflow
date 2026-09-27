@@ -83,7 +83,7 @@ def _probe_summary(probe: object) -> str:
         if not items:
             continue
         names = [
-            str(item if field is None else ((item or {}).get(field) or (item or {}).get("testid") or "?"))
+            str(item if field is None else ((item or {}).get(field) or (item or {}).get("e2e") or "?"))
             for item in items[:6]
         ]
         parts.append(f"{bucket}: {', '.join(names)}{' …' if len(items) > 6 else ''}")

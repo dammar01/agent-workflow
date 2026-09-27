@@ -92,6 +92,7 @@ from tests.checks.installer import (
     _test_installer_text_merging,
 )
 from tests.checks.deps import _test_runtime_is_stdlib_only
+from tests.checks.hidden_spawn import _test_every_spawn_hides_its_console
 from tests.checks.governance import _test_governance_controls
 from tests.checks.graph_verification import _test_graph_verification
 from tests.checks.hardening import _test_hardening
@@ -1179,6 +1180,7 @@ confidence: high — all requested checks ran
         _test_installer_check_reports_second_agent_default()
         _test_installer_e2e_deps_are_opt_in()
         _test_runtime_is_stdlib_only()
+        _test_every_spawn_hides_its_console()
         _test_telemetry_metrics()
         _test_usage_token_accounting()
         _test_transcript_parsing()

@@ -25,7 +25,7 @@ from urllib.parse import parse_qs, urljoin, urlsplit
 from core.evidence.e2e.preflight import is_local_dev_host, same_origin
 from core.evidence.e2e.redact import sanitize_endpoint
 from core.evidence.e2e.request import blocked_request_target, destructive_request_target, read_only_request_target
-from core.evidence.e2e.spec import DESTRUCTIVE_METHODS, SAFE_METHODS, SELECTOR_RANK, WRITE_METHODS, carries_method_override, navigation_error, request_path_matches, resolve_upload, selector_rank, step_selectors
+from core.evidence.e2e.spec import DESTRUCTIVE_METHODS, SAFE_METHODS, SELECTOR_RANK, WRITE_METHODS, carries_method_override, e2e_css, navigation_error, request_path_matches, resolve_upload, selector_rank, step_selectors
 
 HEARTBEAT_EVERY_S = 2.0
 POLL_S = 0.1
@@ -80,16 +80,16 @@ _PROBE_JS = r"""(limit) => {
   };
   document.querySelectorAll("h1,h2,h3").forEach((el) => take("headings", el, cut(el.innerText)));
   document.querySelectorAll("button,[role=button],input[type=submit],input[type=button]").forEach((el) =>
-    take("buttons", el, {role: "button", name: cut(el.getAttribute("aria-label") || el.innerText || el.value), testid: el.getAttribute("data-testid")}));
+    take("buttons", el, {role: "button", name: cut(el.getAttribute("aria-label") || el.innerText || el.value), e2e: el.getAttribute("data-e2e")}));
   document.querySelectorAll("input:not([type=hidden]):not([type=submit]):not([type=button]),textarea,select").forEach((el) =>
     take("inputs", el, {
       role: el.tagName === "SELECT" ? "combobox" : "textbox",
       label: cut((el.labels && el.labels[0] && el.labels[0].innerText) || el.getAttribute("aria-label") || el.getAttribute("placeholder")),
       type: el.getAttribute("type") || el.tagName.toLowerCase(),
-      testid: el.getAttribute("data-testid"),
+      e2e: el.getAttribute("data-e2e"),
     }));
   document.querySelectorAll("a[href]").forEach((el) =>
-    take("links", el, {name: cut(el.innerText || el.getAttribute("aria-label")), href: cut(el.getAttribute("href")), testid: el.getAttribute("data-testid")}));
+    take("links", el, {name: cut(el.innerText || el.getAttribute("aria-label")), href: cut(el.getAttribute("href")), e2e: el.getAttribute("data-e2e")}));
   return out;
 }"""
 
@@ -276,7 +276,7 @@ class Session:
         emit,
         *,
         clock=time.monotonic,
-        sleep=time.sleep,
+        sleep=None,
         artifacts_dir: str = "",
         has_secrets: bool = False,
         display_scenario: dict | None = None,
@@ -301,6 +301,7 @@ class Session:
         self.config = config
         self._emit = emit
         self.clock = clock
+        # None = wait through the page. A test drives time itself and passes its own.
         self.sleep = sleep
         self.base_url = str(config.get("base_url") or "")
         self.step_timeout_ms = int(config.get("step_timeout_ms") or 8000)
@@ -385,6 +386,24 @@ class Session:
         """Long polls still talk: the supervisor's idle timer resets on every line."""
         if self.clock() - self._last_emit >= HEARTBEAT_EVERY_S:
             self.emit({"type": "heartbeat"})
+
+    def pause(self) -> None:
+        """One poll interval, spent inside Playwright so its events keep arriving.
+
+        The sync API delivers events — route handlers, `framenavigated`, responses — only
+        while this thread is inside a Playwright call. `time.sleep` is not one, and
+        `page.url` is a cached attribute rather than a round trip, so a loop of the two
+        (`expect_url`, a `url` readiness condition) held every event for the whole step
+        timeout: a login POST passing through the write guard sat unrouted until the
+        assertion had already failed, finishing ~0.8 s after whatever the timeout was.
+        `wait_for_timeout` waits the same interval and dispatches while it does."""
+        if self.sleep is not None:
+            self.sleep(POLL_S)
+            return
+        try:
+            self.page.wait_for_timeout(POLL_S * 1000)
+        except Exception:
+            time.sleep(POLL_S)
 
     def _page_url(self) -> str:
         try:
@@ -994,8 +1013,8 @@ class Session:
             return root.get_by_role(selector["role"])
         if key == "label":
             return root.get_by_label(selector["label"])
-        if key == "testid":
-            return root.get_by_test_id(selector["testid"])
+        if key == "e2e":
+            return root.locator(e2e_css(selector["e2e"]))
         if key == "text":
             return root.get_by_text(selector["text"])
         return root.locator(selector["css"])
@@ -1045,7 +1064,7 @@ class Session:
             if self.clock() >= deadline:
                 break
             self.beat()
-            self.sleep(POLL_S)
+            self.pause()
         waited = f"within {self.step_timeout_s:g}s"
         selection = {"candidate": None, "match_counts": counts, "fallback_used": False}
         if hidden:
@@ -1090,7 +1109,7 @@ class Session:
             if not unmet or self.clock() >= deadline:
                 break
             self.beat()
-            self.sleep(POLL_S)
+            self.pause()
         described = [shown[i] if isinstance(shown[i], dict) else conditions[i] for i in unmet]
         return {
             "conditions": len(conditions),
@@ -1122,7 +1141,7 @@ class Session:
             if self.clock() >= deadline:
                 return False, actual
             self.beat()
-            self.sleep(POLL_S)
+            self.pause()
 
     def stable(self, step: dict | None = None) -> bool:
         """Whether the page had settled when a step failed — the classifier's app/unknown split.

@@ -25,15 +25,14 @@ Working thesis:
 > the primary reasoning context.
 
 The goal is context and responsibility separation, not necessarily less total computation:
-externalization moves exploration elsewhere at the cost of extra execution, compute, and
-latency ([CASE-003](real-cases/CASE-003-large-refactor-evidence-correction.md)). It is
-context *allocation*, not context reduction.
+externalization moves exploration elsewhere at the cost of extra execution and latency
+(maintainer latency: [CASE-004](real-cases/CASE-004-maintainer-telemetry-snapshot.md)). It
+is context *allocation*, not context reduction.
 
 The right label is agent harness with a delegated specialist, not a multi-agent
 collaboration system: a primary intelligence, a specialized external worker, and a
-deterministic control plane. How responsibility is divided among them, and where the
-current division falls short (verification is not independent of exploration), is in
-[SYN-002](synthesis/SYN-002-responsibility-allocation.md).
+deterministic control plane. How responsibility should be divided among them is still a
+draft (SYN-002, see "Drafts" below).
 
 A direction, not a present claim: with its benchmark harness (`bench/`), provider
 abstraction, audit trail, and evidence records, the project can also serve as experimental
@@ -118,9 +117,53 @@ Research statements use explicit status where relevant:
 proposed | observed | implemented | validated | partially_validated | rejected | deprecated | unknown
 ```
 
+Every record states two dimensions separately in its `disposition` block, next to its
+type-specific `status` or `outcome`:
+
+```text
+implementation_status   not_implemented | partially_implemented | implemented | not_applicable
+validation_status       not_validated | observed | partially_validated | validated | rejected
+```
+
+Only the maintainer marks a record validated or rejected. The fields, their values, and when the corpus counts as final:
+[CONTRACT.md](CONTRACT.md) §14.
+
 A design being implemented does not mean that its underlying hypothesis has been
 validated. Likewise, a literature source being related to a design does not imply that the
 source directly caused that design.
+
+## Record inventory
+
+Only records that describe something that actually happened stay here. Everything else is
+a draft (see below).
+
+| ID | Title | Type status | Implementation | Validation | RQ |
+| --- | --- | --- | --- | --- | --- |
+| [CASE-004](real-cases/CASE-004-maintainer-telemetry-snapshot.md) | Maintainer telemetry snapshot | inconclusive | implemented | observed | RQ-05, RQ-06 |
+| [CASE-005](real-cases/CASE-005-verify-browser-drafts-never-ready.md) | `/.verify-browser` drafts never reached `ready` | negative | implemented | observed | — |
+| [DEC-001](decisions/DEC-001-verify-browser-delegated.md) | `/.verify-browser` is a delegated command | accepted | implemented | not_validated | — |
+| [DEC-004](decisions/DEC-004-data-e2e-only-test-attribute.md) | `data-e2e` is the only test attribute | accepted | implemented | not_validated | — |
+| [DEC-005](decisions/DEC-005-repeat-brake-releases-on-change.md) | The repeat brake releases on a project change and is remembered as knowledge | accepted | implemented | not_validated | — |
+| [DEC-006](decisions/DEC-006-stage-one-repair-continuation.md) | A stage-1 spec that fails validation gets one repair in the same thread | accepted | implemented | not_validated | — |
+| [DEC-007](decisions/DEC-007-poll-waits-inside-playwright.md) | The browser player's poll waits inside Playwright, not beside it | accepted | implemented | not_validated | — |
+| [DEC-008](decisions/DEC-008-app-repeat-streak-keyed-by-failure-signature.md) | An app repeat streak is keyed by failure signature, and a runtime change releases it | accepted | implemented | not_validated | — |
+
+No `H-XXX`, `EXP-XXX`, or `SYN-XXX` record is tracked: none has been run or has a result.
+
+### Drafts
+
+Proposed hypotheses, planned experiments, syntheses, and decisions without a result are
+kept in `docs/research-drafts/` (same subfolders). That directory is git-ignored and exists
+only on the maintainer's machine; tracked records mention draft IDs as plain text, never as
+links. A draft moves back here only when it has been carried out and has a recorded result.
+Drafts currently held: H-001..H-007, EXP-001..EXP-003, SYN-001..SYN-002, DEC-002, DEC-003,
+and CASE-001..CASE-003 (real observations without a kept artifact, so they cannot be
+re-checked).
+
+No `LIT-XXX` or `ARC-XXX` record exists yet. For literature this is deliberate: papers
+remembered during research were not recorded because their metadata was not available
+([logs/2026-09-26.md](logs/2026-09-26.md), "Deliberately not recorded"). No historical
+decision has been reconstructed as an `ARC` record so far.
 
 ## Relationship to other documentation
 

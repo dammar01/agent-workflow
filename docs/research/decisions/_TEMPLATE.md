@@ -9,6 +9,11 @@ status:            # proposed | accepted | superseded | deprecated
 provenance:
   type:            # direct | adapted | synthesized | observed | unknown
   confidence:      # low | medium | high
+disposition:        # see CONTRACT.md §14
+  implementation_status: not_implemented   # not_implemented | partially_implemented | implemented | not_applicable
+  validation_status: not_validated         # not_validated | observed | partially_validated | validated | rejected
+  validated_by:                            # maintainer; required once validation_status is not not_validated
+  validated_on:
 ```
 
 ## Problem
@@ -46,7 +51,9 @@ components:
 
 `not_validated` | `observed` | `partially_validated` | `validated`
 
-What evidence currently supports the decision?
+What evidence currently supports the decision? A DEC is `validated` by a clean direct-use
+run (CONTRACT.md §14): verdict pass, no manual workaround, no issue reported — name its
+date, job id, and a sanitised description of what was exercised.
 
 ## Trade-offs
 

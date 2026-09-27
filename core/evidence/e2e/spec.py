@@ -35,13 +35,21 @@ ALLOWED_ACTIONS = frozenset(
     }
 )
 ASSERTION_ACTIONS = frozenset({"expect_dom", "expect_url", "expect_title"})
-SELECTOR_KEYS = frozenset({"role", "name", "label", "testid", "text", "css"})
+# `e2e` targets the project's own `data-e2e` attribute, the same one tagging proposes
+# (`tagging.TAG_ATTRIBUTE`). There is deliberately no `testid`: a second test attribute
+# meant drafts recommending `data-testid` while the tags this runtime proposes say
+# `data-e2e`, and the two never converged.
+E2E_ATTRIBUTE = "data-e2e"
+SELECTOR_KEYS = frozenset({"role", "name", "label", "e2e", "text", "css"})
+# Keys a draft reaches for from habit, with the key to use instead. Named in the error so a
+# repair continuation can fix the scenario rather than guess.
+RETIRED_SELECTOR_KEYS = {"testid": "e2e", "data-testid": "e2e", "data-e2e": "e2e"}
 PROVENANCE = frozenset({"source", "existing_test", "runtime_probe", "heuristic"})
 SEVERITIES = frozenset({"blocking", "non_blocking"})
 SIDE_EFFECTS = frozenset({"none", "creates_test_data", "modifies_test_data", "deletes_test_data"})
 # Plan §10 preference order. A candidate list must not rank a weaker selector above a
 # stronger one: the player tries candidates in order, so the order IS the fallback rule.
-SELECTOR_RANK = ("role", "label", "testid", "text", "css")
+SELECTOR_RANK = ("role", "label", "e2e", "text", "css")
 MAX_SELECTOR_CANDIDATES = 5
 # Readiness a step waits for before its action (after navigation, for goto). Declared per
 # step from the app's own indicators — a spinner gone, a button enabled, fetched rows shown
@@ -317,6 +325,12 @@ def parse_spec(content: str) -> dict:
     return out
 
 
+def e2e_css(value: object) -> str:
+    """The CSS attribute selector for an `e2e` selector value, quoted and escaped."""
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'[{E2E_ATTRIBUTE}="{escaped}"]'
+
+
 def selector_rank(selector: Mapping) -> int | None:
     """Position of the selector's strongest key in SELECTOR_RANK; None when it has none."""
     for rank, key in enumerate(SELECTOR_RANK):
@@ -328,9 +342,16 @@ def selector_rank(selector: Mapping) -> int | None:
 def _selector_errors(where: str, selector: object) -> list[str]:
     if not isinstance(selector, dict) or not selector:
         return [f"{where}: needs a selector object"]
+    retired = sorted(key for key in selector if key in RETIRED_SELECTOR_KEYS)
+    if retired:
+        return [
+            f"{where}: selector key '{key}' not allowed; use '{RETIRED_SELECTOR_KEYS[key]}' "
+            f"(matches {E2E_ATTRIBUTE}), e.g. {{\"e2e\": \"<value>\"}}"
+            for key in retired
+        ]
     unknown = set(selector) - SELECTOR_KEYS
     if unknown:
-        return [f"{where}: selector keys {sorted(unknown)} not allowed"]
+        return [f"{where}: selector keys {sorted(unknown)} not allowed; allowed: {sorted(SELECTOR_KEYS)}"]
     if selector_rank(selector) is None:
         return [f"{where}: selector needs one of {'|'.join(SELECTOR_RANK)} (name only qualifies role)"]
     return []
@@ -905,8 +926,12 @@ def substitute_env(scenario: object, env: Mapping[str, str]) -> tuple[object, li
 def spec_gap(content: str) -> dict | None:
     """Why the stage-1 reply cannot proceed, or None when a scenario is present.
 
-    Distinguishes the shape a continuation can fix (evidence arrived, section did not)
-    from one it cannot (the section is there but its scenario is broken).
+    Two shapes, both answered in the same provider thread. `recoverable`: evidence arrived
+    and the section did not, so a continuation asks for the section. `repairable`: the
+    section is there but its scenario did not parse (no fence, invalid JSON), so a repair
+    asks for the whole section again with the parser's own words. Both used to end the
+    draft as `spec_invalid` on the first attempt only for the second shape, which is the
+    shape a model most often produces.
     """
     parsed = parse_spec(content)
     if parsed["scenario"] is not None and not parsed["errors"]:
@@ -917,6 +942,7 @@ def spec_gap(content: str) -> dict | None:
         "reason": "e2e spec present but unusable",
         "missing": list(parsed["errors"]),
         "recoverable": False,
+        "repairable": True,
     }
 
 
@@ -932,6 +958,36 @@ def spec_continuation_prompt(gap: dict) -> str:
             "[CONTINUATION]",
             "Your previous reply carried the evidence but no [E2E SPEC] section.",
             "Return ONLY the missing section, in this exact shape, grounded in the evidence you already gathered:",
+            *_SPEC_SHAPE,
+        ]
+    )
+
+
+def spec_repair_prompt(errors: list[str] | tuple) -> str:
+    """The one repair sent in the same provider thread when the section failed validation.
+
+    Quotes the validator's own messages rather than paraphrasing them: they name the field,
+    the bad value, and the allowed ones, which is what the model needs to fix the scenario
+    instead of rewriting it from scratch. Asks for the WHOLE section, because the runtime
+    parses the repair on its own — a partial answer would lose the claims it left out.
+    """
+    shown = [f"- {error}" for error in list(errors)[:MAX_REPAIR_ERRORS]]
+    if len(errors) > MAX_REPAIR_ERRORS:
+        shown.append(f"- … {len(errors) - MAX_REPAIR_ERRORS} more of the same kind")
+    return "\n".join(
+        [
+            "[CONTINUATION]",
+            "Your [E2E SPEC] section was rejected by the runtime validator:",
+            *shown,
+            "Fix exactly these problems and return the COMPLETE corrected [E2E SPEC] section, grounded in the evidence you already gathered.",
+            "scenario_json must be ONE fenced ```json block holding ONE valid JSON object. Keep every claim and step that was not wrong.",
+            *_SPEC_SHAPE,
+        ]
+    )
+
+
+MAX_REPAIR_ERRORS = 12
+_SPEC_SHAPE = (
             "",
             "[E2E SPEC]",
             "claims:",
@@ -957,5 +1013,4 @@ def spec_continuation_prompt(gap: dict) -> str:
             "[DIGEST]",
             "summary: <one line: how many claims, what existing tests cover>",
             "confidence: low | medium | high",
-        ]
-    )
+)

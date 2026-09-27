@@ -126,3 +126,62 @@ answer:
 4. What evidence supports it?
 5. What are its limitations?
 6. Under what conditions should it be reconsidered?
+
+## 14. Disposition and validation authority
+
+Every record carries a `disposition` block in its metadata, next to its type-specific
+`status` or `outcome`. The two answer different questions: `status` says where the record is
+in its own life cycle (a hypothesis is `proposed`, an experiment `planned`); `disposition`
+says what exists and what has been shown, using the distinction in §7.
+
+```yaml
+disposition:
+  implementation_status:  # not_implemented | partially_implemented | implemented | not_applicable
+  validation_status:      # not_validated | observed | partially_validated | validated | rejected
+  validated_by:
+  validated_on:
+```
+
+- `observed` means there is real-use evidence at some tier in
+  [methodology.md](methodology.md) "Evidence tiers", but no designed evaluation.
+- `validated`, `partially_validated`, and `rejected` require an evaluation the record names
+  (usually an `EXP-XXX`) and a result measured against the record's stated success criteria.
+- Exception for decisions (`DEC-XXX`) only: a DEC is `validated` when the maintainer's
+  direct use of the decided behavior runs clean. All three conditions must hold:
+  1. The runtime verdict is `pass`, or the equivalent success outcome for that behavior.
+  2. The run needed no manual workaround: no `ignore_repeat_brake`, no hand-edited request
+     or scenario, and no runtime patch mid-run.
+  3. The maintainer reported no issue with that run.
+
+  The record's Validation section names the run: its date, its job id, and a sanitised
+  description of what was exercised. Any condition missing makes it `observed`, not
+  `validated`. This is `creator_observation` evidence (see methodology.md "Evidence
+  tiers"). It shows the decision works in the maintainer's use, not that it generalises.
+  Hypotheses (`H-XXX`) still require an `EXP-XXX`.
+- Only the maintainer sets `validated_by` and `validated_on`. Setting any value other than
+  `not_validated` or `observed` without them is incomplete.
+- Every hypothesis states its success criteria: the primary metric, what counts as
+  `supported` and as `rejected`, and whether the data is recorded today. A threshold not
+  chosen yet is written `[PLACEHOLDER]`, never invented.
+
+The research corpus counts as final when every record has a complete disposition, every
+hypothesis has success criteria, and every research question in
+[questions.md](questions.md) links at least one record. Final does not mean answered: a
+record may be final and still `not_validated`.
+
+## 15. Tracked records and drafts
+
+A record is tracked in `docs/research/` only when it describes something that was carried
+out and has a recorded result: an observation with its source stated, a decision
+implemented in code, an experiment that ran. Figures in a tracked record come from a named
+source that can be re-counted (for example a named telemetry file and line range); a figure
+without one is removed, not rounded.
+
+Proposed hypotheses, planned experiments, syntheses, and decisions without implementation
+are drafts. Drafts live in `docs/research-drafts/` with the same subfolders. That directory
+is git-ignored: it is the maintainer's local working area, not part of a release. Tracked
+records refer to a draft by its ID in plain text, never by a link. A draft returns to
+`docs/research/` when it has been carried out and its result is recorded in it.
+
+Tracked records are frozen as of 3.7.3: their content changes only to add a new result or
+to correct a factual error against its source, never to add untested reasoning.

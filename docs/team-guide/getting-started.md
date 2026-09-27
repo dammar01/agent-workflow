@@ -26,12 +26,13 @@ kind of request you are making:
 | "Where is …", "which files handle …" | `explore` | A map: entry points, files, ownership |
 | "Why does …", "is it safe to …" | `analyze` | A causal explanation, no code changes |
 | "I want to add …", "plan how to …" | `plan` | Steps, risks, open questions, options |
-| "Implement it", "go ahead" | `/.execute -y` | Code changes, made by Claude Code itself |
+| "Implement it", "go ahead" | `/.execute`, with your explicit approval | Code changes, made by Claude Code itself |
 | "Is it correct now?", "check what was just done" | `verify` | A verdict with evidence |
+| "Test it in the browser", "click through the login flow" | `verify-browser` | A verdict from a real browser run, reviewed by the secondary agent |
 
 Before running a delegated command, Claude Code prints one line such as
 `[INTENT] explore — location question`. If it guessed wrong, press Esc and rephrase, or use
-the explicit form (`/.explore`, `/.analyze`, `/.plan`, `/.verify`). The full list of trigger
+the explicit form (`/.explore`, `/.analyze`, `/.plan`, `/.verify`, `/.verify-browser`). The full list of trigger
 phrases lives in the shipped Claude Code configuration (`dist/config/claude/CLAUDE.md`,
 "Command registry").
 
@@ -40,8 +41,10 @@ phrases lives in the shipped Claude Code configuration (`dist/config/claude/CLAU
 1. **Delegated requests take time.** The secondary agent actually reads your code. Expect
    anything from under a minute to several minutes for broad analysis or planning. See
    [when-to-use.md](when-to-use.md) for when that is worth it.
-2. **Nothing is implemented without your go-ahead.** `/.execute` requires `-y`. A plan with
-   open questions stops and asks you first.
+2. **Nothing is implemented without your go-ahead.** `/.execute` needs an explicit approval
+   from you; without it, it only shows what it would change. A plan with open questions
+   stops and asks you first. Exact form: [prompt-layer contracts in the
+   reference](../reference.md#kontrak-lapisan-prompt).
 3. **Implemented is not verified.** By default `/.execute` does not run verification by
-   itself; it reports `implemented` and offers `/.verify`. Whether it chains automatically is
-   the `commands.auto_verify_after_execute` setting ([reference](../reference.md)).
+   itself; it reports `implemented` and offers `/.verify`. A project setting can make it
+   chain automatically ([reference](../reference.md#kontrak-lapisan-prompt)).

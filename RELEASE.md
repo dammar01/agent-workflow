@@ -53,20 +53,32 @@ explicit list precisely so that an unrelated semver in prose is not rewritten by
    The manifest carries a sha256 and byte count per shipped file. It is what makes an
    install verifiable after the fact — `core/audit/bundle_integrity.py` compares against it.
 
-4. **Release notes.** Write `prompt/v<version>/changelog.md`. One directory per version,
-   the existing ones are the format. Add the row to `CHANGELOG.md`.
+4. **Release notes.** Add the row to the index table in `CHANGELOG.md` and a `## v<version>`
+   section under "Release notes" in the same file; the v3.7.3 section is the format. Do not
+   create `prompt/v<version>/`: `prompt/` is a historical archive that ends at v3.7.2.
 
-5. **Test.** All three, in this order:
+5. **Test.** This is the tag gate. All of it, in this order:
 
    ```
    python tests/run.py
+   WORKFLOW_E2E_SMOKE=1 python tests/run.py --only e2e-smoke   # real Chromium, needs --with-e2e
    python tools/e2e/e2e.py
    python tools/e2e/e2e.py --full     # spends real quota, needs a configured provider
    ```
 
-   `--full` is the only step that exercises a real delegated call end to end. It costs
-   money, and skipping it means the release was never run against a live provider — record
-   that decision in the release notes rather than leaving it implied.
+   Then **real use**: the maintainer runs the changed commands on an actual project and
+   finds no safety problem — no write the guard should have refused, no credential in an
+   artifact, no data touched outside the test account. A wrong or overly strict verdict is a
+   bug to record, not a gate failure; an unsafe run is.
+
+   `e2e-smoke` is the only step that drives a real browser; CI skips it. `--full` is the only
+   step that exercises a real delegated call end to end. Skipping either means the release
+   never ran against that layer — record the decision in the release notes rather than
+   leaving it implied.
+
+   Research validation is not a tag gate. A tag may ship with records `observed` or
+   `not_validated`, provided their disposition says so honestly
+   (`docs/research/CONTRACT.md` §14).
 
 6. **Commit, then tag.** The tag points at the commit whose `stamp_version --check` and
    `gen_manifest --check` both passed:
@@ -89,8 +101,8 @@ explicit list precisely so that an unrelated semver in prose is not rewritten by
 
 ## What CI already covers
 
-`.github/workflows/ci.yml` runs steps 2, 3, and 5 (without `--full`) on every push and pull
-request, on Linux and Windows.
+`.github/workflows/ci.yml` runs steps 2, 3, and 5 (without `e2e-smoke`, `--full`, or real
+use) on every push and pull request, on Linux and Windows.
 
 CI bumps nothing, tags nothing, publishes nothing. A release still requires a human to decide
 the number and run steps 1, 4, 6, 7. The delegated end-to-end run

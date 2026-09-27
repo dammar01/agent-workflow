@@ -21,7 +21,13 @@ For a significant architecture or behavior change:
 6. Do not include confidential real-world information: no transcripts, company names,
    internal URLs, customer data, or proprietary code. Abstract and sanitize.
 
-Research records stay in `docs/research/`. Never write them into `docs/project-knowledge/`:
+Only records that were carried out and have a recorded result are tracked in
+`docs/research/`; they are frozen except to add a result or correct a fact against its
+source. Proposed, planned, or untested records go to the git-ignored
+`docs/research-drafts/` and are referenced from tracked files by ID only, never linked
+(`docs/research/CONTRACT.md` §15).
+
+Research records stay in `docs/research/` (or `docs/research-drafts/`). Never write them into `docs/project-knowledge/`:
 the runtime injects that directory into exploration and reasoning prompts, and only `promote-write` may
 write there.
 
@@ -45,4 +51,5 @@ use.
 - `README.md` carries the version only in its shields.io badge. Any other version string in
   its prose, or in `docs/reference.md`, fails `tools/maintain/stamp_version.py --check`.
 - `bench/` is frozen at SUT v3.4.5. Do not update its paths or version to match HEAD.
-- Release notes: `prompt/v<version>/changelog.md` plus a row in `CHANGELOG.md`.
+- Release notes: a row and a `## v<version>` section in `CHANGELOG.md`. Never create
+  `prompt/v<version>/`; `prompt/` is a historical archive ending at v3.7.2.

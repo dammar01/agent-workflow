@@ -21,7 +21,15 @@ from core.evidence.e2e import browser as e2e_browser
 from core.evidence.e2e.browser import Session, run_scenario
 from core.evidence.e2e.classify import ORIGIN_APP, ORIGIN_HARNESS, ORIGIN_UNKNOWN, build_report, classify_step
 from core.evidence.e2e.normalize import evidence_block
+from core.evidence.e2e.spec import e2e_css
 from tests.checks.support import assert_true
+
+
+def _css_match(element: dict, css: str) -> bool:
+    """A fake element matches a CSS selector by its `css`, or by its `e2e` attribute when
+    the selector is the one the runtime builds for an `e2e` key. There is no
+    `get_by_test_id` on the fake: a runtime that reached for it would fail here."""
+    return element.get("css") == css or (element.get("e2e") is not None and e2e_css(element["e2e"]) == css)
 
 BASE = "http://localhost:8000"
 FakeTimeout = type("TimeoutError", (Exception,), {})
@@ -74,14 +82,11 @@ class _Locator:
     def get_by_label(self, label):
         return self._inside(lambda el: el.get("label") == label)
 
-    def get_by_test_id(self, testid):
-        return self._inside(lambda el: el.get("testid") == testid)
-
     def get_by_text(self, text):
         return self._inside(lambda el: el.get("text") == text)
 
     def locator(self, css):
-        return self._inside(lambda el: el.get("css") == css)
+        return self._inside(lambda el: _css_match(el, css))
 
     def _one(self) -> dict:
         element = self._matches()[0]
@@ -91,7 +96,7 @@ class _Locator:
 
     def click(self, timeout=None) -> None:
         element = self._one()
-        self.page.clicks.append(element.get("testid") or element.get("name"))
+        self.page.clicks.append(element.get("e2e") or element.get("name"))
         if element.get("on_click"):
             element["on_click"](self.page)
 
@@ -140,7 +145,7 @@ class _Page:
             self.calls.append("clear_inputs")
             return None
         self.calls.append("probe")
-        return {"url": self.url, "limit": arg, "headings": ["Masuk"], "buttons": [{"name": "Masuk", "testid": "login-submit"}], "inputs": [], "links": []}
+        return {"url": self.url, "limit": arg, "headings": ["Masuk"], "buttons": [{"name": "Masuk", "e2e": "login-submit"}], "inputs": [], "links": []}
 
     def content(self) -> str:
         self.calls.append("content")
@@ -164,14 +169,11 @@ class _Page:
     def get_by_label(self, label):
         return _Locator(self, lambda el: el.get("label") == label)
 
-    def get_by_test_id(self, testid):
-        return _Locator(self, lambda el: el.get("testid") == testid)
-
     def get_by_text(self, text):
         return _Locator(self, lambda el: el.get("text") == text)
 
     def locator(self, css):
-        return _Locator(self, lambda el: el.get("css") == css)
+        return _Locator(self, lambda el: _css_match(el, css))
 
 
 def _session(page: _Page, **config) -> tuple[Session, list[dict], _Clock]:
@@ -193,16 +195,80 @@ def _login_page() -> _Page:
     return _Page(
         [
             {"role": "textbox", "label": "Email"},
-            {"role": "button", "name": "Masuk", "testid": "login-submit", "on_click": to_dashboard},
-            {"testid": "banner", "inner_text": "Welcome back, operator"},
+            {"role": "button", "name": "Masuk", "e2e": "login-submit", "on_click": to_dashboard},
+            {"e2e": "banner", "inner_text": "Welcome back, operator"},
         ]
     )
+
+
+class _DispatchPage(_Page):
+    """A page that behaves like the sync Playwright API: events queued by the browser are
+    delivered only while the caller is inside a Playwright call. `wait_for_timeout` is one;
+    reading `page.url` is not."""
+
+    def __init__(self, clock: _Clock, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.clock = clock
+        self.pending: list = []
+
+    def wait_for_timeout(self, ms) -> None:
+        self.clock.advance(ms / 1000)
+        while self.pending:
+            self.pending.pop(0)(self)
+
+
+class _TickingClock(_Clock):
+    """Moves a little on every read, so a poll that never reaches `wait_for_timeout` still
+    hits its deadline and fails — instead of hanging the suite on a clock nothing advances."""
+
+    def __call__(self) -> float:
+        self.advance(0.01)
+        return super().__call__()
+
+
+def _check_polling_keeps_events_flowing() -> None:
+    """A redirect that arrives as an event must reach a polled `expect_url` or `url` readiness.
+
+    Regression: the poll slept with `time.sleep` and read the cached `page.url`, so nothing
+    dispatched for the whole step timeout — a login POST held by the write guard finished
+    just after the assertion had failed, whatever the timeout was."""
+
+    def land(page: _Page) -> None:
+        page.url = BASE + "/home"
+
+    config = {"base_url": BASE, "step_timeout_ms": 500, "nav_timeout_ms": 1000}
+    step = {"id": "after-login", "action": "expect_url", "contains": "/home"}
+
+    clock = _TickingClock()
+    page = _DispatchPage(clock)
+    page.url = BASE + "/login"
+    page.pending.append(land)
+    result = Session(page, config, [].append, clock=clock).perform(step)
+    assert_true(result["status"] == "passed", f"expect_url sees a navigation delivered while it waits: {result}")
+
+    clock = _TickingClock()
+    page = _DispatchPage(clock)
+    page.url = BASE + "/login"
+    page.pending.append(land)
+    ready = Session(page, config, [].append, clock=clock).wait_ready([{"url": "/home"}])
+    assert_true(ready["unmet"] == [], f"a url readiness condition sees it too: {ready}")
+
+    # The contrast that makes the check mean something: a wait outside Playwright never
+    # delivers the event, so the same step fails on the same page.
+    clock = _TickingClock()
+    page = _DispatchPage(clock)
+    page.url = BASE + "/login"
+    page.pending.append(land)
+    starved = Session(page, config, [].append, clock=clock, sleep=clock.advance).perform(step)
+    assert_true(starved["status"] == "failed" and page.pending, f"a non-dispatching wait starves the event: {starved}")
 
 
 _CLAIMS = [{"id": "login", "severity": "blocking", "source_refs": ["src/Login.tsx:1"]}]
 
 
 def _test_e2e_browser_session() -> None:
+    _check_polling_keeps_events_flowing()
+
     # --- a passing flow: every action, one event per step, no typed value on the wire --------------
     page = _login_page()
     session, events, _ = _session(page)
@@ -213,11 +279,11 @@ def _test_e2e_browser_session() -> None:
             {"action": "fill", "selector": {"label": "Email"}, "selector_provenance": {"type": "source"}, "value": "typed-secret-value"},
             {"action": "click", "selector_candidates": [
                 {"selector": {"role": "button", "name": "Sign in"}, "selector_provenance": {"type": "source"}},
-                {"selector": {"testid": "login-submit"}, "selector_provenance": {"type": "existing_test"}},
+                {"selector": {"e2e": "login-submit"}, "selector_provenance": {"type": "existing_test"}},
             ]},
             {"action": "expect_url", "contains": "/dashboard", "claim_id": "login"},
             {"action": "expect_title", "equals": "Dashboard", "claim_id": "login"},
-            {"action": "expect_dom", "selector": {"testid": "banner"}, "text": "Welcome back", "claim_id": "login"},
+            {"action": "expect_dom", "selector": {"e2e": "banner"}, "text": "Welcome back", "claim_id": "login"},
             {"action": "probe"},
         ],
     }
@@ -275,7 +341,7 @@ def _test_e2e_browser_session() -> None:
     page = _Page([
         {"role": "button", "name": "Simpan"},
         {"role": "dialog", "name": "Tambah barang"},
-        {"role": "button", "name": "Simpan", "in": "Tambah barang", "testid": "modal-save"},
+        {"role": "button", "name": "Simpan", "in": "Tambah barang", "e2e": "modal-save"},
     ])
     session, events, _ = _session(page)
     session.run({"steps": [{"id": "save", "action": "click", "selector": {"role": "button", "name": "Simpan"}, "within": {"role": "dialog", "name": "Tambah barang"}}]})
@@ -295,14 +361,14 @@ def _test_e2e_browser_session() -> None:
     page = _Page()
     session, events, clock = _session(page, step_timeout_ms=2000)
     page.elements = [
-        {"testid": "loader", "visible": lambda p: clock.now < 0.5},
+        {"e2e": "loader", "visible": lambda p: clock.now < 0.5},
         {"role": "button", "name": "Simpan", "enabled": lambda p: clock.now >= 0.3},
         {"text": "3 items"},
     ]
     button = {"role": "button", "name": "Simpan"}
     session.run({"steps": [
         {"id": "open", "action": "goto", "url": "/items", "ready": [{"text": "3 items"}]},
-        {"id": "save", "action": "click", "selector": button, "ready": [{"hidden": {"testid": "loader"}}, {"enabled": button}]},
+        {"id": "save", "action": "click", "selector": button, "ready": [{"hidden": {"e2e": "loader"}}, {"enabled": button}]},
     ]})
     opened, saved = _progress(events)
     assert_true(opened["status"] == "passed" and opened["ready"]["unmet"] == [], f"a goto waits for its content after navigating: {opened}")
@@ -312,8 +378,8 @@ def _test_e2e_browser_session() -> None:
     )
     page = _Page()
     session, events, clock = _session(page, step_timeout_ms=1000)
-    page.elements = [{"testid": "loader"}, {"role": "button", "name": "Simpan"}]
-    session.run({"steps": [{"id": "save", "action": "click", "selector": button, "ready": [{"hidden": {"testid": "loader"}}]}]})
+    page.elements = [{"e2e": "loader"}, {"role": "button", "name": "Simpan"}]
+    session.run({"steps": [{"id": "save", "action": "click", "selector": button, "ready": [{"hidden": {"e2e": "loader"}}]}]})
     stuck = _progress(events)[0]
     assert_true(
         stuck["error"]["kind"] == "not_ready" and "hidden" in stuck["error"]["detail"] and stuck["page_stable"] is False and page.clicks == [],
@@ -321,8 +387,8 @@ def _test_e2e_browser_session() -> None:
     )
     assert_true(classify_step(stuck) == ORIGIN_UNKNOWN, "a page that never became ready is unknown, not the app's")
     assert_true("networkidle" not in page.load_states, f"stability never waits for network idle (a polling page never reaches it): {page.load_states}")
-    session, events, _ = _session(_Page([{"testid": "toast", "visible": False}]))
-    session.run({"steps": [{"action": "expect_dom", "selector": {"testid": "toast"}, "claim_id": "login"}]})
+    session, events, _ = _session(_Page([{"e2e": "toast", "visible": False}]))
+    session.run({"steps": [{"action": "expect_dom", "selector": {"e2e": "toast"}, "claim_id": "login"}]})
     assert_true(_progress(events)[0]["error"]["kind"] == "not_visible", "an element that stays hidden fails expect_dom as not_visible")
     session, events, _ = _session(_Page([{"role": "button", "name": "Pay", "actionable": False}]))
     session.run({"steps": [{"action": "click", "selector": {"role": "button", "name": "Pay"}, "selector_provenance": {"type": "source"}}]})
@@ -340,9 +406,9 @@ def _test_e2e_browser_session() -> None:
     session, events, _ = _session(_Page())
     session.run({"steps": [{"action": "expect_title", "matches": "([unclosed", "claim_id": "login"}]})
     assert_true(classify_step(_progress(events)[0]) == ORIGIN_HARNESS, "an invalid pattern is the spec's fault, not the app's")
-    page = _Page([{"testid": "banner", "inner_text": "Goodbye"}])
+    page = _Page([{"e2e": "banner", "inner_text": "Goodbye"}])
     session, events, _ = _session(page)
-    session.run({"steps": [{"action": "expect_dom", "selector": {"testid": "banner"}, "text": "Welcome", "claim_id": "login"}]})
+    session.run({"steps": [{"action": "expect_dom", "selector": {"e2e": "banner"}, "text": "Welcome", "claim_id": "login"}]})
     assert_true(_progress(events)[0]["error"]["kind"] == "assertion" and _progress(events)[0]["actual"] == {"text": "Goodbye"}, "element text mismatch is an assertion")
 
     # --- navigation: timeouts are unknown; the origin guard is harness, before and after goto -----
@@ -1295,7 +1361,7 @@ def _test_e2e_browser_session() -> None:
         def to_items(p: _Page) -> None:
             p.url = BASE + "/items"
 
-        page.elements = [{"role": "button", "name": "Simpan", "on_click": to_items}, {"testid": "row", "inner_text": "e2e-item-1"}]
+        page.elements = [{"role": "button", "name": "Simpan", "on_click": to_items}, {"e2e": "row", "inner_text": "e2e-item-1"}]
         if delete_button:
             page.elements.append({"role": "button", "name": "Hapus e2e-item-1", "on_click": to_items})
         return page
@@ -1304,7 +1370,7 @@ def _test_e2e_browser_session() -> None:
         "claims": _CLAIMS,
         "steps": [
             {"id": "create-item", "action": "click", "selector": {"role": "button", "name": "Simpan"}, "side_effect": "creates_test_data"},
-            {"id": "assert-row", "action": "expect_dom", "selector": {"testid": "row"}, "text": "e2e-item-1", "claim_id": "login"},
+            {"id": "assert-row", "action": "expect_dom", "selector": {"e2e": "row"}, "text": "e2e-item-1", "claim_id": "login"},
         ],
         "cleanup": [
             {"id": "delete-item", "cleans": "create-item", "action": "click", "selector": {"role": "button", "name": "Hapus e2e-item-1"}},

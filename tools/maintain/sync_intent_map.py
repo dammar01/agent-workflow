@@ -62,7 +62,7 @@ def main() -> int:
 
     json_delegated = set(intent.get("delegated", []))
     prefix_regex = str(intent.get("prefix_regex", ""))
-    prefix_cmds = set(re.findall(r"[a-z]+", prefix_regex.split("(", 1)[-1].split(")", 1)[0]))
+    prefix_cmds = set(re.findall(r"[a-z][a-z0-9-]*", prefix_regex.split("(", 1)[-1].split(")", 1)[0]))
     registry = _registry_delegated(claude_text)
 
     problems: list[str] = []

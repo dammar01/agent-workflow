@@ -69,14 +69,14 @@ def _send(handler: http.server.BaseHTTPRequestHandler, status: int, body: bytes,
 _CRUD_PAGE = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Items</title></head>
 <body>
-  <div data-testid="loader">Loading...</div>
-  <p data-testid="count"></p>
-  <ul data-testid="items"></ul>
+  <div data-e2e="loader">Loading...</div>
+  <p data-e2e="count"></p>
+  <ul data-e2e="items"></ul>
   <form id="add"><label>Name <input name="name"></label><button type="submit">Add item</button></form>
   <script>
-    const loader = document.querySelector('[data-testid=loader]');
-    const list = document.querySelector('[data-testid=items]');
-    const count = document.querySelector('[data-testid=count]');
+    const loader = document.querySelector('[data-e2e=loader]');
+    const list = document.querySelector('[data-e2e=items]');
+    const count = document.querySelector('[data-e2e=count]');
     async function call(method, path, body) {
       loader.hidden = false;
       await fetch(path, {method, headers: {'Content-Type': 'application/json'}, body: body ? JSON.stringify(body) : undefined});
@@ -89,7 +89,7 @@ _CRUD_PAGE = """<!doctype html>
       list.innerHTML = '';
       for (const item of items) {
         const row = document.createElement('li');
-        row.dataset.testid = 'row-' + item.name;
+        row.dataset.e2e = 'row-' + item.name;
         row.textContent = item.name + ' ' + item.status + ' ';
         for (const [label, method, body] of [['Mark done', 'PATCH', {status: 'done'}], ['Reset', 'PUT', {name: item.name, status: 'open'}], ['Delete', 'DELETE', null]]) {
           const button = document.createElement('button');
@@ -112,6 +112,20 @@ _CRUD_PAGE = """<!doctype html>
 # the body there without the route handler ever seeing it.
 _BOUNCE_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Bounce</title></head>
 <body><form method="post" action="/items/bounce"><input type="hidden" name="id" value="7"><button type="submit">Send and bounce</button></form></body></html>
+"""
+# Login the way a SPA does it: a fetch POST, then a client-side navigation once it answers.
+# The POST crosses the write guard's route handler, which Playwright sync only runs while the
+# player is inside a Playwright call — a poll that sleeps outside one holds it (DEC-007).
+# Both start a second after the click, so they cannot finish inside the click's own
+# auto-wait: they happen while the next step, expect_url, is polling.
+_GUARDED_LOGIN_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Guarded login</title></head>
+<body><button type="button" id="login">Sign in</button>
+<script>
+  document.getElementById('login').onclick = () => setTimeout(async () => {
+    await fetch('/api/session', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'});
+    location.href = '/dashboard.html';
+  }, 1000);
+</script></body></html>
 """
 _SLOW_PAGE = """<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Slow</title></head>
 <body><form method="post" action="/items/slow"><button type="submit">Send slowly</button></form></body></html>
@@ -159,6 +173,9 @@ class _AppHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return None
+        if path == "/api/session":
+            time.sleep(0.3)
+            return _send(self, 200, b"{}", "application/json")
         if path == "/items/slow":
             time.sleep(4)
             return _send(self, 200, b"<!doctype html><title>Sent</title><p>sent</p>", "text/html; charset=utf-8")
@@ -217,6 +234,8 @@ class _AppHandler(http.server.BaseHTTPRequestHandler):
             return _send(self, 200, _BOUNCE_PAGE.encode("utf-8"), "text/html; charset=utf-8")
         if path == "/slow.html":
             return _send(self, 200, _SLOW_PAGE.encode("utf-8"), "text/html; charset=utf-8")
+        if path == "/guarded_login.html":
+            return _send(self, 200, _GUARDED_LOGIN_PAGE.encode("utf-8"), "text/html; charset=utf-8")
         page = FIXTURE_DIR / path.lstrip("/")
         if path.endswith(".html") and page.parent == FIXTURE_DIR and page.is_file():
             body = page.read_text(encoding="utf-8").replace(THIRD_PARTY_TOKEN, self.third_party)
@@ -330,7 +349,7 @@ def _test_e2e_real_browser_smoke() -> None:
         result, report, files, directory = case([
             *login,
             {"action": "expect_url", "contains": "/dashboard.html", "claim_id": "login"},
-            {"action": "expect_dom", "selector": {"testid": "banner"}, "text": "Welcome back", "claim_id": "login"},
+            {"action": "expect_dom", "selector": {"e2e": "banner"}, "text": "Welcome back", "claim_id": "login"},
         ])
         assert_true(report["browser_verdict"] == "pass", f"pass: {report['reason']} {report['failures']}")
         assert_true(result["meta"]["verdict"] == "pass" and _verify_exit_code("verify", result) == 0, f"browser pass + clean review: pass, exit 0: {result['meta']['verdict']}")
@@ -348,7 +367,7 @@ def _test_e2e_real_browser_smoke() -> None:
         # --- DOM assertion fails without credentials: screenshot and trace kept ---------------------
         result, report, files, _ = case([
             {"action": "goto", "url": "/wrong_text.html"},
-            {"action": "expect_dom", "selector": {"testid": "banner"}, "selector_provenance": {"type": "source"}, "text": "Welcome back", "claim_id": "login"},
+            {"action": "expect_dom", "selector": {"e2e": "banner"}, "selector_provenance": {"type": "source"}, "text": "Welcome back", "claim_id": "login"},
         ])
         assert_true(report["browser_verdict"] == "fail" and report["claims"]["login"]["origin"] == "app", f"wrong text is the app's: {report['claims']}")
         assert_true({"step02.html", "step02.png", "trace.zip"} <= files, f"page evidence and trace kept on failure: {sorted(files)}")
@@ -394,8 +413,8 @@ def _test_e2e_real_browser_smoke() -> None:
         # --- third-party widget error and beacon 503 stay warnings ----------------------------------
         _, report, _, _ = case([
             {"action": "goto", "url": "/third_party.html"},
-            {"action": "wait_dom", "selector": {"testid": "beacon-done"}, "selector_provenance": {"type": "source"}},
-            {"action": "expect_dom", "selector": {"testid": "greeting"}, "selector_provenance": {"type": "source"}, "text": "Hello", "claim_id": "login"},
+            {"action": "wait_dom", "selector": {"e2e": "beacon-done"}, "selector_provenance": {"type": "source"}},
+            {"action": "expect_dom", "selector": {"e2e": "greeting"}, "selector_provenance": {"type": "source"}, "text": "Hello", "claim_id": "login"},
         ])
         noise = {(o["kind"], o["same_origin"]) for o in report["observations"]}
         assert_true(report["browser_verdict"] == "pass", f"third-party noise must not fail the run: {report['app_errors']}")
@@ -425,14 +444,16 @@ def _test_e2e_real_browser_smoke() -> None:
             f"a navigation redirected off the origin policy fails its step and says it was followed: {report['failures']}",
         )
 
-        # --- a form POST is refused while allow_side_effects is false: the server never sees it -----
+        # --- a form POST is refused while every write switch is off: the server never sees it -------
+        # allow_local_side_effects (default on) sends ordinary writes to a loopback host by design;
+        # the refusal is only provable with it switched off too.
         delete = [
             {"action": "goto", "url": "/mutate.html"},
             {"action": "click", "selector": {"role": "button", "name": "Delete item"}, "selector_provenance": {"type": "source"}},
             {"action": "expect_title", "equals": "Deleted", "claim_id": "login"},
         ]
         _AppHandler.writes.clear()
-        _, report, _, _ = case(delete)
+        _, report, _, _ = case(delete, allow_local_side_effects=False)
         assert_true(_AppHandler.writes == [], f"the refused write never reached the app: {_AppHandler.writes}")
         assert_true(
             report["browser_verdict"] == "incomplete" and report["failures"] and report["failures"][0]["origin"] == "harness"
@@ -451,6 +472,25 @@ def _test_e2e_real_browser_smoke() -> None:
         _, report, _, _ = case(delete, allow_side_effects=True)
         assert_true(_AppHandler.writes == ["/items/delete"] and report["browser_verdict"] == "pass", f"allow_side_effects sends a write to a loopback app: {_AppHandler.writes} {report['reason']}")
 
+        # --- a guarded write followed by expect_url: the poll keeps the route handler running (DEC-007)
+        # Default settings: the login POST reaches loopback through allow_local_side_effects, the
+        # path a real login takes.
+        _AppHandler.writes.clear()
+        _, report, _, _ = case([
+            {"id": "open", "action": "goto", "url": "/guarded_login.html"},
+            {"id": "sign-in", "action": "click", "selector": {"role": "button", "name": "Sign in"}, "selector_provenance": {"type": "source"}},
+            {"id": "landed", "action": "expect_url", "contains": "/dashboard.html", "claim_id": "login"},
+        ], step_timeout_ms=5000)
+        sent = [(r["method"], r["step_id"]) for r in report["requests"]]
+        assert_true(
+            report["browser_verdict"] == "pass" and _AppHandler.writes == ["/api/session"],
+            f"the guarded POST is released and the redirect lands: {report['reason']} {report['failures']} {_AppHandler.writes}",
+        )
+        assert_true(
+            sent == [("POST", "landed")],
+            f"the POST went through the guard while expect_url was polling, not inside the click: {sent}",
+        )
+
         # --- a write the server redirects off policy is not re-sent: the guard follows it itself -------
         bounce = [
             {"action": "goto", "url": "/bounce.html"},
@@ -468,8 +508,8 @@ def _test_e2e_real_browser_smoke() -> None:
 
         # --- CRUD on a fetch-driven page: readiness, scoped selectors, ledger, cleanup ----------------
         name = "e2e-smoke-item"
-        row = {"testid": f"row-{name}"}
-        loaded = [{"hidden": {"testid": "loader"}}]
+        row = {"e2e": f"row-{name}"}
+        loaded = [{"hidden": {"e2e": "loader"}}]
         crud_steps = [
             {"id": "open", "action": "goto", "url": "/crud.html", "ready": [*loaded, {"text": "0 items"}]},
             {"id": "fill-name", "action": "fill", "selector": {"label": "Name"}, "selector_provenance": {"type": "source"}, "value": name},
@@ -489,11 +529,13 @@ def _test_e2e_real_browser_smoke() -> None:
             {"id": "reopen", "cleans": "create", "action": "goto", "url": "/crud.html", "ready": loaded},
             {"id": "delete", "cleans": "create", "action": "click", "selector": {"role": "button", "name": "Delete"}, "within": row,
              "request": {"method": "DELETE", "path": "/api/items/:id"}},
-            {"id": "assert-deleted", "cleans": "create", "action": "expect_dom", "selector": {"testid": "count"}, "text": "0 items", "ready": loaded},
+            {"id": "assert-deleted", "cleans": "create", "action": "expect_dom", "selector": {"e2e": "count"}, "text": "0 items", "ready": loaded},
         ]
+        # DELETE is never covered by a write switch: the cleanup's endpoint is approved explicitly
+        crud_settings = {"allow_side_effects": True, "step_timeout_ms": 6000, "allowed_destructive_requests": ["DELETE /api/items/:id"]}
         _AppHandler.writes.clear()
         _AppHandler.items.clear()
-        result, report, _, _ = case(crud_steps, crud_cleanup, allow_side_effects=True, step_timeout_ms=6000)
+        result, report, _, _ = case(crud_steps, crud_cleanup, **crud_settings)
         writes = [w for w in _AppHandler.writes if not w.startswith("GET")]
         assert_true(report["browser_verdict"] == "pass" and report["cleanup"]["status"] == "passed", f"CRUD passes and cleans up: {report['reason']} {report['failures']} {report['cleanup']}")
         assert_true(
@@ -512,7 +554,7 @@ def _test_e2e_real_browser_smoke() -> None:
         _AppHandler.items.clear()
         _AppHandler.fail_delete[0] = True
         try:
-            result, report, _, directory = case(crud_steps, crud_cleanup, allow_side_effects=True, step_timeout_ms=6000)
+            result, report, _, directory = case(crud_steps, crud_cleanup, **crud_settings)
         finally:
             _AppHandler.fail_delete[0] = False
         assert_true(
@@ -542,10 +584,10 @@ def _test_e2e_real_browser_smoke() -> None:
             {"action": "expect_title", "equals": "Results", "claim_id": "login"},
         ]
         _AppHandler.writes.clear()
-        _, report, _, _ = case(search)
+        _, report, _, _ = case(search, allow_local_side_effects=False)
         assert_true(_AppHandler.writes == [] and report["browser_verdict"] == "incomplete", f"an unconfirmed read-shaped POST is still refused: {_AppHandler.writes} {report['browser_verdict']}")
         _AppHandler.writes.clear()
-        _, report, _, _ = case(search, allowed_read_only_requests=["POST /search"])
+        _, report, _, _ = case(search, allow_local_side_effects=False, allowed_read_only_requests=["POST /search"])
         assert_true(_AppHandler.writes == ["/search"] and report["browser_verdict"] == "pass", f"a confirmed read reaches the app once and the flow completes: {_AppHandler.writes} {report['reason']} {report['failures']}")
         assert_true(
             any(o["kind"] == "read_only_request_allowed" for o in report["observations"]),

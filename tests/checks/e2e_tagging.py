@@ -59,6 +59,13 @@ def _test_e2e_tagging() -> None:
     assert_true(len(tagging.proposals(many)) == tagging.MAX_PROPOSALS, "one run's worth, not a refactor")
 
     # --- the line rewrite ------------------------------------------------------------
+    # One test attribute across the runtime: what tagging writes is what an `e2e` selector
+    # reads. A drift here is the data-testid/data-e2e split this pairing exists to prevent.
+    from core.evidence.e2e.spec import E2E_ATTRIBUTE, e2e_css
+
+    assert_true(tagging.TAG_ATTRIBUTE == E2E_ATTRIBUTE == "data-e2e", "tagging and selectors share one attribute")
+    assert_true("testid" not in tagging.tagged_line(_BUTTON, "save-item"), "a proposal never writes data-testid")
+    assert_true(e2e_css("save-item") in f'[{tagging.TAG_ATTRIBUTE}="save-item"]', "the selector for a proposed tag is the tag")
     assert_true(
         tagging.tagged_line(_BUTTON, "save-item") == '  <button data-e2e="save-item" class="primary" onclick="save()">Simpan</button>',
         f"the attribute lands right after the element name: {tagging.tagged_line(_BUTTON, 'save-item')}",

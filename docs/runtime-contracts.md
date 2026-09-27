@@ -45,14 +45,30 @@ the bytes it would have to check.
 | Intent detection without the `/.` prefix | Matches on the **user's** message. No Python path receives one. |
 | `/.execute` and its `-y` gate | `/.execute` is implemented entirely by main_agent editing files. There is no Python entry point to hook. |
 | `commands.auto_verify_after_execute` | Same — which is why the config key ships with that caveat inline rather than as a promise. |
-| `/.verify-browser` interview and confirmation | The questions and the user's "run it" happen in main_agent's thread. The runtime only sees the request file written afterwards. |
+| `/.verify-browser` interview | The questions happen in main_agent's thread, and only after a draft reports the target unconfigured or unreachable. The runtime only sees the request file written afterwards. |
+| Proxy-failure hard gate | Stopping, printing `[PROXY GAGAL]`, and waiting for a yes/no before any local fallback is main_agent behavior after it reads `ok:false`. The runtime returns the failure; it cannot stop main_agent from gathering on its own. |
+| Output contracts (RELAY vs SYNTHESIS, mandatory fields) | Output-side, like `[OPTIONS]`. |
+
+One prompt contract is enforced **partly outside Python**: the pre-flight gate for
+delegated commands. It is prompt-level in `CLAUDE.md`, and in auto-intent mode the
+`intent-gate-set` / `intent-gate-check` hooks in Claude Code block gather tools until
+`.workflow/run` dispatches. That enforcement lives in the agent host, not in this runtime,
+and it fails open. The full prompt-layer list, with what each contract requires, is in
+[reference.md, "Kontrak lapisan prompt"](reference.md#kontrak-lapisan-prompt).
 
 What *is* checkable is the second agent's output, because it comes back through the
 runtime: see `core.evidence.contract.contract_warnings`. Those are reported, never fatal.
 
 ## /.verify-browser
 
-`--command verify-browser` (a background command like `verify`), dispatched from
+`--command verify-browser` is a **delegated** command: listed in the DELEGATED registry of
+the shipped `CLAUDE.md` and in `intent-map.json`, so the pre-flight gate applies to it as it
+does to `verify`. Division of work: the secondary agent drafts the spec (stage 1) and reviews
+the browser evidence (stage 3); the browser itself is driven by the **runtime player**, a
+child process this runtime starts (stage 2). Neither main_agent nor the secondary agent
+(read-only sandbox) runs the browser.
+
+It is a background command like `verify`, dispatched from
 `Executor.execute()` to `core/evidence/e2e/runner.py` under the one runtime lock the call
 holds. Stages that need a provider go through `Executor._run_delegated` directly — never
 back through `execute()`, whose fact ingest, evidence indexing and fan-out bookkeeping
@@ -109,12 +125,24 @@ what replaced it. Hybrid review is not a setting: it always runs.
 | --- | --- | --- | --- | --- |
 | both | request | — | — | missing or malformed → `incomplete: request_missing | request_invalid` (not recorded) |
 | both | preflight | — | — | `base_url` policy, write policy (`allow_side_effects` with a write host that is not loopback or `.test` and resolves public, link-local or nowhere → `spec_invalid`), Playwright, browser, or URL reachability fails → draft `blocked`, run `incomplete` with that reason |
-| draft | 1 | `e2e_spec` (internal route, role exploration; refused by `main.run()` and absent from the CLI) | standard `[EVIDENCE]` … `[DIGEST]` with an `[E2E SPEC]` section inside | a proxy failure (returned as-is); otherwise always — `[E2E DRAFT]` with status `ready` or `invalid` (spec missing after one targeted continuation, refused by policy, ungrounded) |
+| draft | 1 | `e2e_spec` (internal route, role exploration; refused by `main.run()` and absent from the CLI) | standard `[EVIDENCE]` … `[DIGEST]` with an `[E2E SPEC]` section inside | a proxy failure (returned as-is); otherwise always — `[E2E DRAFT]` with status `ready` or `invalid` (spec missing after one targeted continuation, still invalid after one repair, refused by policy, ungrounded) |
 | run | spec | the request's `scenario` | — | refused by validation → `incomplete: spec_invalid`; malformed secrets.json, an unknown profile, or several profiles and none selected → `secrets_invalid`; an unresolved `${ENV}` → `env_missing` |
 | run | existing tests | `config.json e2e.existing_test_command` over allow-listed files | exit code | never by itself — covered claims become proven (exit 0) or `unknown` (anything else) |
-| run | 2 | local player child process (`python -m core.evidence.e2e.player` → `browser.run_scenario`) | JSONL events (`progress`, `request`, `cleanup`, `observation`, `artifact`, `harness`, `heartbeat`, `result`; shapes in `classify.py`) | never by itself — its report decides; skipped when the scenario has no steps; retried under the rules below |
+| run | 2 | runtime player child process (`python -m core.evidence.e2e.player` → `browser.run_scenario`) | JSONL events (`progress`, `request`, `cleanup`, `observation`, `artifact`, `harness`, `heartbeat`, `result`; shapes in `classify.py`) | never by itself — its report decides; skipped when the scenario has no steps; retried under the rules below |
 | run | 3 | `verify` with an `[E2E EVIDENCE]` block in the prompt | ordinary `[VERIFICATION]` | skipped when the browser could not finish; a failed review is a declared gap, never a softer verdict |
 | run | normalise | — | canonical `[VERIFICATION]` on `result.content`; `meta.verdict` set before `_finalize_verify_result` | — |
+
+Stage 1 gets at most two follow-ups in the same provider thread, each at most once. A reply
+with evidence and no `[E2E SPEC]` gets the targeted continuation (`spec.spec_continuation_prompt`).
+A section that arrived but did not validate — the scenario outside its fence, invalid JSON, a
+value outside an enum such as `side_effect`, a retired selector key, a policy or grounding
+refusal — gets one repair (`spec.spec_repair_prompt`) quoting the validator's messages (at
+most `MAX_REPAIR_ERRORS`) and asking for the complete corrected section; the repair reply
+replaces the first section and is validated from scratch. Still invalid after that, the
+draft is `invalid`. `meta.e2e.repair` records `{attempted, errors, recovered}`; without a
+`provider_session_id` nothing is asked and it says `reason: no_provider_session`. Before this,
+every section that arrived broken ended the draft on its first attempt, which is the shape
+first drafts most often have.
 
 Origin and write policy are two different questions, answered by two different things
 (`core/evidence/e2e/preflight.py`). WHERE a run may point is about names: a loopback host, a
@@ -209,6 +237,29 @@ next: wait or raise a limit; fix the environment; fix the application. An app fa
 outcome that could never accumulate, which is the outcome most worth braking on. The latest
 reason still travels in the record as the detail the refusal quotes back.
 
+Since 3.7.3 the `app` bucket is narrowed by a failure signature
+(`classify.failure_signature`, versioned `v1:<digest>`, DEC-008). An `app` streak continues
+only when the new failure has the same signature: the same page (`url_after` through
+`sanitize_endpoint`, query and fragment dropped, identifier segments folded to `:id`), the
+same action, the same field (the step's `selector`/`selector_candidates`/`within` as the
+placeholder scenario wrote them), and the same condition (the error kind, the step's
+`contains`/`equals`/`matches`/`text`/`value` except on `fill`, and the unmet readiness
+conditions). It excludes the step id, so renaming a step is not a fix, and the free-text
+detail, so a timestamp in a message does not make every run new. A `fail` with no failed
+step is signed by the run's reason. Different app failures on one origin are different
+things to fix, not one loop: keyed on the bucket alone, a login form that had not rendered, a
+redirect the runtime itself held back, and that redirect again became one streak, and the
+fourth run was refused. `timeout` and `harness` carry no signature and stay coarse, for the
+reason above. An `app` record written before signatures existed (no `signature` field) is
+read as no streak.
+
+Every counted outcome also records `runtime`, the runtime's own identity
+(`runner.runtime_identity()`: `TOOL_VERSION` plus a digest of `core/evidence/e2e/*.py`). A
+streak at the limit written by a different runtime is released before braking, with
+`meta.e2e.repeat_released: {by: runtime_changed, …}`. The project fingerprint below cannot see
+the runtime, and a fix made during development does not bump the version. A record without
+`runtime` says nothing either way and is not released by this rule.
+
 A run is counted at two points, not one. After a browser report, keyed on that report's own
 verdict and reason; and at the preflight gate, which a refused run never gets past — an
 outcome written only after a browser report left `base_url_unreachable` and
@@ -223,11 +274,22 @@ rather than a loop, so braking there would lock someone out on the third attempt
 password and leave a new session as the only way to try a fourth. A draft is never counted —
 it starts no browser, so repeating it costs nothing — and neither is `repeat_failure` itself,
 which would extend the streak it has just reported.
-Bucket rather than step outcomes, deliberately — the loop this catches
+For the environment buckets: bucket rather than step outcomes, deliberately — the loop this catches
 edits the scenario between attempts, so a step-level key would reset every time and count to
 one forever. What twelve such runs have in common is never the steps; it is the environment,
 the data or the credentials underneath them. A `pass` clears the streak, and so does a new
-session. So does a preflight that passes, for a streak preflight itself
+session. So does a change to the project: every counted failure stores the project's
+fingerprint (`fingerprint.project_fingerprint` — HEAD, the tracked diff and the untracked,
+non-ignored files, all outside `.workflow/`), the newest one kept. Before braking, a streak
+at the limit is compared with the project as it is now; a different fingerprint means the
+application changed since the last failure, the record is cleared, and the run goes ahead
+with `meta.e2e.repeat_released: {by: change_detected, …}`. Scenario and request edits live
+under `.workflow/` and never change it — that loop is still braked. Outside Git there is no
+fingerprint and this release never fires. When the brake refuses, the record is also written
+to the browser knowledge store as a `repeat_failure` entry (origin, bucket, reason, streak,
+fingerprint, signature — one entry per distinct app signature), offered first to every later draft for that origin, in any session; a passing
+run against the origin retires it (`meta.e2e.repeat_failures_resolved`). A hint, never a
+gate. So does a preflight that passes, for a streak preflight itself
 wrote — one whose recorded `source` is `preflight`. Neither the bucket nor the reason can
 carry that. Not the bucket, because `harness` and `timeout` are where a browser run’s own
 incompletes land too, so clearing by bucket retired a streak of real timeouts every time
@@ -460,10 +522,15 @@ fenced JSON scenario), `spec_uncertainties`. Validation runs in both phases, bef
   tokens are never recorded. An
   HTTP 2xx proves nothing on its own — the assertions do;
 - a step uses one `selector` or `selector_candidates` (1–5, strongest first: role, label,
-  testid, text, css), each with a `selector_provenance` (optionally `ref`, a
+  e2e, text, css), each with a `selector_provenance` (optionally `ref`, a
   `path[:line]`), optionally scoped by `within` (a selector for the modal, form or table);
   the player tries only those candidates, needs exactly one match, and reports the
-  candidate used, each candidate's match count and whether a fallback was used;
+  candidate used, each candidate's match count and whether a fallback was used. `e2e`
+  matches the project's `data-e2e` attribute (`[data-e2e="<value>"]`, `spec.e2e_css`) — the
+  same attribute tagging proposes, and the only test attribute: `testid`, `data-testid` and
+  `data-e2e` as selector keys are refused with an error naming `e2e`
+  (`spec.RETIRED_SELECTOR_KEYS`), and knowledge entries recorded with `testid` are no longer
+  offered to a draft;
 - `ready` (1–5 conditions, each one of `hidden` / `visible` / `enabled` with a selector,
   `text`, or `url`) is awaited before the action — after navigation for a `goto` — within
   `step_timeout_ms`; unmet conditions fail the step as `not_ready` (origin `unknown`) and

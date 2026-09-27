@@ -317,7 +317,13 @@ def e2e_repeat_state(project_root: Path, session_id: str) -> dict:
         streak = int(record.get("streak") or 0)
     except (TypeError, ValueError):
         return {}
-    return {**record, "streak": streak, "bucket": _repeat_bucket_of(record)}
+    bucket = _repeat_bucket_of(record)
+    # An `app` streak from a build that counted by bucket alone says nothing about WHICH
+    # failure repeated — it may be three different ones. Read as no streak rather than as
+    # a limit reached: the next identical failure counts again from one.
+    if bucket == "app" and not record.get("signature"):
+        return {}
+    return {**record, "streak": streak, "bucket": bucket}
 
 
 def _repeat_bucket_of(record: dict) -> str | None:
@@ -347,6 +353,9 @@ def note_e2e_outcome(
     bucket: str | None,
     reason: str | None = None,
     source: str = "browser",
+    fingerprint: str | None = None,
+    signature: str | None = None,
+    runtime: str | None = None,
 ) -> int:
     """Fold one finished browser run into the repeat counter; return the new streak.
 
@@ -366,12 +375,30 @@ def note_e2e_outcome(
 
     A pass clears the streak, since what it was counting is gone.
 
+    `fingerprint` is the project's source state when this run failed
+    (`core/evidence/e2e/fingerprint.py`); the newest one is kept. The runner compares it
+    with the project's state before braking: a different one means someone changed the
+    application since the streak's last failure, and the brake lets that run through
+    instead of demanding a new session.
+
     `source` is which gate wrote this — `preflight` or `browser` — and it exists because
     the reason alone cannot tell them apart. The player emits `playwright_missing` and
     `browser_missing` of its own when a launch fails, the same words preflight uses, so a
     caller deciding "preflight proved this one fixed, retire it" by reading the reason
     would retire a streak of real launch failures too. It is recorded rather than derived
     for the same cause: nothing about the record after the fact says where it came from.
+
+    `signature` narrows the `app` bucket, and only that one (`classify.failure_signature`):
+    the page, the field and the condition that failed. The paragraph above is about the
+    environment, where a step-level key would never count past one; an application failure
+    is the opposite case, where three different failures on one origin are three different
+    things to fix, not one loop. So an `app` streak continues only when the signature
+    matches, and `timeout`/`harness` stay keyed on the bucket.
+
+    `runtime` is the runtime's own identity when this run failed (version and a digest of
+    the browser package's source). The runner releases a streak whose runtime differs, as
+    it does for the project fingerprint: a fix to the runtime is a change the project's
+    fingerprint cannot see.
     """
     try:
         loaded = load_workspace_state(project_root, session_id)
@@ -386,7 +413,11 @@ def note_e2e_outcome(
         previous, previous_streak = {}, 0
     if not bucket:
         record = {}
-    elif previous.get("origin") == origin and previous_bucket == bucket:
+    elif (
+        previous.get("origin") == origin
+        and previous_bucket == bucket
+        and (bucket != "app" or (signature and previous.get("signature") == signature))
+    ):
         # The newest reason replaces the stored one: when a streak is quoted back it should
         # name what the last run actually said, not the first name the problem went by.
         # `bucket` written explicitly, not inherited from `previous`: a record migrated
@@ -407,9 +438,15 @@ def note_e2e_outcome(
             "reason": reason,
             "streak": previous_streak + 1,
             "source": source if previous.get("source") == source else "mixed",
+            "fingerprint": fingerprint,
+            "signature": signature,
+            "runtime": runtime,
         }
     else:
-        record = {"origin": origin, "bucket": bucket, "reason": reason, "streak": 1, "source": source}
+        record = {
+            "origin": origin, "bucket": bucket, "reason": reason, "streak": 1, "source": source,
+            "fingerprint": fingerprint, "signature": signature, "runtime": runtime,
+        }
     state["e2e_repeat"] = record
     atomic_write_json(loaded["paths"]["state"], state)
     return int(record.get("streak") or 0)

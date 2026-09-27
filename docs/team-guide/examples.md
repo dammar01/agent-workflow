@@ -34,7 +34,7 @@ What happens:
 | --- | --- | --- | --- |
 | `explore` | secondary agent reads the repository | where user settings, notifications, and the relevant API/UI live, with `file:line` anchors | nothing yet |
 | `plan` | secondary agent gathers evidence; Claude Code reasons | ordered steps, affected files, risks, open questions, options | answer the open questions, pick an option |
-| `/.execute -y` | Claude Code writes the code | the changes, reported as `implemented` | approve by typing `-y` |
+| `/.execute` | Claude Code writes the code | the changes, reported as `implemented` | give the explicit approval ([how](../reference.md#kontrak-lapisan-prompt)) |
 | `/.verify` | secondary agent checks the result | a verdict with evidence | whether it is done, or needs another pass |
 
 The explore stage is often absorbed into `plan`; you can also ask for it explicitly.

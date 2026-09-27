@@ -25,15 +25,11 @@ continue locally without the secondary agent, or `no` to stop and fix the provid
 It is slow because the secondary agent reads the code. That is the work you are delegating,
 not overhead around it. What you can do:
 
-**Measure first.** Your own numbers are better than anyone's estimate:
-
-```bash
-python "$AGENT_PATH" --command report --work-dir /path/to/your-project --pretty
-```
-
-`time_to_completion_seconds` gives the mean and median per delegated call, and names how
-many calls were not measured. Per-call detail (duration, timeout, exit code) is written to
-each call's `call.meta.json`.
+**Measure first.** Your own numbers are better than anyone's estimate. The `report` command
+summarizes how long delegated calls took in your project (mean, median, and how many calls
+were not measured); per-call detail is kept in the workspace too. How to run it and where
+the per-call files live: [reference, command table](../reference.md#command) and
+[workspace layout](../reference.md#layout-workspace).
 
 **Then reduce it:**
 
@@ -46,15 +42,16 @@ each call's `call.meta.json`.
 - **Scope the request.** "How does checkout validate addresses" finishes sooner than "explain
   checkout".
 - **Let reuse work.** Repeated or similar questions can reuse earlier evidence and facts.
-  Forcing a fresh session (`--fresh-session`) turns that off; use it only when you know the
-  earlier evidence is stale.
-- **`verify_mode: syntax`** makes `/.verify` run local parse checks only, without the
-  secondary agent. It is much faster, but it proves only that files parse — **not** that the
-  behavior is correct. See [verify modes in the reference](../reference.md).
+  Forcing a fresh session turns that off; do it only when you know the earlier evidence is
+  stale. The option is in the [CLI reference](../reference.md#cli-langsung).
+- **Use the quick verify mode when parsing is all you need.** A project can switch
+  `/.verify` to parse checks only, without the secondary agent. It is much faster, but it
+  proves only that files parse — **not** that the behavior is correct. The setting and what
+  each mode checks: [verify modes in the reference](../reference.md#mode-verify).
 
 If a task is worth delegating but still too slow to be practical, say so: that feedback is
-recorded as research input (see `H-001` in
-[docs/research/hypotheses/](../research/hypotheses/)) rather than dismissed.
+recorded as research input ([research questions](../research/questions.md), RQ-04 and
+RQ-05) rather than dismissed.
 
 ## "It feels the same as the normal agent"
 

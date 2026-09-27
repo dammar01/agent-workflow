@@ -47,7 +47,8 @@ STALE_AFTER_FAILS = 2
 # Proven this many times before it may leave the project as Git-tracked knowledge.
 PROMOTE_AFTER_PASSES = 3
 PER_KIND_LIMIT = 5
-KIND_ORDER = ("auth.login", "auth.logout", "navigation", "page_ready", "selector")
+REPEAT_FAILURE = "repeat_failure"
+KIND_ORDER = (REPEAT_FAILURE, "auth.login", "auth.logout", "navigation", "page_ready", "selector")
 _PLACEHOLDER = re.compile(r"^\$\{[A-Z0-9_]+\}$")
 _PASSWORD_PLACEHOLDER = "${E2E_PASS}"
 _ASSERTIONS = frozenset({"expect_url", "expect_dom", "expect_title"})
@@ -270,10 +271,91 @@ def ingest(project_root: Path, report: dict, scenario: dict, base_url: str, sess
     return summary
 
 
+def note_repeat_failure(project_root: Path, origin: str, record: dict, session_id: str) -> None:
+    """Remember that runs against `origin` kept ending the same way.
+
+    Written when the repeat brake reaches its limit. The brake itself lives in one
+    session's state and lets go when the project changes; this entry is what outlives
+    both, so the next draft — in this session or a new one — reads that the environment
+    was failing, and why, before it proposes the same run again. A hint, never a gate.
+    """
+    bucket = str(record.get("bucket") or "")
+    if not origin or not bucket:
+        return
+    now = now_iso()
+    with _Lock(project_root):
+        entries = {entry["id"]: entry for entry in load(project_root)}
+        # One entry per distinct app failure, not one per bucket: two different failures
+        # are two different things for the next draft to read. The environment buckets
+        # carry no signature and keep one entry each.
+        signature = str(record.get("signature") or "")
+        entry_id = _entry_id(REPEAT_FAILURE, origin, f"{bucket}\0{signature}" if signature else bucket)
+        entry = entries.get(entry_id) or {"id": entry_id, "kind": REPEAT_FAILURE, "origin": origin, "first_seen": now, "pass_count": 0}
+        entry.update(
+            {
+                "bucket": bucket,
+                "reason": record.get("reason"),
+                "streak": int(record.get("streak") or 0),
+                "source": record.get("source"),
+                "fingerprint": record.get("fingerprint"),
+                "signature": record.get("signature"),
+                "stale": False,
+                "last_seen": now,
+                "last_verified": now,
+                "last_session": session_id,
+                "note": "Runs against this origin kept failing the same way; the cause was outside the scenario. Check the environment named by `bucket`/`reason` before drafting the same flow.",
+            }
+        )
+        entries[entry_id] = entry
+        _save(project_root, list(entries.values()))
+
+
+def resolve_repeat_failures(project_root: Path, origin: str) -> int:
+    """A passing run against `origin` retires its repeat-failure entries; returns how many."""
+    if not origin or not _store_path(project_root).exists():
+        return 0
+    now = now_iso()
+    resolved = 0
+    with _Lock(project_root):
+        entries = load(project_root)
+        for entry in entries:
+            if entry.get("kind") == REPEAT_FAILURE and entry.get("origin") == origin and not entry.get("stale"):
+                entry.update({"stale": True, "resolved_at": now})
+                resolved += 1
+        if resolved:
+            _save(project_root, entries)
+    return resolved
+
+
+def _uses_retired_selector(entry: dict) -> bool:
+    """An entry recorded before `testid` was retired. Offering it would hand the draft a
+    selector the validator now refuses, so it is left out rather than rewritten: whether
+    the element also carries `data-e2e` is something only the source can say."""
+    from core.evidence.e2e.spec import RETIRED_SELECTOR_KEYS
+
+    found: list[bool] = []
+
+    def visit(item: object) -> None:
+        if isinstance(item, dict):
+            if any(key in RETIRED_SELECTOR_KEYS for key in item):
+                found.append(True)
+            for value in item.values():
+                visit(value)
+        elif isinstance(item, list):
+            for value in item:
+                visit(value)
+
+    visit(entry)
+    return bool(found)
+
+
 def relevant(project_root: Path, base_url: str) -> list[dict]:
     """Live entries for this origin, the best proven first, bounded per kind."""
     origin = origin_of(base_url)
-    live = [e for e in load(project_root) if e.get("origin") == origin and not e.get("stale")]
+    live = [
+        e for e in load(project_root)
+        if e.get("origin") == origin and not e.get("stale") and not _uses_retired_selector(e)
+    ]
     chosen: list[dict] = []
     for kind in KIND_ORDER:
         of_kind = sorted((e for e in live if e.get("kind") == kind), key=lambda e: (-int(e.get("pass_count") or 0), str(e.get("route"))))

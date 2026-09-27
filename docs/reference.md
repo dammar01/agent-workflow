@@ -1,4 +1,4 @@
-# agent-workflow v3.7.2
+# agent-workflow v3.7.3
 
 Runtime orkestrasi mandiri untuk alur kerja dua-agent. Tanpa dependency pihak ketiga.
 
@@ -70,7 +70,7 @@ git --version
 
 ---
 
-## Install (v3.7.2)
+## Install (v3.7.3)
 
 ### Anggota tim baru — urutan lengkap dari nol
 
@@ -266,6 +266,13 @@ kontrak prefix `/.` dan menghapus hook `intent-gate-set` milik workflow yang sud
 terpasang; hook lain milik user tidak dihapus. Jalankan `--auto-intent` untuk memulihkannya.
 Tanpa kedua flag, upgrade mempertahankan mode instalasi sebelumnya.
 
+`dist/config/claude/CLAUDE.md` sengaja memuat **kedua** stanza mode — `COMMAND-ONLY` dan
+`AUTO-INTENT`, masing-masing dibungkus marker `<!-- <MODE>:START -->` / `<!-- <MODE>:END -->`.
+File itu sumber sebelum dipotong, bukan hasil instalasi. Saat `--apply`, installer
+(`_apply_intent_mode`) membuang stanza mode yang tidak dipilih beserta marker kedua mode,
+sehingga `~/.claude/CLAUDE.md` yang terpasang memuat tepat satu stanza. Dua stanza hidup di
+satu file, bukan dua varian file, supaya perbedaan keduanya terlihat saat review.
+
 `--check` menentukan scope dari cwd: dijalankan di dalam project yang punya `.workflow/`, ia
 ikut memeriksa boundary project (`<project_root>/opencode.json`). Di luar workspace, scope
 itu dilaporkan `SKIPPED` — bukan didiamkan lalu dilaporkan READY.
@@ -437,7 +444,7 @@ Prefix `/.` tetap didukung, tetapi tidak wajib. Main_agent memetakan bahasa natu
 [INTENT] analyze — user meminta audit logic
 ```
 
-Contoh mapping: pertanyaan lokasi/alur → `explore`, sebab/penilaian → `analyze`, fitur baru → `plan`, implementasi → `execute -y`, hasil yang sudah dibuat → `verify`, dan blast radius diff → `sweep`.
+Contoh mapping: pertanyaan lokasi/alur → `explore`, sebab/penilaian → `analyze`, fitur baru → `plan`, implementasi → `execute -y`, hasil yang sudah dibuat → `verify`, uji alur di browser → `verify-browser`, dan blast radius diff → `sweep`.
 
 Batasnya:
 
@@ -453,6 +460,29 @@ Auto-intent adalah kontrak prompt main_agent, bukan fitur parser Python dan tida
 Setelah `[PLAN]`, main_agent menambahkan `[OPTIONS]` berisi maksimal tiga pendekatan yang tetap berada dalam scope. Setiap opsi memuat kelebihan, kekurangan, effort, risiko, dan atribusi evidence; tepat satu opsi direkomendasikan. Bila hanya satu pendekatan yang feasible, alternatif tidak boleh dikarang.
 
 Second_agent hanya memasok evidence dan reasoning. Runtime tidak membuat atau memvalidasi blok `[OPTIONS]`.
+
+### Kontrak lapisan prompt
+
+Kontrak di bawah hidup di `dist/config/claude/CLAUDE.md` dan skill-nya
+(`dist/config/claude/skills/*.md`), bukan di Python. Runtime tak pernah melihat pesan user
+mentah maupun jawaban akhir main_agent, jadi yang menegakkan kontrak ini adalah main_agent
+sendiri. Satu-satunya pengecualian sebagian adalah pre-flight gate, yang juga ditegakkan hook
+agent host. Alasan per kontrak kenapa Python tak bisa menegakkannya: `docs/runtime-contracts.md`,
+bagian "Contracts the runtime cannot enforce".
+
+| Kontrak | Isi | Penegak | Sumber |
+|---|---|---|---|
+| Mode intent | Satu dari dua, dipilih installer. `AUTO-INTENT`: bahasa natural dipetakan ke command dan diumumkan dengan satu baris `[INTENT]` tanpa menunggu jawaban. `COMMAND-ONLY`: command hanya jalan lewat prefix `/.`; tanpa prefix = percakapan biasa, boleh menyarankan satu baris lalu berhenti | main_agent | `CLAUDE.md`, stanza `AUTO-INTENT` / `COMMAND-ONLY`; lihat [Mode intent](#mode-intent) |
+| Pre-flight gate | Begitu intent resolve ke command terdelegasi (`explore`, `plan`, `analyze`, `verify`, `verify-browser`), langkah berikutnya wajib `.workflow/run`. Tool gather (Read/Grep/Glob/Bash/MCP) dilarang sebelum itu, kecuali `[LOCAL_MODE]`, proxy gagal, atau slice presisi kecil | main_agent + hook `intent-gate-set` / `intent-gate-check` (hanya mode auto-intent; fail-open) | `CLAUDE.md`, "Pre-flight gate"; `dist/config/claude/hooks/intent-map.json` |
+| Output contract | Explore dan `sweep`/`doctor` = RELAY hasil runtime apa adanya. Plan/analyze = SYNTHESIS oleh main_agent: confidence tiga bagian (`problem_understanding`, `root_cause`, `solution_path`), atribusi per klaim, `open_questions` dipisah dari `uncertainty`. Field wajib tetap tampil walau kosong, dengan alasannya | main_agent | `CLAUDE.md`, "Output Contract" dan "Plan/analysis output" |
+| `[OPTIONS]` | Lihat [Opsi implementasi pada `/.plan`](#opsi-implementasi-pada-plan) | main_agent | `skills/plan.md` |
+| `/.execute -y` | Tanpa `-y` hanya menampilkan `[EXECUTION SCOPE]` lalu berhenti. Dengan `-y` mengedit hanya file dalam scope; kebutuhan di luar scope = berhenti dan minta instruksi | main_agent | `skills/execute.md` |
+| Verifikasi setelah execute | `commands.auto_verify_after_execute` dibaca ulang tiap `/.execute`. `false` (default): status `implemented`, `verification: not_run`, kata "done" dan sejenisnya dilarang. `true`: `/.verify` bagian dari `/.execute` | main_agent | `skills/execute.md`; `CLAUDE.md`, "Execution rules" |
+| Proxy failure | `ok:false`, `error_type` evidence tidak valid, atau content bukan evidence → berhenti, cetak `[PROXY GAGAL] …`, tanya lanjut ke `/.local` (yes/no), lalu tunggu. Fallback lokal otomatis dilarang | main_agent | `CLAUDE.md`, "Proxy failure" |
+| Aksi destruktif | Commit, hapus, atau tulis di luar project tidak boleh jalan dari intent tebakan; wajib konfirmasi | main_agent | `CLAUDE.md`, "Intent detection" dan "Global Forbidden" |
+
+Isi persisnya tetap di file sumber; tabel ini peta, bukan salinan. Saat file sumber dan tabel
+ini berbeda, perbaiki salah satunya dalam perubahan yang sama.
 
 ---
 
@@ -488,7 +518,7 @@ Second_agent hanya memasok evidence dan reasoning. Runtime tidak membuat atau me
 
 ² Ketiga tahap `promote-*` menerima **path ke file JSON** lewat `--prompt`, bukan dokumennya sendiri: satu dokumen knowledge melewati batas argv 8191 karakter Windows dengan mudah. Tahapnya dipisah karena persetujuan user terjadi di antaranya — CLI tak bisa bertanya apa pun, jadi verifikasi berhenti pada vonis, main_agent yang menjalankan review, dan penulisan adalah panggilan terpisah yang hanya bisa terjadi sesudahnya. `promote-write` menolak di luar `policies.production_branch`.
 
-³ `verify-browser` membaca **request per sesi** (`.workflow/data/sessions/<session>/e2e/request.json`) di atas default project dari section `e2e` di `config.json`: wawancara dan konfirmasi terjadi di main_agent, browser dijalankan proses lokal, dan hanya draft spec serta review hasil yang memakai second_agent. Tahap `draft` tidak membawa vonis; tahap `run` diselesaikan sebagai `verify` sehingga vonis dan exit code-nya sama dengan verifikasi lain. Kontrak lengkap: `docs/runtime-contracts.md`, bagian `/.verify-browser`.
+³ `verify-browser` adalah command **terdelegasi**: ia terdaftar di registry DELEGATED dan ikut pre-flight gate seperti `explore`/`plan`/`analyze`/`verify`. Ia membaca **request per sesi** (`.workflow/data/sessions/<session>/e2e/request.json`) di atas default project dari section `e2e` di `config.json`. Pembagian kerjanya tiga tahap: second_agent menyusun draft spec (tahap 1) dan me-review bukti browser (tahap 3); di antaranya, **player runtime** — proses anak yang dijalankan runtime (`python -m core.evidence.e2e.player`) — menggerakkan Playwright (tahap 2). main_agent tidak menjalankan browser dan second_agent juga tidak (sandbox read-only). Wawancara terjadi di main_agent hanya sesudah draft melaporkan target belum dikonfigurasi. Tahap `draft` tidak membawa vonis; tahap `run` diselesaikan sebagai `verify` sehingga vonis dan exit code-nya sama dengan verifikasi lain. Sejak 3.7.3: section `[E2E SPEC]` yang gagal validasi mendapat satu perbaikan di thread provider yang sama (`meta.e2e.repair`); satu-satunya atribut test adalah `data-e2e` lewat key selector `e2e` — `testid` ditolak (**breaking**); rem `repeat_failure` lepas sendiri bila project (di luar `.workflow/`, via Git) atau runtime (`TOOL_VERSION` + digest kode `core/evidence/e2e/`) berubah sejak kegagalan terakhir, streak bucket `app` hanya bertambah untuk kegagalan dengan signature sama (halaman, field, kondisi), dan tercatat sebagai knowledge `repeat_failure` untuk draft berikutnya. Kontrak lengkap: `docs/runtime-contracts.md`, bagian `/.verify-browser`.
 
 Tidak ada command Python `execute`. `/.execute -y` tetap tersedia sebagai command user-facing di main_agent; menulis kode sengaja tidak didelegasikan ke runtime atau second_agent.
 
@@ -506,7 +536,7 @@ python3 main.py -c await --job-command explore -p "cari entry point auth" -s "ma
 python main.py -c await --job-command explore -p "cari entry point auth" -s "main_app_20260723_090000" -w "C:/path/to/target-app" --pretty
 ```
 
-Memanggil `-c explore`, `plan`, `analyze`, atau `verify` secara langsung hanya melakukan
+Memanggil `-c explore`, `plan`, `analyze`, `verify`, atau `verify-browser` secara langsung hanya melakukan
 `submit` dan segera mengembalikan payload job. Ambil hasilnya lewat `result`/`check`, atau
 gunakan `await` seperti contoh di atas. `sweep` dan command lokal lain selesai langsung.
 
@@ -609,7 +639,7 @@ Pakai `codex` bila project-nya memang tak menyimpan rahasia, atau bila kamu mene
 
 Sejak v3.7.1 posisi ini eksplisit: `codex` dan `agy` diperlakukan sebagai **trusted provider**. Selain tanpa batas baca, adapter keduanya meneruskan seluruh environment proses ke CLI provider (credential di env ikut terlihat). Itu diterima sebagai risiko, bukan diperbaiki dengan allowlist — allowlist bisa memutus auth CLI provider, dan provider yang sudah bisa membaca `.env` tak dijaga apa pun oleh env yang dipangkas. Sebagai gantinya risikonya selalu terlihat: `/.doctor` menulis cek `second_agent_read_boundary` dan satu `WARNING` di `recommended_fixes` tiap kali provider aktif `codex`/`agy` (bukan issue — readiness tetap READY), dan `/.provider` menyebutnya saat memilih.
 
-Kunci reliability (v3.7.2):
+Kunci reliability (v3.7.3):
 
 | Kunci | Default | Arti |
 | --- | --- | --- |
@@ -840,7 +870,7 @@ pernah tercatat, runtime gagal sebagai `session_capture_failed` dan clean run di
 Request berbeda pada session yang masih terkunci tetap ditolak sebagai
 `job_already_running`.
 
-### Liveness worker (v3.7.2)
+### Liveness worker (v3.7.3)
 
 PID yang hidup **tidak** berarti sedang bekerja. Worker karena itu melaporkan heartbeat sekaligus usia output stream, lalu job diklasifikasi tiga keadaan:
 
@@ -977,7 +1007,7 @@ nyata ada di [`docs/evaluation/observed-usage.md`](evaluation/observed-usage.md)
 
 ## Referensi
 
-- Catatan rilis: [`prompt/v3.7.2/changelog.md`](../prompt/v3.7.2/changelog.md)
+- Catatan rilis: [`CHANGELOG.md`](../CHANGELOG.md)
 - Kontrak canonical main_agent: [`dist/config/claude/CLAUDE.md`](../dist/config/claude/CLAUDE.md)
 - Kontrak canonical second_agent: [`dist/config/opencode/AGENTS.md`](../dist/config/opencode/AGENTS.md)
 - Runtime entry point: [`main.py`](../main.py)

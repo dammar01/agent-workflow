@@ -10,7 +10,7 @@ agent, while reasoning and implementation stay with your primary coding agent.
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](#requirements)
-[![Version](https://img.shields.io/badge/version-3.7.2-informational.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-3.7.3-informational.svg)](CHANGELOG.md)
 
 <br>
 
@@ -173,6 +173,7 @@ concurrent sessions would share an identifier and overwrite each other's state.
 | `analyze` | delegated | Causal analysis; no code changes |
 | `plan` | delegated | Evidence-backed implementation steps |
 | `verify` | delegated | Verdict on completed work, with evidence — produced by the secondary agent, not an independent check |
+| `verify-browser` | delegated | Verify a running app in a real browser: the secondary agent drafts the scenario and reviews the evidence; a runtime player drives Playwright |
 | `promote-validate` → `promote-verify` → `promote-write` | local | Turn verified evidence into a Git-tracked knowledge document |
 
 Implementation itself (`/.execute` in Claude Code) is a primary-agent skill, not a runtime

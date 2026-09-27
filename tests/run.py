@@ -63,6 +63,7 @@ from tests.checks.e2e_tagging import _test_e2e_tagging  # noqa: E402
 from tests.checks.e2e_hardening import _test_e2e_hardening  # noqa: E402
 from tests.checks.e2e_knowledge import _test_e2e_knowledge  # noqa: E402
 from tests.checks.deps import _test_runtime_is_stdlib_only  # noqa: E402
+from tests.checks.hidden_spawn import _test_every_spawn_hides_its_console  # noqa: E402
 from tests.checks.governance import _test_governance_controls  # noqa: E402
 from tests.checks.graph_verification import _test_graph_verification  # noqa: E402
 from tests.checks.hardening import _test_hardening  # noqa: E402
@@ -167,6 +168,7 @@ SUITES: dict[str, tuple] = {
     "continuation-size": (_test_continuation_prompt_is_bounded, "the recovery prompt fits the command line it travels on"),
     "contracts": (_test_workflow_contracts, "workflow contracts round-trip and the usage stream derives honestly"),
     "deps": (_test_runtime_is_stdlib_only, "shipped code imports nothing outside the stdlib"),
+    "hidden-spawn": (_test_every_spawn_hides_its_console, "every runtime subprocess hides its console on Windows"),
     "telemetry": (_test_telemetry_metrics, "P1 metrics count tasks, not calls, and report their denominators"),
     "usage-tokens": (_test_usage_token_accounting, "provider token counts reach the row, and breakdowns never become addends"),
     "transcript": (_test_transcript_parsing, "a Claude transcript yields human turns and per-turn context, not tool-call counts"),

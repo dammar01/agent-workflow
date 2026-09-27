@@ -21,5 +21,8 @@ Supporting documents: [limitations.md](limitations.md), [evaluation/](evaluation
   to use them and links there.
 - **Research records carry provenance and status.** They may say "proposed" or "unknown";
   the team guide and reference describe only what exists.
+- **Research drafts are local only.** Proposed or untested research lives in the git-ignored
+  `docs/research-drafts/`; tracked documents never link there. See
+  [research/CONTRACT.md](research/CONTRACT.md) §15.
 - **Neither layer is runtime input.** The runtime reads `.workflow/` and
   `docs/project-knowledge/` (written only by `promote-write`), never these documents.

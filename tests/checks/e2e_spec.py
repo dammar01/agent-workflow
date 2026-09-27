@@ -8,11 +8,15 @@ import tempfile
 from pathlib import Path
 
 from core.evidence.e2e.spec import (
+    SELECTOR_KEYS,
+    SELECTOR_RANK,
+    e2e_css,
     env_references,
     ground_claims,
     parse_spec,
     spec_continuation_prompt,
     spec_gap,
+    spec_repair_prompt,
     step_selectors,
     substitute_env,
     validate_existing_tests,
@@ -28,7 +32,7 @@ _SCENARIO = {
     "steps": [
         {"id": "open-login", "action": "goto", "url": "/login"},
         {"id": "fill-email", "action": "fill", "selector": {"role": "textbox", "name": "Email"}, "selector_provenance": {"type": "source"}, "value": "${E2E_USER}"},
-        {"id": "fill-password", "action": "fill", "selector": {"testid": "password"}, "value": "${E2E_PASS}"},
+        {"id": "fill-password", "action": "fill", "selector": {"e2e": "password"}, "value": "${E2E_PASS}"},
         {"id": "submit", "action": "click", "selector": {"role": "button", "name": "Masuk"}},
         {"id": "assert-dashboard", "action": "expect_url", "contains": "/dashboard", "claim_id": "login-valid-user"},
     ],
@@ -102,15 +106,34 @@ def _test_e2e_spec_contract() -> None:
     parsed = parse_spec(_reply(bare))
     assert_true(parsed["scenario"]["claims"][0]["id"] == "login-valid-user", "prose claims backfill an empty JSON claims list")
 
-    # Missing section vs unusable section: only the first is a continuation's job.
+    # Missing section vs unusable section: the first is a continuation's job, the second a
+    # repair's — both in the same thread, neither a dead draft on the first attempt.
     gap = spec_gap(_reply(_SCENARIO, with_section=False))
     assert_true(gap is not None and gap["recoverable"] and "[E2E SPEC]" in gap["missing"], f"a missing section is a recoverable gap: {gap}")
     prompt = spec_continuation_prompt(gap)
     assert_true("[E2E SPEC]" in prompt and "[DIGEST]" in prompt, "the follow-up asks for the section and closes with a digest marker")
     broken = _reply(_SCENARIO).replace("```json\n", "```json\n{not json ")
     gap = spec_gap(broken)
-    assert_true(gap is not None and not gap["recoverable"], f"a broken scenario is not recoverable by re-asking: {gap}")
+    assert_true(gap is not None and not gap["recoverable"] and gap.get("repairable"), f"a broken scenario is repairable, not re-asked: {gap}")
+    repair = spec_repair_prompt(gap["missing"])
+    assert_true(
+        "invalid JSON" in repair and "COMPLETE corrected [E2E SPEC]" in repair and "[DIGEST]" in repair,
+        "the repair quotes the parser and asks for the whole section",
+    )
+    many = spec_repair_prompt([f"error {n}" for n in range(30)])
+    assert_true("error 11" in many and "error 12" not in many and "18 more" in many, "a long error list is bounded")
+    unfenced = _reply(_SCENARIO).replace("```json\n", "").replace("\n```", "")
+    gap = spec_gap(unfenced)
+    assert_true(gap is not None and gap.get("repairable") and "scenario_json: no JSON code fence" in gap["missing"], f"a lost fence is repairable: {gap}")
     assert_true(spec_gap(_reply(_SCENARIO)) is None, "no gap when the spec is usable")
+
+    # One test attribute: `data-e2e`, through the `e2e` key. `testid` is retired, named in
+    # the error with its replacement, and the CSS the player uses is quoted and escaped.
+    for retired in ("testid", "data-testid", "data-e2e"):
+        found = validate_scenario(dict(_SCENARIO, steps=[{"id": "s", "action": "click", "selector": {retired: "x"}}]))
+        assert_true(any(f"'{retired}' not allowed; use 'e2e'" in e for e in found), f"{retired} is refused with its replacement: {found}")
+    assert_true(e2e_css('a"b\\c') == '[data-e2e="a\\"b\\\\c"]', f"e2e_css escapes quotes and backslashes: {e2e_css('a\"b')}")
+    assert_true(SELECTOR_RANK == ("role", "label", "e2e", "text", "css") and "testid" not in SELECTOR_KEYS, "e2e replaces testid in the rank")
 
     # Validation rules, one failing input each.
     def errors(**changes) -> list[str]:
@@ -250,9 +273,9 @@ def _test_e2e_spec_contract() -> None:
     assert_true(step_errors([dict(submit, within=modal)]) == [], "a selector scoped to a modal validates")
     assert_true(any("within" in e for e in step_errors([dict(submit, within={"xpath": "//div"})])), "within is a selector too")
     assert_true(any("within scopes a selector" in e for e in step_errors([{"action": "goto", "url": "/", "within": modal}])), "a goto has nothing to scope")
-    ready = [{"hidden": {"testid": "loader"}}, {"enabled": {"role": "button", "name": "Simpan"}}, {"text": "3 items"}, {"url": "/items"}]
+    ready = [{"hidden": {"e2e": "loader"}}, {"enabled": {"role": "button", "name": "Simpan"}}, {"text": "3 items"}, {"url": "/items"}]
     assert_true(step_errors([dict(submit, ready=ready)]) == [], "every readiness kind validates")
-    for bad, why in (([], "empty"), ([{"networkidle": True}], "unknown kind"), ([{"hidden": {"testid": "x"}, "text": "y"}], "two kinds in one"), ([{"text": ""}], "empty text"), ([{"visible": {"name": "x"}}], "selector without a locating key")):
+    for bad, why in (([], "empty"), ([{"networkidle": True}], "unknown kind"), ([{"hidden": {"e2e": "x"}, "text": "y"}], "two kinds in one"), ([{"text": ""}], "empty text"), ([{"visible": {"name": "x"}}], "selector without a locating key")):
         assert_true(any(".ready" in e or "ready must" in e for e in step_errors([dict(submit, ready=bad)])), f"readiness refuses {why}: {step_errors([dict(submit, ready=bad)])}")
     assert_true(step_errors([dict(submit, request={"method": "POST", "path": "/items/:id"})]) == [], "an expected write validates")
     for bad in ({"method": "GET", "path": "/items"}, {"method": "POST", "path": "items"}, {"method": "POST", "path": "/items?x=1"}, {"method": "POST", "path": "/items", "body": "{}"}):
@@ -276,7 +299,7 @@ def _test_e2e_spec_contract() -> None:
 
     strong_first = [
         {"selector": {"role": "button", "name": "Masuk"}, "selector_provenance": {"type": "source"}},
-        {"selector": {"testid": "login-submit"}, "selector_provenance": {"type": "existing_test"}},
+        {"selector": {"e2e": "login-submit"}, "selector_provenance": {"type": "existing_test"}},
         {"selector": {"css": "form button"}, "selector_provenance": {"type": "heuristic"}},
     ]
     candidates_step = {"id": "submit", "action": "click", "selector_candidates": strong_first}

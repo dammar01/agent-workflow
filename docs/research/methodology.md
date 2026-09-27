@@ -80,6 +80,16 @@ higher one:
 "The workflow feels better" is not equivalent to "the workflow improves task completion
 under controlled conditions".
 
+Tiers map onto a record's `validation_status` ([CONTRACT.md](CONTRACT.md) §14): creator and
+team observations can make a record `observed`, never `validated`. `validated`,
+`partially_validated`, and `rejected` need a designed evaluation — a `controlled_experiment`
+or an `independent_evaluation` — measured against the record's success criteria.
+
+One exception, defined in CONTRACT.md §14 and nowhere else: a decision (`DEC-XXX`) becomes
+`validated` on a clean maintainer direct-use run of the decided behavior. That evidence stays
+`creator_observation`: it shows the decision works in the maintainer's use, not that it
+generalises. The exception does not extend to hypotheses, cases, or any other record type.
+
 ## Principles
 
 1. AI discussion is not evidence.

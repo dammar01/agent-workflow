@@ -31,6 +31,11 @@ Player event protocol (one JSON object per stdout line):
 
 from __future__ import annotations
 
+import hashlib
+import json
+
+from core.evidence.e2e.redact import sanitize_endpoint
+
 ORIGIN_APP = "app"
 ORIGIN_HARNESS = "harness"
 ORIGIN_UNKNOWN = "unknown"
@@ -86,6 +91,53 @@ def repeat_bucket(verdict: str | None, reason: str | None) -> str | None:
     if not reason:
         return None
     return "timeout" if reason in _REPEAT_TIMEOUT else ORIGIN_HARNESS
+
+
+FAILURE_SIGNATURE_VERSION = 1
+_SELECTOR_FIELDS = ("selector", "selector_candidates", "within")
+_CONDITION_FIELDS = ("contains", "equals", "matches", "text", "value")
+
+
+def failure_signature(report: dict, scenario: dict | None) -> str | None:
+    """Which app failure this run was, precisely enough that a different one is not the same.
+
+    Only for the `app` bucket. The coarse bucket above stays right for `timeout` and
+    `harness`: those are the environment, which answers to several names in turn and is
+    exactly what a scenario edit cannot change. An app failure is the opposite case. Keyed on
+    the bucket alone, a form that had not rendered yet, a redirect the runtime itself held
+    back and the same redirect again were one streak, and the fourth run — the first one
+    whose scenario and runtime were both right — was refused.
+
+    The page (the route after the step, identifiers folded to `:id`, query dropped), the
+    action, the field (the step's selectors as the scenario wrote them) and the condition
+    (the error kind, what the step expected, which readiness conditions never held). Read
+    from the placeholder scenario and the report, so no resolved credential can reach it,
+    and no page text: a message with a timestamp in it would make every run new.
+
+    Not the step id: renaming a step is not a fix. Not the free-text detail, for the reason
+    above. A fail with no failed step (an enforced console error, say) is signed by the run's
+    reason, so a repeat of it still counts.
+    """
+    if report.get("browser_verdict") != "fail":
+        return None
+    steps = {str(step.get("id")): step for step in (scenario or {}).get("steps") or [] if isinstance(step, dict)}
+    failures = report.get("failures") or []
+    if not failures:
+        basis = {"run": report.get("reason") or "fail"}
+    else:
+        row = failures[0]
+        step = steps.get(str(row.get("step_id"))) or {}
+        url = row.get("url_after")
+        basis = {
+            "page": sanitize_endpoint(url) if url else None,
+            "action": row.get("action"),
+            "field": {key: step[key] for key in _SELECTOR_FIELDS if key in step},
+            "kind": row.get("error_kind"),
+            "expected": {key: step[key] for key in _CONDITION_FIELDS if key in step and step.get("action") != "fill"},
+            "unmet": sorted(json.dumps(item, sort_keys=True) for item in (row.get("ready_unmet") or [])),
+        }
+    digest = hashlib.sha256(json.dumps(basis, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+    return f"v{FAILURE_SIGNATURE_VERSION}:{digest}"
 
 
 _GROUNDED = frozenset({"source", "existing_test", "runtime_probe"})
@@ -212,6 +264,11 @@ def build_report(events: list[dict], scenario: dict | None, *, run_meta: dict | 
                         "actual": event.get("actual"),
                         "detail": detail,
                         "probe": event.get("probe"),
+                        # What the repeat brake needs to tell one app failure from another
+                        # (failure_signature). Kind and conditions, never page text.
+                        "error_kind": (event.get("error") or {}).get("kind"),
+                        "url_after": event.get("url_after"),
+                        "ready_unmet": (event.get("ready") or {}).get("unmet"),
                     }
                 )
                 if cid in claims:
