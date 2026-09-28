@@ -59,15 +59,25 @@ implementation:
 
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: validated
   validated_by: maintainer
-  validated_on: 2026-09-27
+  validated_on: 2026-09-28
 
 validation:
   summary: |
     `sync_intent_map.py --check` and `sync_skills.py --check` pass, and the new prefix pattern
     resolves `/.verify-browser` correctly under both Python `re` and .NET. The reversed skill
     flow has not been run end to end.
+
+    2026-09-28, real use on the maintainer's private web project: every `/.verify-browser` call went through `.workflow/run` as a
+    delegated command — stage 1 and stage 3 reached the second agent, stage 2 the runtime player;
+    eight jobs, four drafts and four runs, the reversed flow (draft first, no interview for a
+    configured project) end to end. Validated by the maintainer on the run named below.
+  runs:
+    - date: 2026-09-28
+      job_id: "job_20260928_035021_734713"
+      description: "Delegated draft then run through `.workflow/run`; Login + dashboard on the maintainer's private web project: 7/7 steps passed, browser verdict pass; the run verdict was incomplete only because mobile rendering was listed under not_verified."
+      clean: true
 
 trade_offs:
   better:

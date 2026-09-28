@@ -89,15 +89,30 @@ implementation:
 
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
   validated_by: maintainer
-  validated_on: 2026-09-27
+  validated_on: 2026-09-28
 
 validation:
   summary: |
     Offline suites only. Per CONTRACT.md §14, this becomes `validated` after a clean direct-use
-    run that exercises it: the provie-style login re-run proceeds without `ignore_repeat_brake`,
+    run that exercises it: the originating login re-run proceeds without `ignore_repeat_brake`,
     released by `runtime_changed` or with no streak; and a later identical app failure brakes.
+
+    2026-09-28, correction: the paragraph above named the private project in "the originating
+    login re-run"; the name was replaced under CONTRACT.md §5. Nothing else in it changed.
+
+    2026-09-28, real use on the maintainer's private web project: an app failure was recorded with its signature and runtime
+    identity (streak 1) and a later pass cleared it. The brake had refused 5 `app` runs on that
+    project between 2026-09-25 and 2026-09-27, none carrying a signature — all before this
+    decision, and the pattern it describes. Since the change no streak has reached the limit
+    and no job record carries `repeat_released`, so neither a signature-narrowed brake nor a
+    `runtime_changed` release has happened in real use — observed, not validated.
+  runs:
+    - date: 2026-09-28
+      job_id: "job_20260928_031504_658555"
+      description: "App failure recorded with signature v1 and runtime identity; streak 1; cleared by a later pass."
+      clean: false
 
 trade_offs:
   better:

@@ -66,8 +66,8 @@ limitations:
   - Only the first error of each draft is tabulated; a draft usually carried several.
   - The job files do not record which provider or model drafted each spec.
 
-related: [DEC-006, CASE-004]
-related_notes: DEC-006 is the response; CASE-004 is the same maintainer's usage telemetry.
+related: [DEC-006]
+related_notes: DEC-006 is the response. Draft CASE-004 (kept locally, not tracked) is the same maintainer's usage telemetry.
 
 implementation:
   version: 3.6.x–3.7.2 (observed); response in 3.7.3

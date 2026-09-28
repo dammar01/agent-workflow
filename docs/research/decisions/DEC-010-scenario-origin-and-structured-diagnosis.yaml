@@ -67,7 +67,7 @@ evidence_notes: |
 
 implementation:
   version: 3.7.3
-  commits: [uncommitted]
+  commits: [c584748bc0c5faf3f26c45e8d88c04217fe7e621]
   components:
     - core/evidence/e2e/classify.py (ORIGIN_SCENARIO, NOT_COUNTED_REASONS, diagnose, diagnosis_for_cause)
     - core/evidence/e2e/runner.py (diagnosis wiring, repeat skip, failure_hint, draft diagnosis and quality row)
@@ -82,7 +82,9 @@ implementation:
 
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: validated
+  validated_by: maintainer
+  validated_on: 2026-09-28
 
 validation:
   summary: |
@@ -95,6 +97,18 @@ validation:
     (`scenario_selector_ambiguous`); before, the diagnosis read `selector_not_rendered`, whose
     hint says the element is missing. The draft categories have not been compared with a
     recount of real jobs.
+
+    Validated by the maintainer on the run named below: the complaint this decision answers — a
+    drafting mistake counted by the 3x brake with an unhelpful message — did not recur, and the
+    diagnosis led the next draft to a working selector. The draft telemetry ran in the same real
+    use: four `kind: e2e_draft` rows in the project's quality stream, with first-error categories
+    (`structure`, `selector_shape`) and repair outcomes; comparing those categories with a hand
+    recount of the same jobs has not been done.
+  runs:
+    - date: 2026-09-28
+      job_id: "job_20260928_031907_120639"
+      description: "Grounded selector matching two elements ended `incomplete: scenario_error`; the standing app streak (1) was neither counted nor cleared; diagnosis scenario_selector_ambiguous / fix_scenario; a failure_hint was written, and the next draft (job_20260928_031939_034230) chose a unique selector; the following run passed."
+      clean: true
 
 trade_offs:
   better:

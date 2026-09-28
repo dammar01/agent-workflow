@@ -65,14 +65,24 @@ implementation:
 
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: validated
   validated_by: maintainer
-  validated_on: 2026-09-27
+  validated_on: 2026-09-28
 
 validation:
   summary: |
     The offline suites pass, including the dispatch regression check. The login scenario that
     exposed the problem has not been re-run against the real application since the change.
+
+    2026-09-28, real use on the maintainer's private web project with the originating shape — a guarded login POST followed by
+    `expect_url`: the POST finished in 864 ms (HTTP 200) at the default 8 s step timeout, no
+    longer tracking it, and `expect_url /home` passed. Validated by the maintainer on the run
+    named below.
+  runs:
+    - date: 2026-09-28
+      job_id: "job_20260928_035021_734713"
+      description: "Guarded POST /api/v1/auth/login (864 ms, 200) then expect_url /home passed; Login + dashboard on the maintainer's private web project: 7/7 steps passed, browser verdict pass; the run verdict was incomplete only because mobile rendering was listed under not_verified."
+      clean: true
 
 trade_offs:
   better:

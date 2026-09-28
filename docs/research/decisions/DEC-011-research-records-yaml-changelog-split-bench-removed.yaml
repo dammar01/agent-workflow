@@ -61,7 +61,7 @@ evidence_notes: |
 
 implementation:
   version: 3.7.3
-  commits: [uncommitted]
+  commits: [665bb4c6da5098238eab8036a54ef12a9aae2332, c584748bc0c5faf3f26c45e8d88c04217fe7e621]
   components:
     - docs/research/schema.yaml (new), docs/research/*/_TEMPLATE.yaml
     - docs/research/decisions/*.yaml, docs/research/real-cases/*.yaml (converted)
@@ -73,13 +73,37 @@ implementation:
 
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: validated
+  validated_by: maintainer
+  validated_on: 2026-09-28
 
 validation:
   summary: |
     `check_research.py` passes over the converted corpus and the suite's fixtures reject each
     rule it enforces. Whether YAML records are faster to write and easier to verify than the
     Markdown ones is the maintainer's judgement over the next cycle, not yet recorded.
+
+    Observed, not validated: the strict gate passes only where docs/research-drafts/ exists until
+    the held CASE-004 fix lands.
+
+    2026-09-28: CASE-004 was moved back to drafts instead (every record it relates to is a
+    draft), and CASE-005 no longer references it. `check_research.py --strict --git` then passed
+    both with docs/research-drafts/ present and with it moved away (a clean-clone equivalent),
+    10 records, 0 warnings, and the `research` suite passed. Validated by the maintainer on
+    that run.
+  runs:
+    - date: 2026-09-28
+      job_id: "local check 2026-09-28"
+      description: "`check_research.py --strict --git` passes on the maintainer's machine after commits 665bb4c and c584748; in a clean clone it fails on CASE-004's draft references (fix held)."
+      clean: false
+    - date: 2026-09-28
+      job_id: "local check after CASE-004 moved to drafts"
+      description: "`check_research.py --strict --git` with and without docs/research-drafts/ (clean-clone equivalent): 10 records, 0 warnings; `tests/run.py --only research` passed."
+      clean: true
+    - date: 2026-09-28
+      job_id: "local release-layout scan after CASE-004 moved to drafts"
+      description: "Changelog split and bench removal: `stamp_version.py --check` and `gen_manifest.py --check` pass; a scan of every tracked Markdown/YAML file outside prompt/ found 0 broken relative links, including every link from CHANGELOG.md into docs/releases/; every remaining mention of `bench/` describes its removal; `tests/run.py --only stamp-version --only manifest --only deps` passed."
+      clean: true
 
 trade_offs:
   better:
