@@ -8,8 +8,8 @@ Protocol: see `classify.py`. Every line on stdout is one JSON object; anything e
 the supervisor counts as malformed. Typed values are never echoed back.
 
 `fake` modes exist so the whole lifecycle — supervisor, classifier, normaliser, exit
-codes — is testable without a browser: `pass`, `app_fail`, `harness_fail`, `unknown`,
-`launch_fail`, `malformed`, `crash`, `stall`, `heartbeat_forever`, `artifacts`.
+codes — is testable without a browser: `pass`, `app_fail`, `harness_fail`, `scenario_fail`,
+`unknown`, `launch_fail`, `malformed`, `crash`, `stall`, `heartbeat_forever`, `artifacts`.
 
 A non-fake invocation drives a real browser through `browser.run_scenario` — Playwright
 is imported there, lazily, so this module stays importable without the optional extra.
@@ -102,18 +102,24 @@ def _fake_run(mode: str, scenario: dict, artifacts_dir: str = "", display_scenar
                 }
             )
             continue
-        if mode in ("harness_fail", "unknown") and action in ("click", "fill", "expect_dom") and not failed_once:
+        if mode in ("harness_fail", "scenario_fail", "unknown") and action in ("click", "fill", "expect_dom") and not failed_once:
             failed_once = True
+            # harness_fail: the runtime broke on the step. scenario_fail: a guessed selector
+            # matched nothing on a settled page. unknown: a grounded one, page unsettled.
             _emit(
                 {
                     **base,
                     "status": "failed",
-                    "selector_provenance": "heuristic" if mode == "harness_fail" else "source",
-                    "page_stable": mode == "harness_fail",
+                    "selector_provenance": "source" if mode == "unknown" else "heuristic",
+                    "page_stable": mode != "unknown",
                     "expected": {"selector": (shown_by_id.get(str(step.get("id"))) or step).get("selector")},
                     "actual": {"found": False},
                     "url_after": url,
-                    "error": {"kind": "selector_missing", "detail": "fake: no element matched"},
+                    "error": (
+                        {"kind": "harness_error", "detail": "fake: the step's driver call failed"}
+                        if mode == "harness_fail"
+                        else {"kind": "selector_missing", "detail": "fake: no element matched"}
+                    ),
                 }
             )
             continue

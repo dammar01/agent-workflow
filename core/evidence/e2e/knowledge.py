@@ -14,6 +14,9 @@ What a run records, per application origin (scheme://host:port of base_url):
   navigation    a route a goto reached
   page_ready    a route's readiness conditions that held
   selector      a selector that matched exactly one element for an action on a route
+  failure_hint  a selector a run could not use, with the diagnosis that says why
+                (`classify.diagnose`, reusable causes only) — what the next draft should
+                not propose again as it was
 
 Only what a run PROVED is recorded: a step that passed, in a run that passed on its first
 attempt, that wrote nothing. A step that fails against a recorded entry counts against it,
@@ -48,7 +51,8 @@ STALE_AFTER_FAILS = 2
 PROMOTE_AFTER_PASSES = 3
 PER_KIND_LIMIT = 5
 REPEAT_FAILURE = "repeat_failure"
-KIND_ORDER = (REPEAT_FAILURE, "auth.login", "auth.logout", "navigation", "page_ready", "selector")
+FAILURE_HINT = "failure_hint"
+KIND_ORDER = (REPEAT_FAILURE, FAILURE_HINT, "auth.login", "auth.logout", "navigation", "page_ready", "selector")
 _PLACEHOLDER = re.compile(r"^\$\{[A-Z0-9_]+\}$")
 _PASSWORD_PLACEHOLDER = "${E2E_PASS}"
 _ASSERTIONS = frozenset({"expect_url", "expect_dom", "expect_title"})
@@ -279,9 +283,12 @@ def note_repeat_failure(project_root: Path, origin: str, record: dict, session_i
     both, so the next draft — in this session or a new one — reads that the environment
     was failing, and why, before it proposes the same run again. A hint, never a gate.
     """
+    from core.evidence.e2e.classify import diagnosis_for_cause
+
     bucket = str(record.get("bucket") or "")
     if not origin or not bucket:
         return
+    diagnosis = diagnosis_for_cause(record.get("cause"), bucket, reason=record.get("reason"), repeat=True)
     now = now_iso()
     with _Lock(project_root):
         entries = {entry["id"]: entry for entry in load(project_root)}
@@ -299,11 +306,56 @@ def note_repeat_failure(project_root: Path, origin: str, record: dict, session_i
                 "source": record.get("source"),
                 "fingerprint": record.get("fingerprint"),
                 "signature": record.get("signature"),
+                "cause": diagnosis["cause"],
+                "next_step": diagnosis["next_step"],
+                "fix_hint": diagnosis["fix_hint"],
                 "stale": False,
                 "last_seen": now,
                 "last_verified": now,
                 "last_session": session_id,
-                "note": "Runs against this origin kept failing the same way; the cause was outside the scenario. Check the environment named by `bucket`/`reason` before drafting the same flow.",
+                "note": "Runs against this origin kept failing the same way. Act on `cause`/`fix_hint` before drafting the same flow.",
+            }
+        )
+        entries[entry_id] = entry
+        _save(project_root, list(entries.values()))
+
+
+def note_failure_hint(project_root: Path, origin: str, diagnosis: dict, scenario: dict, session_id: str) -> None:
+    """Remember the step a run could not use, and why, for the next draft against `origin`.
+
+    Only reusable causes (`diagnosis["reusable"]`): a selector the draft guessed that did not
+    fit, or one cited from source that the page did not render. Keyed by the step's selector
+    view, so the same bad selector is one entry however often it recurs. Built from the
+    placeholder scenario; the step view drops typed values. Retired by a passing run
+    against the origin, like a repeat failure.
+    """
+    failed = diagnosis.get("failed") or {}
+    step_id = failed.get("step_id")
+    if not origin or not diagnosis.get("reusable") or not step_id:
+        return
+    step = next((s for s in (scenario or {}).get("steps") or [] if isinstance(s, dict) and str(s.get("id")) == str(step_id)), None)
+    if step is None:
+        return
+    view = _step_view(step)
+    now = now_iso()
+    with _Lock(project_root):
+        entries = {entry["id"]: entry for entry in load(project_root)}
+        entry_id = _entry_id(FAILURE_HINT, origin, json.dumps([diagnosis["cause"], view], sort_keys=True))
+        entry = entries.get(entry_id) or {
+            "id": entry_id, "kind": FAILURE_HINT, "origin": origin, "first_seen": now, "pass_count": 0, "seen": 0,
+        }
+        entry.update(
+            {
+                "cause": diagnosis["cause"],
+                "next_step": diagnosis["next_step"],
+                "fix_hint": diagnosis["fix_hint"],
+                "error_kind": failed.get("error_kind"),
+                "step": view,
+                "seen": int(entry.get("seen") or 0) + 1,
+                "stale": False,
+                "last_seen": now,
+                "last_verified": now,
+                "last_session": session_id,
             }
         )
         entries[entry_id] = entry
@@ -311,7 +363,8 @@ def note_repeat_failure(project_root: Path, origin: str, record: dict, session_i
 
 
 def resolve_repeat_failures(project_root: Path, origin: str) -> int:
-    """A passing run against `origin` retires its repeat-failure entries; returns how many."""
+    """A passing run against `origin` retires its repeat-failure and failure-hint entries;
+    returns how many."""
     if not origin or not _store_path(project_root).exists():
         return 0
     now = now_iso()
@@ -319,7 +372,7 @@ def resolve_repeat_failures(project_root: Path, origin: str) -> int:
     with _Lock(project_root):
         entries = load(project_root)
         for entry in entries:
-            if entry.get("kind") == REPEAT_FAILURE and entry.get("origin") == origin and not entry.get("stale"):
+            if entry.get("kind") in (REPEAT_FAILURE, FAILURE_HINT) and entry.get("origin") == origin and not entry.get("stale"):
                 entry.update({"stale": True, "resolved_at": now})
                 resolved += 1
         if resolved:

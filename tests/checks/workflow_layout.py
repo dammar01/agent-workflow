@@ -91,7 +91,7 @@ def _check_hooks_share_the_rule() -> None:
 
 def _check_consumers_do_not_spell_the_root_layout() -> None:
     """Messages and tools that name a data path must name the one a migrated workspace has."""
-    for relative in ("adapters/providers/opencode_adapter.py", "adapters/providers/codex_adapter.py", "bench/observe.py"):
+    for relative in ("adapters/providers/opencode_adapter.py", "adapters/providers/codex_adapter.py"):
         text = (_REPO / relative).read_text(encoding="utf-8")
         assert_true(
             ".workflow/sessions/" not in text and '".workflow" / "usage.jsonl"' not in text,

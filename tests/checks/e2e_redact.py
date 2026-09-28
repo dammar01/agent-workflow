@@ -88,3 +88,60 @@ def _test_e2e_redaction_variants() -> None:
             )
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+    # Agent-written input: a typed-out value is found by the lookup, never by its shape.
+    from core.evidence.e2e.redact import scrub_literals
+
+    scenario = {
+        "claims": [{"id": "login-valid-user"}],
+        "steps": [
+            {"action": "fill", "value": "user"},
+            {"action": "fill", "value": email},
+            {"action": "goto", "url": f"/profile/{email}"},
+        ],
+    }
+    clean, names = scrub_literals(scenario, {"E2E_USER": "user", "E2E_PASS": email})
+    assert_true(names == ["E2E_PASS", "E2E_USER"], f"both values are named, never shown: {names}")
+    assert_true(clean["claims"][0]["id"] == "login-valid-user", "a short value is not replaced inside another word")
+    assert_true(clean["steps"][0]["value"] == "${E2E_USER}", "a string that IS a short value is replaced whole")
+    assert_true(clean["steps"][1]["value"] == "${E2E_PASS}" and clean["steps"][2]["url"] == "/profile/${E2E_PASS}", "a long value is replaced wherever it sits")
+    assert_true(scrub_literals(scenario, {})[1] == [], "no lookup, nothing found")
+    event = {"type": "progress", "step_id": "fill-password", "claim_id": "password-login", "detail": "typed password into the form"}
+    scrubbed = scrub_resolved(event, {"E2E_PASS": "password"})
+    assert_true(
+        scrubbed["step_id"] == "fill-password" and scrubbed["claim_id"] == "password-login" and "${E2E_PASS}" in scrubbed["detail"],
+        f"echoed text is scrubbed, scenario ids in events are not: {scrubbed}",
+    )
+    worded = {"steps": [{"id": "fill-password", "action": "fill", "value": "password", "selector": {"css": "#password"}}, {"action": "goto", "url": "/reset?to=password"}], "note": "type the passwords here"}
+    clean, names = scrub_literals(worded, {"E2E_PASS": "password"})
+    assert_true(
+        clean["steps"][0]["id"] == "fill-password" and clean["steps"][0]["value"] == "${E2E_PASS}" and clean["steps"][0]["selector"]["css"] == "#password"
+        and clean["steps"][1]["url"] == "/reset?to=${E2E_PASS}" and clean["note"] == "type the passwords here" and names == ["E2E_PASS"],
+        f"a credential that is an ordinary word never rewrites an id or a longer word, only the value itself: {clean}",
+    )
+    embedded = {"steps": [
+        {"action": "expect_dom", "selector": {"text": "Welcome user@example.test"}},
+        {"action": "click", "selector": {"css": "[data-user='user@example.test']"}},
+        {"action": "click", "selector": {"name": "Secret123 account"}},
+    ]}
+    clean, names = scrub_literals(embedded, {"E2E_USER": "user@example.test", "E2E_PASS": "Secret123"})
+    assert_true(
+        clean["steps"][0]["selector"]["text"] == "Welcome ${E2E_USER}"
+        and clean["steps"][1]["selector"]["css"] == "[data-user='${E2E_USER}']"
+        and clean["steps"][2]["selector"]["name"] == "${E2E_PASS} account"
+        and names == ["E2E_PASS", "E2E_USER"],
+        f"a credential that is not a plain word is found inside a longer selector: {clean}",
+    )
+    short_mixed = {"steps": [{"action": "expect_dom", "selector": {"text": "Welcome 1234"}}, {"action": "click", "selector": {"css": "[data-user='a1b2']"}}, {"id": "a1b2-step", "action": "click"}]}
+    clean, names = scrub_literals(short_mixed, {"E2E_USER": "a1b2", "E2E_PASS": "1234"})
+    assert_true(
+        clean["steps"][0]["selector"]["text"] == "Welcome ${E2E_PASS}" and clean["steps"][1]["selector"]["css"] == "[data-user='${E2E_USER}']"
+        and clean["steps"][2]["id"] == "a1b2-step" and names == ["E2E_PASS", "E2E_USER"],
+        f"a 4-7 character value that is not a plain word is found as a token too; ids stay: {clean}",
+    )
+    tiny = {"steps": [{"action": "fill", "value": "pw"}, {"action": "click", "side_effect": "pw"}], "pw": "pw"}
+    clean, names = scrub_literals(tiny, {"E2E_PASS": "pw"})
+    assert_true(
+        names == ["E2E_PASS"] and clean["steps"][0]["value"] == "${E2E_PASS}" and clean["steps"][1]["side_effect"] == "pw" and "pw" in clean,
+        f"a value under four characters is replaced only as a whole `value` field; keys and other fields are left alone: {clean}",
+    )

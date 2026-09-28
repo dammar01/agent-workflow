@@ -50,12 +50,9 @@ TARGETS: dict[str, tuple[str, ...]] = {
         "[COMMAND GUIDE — v",
     ),
     "dist/config/claude/skills/init.md": ("generated: run/inspect/check",),
-    # `bench/BENCHMARK-PLAN.md` used to be stamped here, and stamping it was wrong. The
-    # benchmark's system under test is FROZEN at a tag (docs/reference.md, "System under test
-    # dibekukan"; the decision is recorded again in bench/STATE.md), so its `**Versi SUT:**`
-    # line must NOT follow TOOL_VERSION — a SUT that shifts mid-measurement makes the
-    # numbers attributable to no version at all. Auto-stamping it would have broken that
-    # silently on the next bump. bench/ is outside SCAN_PATHS for the same reason.
+    # A benchmark's system under test is pinned in its EXP record (`version_under_test`),
+    # never stamped: a SUT that follows TOOL_VERSION mid-measurement makes the numbers
+    # attributable to no version at all. docs/research/ is outside SCAN_PATHS for that reason.
 }
 
 # Each provider's instruction file carries the same banner. Derived rather than listed so

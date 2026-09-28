@@ -190,6 +190,13 @@ def _e2e_rows(root: Path) -> list[dict]:
     return [row for row in rows if row.get("kind") == "e2e_run"]
 
 
+def _quality_rows(root: Path) -> list[dict]:
+    path = workflow_paths(root)["data_dir"] / "quality.jsonl"
+    if not path.is_file():
+        return []
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
 def _usage_rows(root: Path) -> list[dict]:
     path = workflow_paths(root)["data_dir"] / "usage.jsonl"
     if not path.is_file():
@@ -540,6 +547,35 @@ def _test_e2e_routing() -> None:
         _, result = _flow(root, _adapter(), "unknown", {"E2E_USER": "u"})
         assert_true(result["meta"].get("verdict") == "incomplete" and "unknown origin" in result["content"], "unknown origin is incomplete, not harness")
 
+        # --- scenario: a guessed selector missed → scenario_error, not retried, not counted -----
+        from core.evidence.e2e import knowledge as e2e_knowledge_store
+        from core.runtime.state import e2e_repeat_state as _repeat_state, note_e2e_outcome as _note
+
+        root = workspace("e2e-scenario-")
+        # A harness streak already standing: a scenario typo must neither add to it nor clear it.
+        origin = e2e_knowledge_store.origin_of("http://localhost:8000")
+        _note(root, _SESSION_ID, origin, "harness", "harness_error")
+        _note(root, _SESSION_ID, origin, "harness", "harness_error")
+        result = _run(root, _adapter(), _scenario(), fake="scenario_fail", env={"E2E_USER": "u"})
+        meta = result["meta"]["e2e"]
+        assert_true(result["meta"].get("verdict") == "incomplete" and meta.get("reason") == "scenario_error", f"a draft's own selector miss is scenario_error: {meta.get('reason')}")
+        assert_true(not (meta.get("attempts") or []), "rerunning the same scenario cannot fix it, so it is not retried")
+        standing = _repeat_state(root, _SESSION_ID)
+        assert_true(standing.get("streak") == 2 and standing.get("bucket") == "harness" and meta.get("repeat_not_counted") == "scenario_error", f"the brake neither counts nor clears it: {standing}")
+        diagnosis = meta.get("diagnosis") or {}
+        assert_true(
+            diagnosis.get("cause") == "scenario_selector" and diagnosis.get("next_step") == "fix_scenario" and diagnosis.get("failed", {}).get("step_id"),
+            f"why, what, and what next travel in meta: {diagnosis}",
+        )
+        report_json = json.loads((Path(meta["artifacts"]) / "report.json").read_text(encoding="utf-8"))
+        assert_true((report_json.get("diagnosis") or {}).get("cause") == "scenario_selector", "and in report.json")
+        hints = [e for e in e2e_knowledge_store.load(root) if e.get("kind") == e2e_knowledge_store.FAILURE_HINT]
+        assert_true(len(hints) == 1 and hints[0]["cause"] == "scenario_selector" and hints[0]["step"].get("selector"), f"the next draft is told which selector did not fit: {hints}")
+        row = _e2e_rows(root)[-1]
+        assert_true(row["failure_origins"].get("scenario") == 1 and row["diagnosis"] == {"cause": "scenario_selector", "next_step": "fix_scenario"}, f"the quality row counts it: {row['failure_origins']} {row.get('diagnosis')}")
+        _run(root, _adapter(), _scenario(), fake="pass", env={"E2E_USER": "u"})
+        assert_true(all(e.get("stale") for e in e2e_knowledge_store.load(root) if e.get("kind") == e2e_knowledge_store.FAILURE_HINT), "a passing run retires the hint")
+
         # --- launch failure from the player → browser_missing -------------------------------
         root = workspace("e2e-launch-")
         _, result = _flow(root, _adapter(), "launch_fail", {"E2E_USER": "u"})
@@ -580,6 +616,11 @@ def _test_e2e_routing() -> None:
             reasons[-1] == "repeat_failure" and "playwright_missing" in (repeated[-1]["meta"]["e2e"].get("next_action") or ""),
             f"repeating a preflight failure reaches the brake, quoting what to fix: {reasons}",
         )
+        braked = repeated[-1]["meta"]["e2e"].get("diagnosis") or {}
+        assert_true(
+            braked.get("cause") == "environment_setup" and braked.get("next_step") == "fix_environment" and braked.get("reason") == "repeat_failure" and braked.get("fix_hint"),
+            f"the brake answers with a diagnosis, not only a sentence: {braked}",
+        )
 
         # --- and installing what was missing gets past it -----------------------------------
         # The other half of the brake, and the half it used to be missing. The streak is
@@ -619,6 +660,7 @@ def _test_e2e_routing() -> None:
             held["meta"]["e2e"].get("reason") == "repeat_failure",
             f"a passing preflight does not retire an app streak: {held['meta']['e2e']}",
         )
+        assert_true((held["meta"]["e2e"].get("diagnosis") or {}).get("next_step") == "fix_app", "an app streak's next step is the app")
 
         e2e_preflight.playwright_available = lambda: (False, "pinned absent for the test")
         try:
@@ -787,6 +829,19 @@ def _test_e2e_routing() -> None:
             _draft_info(draft).get("status") == "invalid" and len(adapter.calls) == 2 and (draft["meta"]["e2e"].get("repair") or {}).get("recovered") is False,
             f"a repair that did not fix it ends the draft; no second repair: {len(adapter.calls)}",
         )
+        failed_draft = draft["meta"]["e2e"].get("diagnosis") or {}
+        assert_true(
+            failed_draft.get("cause") == "draft_invalid" and failed_draft.get("next_step") == "fix_scenario"
+            and failed_draft.get("first_error") == "selector_shape" and failed_draft.get("categories", {}).get("selector_shape")
+            and failed_draft.get("repair") == {"attempted": True, "recovered": False},
+            f"an invalid draft says why, by category, and what the repair did: {failed_draft}",
+        )
+        draft_rows = [row for row in _quality_rows(root) if row.get("kind") == "e2e_draft"]
+        assert_true(
+            len(draft_rows) == 1 and draft_rows[0]["status"] == "invalid" and draft_rows[0]["first_error"] == "selector_shape"
+            and draft_rows[0]["repair_attempted"] and not draft_rows[0]["repair_recovered"] and not _e2e_rows(root),
+            f"a draft is a quality row of its own, never an e2e_run: {draft_rows}",
+        )
 
         # --- env placeholder unset: named in the draft, env_missing at run --------------------
         root = workspace("e2e-env-")
@@ -824,6 +879,41 @@ def _test_e2e_routing() -> None:
         assert_true(chosen["meta"]["e2e"]["secrets"].get("profile") == "admin" and chosen["meta"].get("verdict") == "pass", f"the request picks another account by name: {chosen['meta']['e2e'].get('secrets')}")
         absent = _run(root, _adapter(), _scenario(), settings={"secrets_profile": "nobody"})
         assert_true(absent["meta"]["e2e"].get("reason") == "secrets_invalid" and "no profile 'nobody'" in absent["content"], f"an unknown profile is refused by name: {absent['content'][:400]}")
+        # --- a credential typed out literally: found by value, replaced, flagged, never stored ---
+        # The generic scanner cannot see an email or a plain password; only the lookup can.
+        literal_reply = _SPEC_REPLY.replace('"value": "${E2E_USER}"', f'"value": "{from_file}"')
+        adapter = _adapter(spec=[literal_reply])
+        literal_task = f"verify the login change as {from_file}"
+        literal_draft = _draft(root, adapter, task=literal_task)
+        info = _draft_info(literal_draft)
+        saved = draft_path(root, _SESSION_ID).read_text(encoding="utf-8")
+        assert_true(info.get("status") == "ready" and from_file not in saved and "${E2E_USER}" in saved, f"draft.json holds the placeholder, not the value: {saved[:300]}")
+        assert_true(from_file not in json.dumps(literal_draft), "nor does the draft result")
+        assert_true(all(from_file not in c["prompt"] for c in adapter.calls), "a value in the task never reaches the stage-1 prompt")
+        literal_meta = literal_draft["meta"]["e2e"].get("secret_literals") or {}
+        assert_true(literal_meta.get("draft") == ["E2E_USER"] and literal_meta.get("task") == ["E2E_USER"], f"flagged by name, where it was found: {literal_meta}")
+        # The request the main agent copies from the draft by hand, value and all.
+        literal_scenario = json.loads(json.dumps(_scenario()).replace("${E2E_USER}", from_file))
+        adapter = _adapter()
+        literal_run = _run(root, adapter, literal_scenario)
+        on_disk = request_path(root, _SESSION_ID).read_text(encoding="utf-8")
+        assert_true(from_file not in on_disk and "${E2E_USER}" in on_disk, f"request.json is rewritten in place: {on_disk[:300]}")
+        assert_true(literal_run["meta"].get("verdict") == "pass", f"the same run, with the value restored for the player: {literal_run['meta'].get('verdict')}")
+        assert_true((literal_run["meta"]["e2e"].get("secret_literals") or {}).get("request") == ["E2E_USER"], "and flagged")
+        assert_true(from_file not in json.dumps(literal_run) and all(from_file not in c["prompt"] for c in adapter.calls), "no prompt, no result")
+        artifacts = Path(literal_run["meta"]["e2e"]["artifacts"])
+        assert_true(all(from_file not in p.read_text(encoding="utf-8", errors="ignore") for p in artifacts.rglob("*") if p.is_file()), "no artifact")
+        # A password the lookup does not know yet is refused by the field it is typed into.
+        invented = _SPEC_REPLY.replace(
+            '{"id": "submit"',
+            '{"id": "fill-pass", "action": "fill", "selector": {"role": "textbox", "name": "Password"}, "selector_provenance": {"type": "source"}, "value": "hunter2-invented"},\n   {"id": "submit"',
+        )
+        refused = _draft(root, _adapter(spec=[invented, invented]))
+        assert_true(
+            _draft_info(refused).get("status") == "invalid" and any("password field needs a placeholder" in e for e in _draft_info(refused).get("errors") or []),
+            f"a literal password is a validation error: {_draft_info(refused).get('errors')}",
+        )
+
         bad_name = settings_from({"secrets_profile": "a b"})[1]
         assert_true(bad_name and "secrets_profile" in bad_name[0], f"a profile name is validated as a name: {bad_name}")
 

@@ -38,7 +38,13 @@ _SKIP_PARTS = {"__pycache__", ".git", ".workflow", "graphify-out", "dist", "buil
 # check that used to read "nothing third-party" now reads "nothing third-party that a
 # user could be surprised by", and a guarded lazy import is the one form that cannot
 # surprise anyone.
-_OPTIONAL_EXTRAS = {"playwright": "core/evidence/e2e/"}
+_OPTIONAL_EXTRAS = {
+    "playwright": "core/evidence/e2e/",
+    # A development tool, not the runtime: research records are YAML, read only by the
+    # maintainer's check (requirements-dev.txt). Guarded like Playwright, so a runtime
+    # install without it still imports every shipped module.
+    "yaml": "tools/maintain/check_research.py",
+}
 _IMPORT_ERRORS = {"ImportError", "ModuleNotFoundError"}
 
 

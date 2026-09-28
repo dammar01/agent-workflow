@@ -10,7 +10,8 @@ question, and each has one job.
 | **Reference** | Exactly what does the runtime do? | Anyone who needs precise behavior: commands, config keys, contracts, storage | [reference.md](reference.md), [runtime-contracts.md](runtime-contracts.md), [architecture/](architecture/README.md) |
 
 Supporting documents: [limitations.md](limitations.md), [evaluation/](evaluation/README.md)
-(benchmark and observed usage), and the release history in [CHANGELOG.md](../CHANGELOG.md).
+(benchmark and observed usage), and the release history: the index in
+[CHANGELOG.md](../CHANGELOG.md), per-version notes in [releases/](releases/).
 
 ## Rules between layers
 
@@ -20,7 +21,10 @@ Supporting documents: [limitations.md](limitations.md), [evaluation/](evaluation
   details, and storage layouts stay in the reference. The team guide explains when and why
   to use them and links there.
 - **Research records carry provenance and status.** They may say "proposed" or "unknown";
-  the team guide and reference describe only what exists.
+  the team guide and reference describe only what exists. Records are YAML checked against
+  [research/schema.yaml](research/schema.yaml) ([research/CONTRACT.md](research/CONTRACT.md) §16).
+- **Release notes say what changed, not how it works.** They link to the reference for
+  behavior instead of restating it, so there is one description to keep current.
 - **Research drafts are local only.** Proposed or untested research lives in the git-ignored
   `docs/research-drafts/`; tracked documents never link there. See
   [research/CONTRACT.md](research/CONTRACT.md) §15.

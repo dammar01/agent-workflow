@@ -40,7 +40,8 @@ from core.workspace import current as e2e_current
 from core.evidence.e2e import redact as e2e_redact
 from core.evidence.e2e import request as e2e_request
 from core.evidence.e2e import tagging as e2e_tagging
-from core.evidence.e2e.classify import build_report, failure_signature, repeat_bucket
+from core.evidence.e2e.classify import NOT_COUNTED_REASONS, build_report, diagnose, failure_signature, repeat_bucket
+from core.evidence.e2e.classify import diagnosis_for_cause
 from core.evidence.e2e.fingerprint import project_fingerprint
 from core.evidence.e2e.normalize import evidence_block, to_verification
 from core.evidence.e2e.preflight import display_available, preflight
@@ -56,7 +57,7 @@ from core.evidence.e2e.spec import (
     validate_existing_tests,
     validate_scenario,
 )
-from core.evidence.e2e.spec import upload_file_errors, validate_read_only_requests
+from core.evidence.e2e.spec import error_category, upload_file_errors, validate_read_only_requests
 from core.evidence.e2e.supervisor import run_player
 from core.provider.result_prep import _sanitize_result
 from core.evidence.contracts import correlation_id_for
@@ -212,7 +213,8 @@ def _record_run(
                 "failed": statuses.count("failed"),
                 "unproven": declared - statuses.count("proven") - statuses.count("failed"),
             },
-            "failure_origins": {origin: sum(1 for f in failures if f.get("origin") == origin) for origin in ("app", "harness", "unknown")},
+            "failure_origins": {origin: sum(1 for f in failures if f.get("origin") == origin) for origin in ("app", "harness", "scenario", "unknown")},
+            "diagnosis": {key: (e2e_meta.get("diagnosis") or {}).get(key) for key in ("cause", "next_step")} if e2e_meta.get("diagnosis") else None,
             "app_errors": len(report.get("app_errors") or []),
             "steps": report.get("steps") or {},
             "browser_runs": sum(1 for s in stages if s.get("stage") == 2 and s.get("returncode") is not None),
@@ -317,9 +319,13 @@ def _draft_result(
     errors: list[str] | tuple = (),
     env_names: list[str] | tuple = (),
     missing_env: list[str] | tuple = (),
+    secret_values: dict | None = None,
 ) -> dict:
     """The draft the user confirms. Placeholder form only; written for the run phase to copy."""
     parsed = parsed or {}
+    if secret_values:
+        # Last line before disk: whatever reached here typed out goes back to `${NAME}`.
+        parsed, _ = e2e_redact.scrub_literals(parsed, secret_values)
     scenario = parsed.get("scenario")
     draft = {
         "version": 1,
@@ -344,6 +350,13 @@ def _draft_result(
     if hits:
         e2e_meta["artifact_redactions"] = hits
     e2e_meta["draft"] = {**draft, "path": str(path)}
+    diagnosis = _draft_diagnosis(status, draft["reason"], list(errors), e2e_meta.get("repair"))
+    if diagnosis:
+        e2e_meta["diagnosis"] = diagnosis
+    try:
+        _record_draft(project_root, session_id, e2e_meta, status, diagnosis)
+    except Exception:  # observing the draft must never be able to fail it
+        pass
 
     lines = ["[E2E DRAFT]", f"status: {status}", f"reason: {draft['reason'] or 'none'}", f"draft_file: {path}", "", "claims:"]
     claims = _claim_ids(scenario)
@@ -382,6 +395,80 @@ def _draft_result(
     lines += ["", "spec_uncertainties:", *([f"- {u}" for u in draft["spec_notes"]] or ["- none"])]
     meta = {"command": INVOCATION, "invocation": INVOCATION, "phase": "draft", "e2e": e2e_meta}
     return _sanitize_result({"ok": True, "content": "\n".join(lines) + "\n", "meta": meta})[0]
+
+
+def _categories(errors: list) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for error in errors:
+        name = error_category(error)
+        counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def _draft_diagnosis(status: str, reason: str | None, errors: list, repair: dict | None) -> dict | None:
+    """Why a draft is not `ready`, in the same terms a run's diagnosis uses.
+
+    The draft was the one outcome with no structured answer: it never reaches a browser, so
+    it has no report to diagnose, and it is never counted by the repeat brake. Its errors
+    are the validator's own messages; here they become categories (`spec.error_category`),
+    both for what the first reply got wrong and for what was still wrong after the repair.
+    """
+    if status == "ready":
+        return None
+    repair = repair or {}
+    initial = list(repair.get("errors") or errors)
+    if status == "blocked":
+        cause, next_step = "draft_blocked", "fix_environment"
+        hint = "Preflight refused the draft before stage 1: fix what the reason names (Playwright, the browser, the base URL, or its policy), then draft again."
+    elif reason == "secrets_invalid":
+        cause, next_step = "draft_secrets", "fix_environment"
+        hint = "secrets.json could not be read as a valid profile; fix the file or settings.secrets_profile. The scenario itself may be fine."
+    else:
+        cause, next_step = "draft_invalid", "fix_scenario"
+        hint = (
+            "The draft did not validate after the one repair. Fix the scenario JSON by the listed categories, or draft again with a narrower task; "
+            "the categories show what the second agent keeps getting wrong."
+        )
+    return {
+        "version": 1,
+        "cause": cause,
+        "next_step": next_step,
+        "first_error": error_category(initial[0]) if initial else None,
+        "categories": _categories(list(errors)),
+        "initial_categories": _categories(initial),
+        "repair": {"attempted": bool(repair.get("attempted")), "recovered": bool(repair.get("recovered"))} if repair else None,
+        "fix_hint": hint,
+    }
+
+
+def _record_draft(project_root: Path, session_id: str, e2e_meta: dict, status: str, diagnosis: dict | None) -> None:
+    """One `kind: e2e_draft` row on the quality stream: what stage 1 produced and why not.
+
+    Separate from `e2e_run` on purpose — a draft exercised nothing, and counting it as a run
+    would dilute every run rate. Categories only, never the messages: a message quotes a
+    selector or a path, and the row is for counting.
+    """
+    repair = e2e_meta.get("repair") or {}
+    stages = e2e_meta.get("stages") or []
+    write_quality_record(
+        project_root,
+        {
+            "kind": "e2e_draft",
+            "recorded_at": now_iso(),
+            "session_id": session_id,
+            "run_kind": _run_kind(e2e_meta.get("fake")),
+            "label": os.environ.get(LABEL_ENV) or None,
+            "status": status,
+            "reason": e2e_meta.get("reason"),
+            "first_error": (diagnosis or {}).get("first_error"),
+            "categories": (diagnosis or {}).get("categories") or {},
+            "initial_categories": (diagnosis or {}).get("initial_categories") or _categories(list(repair.get("errors") or [])),
+            "repair_attempted": bool(repair.get("attempted")),
+            "repair_recovered": bool(repair.get("recovered")),
+            "provider_calls": sum(1 for s in stages if s.get("command")),
+            "secret_literals": sorted({name for names in (e2e_meta.get("secret_literals") or {}).values() for name in names}),
+        },
+    )
 
 
 def _retryable(report: dict) -> bool:
@@ -481,6 +568,9 @@ def run(
         reason_text = record.get("reason") or _REPEAT_PHRASE.get(record.get("bucket") or "", "the same outcome")
         e2e_meta["reason"] = "repeat_failure"
         e2e_meta["repeat"] = dict(record)
+        # What the streak kept failing on, as the same structured answer a single run gives.
+        # A record from an older build has no cause; its bucket still names the owner.
+        e2e_meta["diagnosis"] = diagnosis_for_cause(record.get("cause"), record.get("bucket"), reason=record.get("reason"), repeat=True)
         e2e_meta["next_action"] = (
             "the last "
             f"{record.get('streak')} runs against {repeat_origin} all ended in "
@@ -699,6 +789,28 @@ def run(
     # Registered names only: the process environment is a fallback for a credential, not a
     # way for a scenario to read any variable the runtime happens to have.
     lookup = {**{name: os.environ[name] for name in e2e_request.CREDENTIAL_KEYS if name in os.environ}, **secrets}
+
+    # ---- literal secrets ------------------------------------------------------------
+    # The task and the request are written by agents, and a credential that should have
+    # travelled as `${NAME}` sometimes arrives typed out. Found by value, because only the
+    # lookup knows what an email or a plain password looks like; replaced by its
+    # placeholder, which resolves back to the same value for the player, so the run is the
+    # same run without the value in any prompt, file, or result. Flagged by name.
+    leaked = {}
+    task, task_names = e2e_redact.scrub_literals(task, lookup)
+    if task_names:
+        leaked["task"] = task_names
+    request_names = e2e_request.scrub_request_file(project_root, session_id, lookup)
+    if request_names:
+        request, _ = e2e_redact.scrub_literals(request, lookup)
+        leaked["request"] = request_names
+    if leaked:
+        e2e_meta["secret_literals"] = leaked
+        e2e_meta.setdefault("config_warnings", []).append(
+            "credential value(s) typed out literally in "
+            + ", ".join(f"{where} ({', '.join(names)})" for where, names in leaked.items())
+            + "; replaced by their ${NAME} placeholders — write placeholders, never values"
+        )
 
     if phase == "draft":
         return _draft(executor, project_root, session_id, session, task, work_dir, on_progress, session_manager, lock_claim, config, e2e_meta, stages, lookup, secret_errors)
@@ -932,6 +1044,12 @@ def run(
         previous_signature = signature
 
     report["existing_tests"] = existing_rows
+    # Why it failed, what failed, what to do next, what to fix — enums and fixed text, so it
+    # travels into report.json, meta, the quality row, the repeat record and the knowledge
+    # the next draft reads, without carrying page text or a resolved value anywhere.
+    report["diagnosis"] = diagnose(report)
+    if report["diagnosis"]:
+        e2e_meta["diagnosis"] = report["diagnosis"]
     run_state["report"] = report
     if len(attempts) > 1:
         e2e_meta["attempts"] = attempts
@@ -980,6 +1098,13 @@ def run(
         )
     except Exception as exc:  # observing the run must never be able to fail it
         e2e_meta["knowledge"] = {"error": f"{type(exc).__name__}: {exc}"}
+    if (report.get("diagnosis") or {}).get("reusable"):
+        # The one kind of failure the next draft can act on: a selector that did not fit,
+        # or one the page did not render. Kept for it, keyed by the step's selector.
+        try:
+            e2e_knowledge.note_failure_hint(project_root, repeat_origin, report["diagnosis"], scenario, session_id)
+        except Exception:  # observing the run must never be able to fail it
+            pass
     e2e_meta["browser_verdict"] = report["browser_verdict"]
     e2e_meta["reason"] = report["reason"]
     e2e_meta["cleanup"] = {key: report["cleanup"][key] for key in ("status", "groups")}
@@ -991,16 +1116,24 @@ def run(
     # non-pass verdict carries a reason worth counting.
     try:
         bucket = repeat_bucket(report["browser_verdict"], report["reason"])
-        streak = note_e2e_outcome(
-            project_root,
-            session_id,
-            repeat_origin,
-            bucket,
-            report["reason"],
-            fingerprint=current_fingerprint() if bucket else None,
-            signature=failure_signature(report, scenario) if bucket == "app" else None,
-            runtime=runtime_identity() if bucket else None,
-        )
+        # A scenario's own mistake is neither counted nor allowed to clear what is: the
+        # next run is a different scenario, and a typo must not erase a streak of real
+        # environment failures standing behind it.
+        streak = 0
+        if report["reason"] not in NOT_COUNTED_REASONS:
+            streak = note_e2e_outcome(
+                project_root,
+                session_id,
+                repeat_origin,
+                bucket,
+                report["reason"],
+                fingerprint=current_fingerprint() if bucket else None,
+                signature=failure_signature(report, scenario) if bucket == "app" else None,
+                runtime=runtime_identity() if bucket else None,
+                cause=(report.get("diagnosis") or {}).get("cause") if bucket else None,
+            )
+        else:
+            e2e_meta["repeat_not_counted"] = report["reason"]
         if streak > 1:
             e2e_meta["repeat_streak"] = streak
         if report["browser_verdict"] == "pass":
@@ -1118,7 +1251,13 @@ def _draft(
             gap = spec_gap(content)
 
     def validated(text: str) -> tuple[dict, list[str], list[str]]:
-        parsed_text = parse_spec(text)
+        # Scrubbed after parsing and before validation, so draft.json, the draft shown to
+        # the user and the request later copied from it all start from the placeholder
+        # form — and a known password typed into a password field is replaced, not refused.
+        parsed_text, names = e2e_redact.scrub_literals(parse_spec(text), lookup)
+        if names:
+            found_before = (e2e_meta.get("secret_literals") or {}).get("draft") or []
+            e2e_meta.setdefault("secret_literals", {})["draft"] = sorted({*found_before, *names})
         found, _runnable, _skipped = _spec_errors(parsed_text["scenario"], parsed_text.get("existing_tests") or [], config, project_root)
         # A proposed read-only POST is only a proposal: the draft lists it for the user to
         # confirm, and nothing reaches the guard until the request's settings name it. An
@@ -1153,7 +1292,7 @@ def _draft(
         e2e_meta["repair"] = repair
     if gap:
         e2e_meta["reason"] = "spec_invalid"
-        return _draft_result(project_root, session_id, e2e_meta, status="invalid", errors=list(gap.get("missing") or [gap.get("reason", "")]))
+        return _draft_result(project_root, session_id, e2e_meta, status="invalid", errors=list(gap.get("missing") or [gap.get("reason", "")]), secret_values=lookup)
     e2e_meta["spec_source"] = "e2e_spec"
     scenario = parsed["scenario"]
     errors = [*spec_errors, *read_only_errors, *secret_errors]
@@ -1180,4 +1319,5 @@ def _draft(
         errors=errors,
         env_names=names,
         missing_env=missing,
+        secret_values=lookup,
     )

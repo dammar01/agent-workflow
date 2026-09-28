@@ -594,6 +594,14 @@ def _step_errors(where: str, step: Mapping, policy: Mapping, claim_ids: set[str]
             errors.extend(_request_errors(where, step.get("request")))
     if action == "fill" and not isinstance(step.get("value"), str):
         errors.append(f"{where}: fill needs a string value")
+    elif action == "fill" and not _ENV_REF.search(step["value"]) and _credential_target(step):
+        # The prompt forbids literal credentials; this is where that rule stops being a
+        # request. A password typed out in the draft is a password written to draft.json,
+        # copied into request.json, and read by every stage after it.
+        errors.append(
+            f"{where}: fill into a password field needs a placeholder ({', '.join('${' + k + '}' for k in _credential_keys())}), "
+            "never a literal value"
+        )
     if action == "upload" and not (isinstance(step.get("file"), str) and _UPLOAD_FILE.match(step["file"])):
         errors.append(f"{where}: upload needs `file`, a project-relative path with forward slashes and no `..`")
     if action == "expect_url" and not any(k in step for k in ("contains", "equals", "matches")):
@@ -643,6 +651,35 @@ def _cleanup_errors(scenario: Mapping, step_ids: dict[str, tuple[int, Mapping]],
         elif step.get("no_cleanup_reason") is None:
             errors.append(f"steps[{index}]: side_effect '{effect}' needs a cleanup step (scenario.cleanup with cleans: '{sid}') or no_cleanup_reason")
     return errors
+
+
+_CREDENTIAL_FIELD = re.compile(r"password|passwd|passcode|\bpwd\b", re.IGNORECASE)
+
+
+def _credential_keys() -> tuple[str, ...]:
+    from core.evidence.e2e.request import CREDENTIAL_KEYS
+
+    return CREDENTIAL_KEYS
+
+
+def _credential_target(step: Mapping) -> bool:
+    """Whether a fill step's selector names a password field.
+
+    A heuristic over the selector text only — a user-name field is not detectable this
+    way, and does not need to be: the runner scrubs every value the secrets lookup knows,
+    whatever field it was typed into. This rule exists for the value the lookup does not
+    know yet, a password the draft invented or copied before secrets.json was filled.
+    """
+    selectors = [step.get("selector")]
+    for item in step.get("selector_candidates") or []:
+        if isinstance(item, dict):
+            selectors.append(item.get("selector"))
+    for selector in selectors:
+        if isinstance(selector, dict) and any(
+            isinstance(value, str) and _CREDENTIAL_FIELD.search(value) for value in selector.values()
+        ):
+            return True
+    return False
 
 
 def placeholder_errors(scenario: object) -> list[str]:
@@ -921,6 +958,42 @@ def substitute_env(scenario: object, env: Mapping[str, str]) -> tuple[object, li
         return item
 
     return visit(scenario), missing
+
+
+# Why a draft was rejected, as an enum a quality row can count. Ordered: the first rule
+# whose pattern the message holds decides, so the specific ones (a fence, a source_ref, a
+# password) come before the shapes that also mention a selector or a step. The patterns
+# read the validator's own messages above, and a message none of them names is `other` —
+# counted, never guessed into a neighbour.
+DRAFT_ERROR_CATEGORIES = (
+    ("section_missing", ("[e2e spec] section missing",)),
+    ("fence_missing", ("no json code fence",)),
+    ("json_invalid", ("invalid json", "top level is not an object", "scenario is not an object")),
+    ("credential_literal", ("password field needs a placeholder", "placeholder '")),
+    ("source_refs", ("source_ref",)),
+    ("provenance", ("selector_provenance",)),
+    ("selector_shape", ("selector", "within scopes")),
+    ("readiness", ("ready",)),
+    ("cleanup", ("cleanup", "cleans '", "no_cleanup_reason")),
+    ("side_effect", ("side_effect", "request.", "request is", "request names", "allow_side_effects")),
+    ("enum", (" not in [", "not allowed", " one of ")),
+    ("policy", ("refused", "origin", "allow_remote")),
+    ("claims", ("claim",)),
+    ("secrets", ("secrets.json", "secrets_profile")),
+)
+DRAFT_ERROR_CATEGORY_NAMES = (*(name for name, _ in DRAFT_ERROR_CATEGORIES), "structure", "other")
+_STRUCTURE_HINTS = ("id '", "duplicate", "needs", "at least one", "must", "not an object", "not a list", "version")
+
+
+def error_category(message: object) -> str:
+    """The DRAFT_ERROR_CATEGORY_NAMES entry one validator or parser message belongs to."""
+    text = str(message or "").lower()
+    for name, needles in DRAFT_ERROR_CATEGORIES:
+        if any(needle in text for needle in needles):
+            return name
+    if any(hint in text for hint in _STRUCTURE_HINTS):
+        return "structure"
+    return "other"
 
 
 def spec_gap(content: str) -> dict | None:

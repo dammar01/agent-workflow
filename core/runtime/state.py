@@ -356,6 +356,7 @@ def note_e2e_outcome(
     fingerprint: str | None = None,
     signature: str | None = None,
     runtime: str | None = None,
+    cause: str | None = None,
 ) -> int:
     """Fold one finished browser run into the repeat counter; return the new streak.
 
@@ -399,6 +400,9 @@ def note_e2e_outcome(
     the browser package's source). The runner releases a streak whose runtime differs, as
     it does for the project fingerprint: a fix to the runtime is a change the project's
     fingerprint cannot see.
+
+    `cause` is the run's diagnosis cause (`classify.diagnose`), newest kept, so a brake that
+    fires can say what kept failing in the same terms a single run does.
     """
     try:
         loaded = load_workspace_state(project_root, session_id)
@@ -441,11 +445,12 @@ def note_e2e_outcome(
             "fingerprint": fingerprint,
             "signature": signature,
             "runtime": runtime,
+            "cause": cause,
         }
     else:
         record = {
             "origin": origin, "bucket": bucket, "reason": reason, "streak": 1, "source": source,
-            "fingerprint": fingerprint, "signature": signature, "runtime": runtime,
+            "fingerprint": fingerprint, "signature": signature, "runtime": runtime, "cause": cause,
         }
     state["e2e_repeat"] = record
     atomic_write_json(loaded["paths"]["state"], state)

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
+
 from core.evidence.contract import validate_verification_contract, verify_exit_status
-from core.evidence.e2e.classify import ORIGIN_APP, ORIGIN_HARNESS, ORIGIN_UNKNOWN, build_report, classify_step
+from core.evidence.e2e.classify import ORIGIN_APP, ORIGIN_HARNESS, ORIGIN_SCENARIO, ORIGIN_UNKNOWN, build_report, classify_step, diagnose, repeat_bucket
 from core.evidence.e2e.normalize import evidence_block, to_verification
 from tests.checks.support import assert_true
 
@@ -35,7 +37,22 @@ def _agrees(norm: dict) -> bool:
 def _test_e2e_classification_and_verdicts() -> None:
     # --- origin per failure ---------------------------------------------------------
     assert_true(classify_step({"action": "expect_url", "error": {"kind": "assertion"}}) == ORIGIN_APP, "a failed URL assertion is the app's")
-    assert_true(classify_step({"action": "click", "error": {"kind": "selector_missing"}, "selector_provenance": "heuristic"}) == ORIGIN_HARNESS, "a heuristic selector that misses is the harness's")
+    assert_true(classify_step({"action": "click", "error": {"kind": "selector_missing"}, "selector_provenance": "heuristic"}) == ORIGIN_SCENARIO, "a heuristic selector that misses is the scenario's")
+    assert_true(classify_step({"action": "click", "error": {"kind": "mutation_blocked"}}) == ORIGIN_SCENARIO, "a write the run may not send is the scenario's")
+    assert_true(classify_step({"action": "click", "error": {"kind": "harness_error"}}) == ORIGIN_HARNESS, "a driver error is still the harness's")
+    assert_true(
+        classify_step({"action": "fill", "error": {"kind": "selector_ambiguous"}, "selector_provenance": "source", "page_stable": True}) == ORIGIN_SCENARIO,
+        "a grounded selector that matched two elements is the scenario's: the element is there, the selector is not unique",
+    )
+    assert_true(
+        classify_step({"action": "fill", "error": {"kind": "selector_missing"}, "selector_provenance": "source", "page_stable": True}) == ORIGIN_APP,
+        "a grounded selector that is gone from a settled page stays the app's",
+    )
+    ambiguous = build_report(_events(_progress(1, "fill", "failed", None, error={"kind": "selector_ambiguous"}, selector_provenance="source", page_stable=True)), _SCENARIO)
+    assert_true(
+        ambiguous["reason"] == "scenario_error" and diagnose(ambiguous)["cause"] == "scenario_selector_ambiguous",
+        f"and it ends scenario_error, diagnosed as ambiguous rather than missing: {ambiguous['reason']} {diagnose(ambiguous)}",
+    )
     assert_true(classify_step({"action": "click", "error": {"kind": "selector_missing"}, "selector_provenance": "source", "page_stable": False}) == ORIGIN_UNKNOWN, "a source selector missing on an unsettled page is unknown")
     assert_true(classify_step({"action": "click", "error": {"kind": "selector_missing"}, "selector_provenance": "source", "page_stable": True}) == ORIGIN_APP, "a source selector missing on a settled page is the app's")
     assert_true(classify_step({"action": "click", "error": {"kind": "timeout"}}) == ORIGIN_UNKNOWN, "a timeout is not attributed")
@@ -53,7 +70,20 @@ def _test_e2e_classification_and_verdicts() -> None:
 
     # --- report: harness / unknown / early end → incomplete with reason -----------------
     report = build_report(_events(_progress(1, "click", "failed", None, error={"kind": "selector_missing"}, selector_provenance="heuristic"), _progress(2, "expect_url", "skipped", "login")), _SCENARIO)
+    assert_true(report["browser_verdict"] == "incomplete" and report["reason"] == "scenario_error", f"a guessed selector that missed is the scenario's, incomplete: {report['reason']}")
+    assert_true(repeat_bucket(report["browser_verdict"], report["reason"]) is None, "and the repeat brake does not count it")
+    diagnosis = diagnose(report)
+    assert_true(
+        diagnosis["cause"] == "scenario_selector" and diagnosis["next_step"] == "fix_scenario" and diagnosis["reusable"] is True
+        and diagnosis["failed"]["error_kind"] == "selector_missing",
+        f"the diagnosis says why, what, and what next: {diagnosis}",
+    )
+    report = build_report(_events(_progress(1, "click", "failed", None, error={"kind": "harness_error"}), _progress(2, "expect_url", "skipped", "login")), _SCENARIO)
     assert_true(report["browser_verdict"] == "incomplete" and report["reason"] == "harness_error", f"harness failure is incomplete: {report['reason']}")
+    assert_true(repeat_bucket(report["browser_verdict"], report["reason"]) == ORIGIN_HARNESS and diagnose(report)["cause"] == "runtime_harness", "a harness failure is counted, and diagnosed as the runtime's")
+    fail = build_report(_events(_progress(1, "expect_url", "failed", "login", error={"kind": "assertion"}, expected={"contains": "/d"}, actual={"url": "/l"})), _SCENARIO)
+    assert_true(diagnose(fail)["cause"] == "app_assertion" and diagnose(fail)["next_step"] == "fix_app" and "/l" not in json.dumps(diagnose(fail)), "an app failure is fix_app, and carries no page text")
+    assert_true(diagnose({"browser_verdict": "pass"}) is None, "a pass has nothing to diagnose")
     report = build_report(_events(_progress(1, "click", "failed", "login", error={"kind": "selector_missing"}, selector_provenance="source", page_stable=False)), _SCENARIO)
     assert_true(report["reason"] == "unknown_origin", "unknown stays unknown, never promoted to harness")
     report = build_report(_events(_progress(1, "goto", "passed"), finished=False), _SCENARIO)

@@ -30,7 +30,7 @@ maintenance do not require a full research record.
 ## 2. Minimum record
 
 Every significant change must have at least one of `DEC-XXX`, `H-XXX`, `EXP-XXX`, or
-`CASE-XXX`.
+`CASE-XXX`, written in the format of §16.
 
 The record must explain the problem, the decision or hypothesis, the reasoning, the
 evidence, the implementation reference, the validation status, and the limitations.
@@ -89,7 +89,8 @@ research record whenever possible.
 ## 10. Historical reconstruction
 
 Historical records may be reconstructed from source code, git history, release history
-(`CHANGELOG.md`, `prompt/`), existing documentation, and remembered observations.
+(`CHANGELOG.md` and `docs/releases/`, `prompt/` up to v3.7.2), existing documentation, and
+remembered observations.
 
 Reconstructed history must be marked as reconstructed when certainty is limited. Missing
 provenance must not be fabricated.
@@ -184,4 +185,41 @@ records refer to a draft by its ID in plain text, never by a link. A draft retur
 `docs/research/` when it has been carried out and its result is recorded in it.
 
 Tracked records are frozen as of 3.7.3: their content changes only to add a new result or
-to correct a factual error against its source, never to add untested reasoning.
+to correct a factual error against its source, never to add untested reasoning. The one
+exception is the format conversion of §16 (DEC-011), which changed their encoding, not
+their content, and filled the commits they named as `unknown` from Git history.
+
+## 16. Record format
+
+Every record is a YAML file, `<ID>-<kebab-slug>.yaml`, in its type's directory, following
+[`schema.yaml`](schema.yaml) and started from that directory's `_TEMPLATE.yaml`. The schema
+fixes the fields per type and which of them are enums; unknown keys are refused, so a field
+cannot be invented in one record. `tools/maintain/check_research.py` enforces it in the test
+suite and in CI, together with the rules the schema cannot express:
+
+- IDs are unique and match the file name; the prefix matches the directory.
+- An implemented or partially implemented `DEC` names the commit(s) that carry it
+  (`implementation.commits`). `uncommitted` is allowed while the change is in the working
+  tree and is refused by `--strict`, which a release runs; replace it with the hash once the
+  commit exists.
+- `H` and `EXP` records are external to the code: they carry no commit anywhere. An `EXP`
+  pins `version_under_test` instead and names its `hypothesis`, and that `H` lists the `EXP`
+  back under `experiments`; every `EXP` an `H` lists names that `H`. Benchmark method —
+  arms, metrics, results — is written as an `EXP`.
+- `validation_status` beyond `observed` needs `validated_by` and `validated_on` (§14) and an
+  evaluation: an `EXP` reference, a completed `EXP` with results, or for a `DEC` a
+  `validation.runs` entry with `clean: true`.
+- A tracked record meets its type's `tracked_when` in the schema (§15); anything else is a
+  draft.
+- Every referenced ID resolves to a tracked record, or to a draft when
+  `docs/research-drafts/` exists.
+
+Drafts in `docs/research-drafts/` follow the same format; `--drafts` validates them without
+the tracked gate and refuses a Markdown draft. Drafts written before 3.7.3's conversion are
+Markdown until the maintainer converts them, which `--drafts` reports one by one.
+
+The README inventory is generated from the records (`--write-inventory`) and the check fails
+when it is stale. Prose goes in block scalars (`|`); a list item that starts with a backtick
+is quoted. The schema is part of this contract: changing a field or an enum bumps
+`schema_version` and is recorded as a `DEC`. PyYAML is a development dependency
+(`requirements-dev.txt`); the runtime never reads these records.

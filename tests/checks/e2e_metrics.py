@@ -70,6 +70,13 @@ def _test_e2e_metrics() -> None:
         ):
             write_quality_record(root, row)
         write_quality_record(root, {"kind": "tests", "ok": True, "suites": ["scenario"]})
+        for draft in (
+            {"kind": "e2e_draft", "run_kind": "project", "status": "ready", "first_error": "json_invalid", "categories": {}, "repair_attempted": True, "repair_recovered": True},
+            {"kind": "e2e_draft", "run_kind": "project", "status": "invalid", "first_error": "source_refs", "categories": {"source_refs": 2, "selector_shape": 1}, "repair_attempted": True, "repair_recovered": False},
+            {"kind": "e2e_draft", "run_kind": "project", "status": "invalid", "first_error": "source_refs", "categories": {"source_refs": 1}, "repair_attempted": False, "secret_literals": ["E2E_USER"]},
+            {"kind": "e2e_draft", "run_kind": "fake", "status": "ready", "first_error": None, "categories": {}},
+        ):
+            write_quality_record(root, draft)
 
         metrics = e2e_metrics(root)
         project = metrics["by_run_kind"]["project"]
@@ -96,6 +103,17 @@ def _test_e2e_metrics() -> None:
         assert_true(metrics["project_vs_baseline_token_ratio"] == 0.37, f"project e2e tokens against the baseline: {metrics['project_vs_baseline_token_ratio']}")
         assert_true(metrics["visual_browser_loop_baseline"] is None, "a baseline nobody measured is reported as absent, never estimated")
         assert_true(metrics["labels"] == ["change-1", "change-2"], "dataset labels are listed")
+        drafts = metrics["drafts"]["project"]
+        assert_true(
+            drafts["drafts"] == 3 and drafts["ready"] == 1 and drafts["invalid"] == 2 and drafts["ready_rate"] == 0.333
+            and drafts["repair_attempted"] == 2 and drafts["repair_recovered"] == 1 and drafts["secret_literal_drafts"] == 1,
+            f"drafts are counted apart from runs: {drafts}",
+        )
+        assert_true(
+            drafts["first_error"] == {"source_refs": 2, "json_invalid": 1} and drafts["categories"] == {"source_refs": 3, "selector_shape": 1},
+            f"first errors (what CASE-005 tallied by hand) and what the repair left standing: {drafts}",
+        )
+        assert_true(metrics["runs"] == 5 and metrics["drafts"]["fake"]["drafts"] == 1, "a draft is never a run, and fake drafts stay apart")
 
         assert_true(test_pass_rate(root)["total_runs"] == 1, "e2e rows never count as test-suite runs")
         assert_true(report(root)["e2e"]["runs"] == 5, "the report carries the e2e section")

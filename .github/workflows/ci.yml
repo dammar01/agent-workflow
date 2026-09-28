@@ -32,6 +32,9 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history: the research check resolves every commit a decision names.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -42,6 +45,16 @@ jobs:
           # be needed. A constraints file listing nothing would document the claim
           # without testing it.
           python-version: '3.13'
+
+      - name: Development dependencies
+        # Development only (requirements-dev.txt): PyYAML for the research-record check.
+        # The runtime stays stdlib-only — the `deps` step below still proves it, because the
+        # one tool that imports yaml does so under an ImportError guard.
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Research records follow their schema
+        # --git: every commit a decision names exists in this repository.
+        run: python tools/maintain/check_research.py --git
 
       - name: Version stamp is in sync
         run: python tools/maintain/stamp_version.py --check

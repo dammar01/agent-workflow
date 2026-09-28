@@ -39,6 +39,13 @@ from core.evidence.e2e.redact import sanitize_endpoint
 ORIGIN_APP = "app"
 ORIGIN_HARNESS = "harness"
 ORIGIN_UNKNOWN = "unknown"
+# The scenario itself, on evidence that says so: a selector the draft guessed that matched
+# nothing or too much, a write or a navigation the run's own policy refused. Split from
+# `harness` because the two have different owners — a harness problem is the runtime's or
+# the machine's, and repeating the run is how it is confirmed; a scenario problem is the
+# draft's, and the next run is a different scenario, not a repeat. Never inferred: a
+# selector the codebase named that is missing stays `app`/`unknown`, as before.
+ORIGIN_SCENARIO = "scenario"
 
 # Reasons a run ends without a verdict. Every one of them maps to `incomplete`; the
 # reason is what the user needs to fix, so it travels verbatim into `not_verified`.
@@ -61,8 +68,16 @@ INCOMPLETE_REASONS = frozenset(
         # the run reached an address the project denied, and the scenario is what has to
         # stop going there.
         "navigation_blocked",
+        # Every undecided failure was the scenario's own (ORIGIN_SCENARIO). Fixed by
+        # editing the scenario, so it is neither retried nor counted by the repeat brake.
+        "scenario_error",
     }
 )
+
+# Reasons the repeat brake neither counts nor clears. The caller's own input, corrected by
+# coming back with it fixed — braking there would lock someone out of the fix, and clearing
+# there would let a scenario typo erase a streak of real environment failures.
+NOT_COUNTED_REASONS = frozenset({"scenario_error"})
 
 # The repeat brake counts runs that keep ending the same way, and "the same way" has to be
 # coarse enough to survive one problem wearing three names. An unreachable base URL surfaces
@@ -88,7 +103,7 @@ def repeat_bucket(verdict: str | None, reason: str | None) -> str | None:
         return None
     if verdict == "fail":
         return ORIGIN_APP
-    if not reason:
+    if not reason or reason in NOT_COUNTED_REASONS:
         return None
     return "timeout" if reason in _REPEAT_TIMEOUT else ORIGIN_HARNESS
 
@@ -153,12 +168,22 @@ def classify_step(event: dict) -> str:
     stable = event.get("page_stable")
 
     # mutation_blocked: the player's own write guard refused a request (allow_side_effects
-    # false). The application did nothing wrong; the scenario asked for a write it may not do.
-    if kind in {"launch_failed", "browser_missing", "navigation_blocked", "mutation_blocked", "harness_error"}:
+    # false). The application did nothing wrong; the scenario asked for a write it may not
+    # do. navigation_blocked: the scenario went somewhere the project's policy denies.
+    if kind in {"navigation_blocked", "mutation_blocked"}:
+        return ORIGIN_SCENARIO
+    if kind in {"launch_failed", "browser_missing", "harness_error"}:
         return ORIGIN_HARNESS
+    if kind == "selector_ambiguous":
+        # Two or more elements matched. The element the claim is about IS on the page — the
+        # selector is simply not unique, which is the scenario's to fix whatever its
+        # provenance. Calling it `app` failed a login run on a password field whose
+        # show/hide toggle carried the same label, and fed the app streak.
+        return ORIGIN_SCENARIO
     if kind in _SELECTOR_ERRORS:
         if provenance == "heuristic":
-            return ORIGIN_HARNESS
+            # A guessed selector that did not fit: the draft's, not the app's.
+            return ORIGIN_SCENARIO
         if provenance in _GROUNDED:
             # A selector the codebase itself named is gone. On a page that finished
             # loading that is the application changing; on one that never settled it
@@ -366,7 +391,12 @@ def build_report(events: list[dict], scenario: dict | None, *, run_meta: dict | 
         verdict = "incomplete"
     elif undecided:
         verdict = "incomplete"
-        reason = "unknown_origin" if any(f["origin"] == ORIGIN_UNKNOWN for f in undecided) else "harness_error"
+        if any(f["origin"] == ORIGIN_UNKNOWN for f in undecided):
+            reason = "unknown_origin"
+        elif all(f["origin"] == ORIGIN_SCENARIO for f in undecided):
+            reason = "scenario_error"
+        else:
+            reason = "harness_error"
     elif any(c["status"] != "proven" for c in claims.values() if c["severity"] == "blocking"):
         verdict = "incomplete"
         reason = "harness_error"
@@ -391,6 +421,152 @@ def build_report(events: list[dict], scenario: dict | None, *, run_meta: dict | 
         "requests": requests,
         "trail": trail,
         "cleanup": cleanup_report(scenario, cleanup_events, requests, {str(row["step_id"]): row["status"] for row in trail}),
+    }
+
+
+# ---- diagnosis ---------------------------------------------------------------------
+# One structured answer per run that did not pass: why it failed, what failed, what to do
+# next, what to fix, and whether the next draft should be told. Enums, so a run's outcome
+# can be counted and compared; the hint is fixed text per cause, never page text, so it
+# can carry no resolved value and does not change from one run to the next.
+DIAGNOSIS_VERSION = 1
+NEXT_STEPS = ("fix_scenario", "fix_app", "fix_environment", "raise_limit", "investigate")
+_CAUSES = {
+    # cause: (next_step, reusable, fix_hint)
+    "scenario_selector": (
+        "fix_scenario", True,
+        "The draft's selector matched no element or several. Ground it in source (role/label/data-e2e) or add a probe step, then draft again.",
+    ),
+    "scenario_write_policy": (
+        "fix_scenario", False,
+        "The step sends a write this run may not do. Drop the step, or approve it: settings.allow_side_effects, allowed_read_only_requests, allowed_destructive_requests.",
+    ),
+    "scenario_navigation_policy": (
+        "fix_scenario", False,
+        "The scenario navigated somewhere the project's policy denies (allowed_origins or blocked_requests). Change the route, not the policy, unless the policy is wrong.",
+    ),
+    "scenario_selector_ambiguous": (
+        "fix_scenario", True,
+        "The selector matched several elements. Make it unique — scope it with `within`, use role plus name, or a data-e2e tag — then run again.",
+    ),
+    "selector_not_rendered": (
+        "investigate", True,
+        "A selector cited from source is not on the rendered page. Either the application changed or the source_ref is wrong; probe the route before changing either.",
+    ),
+    "app_assertion": (
+        "fix_app", False,
+        "An assertion grounded in the claim failed on a page that loaded. Treat it as a regression until the claim itself is shown to be wrong.",
+    ),
+    "app_runtime_error": (
+        "fix_app", False,
+        "The application raised an error (same-origin 5xx on the main request, an uncaught page error, or an enforced console error).",
+    ),
+    "environment_slow": (
+        "raise_limit", False,
+        "The page never reached the declared readiness in time. Check the app is warm and the ready conditions are the app's own, then raise step_timeout_ms or total_timeout_s.",
+    ),
+    "environment_setup": (
+        "fix_environment", False,
+        "The browser or the application could not be reached. Install or start what the reason names; editing the scenario will not help.",
+    ),
+    "runtime_harness": (
+        "investigate", False,
+        "The runtime could not finish the run (malformed or truncated player output, a harness error). Read report.json and the player stderr before running again.",
+    ),
+    "unknown": (
+        "investigate", False,
+        "The evidence cannot tell the app from the scenario. Probe the failing step's page and read the trail before editing anything.",
+    ),
+}
+CAUSES = tuple(_CAUSES)
+_SETUP_REASONS = frozenset({"playwright_missing", "browser_missing", "base_url_unreachable", "launch_failed", "player_unavailable"})
+
+
+def _cause_of(report: dict) -> tuple[str, dict | None]:
+    failures = report.get("failures") or []
+    reason = report.get("reason")
+    first = failures[0] if failures else None
+    if report.get("browser_verdict") == "fail":
+        app = next((f for f in failures if f.get("origin") == ORIGIN_APP), None)
+        if app is None:
+            return "app_runtime_error", None
+        if app.get("error_kind") in {"selector_missing", "not_visible"}:
+            return "selector_not_rendered", app
+        return "app_assertion", app
+    if reason in _SETUP_REASONS:
+        return "environment_setup", first
+    if reason in {"timeout", "stuck"}:
+        return "environment_slow", first
+    if first is not None:
+        kind = first.get("error_kind")
+        if first.get("origin") == ORIGIN_SCENARIO:
+            if kind == "selector_ambiguous":
+                return "scenario_selector_ambiguous", first
+            if kind == "mutation_blocked":
+                return "scenario_write_policy", first
+            if kind == "navigation_blocked":
+                return "scenario_navigation_policy", first
+            return "scenario_selector", first
+        if kind in {"timeout", "not_ready"}:
+            return "environment_slow", first
+    if reason == "navigation_blocked":
+        return "scenario_navigation_policy", first
+    if reason in {"harness_error", "output_truncated"}:
+        return "runtime_harness", first
+    return "unknown", first
+
+
+def diagnose(report: dict) -> dict | None:
+    """`{version, cause, next_step, failed, reason, fix_hint, reusable}` for a run that did not pass.
+
+    `failed` names the step by id, action, claim and error kind — never expected or actual
+    values, which may hold page text. `reusable` marks the causes the next draft can act on
+    (a selector that did not fit, one the page did not render); those are written to the
+    browser knowledge store for it.
+    """
+    if report.get("browser_verdict") in (None, "pass"):
+        return None
+    cause, failure = _cause_of(report)
+    next_step, reusable, hint = _CAUSES[cause]
+    failed = None
+    if failure is not None:
+        failed = {key: failure.get(key) for key in ("step_id", "action", "claim_id", "error_kind", "origin")}
+    return {
+        "version": DIAGNOSIS_VERSION,
+        "cause": cause,
+        "next_step": next_step,
+        "failed": failed,
+        "reason": report.get("reason"),
+        "fix_hint": hint,
+        "reusable": reusable,
+    }
+
+
+_BUCKET_CAUSE = {ORIGIN_APP: "app_assertion", ORIGIN_HARNESS: "runtime_harness", "timeout": "environment_slow"}
+
+
+def diagnosis_for_cause(cause: str | None, bucket: str | None = None, *, reason: str | None = None, repeat: bool = False) -> dict:
+    """The structured diagnosis for a cause known without a report — a repeat record's.
+
+    `repeat` marks the brake's version: after E2E_REPEAT_LIMIT identical outcomes the next
+    step is never "edit the scenario and try again" for a cause the scenario does not own.
+    """
+    if cause not in _CAUSES:
+        if reason in _SETUP_REASONS:
+            cause = "environment_setup"
+        elif reason in {"timeout", "stuck"}:
+            cause = "environment_slow"
+        else:
+            cause = _BUCKET_CAUSE.get(str(bucket or ""), "unknown")
+    next_step, reusable, hint = _CAUSES[cause]
+    return {
+        "version": DIAGNOSIS_VERSION,
+        "cause": cause,
+        "next_step": next_step,
+        "failed": None,
+        "reason": "repeat_failure" if repeat else None,
+        "fix_hint": hint,
+        "reusable": reusable,
     }
 
 

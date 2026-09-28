@@ -317,6 +317,36 @@ def _e2e_summary(runs: list[dict], usage_by_prompt: dict[str, list[UsageRecord]]
     }
 
 
+def _draft_summary(drafts: list[dict]) -> dict:
+    """Stage-1 outcomes: how many drafts came back ready, and what the rest got wrong.
+
+    `first_error` counts the category of the first reply's first error — what CASE-005
+    tabulated by hand — and `categories` every error still standing after the repair.
+    Raw counts plus one rate, so a later definition re-reads history.
+    """
+    first: dict[str, int] = {}
+    remaining: dict[str, int] = {}
+    for draft in drafts:
+        if draft.get("first_error"):
+            first[draft["first_error"]] = first.get(draft["first_error"], 0) + 1
+        for name, count in (draft.get("categories") or {}).items():
+            remaining[name] = remaining.get(name, 0) + int(count or 0)
+    statuses = [d.get("status") for d in drafts]
+    repaired = [d for d in drafts if d.get("repair_attempted")]
+    return {
+        "drafts": len(drafts),
+        "ready": statuses.count("ready"),
+        "invalid": statuses.count("invalid"),
+        "blocked": statuses.count("blocked"),
+        "ready_rate": _rate(statuses.count("ready"), len(drafts)),
+        "repair_attempted": len(repaired),
+        "repair_recovered": sum(1 for d in repaired if d.get("repair_recovered")),
+        "first_error": dict(sorted(first.items(), key=lambda item: (-item[1], item[0]))),
+        "categories": dict(sorted(remaining.items(), key=lambda item: (-item[1], item[0]))),
+        "secret_literal_drafts": sum(1 for d in drafts if d.get("secret_literals")),
+    }
+
+
 def e2e_metrics(project_root, rows: list[UsageRecord] | None = None) -> dict:
     """/.verify-browser runs from the quality stream, split by run kind before anything is
     aggregated.
@@ -347,9 +377,11 @@ def e2e_metrics(project_root, rows: list[UsageRecord] | None = None) -> dict:
     ]
     project_tokens = summary["project"]["tokens_per_run"]["mean"]
     baseline_mean = _mean(baseline_tokens)
+    drafts = [row for row in load_quality(project_root) if row.get("kind") == "e2e_draft"]
     return {
         "runs": len(runs),
         "by_run_kind": summary,
+        "drafts": {kind: _draft_summary([d for d in drafts if d.get("run_kind") == kind]) for kind in E2E_RUN_KINDS},
         "delegated_verify_baseline": {
             "verifications": len(baseline),
             "tokens_per_verification": {"mean": baseline_mean, "median": _median(baseline_tokens)},

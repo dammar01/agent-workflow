@@ -5,7 +5,7 @@ here, and they must not be read as the same kind of evidence:
 
 | Document | Kind | What it can support |
 | --- | --- | --- |
-| [benchmark.md](benchmark.md) | Controlled study (3 arms, frozen SUT, fixed oracle) | Comparisons between direct Claude, native sub-agents, and agent-workflow |
+| [benchmark.md](benchmark.md) | Where controlled studies are recorded (`H` + `EXP`); the earlier `bench/` harness was removed in 3.7.3 without results | Nothing yet: no controlled study has a result |
 | [observed-usage.md](observed-usage.md) | Uncontrolled telemetry from one machine | How much text the digest contract kept out of the primary context in practice |
 
 ## Net value

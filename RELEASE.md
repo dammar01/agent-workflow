@@ -53,9 +53,20 @@ explicit list precisely so that an unrelated semver in prose is not rewritten by
    The manifest carries a sha256 and byte count per shipped file. It is what makes an
    install verifiable after the fact — `core/audit/bundle_integrity.py` compares against it.
 
-4. **Release notes.** Add the row to the index table in `CHANGELOG.md` and a `## v<version>`
-   section under "Release notes" in the same file; the v3.7.3 section is the format. Do not
-   create `prompt/v<version>/`: `prompt/` is a historical archive that ends at v3.7.2.
+4. **Release notes.** Write `docs/releases/v<version>.md` (`docs/releases/v3.7.3.md` is the
+   format) and add one row to the index table in `CHANGELOG.md` — version, link, a one-line
+   theme. The index stays an index: detail goes in the release file, and behavior is linked
+   to `docs/reference.md` / `docs/runtime-contracts.md` rather than restated. Do not create
+   `prompt/v<version>/`: `prompt/` is a historical archive that ends at v3.7.2.
+
+   **Research records.** Replace every `uncommitted` in a decision's
+   `implementation.commits` with the hash of the commit that carries it, then:
+
+   ```
+   python tools/maintain/check_research.py --strict --git
+   ```
+
+   `--strict` refuses `uncommitted`; `--git` checks every named commit exists.
 
 5. **Test.** This is the tag gate. All of it, in this order:
 
@@ -102,7 +113,8 @@ explicit list precisely so that an unrelated semver in prose is not rewritten by
 ## What CI already covers
 
 `.github/workflows/ci.yml` runs steps 2, 3, and 5 (without `e2e-smoke`, `--full`, or real
-use) on every push and pull request, on Linux and Windows.
+use), and the research check without `--strict`, on every push and pull request, on Linux
+and Windows.
 
 CI bumps nothing, tags nothing, publishes nothing. A release still requires a human to decide
 the number and run steps 1, 4, 6, 7. The delegated end-to-end run
@@ -111,7 +123,9 @@ quota deliberately, not on a schedule.
 
 ## Known gap
 
-There is no reproducible-build guarantee beyond the manifest hashes: the repo has no lock
-file because it has no third-party dependencies (no `requirements.txt`, no
-`pyproject.toml`). Reproducibility here means "the same `dist/` bytes for the same tag",
+There is no reproducible-build guarantee beyond the manifest hashes: the runtime has no
+lock file because it has no third-party dependencies (no `requirements.txt`, no
+`pyproject.toml`). `requirements-e2e.txt` (Playwright, optional extra) and
+`requirements-dev.txt` (PyYAML, maintainer checks only) are pinned and never imported by the
+core runtime. Reproducibility here means "the same `dist/` bytes for the same tag",
 verified by step 7 — not a pinned toolchain. The Python version is pinned only in CI.

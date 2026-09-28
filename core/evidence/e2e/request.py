@@ -574,6 +574,29 @@ def load_request(project_root: Path, session_id: str) -> tuple[dict | None, str 
     )
 
 
+def scrub_request_file(project_root: Path, session_id: str, values: dict[str, str]) -> list[str]:
+    """Put `${NAME}` back into request.json wherever a secret value was typed out.
+
+    The request is written by the main agent, usually by copying draft.json, and nothing
+    before this point knew the real values to look for. Rewritten in place, because the
+    file on disk is the leak: a run that merely ignored the literal would leave it there
+    for every later reader of the session directory. Returns the names found, never values.
+    """
+    from core.evidence.e2e.redact import scrub_literals
+
+    path = request_path(project_root, session_id)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    clean, found = scrub_literals(data, values)
+    if found:
+        from core.workspace.workspace_paths import atomic_write_text
+
+        atomic_write_text(path, json.dumps(clean, indent=2, ensure_ascii=False))
+    return found
+
+
 def load_secrets(project_root: Path, profile: str = "") -> tuple[dict[str, str], list[str], dict]:
     """(values of the selected profile, errors, info). A missing file is no secrets, not an error.
 

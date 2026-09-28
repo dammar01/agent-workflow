@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 from core.evidence.e2e import browser as e2e_browser
 from core.evidence.e2e.browser import Session, run_scenario
-from core.evidence.e2e.classify import ORIGIN_APP, ORIGIN_HARNESS, ORIGIN_UNKNOWN, build_report, classify_step
+from core.evidence.e2e.classify import ORIGIN_APP, ORIGIN_HARNESS, ORIGIN_SCENARIO, ORIGIN_UNKNOWN, build_report, classify_step
 from core.evidence.e2e.normalize import evidence_block
 from core.evidence.e2e.spec import e2e_css
 from tests.checks.support import assert_true
@@ -323,10 +323,10 @@ def _test_e2e_browser_session() -> None:
     missed = _progress(events)[0]
     assert_true(missed["selector_provenance"] == "source" and classify_step(missed) == ORIGIN_APP, f"a grounded selector that vanished is not excused by a heuristic fallback: {missed}")
 
-    # --- the same miss on a heuristic selector is the harness's; on an unsettled page, unknown ----
+    # --- the same miss on a heuristic selector is the scenario's; on an unsettled page, unknown ---
     session, events, _ = _session(_login_page())
     session.run({"steps": [{"action": "click", "selector": {"css": "#logout"}, "selector_provenance": {"type": "heuristic"}}]})
-    assert_true(classify_step(_progress(events)[0]) == ORIGIN_HARNESS, "a heuristic miss is the harness's")
+    assert_true(classify_step(_progress(events)[0]) == ORIGIN_SCENARIO, "a heuristic miss is the scenario's")
     session, events, _ = _session(_Page([{"role": "button", "name": "Masuk"}], settled=False))
     session.run({"steps": [{"action": "click", "selector": {"role": "button", "name": "Logout"}, "selector_provenance": {"type": "source"}}]})
     assert_true(_progress(events)[0]["page_stable"] is False and classify_step(_progress(events)[0]) == ORIGIN_UNKNOWN, "unsettled page: unknown")
@@ -442,7 +442,7 @@ def _test_e2e_browser_session() -> None:
     page.elements = [{"role": "button", "name": "Continue", "on_click": redirect_off_origin}]
     session.run({"steps": [{"action": "click", "selector": {"role": "button", "name": "Continue"}, "selector_provenance": {"type": "source"}}]})
     blocked = _progress(events)[0]
-    assert_true(blocked["error"]["kind"] == "navigation_blocked" and classify_step(blocked) == ORIGIN_HARNESS, f"a click that navigates off-origin fails as harness: {blocked}")
+    assert_true(blocked["error"]["kind"] == "navigation_blocked" and classify_step(blocked) == ORIGIN_SCENARIO, f"a click that navigates off-origin fails as the scenario's: {blocked}")
     assert_true("sso.evil.example" in blocked["error"]["detail"] and "/login" not in blocked["error"]["detail"], "the detail names the origin, not the full URL")
 
     # --- write guard: allow_side_effects false refuses non-GET/HEAD/OPTIONS on any origin -------------
@@ -1274,11 +1274,11 @@ def _test_e2e_browser_session() -> None:
                            {"action": "expect_url", "contains": "/items"}]})
     refused = _progress(events)[0]
     assert_true(refused["status"] == "failed" and refused["error"]["kind"] == "mutation_blocked", f"the refused write fails its step: {refused}")
-    assert_true(classify_step(refused) == ORIGIN_HARNESS, "a refused write is the harness's, never the app's")
+    assert_true(classify_step(refused) == ORIGIN_SCENARIO, "a refused write is the scenario's, never the app's")
     assert_true("DELETE" in refused["error"]["detail"] and "/api/items" not in refused["error"]["detail"], f"the detail names method and origin only: {refused['error']}")
     assert_true(_progress(events)[1]["status"] == "skipped", "the steps after it prove nothing and are skipped")
     report = build_report([*events, {"type": "result", "status": "finished"}], {"claims": _CLAIMS})
-    assert_true(report["browser_verdict"] == "incomplete" and report["reason"] == "harness_error", f"a refused write leaves the run incomplete, not failed: {report['browser_verdict']} {report['reason']}")
+    assert_true(report["browser_verdict"] == "incomplete" and report["reason"] == "scenario_error", f"a refused write leaves the run incomplete, not failed: {report['browser_verdict']} {report['reason']}")
     assert_true(not [e for e in events if e.get("kind") == "mutation_blocked" and e["type"] == "observation"], "an attributed write is not reported twice")
 
     # A beacon never decides a step; it surfaces after the run as a warning observation.

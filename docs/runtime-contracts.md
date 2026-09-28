@@ -209,7 +209,7 @@ reproducible, not flaky, which is the one thing a retry was there to establish. 
 retried: a `fail` verdict (the application broke the claim, and re-rolling a real bug until
 it hides is what this package exists to prevent), the reasons a rerun cannot change
 (`playwright_missing`, `browser_missing`, `base_url_unreachable`, `spec_invalid`,
-`env_missing`, `player_unavailable`), and any run with `allow_side_effects` true — its
+`env_missing`, `player_unavailable`, `scenario_error`), and any run with `allow_side_effects` true — its
 first attempt's write may already have reached the server. Attempt 1 owns the run's `e2e/`
 directory; each retry writes to `e2e/retry<n>/`, and `meta.e2e.attempts` lists them. One
 `artifact_max_mb` budget covers the run directory and every `retry<n>/` together.
@@ -273,7 +273,12 @@ itself returns for a base-URL or write policy the request named, and `secrets_in
 rather than a loop, so braking there would lock someone out on the third attempt at a
 password and leave a new session as the only way to try a fourth. A draft is never counted —
 it starts no browser, so repeating it costs nothing — and neither is `repeat_failure` itself,
-which would extend the streak it has just reported.
+which would extend the streak it has just reported. Nor is a browser run whose every
+undecided failure was the scenario's own (`scenario_error`, `classify.NOT_COUNTED_REASONS`):
+a guessed selector that matched nothing or too much, a write or navigation the run's own
+policy refused. The next run is a different scenario, so it is not a repeat, and it neither
+adds to a standing streak nor clears one — a scenario typo must not erase a streak of real
+environment failures behind it (`meta.e2e.repeat_not_counted`).
 For the environment buckets: bucket rather than step outcomes, deliberately — the loop this catches
 edits the scenario between attempts, so a step-level key would reset every time and count to
 one forever. What twelve such runs have in common is never the steps; it is the environment,
@@ -357,6 +362,35 @@ minimum cannot be mapped back to its placeholder, so that run keeps no page HTML
 (`meta.e2e.secrets.unscrubbable` names the credential); structured events are still
 scrubbed only for longer values.
 
+Literal credentials in agent-written input. The task, the stage-1 draft, and the request
+are written by agents, and a credential sometimes arrives typed out instead of as
+`${NAME}`. Before anything else uses them, the runner looks each one up against the same
+lookup the player resolves from (the selected profile plus registered environment names)
+and puts the placeholder back (`core/evidence/e2e/redact.py` `scrub_literals`; the
+page-echo scrubber `scrub_resolved` likewise leaves `step_id`, `id`, `claim_id`, `cleans`,
+`action`, `type`, `kind` and `after_step` in player events untouched): a string
+that IS a value of 4 or more characters is replaced wherever it sits; a value inside a
+longer string only when it stands as its own token and is at least 8 characters for a
+letters-only value, or at least 4 for any other value (digits, `@`, symbols) (not
+glued to a letter, digit, `-` or `_`), so a credential that is an ordinary word never
+rewrites an identifier such as the step id `fill-password`; structural fields (`id`,
+`claim_id`, `cleans`, `action`, `side_effect`, `severity`, `version`, `covers`, `kind`,
+`type`) are never rewritten at all, and in selector fields (`css`, `text`, `label`, `name`,
+`role`, `e2e`) a value made only of letters (a plain word) is matched only as the whole
+text, while any other value (an email, digits, symbols) is still found as a token inside it; a value under 4 characters only when it is
+the whole of a `value` (or `password`/`secret`/`token`) field — what a `fill` types — and
+never in an enum, an id, or a key. Keys are never rewritten. The task is scrubbed before the stage-1 and
+stage-3 prompts are built, the draft after parsing and before validation and `draft.json`,
+and `request.json` is rewritten in place on disk. The run continues — the placeholder
+resolves back to the same value for the player — and is flagged: `meta.e2e.secret_literals`
+maps `task` | `draft` | `request` to the credential names found, and a `config_warnings`
+line says the same. Values never appear in either. Independently of the lookup, a `fill`
+into a field whose selector names a password (`password`, `passwd`, `passcode`, `pwd`) must
+carry a placeholder; a literal there is `spec_invalid`, which catches a password the lookup
+does not know yet. Not covered: the raw provider reply archived before parsing
+(`response.last.md`, `output.raw.md`), job records that store the task before the runner
+sees it, and a value shorter than 4 characters anywhere but a whole `value` field.
+
 `[E2E SPEC]` sections: `claims` (`id | severity | description | source_refs`),
 `existing_tests` (`path | covers | confidence`), `coverage_gap`, `scenario_json` (a
 fenced JSON scenario), `spec_uncertainties`. Validation runs in both phases, before any
@@ -373,7 +407,7 @@ fenced JSON scenario), `spec_uncertainties`. Validation runs in both phases, bef
   backslashes, whitespace and non-http schemes are refused. The player applies the same rule
   at runtime to top-level navigations: a click that leaves the origin is blocked before the
   request goes out, and a redirect that does is detected after the browser followed it —
-  both fail the step as `navigation_blocked` (harness);
+  both fail the step as `navigation_blocked` (origin `scenario`);
 - every step and cleanup step has an `id` (kebab, unique across both lists); events, the
   request ledger and the report refer to it;
 - a step that changes data declares `side_effect` (`creates_test_data`,
@@ -502,8 +536,8 @@ fenced JSON scenario), `spec_uncertainties`. Validation runs in both phases, bef
   literals and comments are blanked before that check; a field literally named `mutation`
   taking arguments is refused too. Admitted reads become one `read_only_request_allowed`
   observation per method and origin, with a count — a warning-class record, never an app
-  error. A refused write inside a step fails that step as `mutation_blocked` (harness,
-  so the run is `incomplete`), whatever the step saw after it; a refused beacon (`ping`)
+  error. A refused write inside a step fails that step as `mutation_blocked` (origin
+  `scenario`, so the run is `incomplete: scenario_error`), whatever the step saw after it; a refused beacon (`ping`)
   or a write fired outside any step becomes a `mutation_blocked` warning observation.
   Those records keep the method and origin only, never path, query or body. The guard is
   method-only: a `GET` that mutates, a WebSocket message, or a service worker's own
@@ -555,13 +589,33 @@ Verdict combination is fail-closed: browser `fail` → `fail` whatever the revie
 (a reviewer `DONE` is recorded as `reviewer_verdict_overridden`); browser `pass` +
 reviewer blocking → `fail`; browser `pass` + reviewer incomplete or unavailable →
 `incomplete`; browser `incomplete` → `incomplete`. The `origin` tag on a finding keeps its
-temporal meaning; the player's `app | harness | unknown` classification travels as
+temporal meaning; the player's `app | harness | scenario | unknown` classification travels as
 `evidence_source: e2e_runtime` and in `not_verified` reasons. `unknown` is never promoted
 to `harness`.
 
-Classification: a heuristic selector that misses is the harness's; a grounded selector
-missing from a settled page is the app's, from an unsettled page `unknown`; timeouts are
-`unknown`. A same-origin 5xx on the main request, or an uncaught page error thrown by a
+Classification: a heuristic selector that misses, a selector of any provenance that matched
+several elements (`selector_ambiguous` — the element is there, the selector is not unique),
+and a write or navigation the run's own policy refused, are the scenario's (`scenario`); a
+driver error is the harness's; a grounded selector missing from a settled page is the app's,
+from an unsettled page `unknown`;
+timeouts are `unknown`. A run whose undecided failures are all `scenario` ends
+`incomplete: scenario_error`: not retried, not counted by the repeat brake.
+
+Diagnosis (`classify.diagnose`): every browser run that did not pass carries one structured
+answer, `{version, cause, next_step, failed, reason, fix_hint, reusable}`, in
+`meta.e2e.diagnosis`, `report.json`, the evidence block the reviewer reads, and the quality
+row (`cause` and `next_step`). `cause` is an enum (`classify.CAUSES`: `scenario_selector`,
+`scenario_selector_ambiguous`, `scenario_write_policy`, `scenario_navigation_policy`, `selector_not_rendered`,
+`app_assertion`, `app_runtime_error`, `environment_slow`, `environment_setup`,
+`runtime_harness`, `unknown`), `next_step` another (`fix_scenario`, `fix_app`,
+`fix_environment`, `raise_limit`, `investigate`); `failed` names the step by id, action,
+claim, error kind and origin — never expected or actual values; `fix_hint` is fixed text per
+cause. The repeat record stores the newest `cause`, so a brake refusal carries the same
+diagnosis (`reason: repeat_failure`), derived from the reason for a record without one.
+`reusable` causes (`scenario_selector`, `scenario_selector_ambiguous`, `selector_not_rendered`) are written to the browser
+knowledge store as `failure_hint` entries (the step's placeholder view, cause, hint),
+offered to the next draft for the origin right after `repeat_failure`, and retired by a
+passing run against it. A same-origin 5xx on the main request, or an uncaught page error thrown by a
 same-origin script (attributed by the script URL in its stack, not the page URL), fails
 the run even when every assertion passed. Same-origin console errors fail it only with
 `fail_on_console_error`. Third-party noise stays a warning. A passing existing test proves
@@ -584,7 +638,8 @@ Browser knowledge (`core/evidence/e2e/knowledge.py`, `.workflow/e2e-knowledge.js
 at the fact store's level: written automatically, anchored, aged out on its own, never in
 Git. Per base_url origin a run records `auth.login` (the login page's goto through the first
 assertion after `${E2E_PASS}`), `auth.logout` (an action followed by an `expect_url` back to
-that page), `navigation`, `page_ready` and `selector` (matched exactly one element) —
+that page), `navigation`, `page_ready` and `selector` (matched exactly one element), plus the
+`repeat_failure` and `failure_hint` entries above —
 built from the placeholder scenario, with a non-placeholder `fill` value dropped. Only proof
 counts: a passed, non-writing step in a run that passed on its FIRST attempt. A failed step
 weakens the matching entry; `STALE_AFTER_FAILS` (2) in a row retire it. A selector with a
@@ -604,6 +659,21 @@ and origin rates, browser runs per claim, probes, screenshots kept against scree
 sent to a model, tokens per run (joined through `usage.jsonl`), reproducibility across
 repeated scenarios, and a delegated-verify baseline from the same workspace. No
 visual-browser-loop baseline is recorded, and none is estimated.
+
+Every draft appends its own `kind: e2e_draft` row, never an `e2e_run`: `status`, `reason`,
+`first_error` (the category of the first reply's first error), `categories` (every error
+still standing after the repair), `initial_categories`, `repair_attempted`,
+`repair_recovered`, `provider_calls`, and the names in `secret_literals`. Categories come
+from `spec.error_category`, an ordered match over the validator's own messages
+(`spec.DRAFT_ERROR_CATEGORY_NAMES`: `section_missing`, `fence_missing`, `json_invalid`,
+`credential_literal`, `source_refs`, `provenance`, `selector_shape`, `readiness`,
+`cleanup`, `side_effect`, `enum`, `policy`, `claims`, `secrets`, `structure`, `other`);
+messages are never stored. A draft that is not `ready` also carries `meta.e2e.diagnosis`:
+`cause` `draft_invalid` (next step `fix_scenario`), `draft_secrets` or `draft_blocked`
+(`fix_environment`), with the same category counts and the repair outcome. `--command
+report` adds `e2e.drafts`, per run kind: drafts, ready/invalid/blocked, ready rate, repairs
+attempted and recovered, first-error and remaining-category distributions, and drafts that
+carried a literal credential.
 
 Dependency policy: Playwright is an optional extra, pinned in `requirements-e2e.txt` and
 installed only by `python install.py --apply --with-e2e` (pip, then

@@ -99,6 +99,13 @@ def evidence_block(report: dict, *, artifacts: str | None = None, spec_notes: li
         EVIDENCE_MARKER,
         f"browser_verdict: {report.get('browser_verdict')}"
         + (f" ({report.get('reason')})" if report.get("reason") else ""),
+    ]
+    diagnosis = report.get("diagnosis")
+    if diagnosis:
+        failed = diagnosis.get("failed") or {}
+        where = f" | step: {failed.get('step_id')} {failed.get('action')}" if failed else ""
+        lines.append(f"diagnosis: {diagnosis.get('cause')} | next_step: {diagnosis.get('next_step')}{where} — {diagnosis.get('fix_hint')}")
+    lines += [
         "claims:",
     ]
     for cid, claim in claims.items():

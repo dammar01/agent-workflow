@@ -377,3 +377,25 @@ def _test_e2e_spec_contract() -> None:
     assert_true(resolved["steps"][1]["value"] == "u@example.test", "a known placeholder is substituted")
     assert_true(resolved["steps"][2]["value"] == "${E2E_PASS}" and missing == ["E2E_PASS"], "an unknown placeholder stays and is reported")
     assert_true(_SCENARIO["steps"][1]["value"] == "${E2E_USER}", "substitution never mutates the archived form")
+
+    # Draft error taxonomy: the validator's own messages, counted by category.
+    from core.evidence.e2e.spec import DRAFT_ERROR_CATEGORY_NAMES, error_category
+
+    samples = {
+        "[E2E SPEC] section missing": "section_missing",
+        "scenario_json: no JSON code fence": "fence_missing",
+        "scenario_json: invalid JSON (Expecting ',' delimiter: line 1 column 9)": "json_invalid",
+        "claims[0]: source_refs must list at least one `path[:line]` or `req:<id>` reference": "source_refs",
+        "steps[2]: selector_provenance 'guess' not in ['existing_test', 'heuristic', 'runtime_probe', 'source']": "provenance",
+        "steps[2]: selector key 'testid' not allowed; use 'e2e'": "selector_shape",
+        "steps[1]: ready must list 1..5 conditions": "readiness",
+        "steps[3]: side_effect 'creates_test_data' needs a cleanup step (scenario.cleanup with cleans: 'save')": "cleanup",
+        "steps[3]: side_effect 'writes' not in ['creates_test_data', 'deletes_test_data', 'modifies_test_data', 'none']": "side_effect",
+        "steps[1]: fill into a password field needs a placeholder (${E2E_USER}, ${E2E_PASS}), never a literal value": "credential_literal",
+        "steps[0]: action 'hover' not allowed": "enum",
+        "steps[4]: id 'Bad Id' must be a kebab identifier, stable across edits of the draft": "structure",
+        "something nobody wrote a rule for": "other",
+    }
+    for message, expected in samples.items():
+        assert_true(error_category(message) == expected, f"{message!r} is {expected}, not {error_category(message)}")
+    assert_true(set(samples.values()) <= set(DRAFT_ERROR_CATEGORY_NAMES), "every category is a registered name")

@@ -107,21 +107,123 @@ def scrub_resolved(payload: object, env_values: dict[str, str]) -> object:
     if not pairs:
         return payload
 
-    def visit(item):
+    def visit(item, key=None):
         if isinstance(item, str):
+            # A step id or a claim id comes from the placeholder scenario, never from the
+            # page, and a credential that is an ordinary word would otherwise turn the step
+            # `fill-password` into `fill-${E2E_PASS}` in every event, report and signature.
+            if key in _RESOLVED_STRUCTURAL_KEYS:
+                return item
             for value, placeholder in pairs:
                 if value in item:
                     item = item.replace(value, placeholder)
             return item
         if isinstance(item, dict):
-            return {visit(k) if isinstance(k, str) else k: visit(v) for k, v in item.items()}
+            return {visit(k) if isinstance(k, str) else k: visit(v, k) for k, v in item.items()}
         if isinstance(item, list):
-            return [visit(child) for child in item]
+            return [visit(child, key) for child in item]
         if isinstance(item, tuple):
-            return tuple(visit(child) for child in item)
+            return tuple(visit(child, key) for child in item)
         return item
 
     return visit(payload)
+
+
+# Below this length a typed-out value is matched only as a WHOLE string, never inside one.
+# Agent-written input is not a page echo: `user` as a credential would otherwise rewrite
+# the claim id `login-valid-user` into a placeholder and break the scenario that holds it.
+MIN_LITERAL_SUBSTRING = 8
+# Fields that name structure, never carry input: a credential that happens to be an ordinary
+# word (`password`) must not turn the step id `fill-password` into `fill-${E2E_PASS}` — which
+# is exactly what the first real draft after this rule did.
+_STRUCTURAL_KEYS = frozenset({"id", "claim_id", "cleans", "action", "side_effect", "severity", "version", "covers", "kind", "type"})
+# A value found inside a longer string counts only as a whole token: not glued to letters,
+# digits, `-` or `_` on either side. `fill-password` is an identifier that contains a word;
+# `login as a@b.test` or `/users/a@b.test` carries the value itself.
+_TOKEN_EDGE = r"(?<![A-Za-z0-9_-]){}(?![A-Za-z0-9_-])"
+# Selector fields name the page. There a credential that is a plain word (letters only, like
+# a weak `password`) is matched only as the whole string: inside a selector it is far more
+# likely the word — `{"css": "#password"}` became `#${E2E_PASS}`, a false leak report. Any
+# other value (an email, one with digits or symbols) is still found as a token inside a
+# longer selector: `{"text": "Welcome user@example.test"}` carries the credential itself.
+_SELECTOR_KEYS = frozenset({"css", "text", "label", "name", "role", "e2e"})
+
+
+def scrub_literals(payload: object, env_values: dict[str, str]) -> tuple[object, list[str]]:
+    """(payload with typed-out secret values put back to `${NAME}`, names found).
+
+    For input an agent wrote — the task, the draft, the request — rather than output a page
+    echoed. A value that should have travelled as `${NAME}` sometimes arrives typed out,
+    and the generic scanner cannot see an email or a plain password; only the lookup knows
+    what the real values are. A string that IS the value is replaced whatever its length
+    (down to MIN_SCRUB_CHARS); a string that merely contains it only when the value is long
+    enough not to be an ordinary word. Names only — never what the value was.
+    """
+    pairs = sorted(
+        (
+            (form, name)
+            for name, value in env_values.items()
+            if isinstance(value, str) and len(value) >= MIN_SCRUB_CHARS
+            for form in _variants(value)
+        ),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    )
+    # Values below MIN_SCRUB_CHARS: matched only as the whole of a `value` field — what a
+    # `fill` types. Anywhere else a one- to three-character string is as likely an enum
+    # (`none`), a count or an id as a credential, and rewriting it would break the scenario.
+    short = {
+        value: name
+        for name, value in env_values.items()
+        if isinstance(value, str) and 0 < len(value) < MIN_SCRUB_CHARS
+    }
+    if not pairs and not short:
+        return payload, []
+    found: set[str] = set()
+
+    # A letters-only value inside a longer string needs MIN_LITERAL_SUBSTRING: short words are
+    # everywhere. Any other value (digits, `@`, symbols) is not a word anyone writes by chance,
+    # so it is found as a token from MIN_SCRUB_CHARS up.
+    token_patterns = {
+        form: re.compile(_TOKEN_EDGE.format(re.escape(form)))
+        for form, _ in pairs
+        if len(form) >= (MIN_LITERAL_SUBSTRING if form.isalpha() else MIN_SCRUB_CHARS)
+    }
+
+    def visit(item, key=None):
+        if isinstance(item, str):
+            if key in _STRUCTURAL_KEYS:
+                return item
+            if key in _VALUE_KEYS and item in short:
+                found.add(short[item])
+                return f"${{{short[item]}}}"
+            for form, name in pairs:
+                if item == form:
+                    found.add(name)
+                    return f"${{{name}}}"
+            in_selector = key in _SELECTOR_KEYS
+            for form, name in pairs:
+                if in_selector and form.isalpha():
+                    continue
+                pattern = token_patterns.get(form)
+                if pattern is not None and pattern.search(item):
+                    found.add(name)
+                    item = pattern.sub(lambda _m, n=name: f"${{{n}}}", item)
+            return item
+        if isinstance(item, dict):
+            # Keys are structure, never rewritten.
+            return {k: visit(v, k) for k, v in item.items()}
+        if isinstance(item, list):
+            return [visit(child, key) for child in item]
+        if isinstance(item, tuple):
+            return tuple(visit(child, key) for child in item)
+        return item
+
+    clean = visit(payload)
+    return clean, sorted(found)
+
+
+_RESOLVED_STRUCTURAL_KEYS = frozenset({"step_id", "id", "claim_id", "cleans", "action", "type", "kind", "after_step"})
 
 
 def scrub_text_files(directory: Path, env_values: dict[str, str]) -> list[dict]:

@@ -16,7 +16,9 @@ For a significant architecture or behavior change:
 2. Determine whether an existing hypothesis or decision applies, and follow or revise it.
 3. Do not invent literature provenance. Unknown origin is recorded as `provenance: unknown`.
 4. After implementation, create or update the corresponding record (`DEC`, `H`, `EXP`,
-   `CASE`, or `ARC`) from the `_TEMPLATE.md` in its directory.
+   `CASE`, or `ARC`) as YAML from the `_TEMPLATE.yaml` in its directory
+   (`docs/research/schema.yaml`, CONTRACT.md §16). A `DEC` names its commit; `H`/`EXP` never
+   do. Run `python tools/maintain/check_research.py --write-inventory` before committing.
 5. Record validation status and limitations. Implemented is not validated.
 6. Do not include confidential real-world information: no transcripts, company names,
    internal URLs, customer data, or proprietary code. Abstract and sanitize.
@@ -50,6 +52,8 @@ use.
   hand-edit a stamped banner or `dist/manifest.json`.
 - `README.md` carries the version only in its shields.io badge. Any other version string in
   its prose, or in `docs/reference.md`, fails `tools/maintain/stamp_version.py --check`.
-- `bench/` is frozen at SUT v3.4.5. Do not update its paths or version to match HEAD.
-- Release notes: a row and a `## v<version>` section in `CHANGELOG.md`. Never create
-  `prompt/v<version>/`; `prompt/` is a historical archive ending at v3.7.2.
+- Release notes: `docs/releases/v<version>.md` plus one index row in `CHANGELOG.md` (the
+  index stays one line per version). Never create `prompt/v<version>/`; `prompt/` is a
+  historical archive ending at v3.7.2.
+- Benchmark method is an `H` + `EXP` record in `docs/research/`; there is no `bench/`
+  harness any more (removed in 3.7.3, DEC-011).

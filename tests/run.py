@@ -102,6 +102,7 @@ from tests.checks.redaction import _test_redaction_boundary  # noqa: E402
 from tests.checks.registry import _test_every_check_is_registered  # noqa: E402
 from tests.checks.stamp_version import _test_stamp_version_reads_versions_not_addresses  # noqa: E402
 from tests.checks.manifest import _test_manifest_matches_dist  # noqa: E402
+from tests.checks.research import _test_research_records_follow_the_schema  # noqa: E402
 from tests.checks.workflow_layout import _test_workflow_layout  # noqa: E402
 from tests.checks.workspace_migration import _test_workspace_migration  # noqa: E402
 from tests.checks.installer_stale import _test_installer_leaves_no_stale_files  # noqa: E402
@@ -128,6 +129,7 @@ SUITES: dict[str, tuple] = {
     "hook-flavours": (_test_every_shipped_hook_has_both_os_flavours, "every shipped hook ships .ps1 and .sh"),
     "stamp-version": (_test_stamp_version_reads_versions_not_addresses, "version stamping ignores IP addresses and --check passes"),
     "manifest": (_test_manifest_matches_dist, "dist/manifest.json matches the dist/ tree it describes"),
+    "research": (_test_research_records_follow_the_schema, "research records are YAML the schema accepts; every rule the check claims is refused on a broken fixture"),
     "workflow-layout": (_test_workflow_layout, ".workflow/ keeps editable files, data/ the rest; unmigrated workspaces and hooks follow the same rule"),
     "workspace-migration": (_test_workspace_migration, "v3.5.x -> data layout moves everything once with a backup, refuses under a live job, rolls back on failure; overrides-only config; current/ mirror"),
     "opencode-launch": (_test_opencode_prompt_never_reaches_cmd, "opencode's prompt travels as an attached file; cmd.exe-parsed arguments are refused"),
