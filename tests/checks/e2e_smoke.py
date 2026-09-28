@@ -383,14 +383,14 @@ def _test_e2e_real_browser_smoke() -> None:
             f"a wrong redirect fails with the URL it landed on: {report['failures']}",
         )
 
-        # --- a guessed selector that misses is the harness's; the probe shows what was there --------
+        # --- a guessed selector that misses is the scenario's; the probe shows what was there -------
         result, report, files, directory = case([
             {"action": "goto", "url": "/login.html"},
             {"action": "click", "selector": {"css": "#does-not-exist"}, "selector_provenance": {"type": "heuristic"}},
             {"action": "expect_url", "contains": "/dashboard.html", "claim_id": "login"},
         ])
         evidence = (directory / "evidence.md").read_text(encoding="utf-8")
-        assert_true(report["browser_verdict"] == "incomplete" and report["failures"][0]["origin"] == "harness", f"heuristic miss: {report['failures']}")
+        assert_true(report["browser_verdict"] == "incomplete" and report["failures"][0]["origin"] == "scenario" and report["reason"] == "scenario_error", f"heuristic miss: {report['failures']}")
         assert_true("probe:" in evidence and "Masuk" in evidence and not any(name.endswith(".png") for name in files), f"probe instead of a screenshot:\n{evidence}")
 
         # --- an uncaught same-origin page error fails a run whose assertions passed -----------------
@@ -429,7 +429,7 @@ def _test_e2e_real_browser_smoke() -> None:
         ])
         assert_true(
             report["browser_verdict"] == "incomplete" and "blocked" in report["failures"][0]["detail"],
-            f"off-origin navigation is a harness stop: {report['failures']}",
+            f"off-origin navigation is a scenario stop: {report['failures']}",
         )
         assert_true("/phish" not in _ThirdPartyHandler.hits, f"the blocked origin never received the request: {_ThirdPartyHandler.hits}")
 
@@ -456,9 +456,9 @@ def _test_e2e_real_browser_smoke() -> None:
         _, report, _, _ = case(delete, allow_local_side_effects=False)
         assert_true(_AppHandler.writes == [], f"the refused write never reached the app: {_AppHandler.writes}")
         assert_true(
-            report["browser_verdict"] == "incomplete" and report["failures"] and report["failures"][0]["origin"] == "harness"
+            report["browser_verdict"] == "incomplete" and report["failures"] and report["failures"][0]["origin"] == "scenario"
             and "allow_side_effects" in report["failures"][0]["detail"],
-            f"a refused write is a harness stop, not an app failure: {report['browser_verdict']} {report['failures']}",
+            f"a refused write is a scenario stop, not an app failure: {report['browser_verdict']} {report['failures']}",
         )
 
         blocked = [r for r in report["requests"] if r["blocked"]]
