@@ -21,6 +21,7 @@ LOCAL (main_agent langsung):
   /.promote <subj>  evidence terverifikasi → project knowledge ter-Git (plan dulu, approve)
   /.caveman [lite|full|ultra]  toggle compression
   /.local [on|off|status]      toggle no-proxy
+  /.provider        ganti second_agent / model / reasoning effort
   /.help            panduan ini
 
 DELEGATED (1-call .workflow/run script → second_agent):
@@ -28,6 +29,7 @@ DELEGATED (1-call .workflow/run script → second_agent):
   /.plan <task>     evidence + rencana terstruktur
   /.analyze <topic> deep analysis | --local: Claude only
   /.verify          3-step verification (auto bila policy mengaktifkan)
+  /.verify-browser  verifikasi lewat browser sungguhan (draft → run → review)
 
 [WORKFLOW] /.explore → /.plan → /.execute -y → /.verify
 [SESSION CACHE] LAST_EXPLORE_RESULT → /.plan,/.analyze | LAST_PLAN_RESULT → /.execute | LAST_EXECUTE_DIFF → /.verify,/.sweep

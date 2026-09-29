@@ -28,7 +28,7 @@ kind of request you are making:
 | "I want to add …", "plan how to …" | `plan` | Steps, risks, open questions, options |
 | "Implement it", "go ahead" | `/.execute`, with your explicit approval | Code changes, made by Claude Code itself |
 | "Is it correct now?", "check what was just done" | `verify` | A verdict with evidence |
-| "Test it in the browser", "click through the login flow" | `verify-browser` | A verdict from a real browser run, reviewed by the secondary agent |
+| "Test it in the browser", "click through the login flow" | `verify-browser` | A verdict from a real browser run, reviewed by the secondary agent; or, when the drafted test is blocked or invalid, the reason it could not run ([reference](../runtime-contracts.md)) |
 
 Before running a delegated command, Claude Code prints one line such as
 `[INTENT] explore — location question`. If it guessed wrong, press Esc and rephrase, or use

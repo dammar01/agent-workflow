@@ -63,8 +63,8 @@
     },
     {
       "path": "claude/skills/help.md",
-      "sha256": "d4486e6ad2e99e87d8de060f0190d2da051920c628efec34b7cc5f75fcfac34a",
-      "bytes": 1572,
+      "sha256": "25fc3a05b6527889bfd499b0d9d456b4d49707015ccb9989a2697e072bee8683",
+      "bytes": 1720,
       "merge": "replace",
       "component": "prompt_bundle"
     },
