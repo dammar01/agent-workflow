@@ -1,0 +1,82 @@
+schema_version: 2
+id: CASE-008
+title: The graph-refresh hook scan costs seconds whatever the code size, and graphify update fails slowly on a large graph
+recorded_on: 2026-09-29
+visibility: sanitized
+environment: private_production
+repository_identity: undisclosed (two maintainer projects)
+evidence_tier: creator_observation
+confidentiality_note: |
+  The two projects are described by stack and file counts only. No path, name, source file or
+  graph content is recorded.
+
+context: |
+  The maintainer perceives latency after execute turns, worse on a large Laravel backend
+  (CASE-006). The graph-refresh Stop hook (v3.7.3) runs at the end of every implementing turn:
+  it looks for the newest source file, and runs `graphify update` when the graph is older.
+
+task: |
+  Measure, before DEC-012 changes the hook, what the hook's scan and `graphify update` cost on
+  a large Laravel backend and on a Next.js frontend.
+
+workflow: |
+  `python tools/maintain/measure_graph_hook.py --project <root> --run-hook --run-graphify` on
+  each project root: file counts; the hook's PowerShell scan (Get-ChildItem -Recurse, then
+  filtering skip directories) three times; a pruned PowerShell scan that never enters skip
+  directories three times; then once the installed hook end to end and `graphify update`
+  alone. Both scans are timed inside PowerShell, which is what the hook runs.
+
+observation: |
+  | | Laravel backend | Next.js frontend |
+  | --- | --- | --- |
+  | Files in the project | 37,643 | 63,226 |
+  | Files inside skip directories | 23,814 (vendor 17,267; graphify-out 4,546; .git 1,365; .workflow 636) | 62,549 (node_modules 47,340; .next 8,033; .workflow 3,489; .git 1,930; graphify-out 1,757) |
+  | Source files outside them | 4,141 | 582 |
+  | Hook scan, median of 3 (ms) | 1,974 (1,974 / 2,699 / 1,651) | 2,088 (2,015 / 2,100 / 2,088) |
+  | Pruned scan, median of 3 (ms) | 193 (223 / 193 / 186) | 37 (40 / 37 / 37) |
+  | Installed hook, graph fresh (ms) | 2,136 | 2,328 |
+  | `graphify update` alone (ms) | 44,244, exit 1, graph.json rewritten | 1,560, exit 0, graph.json rewritten |
+
+  - The hook's scan costs about the same on both projects (2 s here, up to 3.5 s in an
+    earlier run) although their source differs sevenfold: it is spent walking the skip
+    directories before filtering them out. The pruned scan scales with source files instead.
+  - On the Laravel backend, `graphify update` took 44 s and exited 1; in the earlier run its
+    last line was "Graph has 34620 nodes - too large for HTML viz. Use --no-viz or reduce
+    input size.". `graph.json` was rewritten nonetheless. `update` offers no `--no-viz`
+    option. The hook waits at most 45 s for it.
+  - Both installed-hook runs found the graph fresh and did not run graphify.
+
+evidence:
+  source: |
+    Output of `python tools/maintain/measure_graph_hook.py --project <root> --run-hook
+    --run-graphify` on each project, 2026-09-29; `graphify_rewrote_graph` compares the
+    modification time of graphify-out/graph.json before and after the run.
+  counted_by: main agent
+  counted_on: 2026-09-29
+  notes: |
+    An earlier run the same day with a PowerShell version of the same measurement read the
+    same file counts (within files written by graphify and the runtime between runs), hook
+    scans of 3,538 ms and 3,294 ms, pruned scans of 279 ms and 14 ms, and graphify 43,242 ms,
+    exit 1, on the Laravel backend. Timings vary with the disk cache; the pattern held.
+
+outcome: mixed
+unexpected_behavior:
+  - graphify update exits 1 on a large graph although graph.json is written.
+limitations:
+  - Two projects on one machine; timings depend on disk cache and antivirus scanning.
+  - "The stale-graph path through the hook was not exercised: both graphs were fresh when the hook ran."
+  - A 44 s graphify run near the hook's 45 s limit may be killed before writing on a larger change; not observed here.
+related: [CASE-006]
+related_notes: |
+  Drafts, named as plain text: DEC-012 proposes the pruned scan and one trigger for graphify.
+  CASE-006 shows delegated calls of 342-851 s, against which the 2-3.5 s scan is small; the 44 s
+  graphify run is not.
+
+implementation:
+  version: 3.7.3
+  feature: graph-refresh Stop hook (graph-refresh.ps1), graphify update
+questions: [RQ-13]
+
+disposition:
+  implementation_status: implemented
+  validation_status: observed

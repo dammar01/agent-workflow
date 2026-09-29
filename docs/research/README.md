@@ -152,6 +152,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [CASE-005](real-cases/CASE-005-verify-browser-drafts-never-ready.yaml) | `/.verify-browser` drafts never reached `ready` | negative | implemented | observed | — |
 | [CASE-006](real-cases/CASE-006-latency-and-cached-input-in-maintainer-use.yaml) | Latency by project and cached input share in maintainer use | inconclusive | implemented | observed | — |
 | [CASE-007](real-cases/CASE-007-accumulating-one-byte-lock-guards.yaml) | One-byte lock guards accumulate and look like a defect | mixed | implemented | observed | — |
+| [CASE-008](real-cases/CASE-008-graph-refresh-hook-cost-on-two-projects.yaml) | The graph-refresh hook scan costs seconds whatever the code size, and graphify update fails slowly on a large graph | mixed | implemented | observed | — |
 | [DEC-001](decisions/DEC-001-verify-browser-delegated.yaml) | `/.verify-browser` is a delegated command | accepted | implemented | validated | dd70afd |
 | [DEC-004](decisions/DEC-004-data-e2e-only-test-attribute.yaml) | `data-e2e` is the only test attribute | accepted | implemented | observed | dd70afd |
 | [DEC-005](decisions/DEC-005-repeat-brake-releases-on-change.yaml) | The repeat brake releases on a project change and is remembered as knowledge | accepted | implemented | observed | dd70afd |
