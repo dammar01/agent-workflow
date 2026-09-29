@@ -1,6 +1,6 @@
 schema_version: 2
 id: CASE-008
-title: The graph-refresh hook scan costs seconds whatever the code size, and graphify update fails slowly on a large graph
+title: On two projects whose source differs sevenfold, the graph-refresh hook scan costs about 2 s on each, and graphify update fails slowly on the large graph
 recorded_on: 2026-09-29
 visibility: sanitized
 environment: private_production
@@ -46,6 +46,21 @@ observation: |
     option. The hook waits at most 45 s for it.
   - Both installed-hook runs found the graph fresh and did not run graphify.
 
+  Added 2026-09-29, a second run with `--run-hook --force-stale` after the maintainer had
+  refreshed both graphs: graph.json is backdated so the installed hook takes its refresh path;
+  source files are not touched.
+
+  | | Laravel backend | Next.js frontend |
+  | --- | --- | --- |
+  | Hook scan, median of 3 (ms) | 1,692 (1,683 / 1,692 / 1,725) | 2,147 (2,152 / 2,147 / 2,062) |
+  | Pruned scan, median of 3 (ms) | 187 (234 / 187 / 186) | 33 (33 / 33 / 38) |
+  | Installed hook, graph stale (ms) | 47,028, graph.json not rewritten | 3,774, graph.json rewritten |
+
+  - On the Laravel backend the hook's refresh path ran into its 45 s wait: graphify was
+    killed and graph.json was not rewritten, so the implementing turn paid 47 s and the graph
+    stayed stale. A process list read after the run showed no graphify process left running.
+  - On the frontend the refresh path added about 1.6 s of graphify to the scan.
+
 evidence:
   source: |
     Output of `python tools/maintain/measure_graph_hook.py --project <root> --run-hook
@@ -58,14 +73,19 @@ evidence:
     same file counts (within files written by graphify and the runtime between runs), hook
     scans of 3,538 ms and 3,294 ms, pruned scans of 279 ms and 14 ms, and graphify 43,242 ms,
     exit 1, on the Laravel backend. Timings vary with the disk cache; the pattern held.
+    Second run: output of `python tools/maintain/measure_graph_hook.py --project <root>
+    --run-hook --force-stale` on each project, 2026-09-29; `hook_refreshed_graph` compares the
+    graph's modification time before and after the hook, and the tool put the Laravel graph's
+    original time back because the hook had not rewritten it.
 
 outcome: mixed
 unexpected_behavior:
   - graphify update exits 1 on a large graph although graph.json is written.
+  - On the stale path the hook kills graphify at its 45 s wait on the large graph, so the turn pays 47 s and the graph is not refreshed.
 limitations:
   - Two projects on one machine; timings depend on disk cache and antivirus scanning.
-  - "The stale-graph path through the hook was not exercised: both graphs were fresh when the hook ran."
-  - A 44 s graphify run near the hook's 45 s limit may be killed before writing on a larger change; not observed here.
+  - "The stale-graph path was exercised once per project, by backdating graph.json rather than by a real source change."
+  - "One stale-path run on the large graph: whether graphify ever finishes inside 45 s there is not known."
 related: [CASE-006]
 related_notes: |
   Drafts, named as plain text: DEC-012 proposes the pruned scan and one trigger for graphify.

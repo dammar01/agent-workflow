@@ -496,7 +496,7 @@ ini berbeda, perbaiki salah satunya dalam perubahan yang sama.
 | `clean` | lokal | — | prune job, fakta usang/duplikat, sesi lama |
 | `inspect` | lokal | — | daftar job untuk sesi berjalan |
 | `provider` | lokal | — | baca/ubah provider second_agent dan reasoning effort |
-| `report` | lokal | — | ringkasan stream kualitas workspace (`quality.jsonl`), termasuk `e2e` (run) dan `e2e.drafts` (draft) |
+| `report` | lokal | — | ringkasan stream kualitas workspace (`quality.jsonl`), termasuk `e2e` (run) dan `e2e.drafts` (draft), serta `evidence_reuse` dari `usage.jsonl`: command explore/analyze/plan yang dilayani artifact tersimpan dibagi command yang boleh reuse (continuation dihitung sekali; cache input provider tidak termasuk) |
 | `audit` | lokal | — | baca `audit.jsonl` sesi |
 | `graph-meta` | lokal | — | status snapshot graphify: segar, usang, atau tak ada |
 | `explore` | terdelegasi | ya | peta codebase, entry point, pemilik |

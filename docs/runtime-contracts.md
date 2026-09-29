@@ -771,6 +771,21 @@ ends in a timeout, not a concurrent write. The evidence store still uses its own
 (`core/evidence/evidence_store._EvidenceLock`); migration takes all four store locks before
 moving anything.
 
+Lock files come in two patterns: a lock file owned by its holder, removed on release, and a
+one-byte file carrying an OS byte-range lock, kept between uses:
+
+| File | Kind | Content | Lifetime |
+| --- | --- | --- | --- |
+| `facts.jsonl.lock`, `e2e-knowledge.jsonl.lock`, `promote.lock` | `OwnedFileLock` | `{pid, token, at}` | Removed on release; a leftover empty one is a writer that crashed between create and write, reclaimed after the TTL |
+| `storage/jobs/locks/<session>.lock` (agent install, not the project) | job session lock | job id and token | Removed on release |
+| `evidence.jsonl.lock` | OS lock on byte 0 | one NUL byte | Kept: the lock is the open handle, released by closing it |
+| `<lock>.reclaim` | OS lock on byte 0 | one NUL byte | Kept, one per `OwnedFileLock` that was ever reclaimed |
+| `storage/jobs/.capacity.guard`, `<session>.lock.guard`, `<claim>.guard` | OS lock on byte 0 (`JobManager._exclusive_file_guard`) | one NUL byte | Kept, one per session or claim path; they accumulate (CASE-007) |
+
+A one-byte file shows as empty in most editors; its content is `\0`, which the Windows
+byte-range lock (`msvcrt.locking`) needs to lock. Deleting a kept file while no process runs is
+harmless: it is recreated on the next use.
+
 ## Call telemetry
 
 Telemetry written by `Executor` is best-effort; the provider's result, or the provider's own

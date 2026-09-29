@@ -15,11 +15,15 @@ Both scans are timed inside PowerShell, because that is what the hook runs; Pyth
 starts them. Without PowerShell (the POSIX hook already prunes) they are reported as null.
 
 Read-only unless --run-hook or --run-graphify is given: both may regenerate graphify-out/.
+--force-stale (with --run-hook) backdates graphify-out/graph.json before the hook runs, so
+the hook takes its refresh path; source files are never touched, and the graph's own mtime
+is put back when the hook did not rewrite it.
 Prints one JSON object of counts and timings, nothing from the project's files. Not part of
 the test suite.
 
   python tools/maintain/measure_graph_hook.py --project <root>
   python tools/maintain/measure_graph_hook.py --project <root> --run-hook --run-graphify
+  python tools/maintain/measure_graph_hook.py --project <root> --run-hook --force-stale
 """
 from __future__ import annotations
 
@@ -117,7 +121,11 @@ def default_hook() -> Path:
     return Path.home() / ".claude" / "hooks" / name
 
 
-def measure(root: Path, *, hook: Path, repeat: int, run_hook: bool, run_graphify: bool) -> dict:
+# Older than any source file, so the hook's mtime gate sees the graph as stale.
+STALE_MTIME = 946684800.0  # 2000-01-01T00:00:00Z
+
+
+def measure(root: Path, *, hook: Path, repeat: int, run_hook: bool, run_graphify: bool, force_stale: bool = False) -> dict:
     graph = root / "graphify-out" / "graph.json"
     result: dict = {
         "measured_on": _dt.date.today().isoformat(),
@@ -145,11 +153,20 @@ def measure(root: Path, *, hook: Path, repeat: int, run_hook: bool, run_graphify
             raise SystemExit(f"hook not found: {hook}")
         command = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(hook)] if hook.suffix == ".ps1" else ["bash", str(hook)]
         payload = json.dumps({"last_assistant_message": "[EXECUTION RESULT] measurement", "cwd": str(root)})
+        original = graph.stat() if force_stale and graph.is_file() else None
+        if original is not None:
+            os.utime(graph, (STALE_MTIME, STALE_MTIME))
+        result["hook_forced_stale"] = original is not None
         before = _mtime(graph)
         started = time.perf_counter()
-        subprocess.run(command, input=payload, capture_output=True, text=True)
-        result["hook_total_ms"] = round((time.perf_counter() - started) * 1000)
-        result["hook_refreshed_graph"] = _mtime(graph) not in (None, before)
+        try:
+            subprocess.run(command, input=payload, capture_output=True, text=True)
+            result["hook_total_ms"] = round((time.perf_counter() - started) * 1000)
+            result["hook_refreshed_graph"] = _mtime(graph) not in (None, before)
+        finally:
+            # A hook that did not rewrite the graph leaves it backdated; put its time back.
+            if original is not None and _mtime(graph) == STALE_MTIME:
+                os.utime(graph, (original.st_atime, original.st_mtime))
 
     if run_graphify:
         graphify = shutil.which("graphify")
@@ -176,12 +193,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repeat", type=int, default=3, help="runs per scan (median reported)")
     parser.add_argument("--run-hook", action="store_true", help="also run the installed hook end to end")
     parser.add_argument("--run-graphify", action="store_true", help="also time `graphify update` alone")
+    parser.add_argument("--force-stale", action="store_true", help="with --run-hook: backdate graph.json so the hook refreshes it")
     args = parser.parse_args(argv)
+    if args.force_stale and not args.run_hook:
+        parser.error("--force-stale needs --run-hook")
     root = Path(args.project).resolve()
     if not root.is_dir():
         print(f"not a directory: {root}", file=sys.stderr)
         return 2
-    result = measure(root, hook=args.hook, repeat=max(1, args.repeat), run_hook=args.run_hook, run_graphify=args.run_graphify)
+    result = measure(
+        root, hook=args.hook, repeat=max(1, args.repeat), run_hook=args.run_hook,
+        run_graphify=args.run_graphify, force_stale=args.force_stale,
+    )
     print(json.dumps(result, indent=2))
     return 0
 

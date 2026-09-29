@@ -124,6 +124,33 @@ def _report_reports_its_denominators() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _evidence_reuse_counts_commands_it_could_serve() -> None:
+    rows = [
+        # One explore that ran a continuation: two rows, one command.
+        _usage(command="explore", role="exploration", prompt_id="p1"),
+        _usage(command="explore", role="exploration", prompt_id="p1"),
+        # A reuse hit has no prompt id and is its own command.
+        _usage(command="analyze", role="reasoning", reused_evidence=True, provider_call_avoided=True),
+        # Verify is never offered reuse, so it is not in the denominator.
+        _usage(command="verify", role="verification", prompt_id="p2"),
+        _usage(command="explore", prompt_id="p3"),
+    ]
+    reuse = telemetry.evidence_reuse(rows)
+    assert_true(
+        reuse["reused"] == 1 and reuse["eligible_commands"] == 2 and reuse["rate"] == 0.5,
+        "reuse rate is reused commands over reuse-eligible commands, a continuation counted "
+        f"once; got {reuse}",
+    )
+    assert_true(
+        reuse["role_unrecorded_rows"] == 1,
+        "a row without a role is named, not guessed into the denominator",
+    )
+    assert_true(
+        telemetry.evidence_reuse([])["rate"] is None,
+        "no eligible command is no answer, not a rate of zero",
+    )
+
+
 def _torn_row_is_skipped_not_fatal() -> None:
     root = Path(tempfile.mkdtemp(prefix="aw-torn-"))
     try:
@@ -145,4 +172,5 @@ def _test_telemetry_metrics() -> None:
     _acceptance_is_per_task()
     _unjudged_work_is_not_incorrect()
     _report_reports_its_denominators()
+    _evidence_reuse_counts_commands_it_could_serve()
     _torn_row_is_skipped_not_fatal()

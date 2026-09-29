@@ -416,6 +416,28 @@ def _work_units(rows) -> int:
     return len(_work_groups(rows))
 
 
+_REUSE_ROLES = ("exploration", "reasoning")
+
+
+def evidence_reuse(rows) -> dict:
+    """How often a reuse-eligible command was served from a stored artifact.
+
+    Counted in work units (a continuation is one command), over the roles the executor
+    offers reuse to. A row with no recorded role cannot be placed and is named, not
+    guessed from its command. Provider cached input is a different thing and is not
+    counted here: a reuse hit never reaches a provider.
+    """
+    eligible = [row for row in rows if row.role in _REUSE_ROLES]
+    groups = _work_groups(eligible)
+    reused = sum(1 for group in groups if any(row.reused_evidence for row in group))
+    return {
+        "reused": reused,
+        "eligible_commands": len(groups),
+        "rate": round(reused / len(groups), 3) if groups else None,
+        "role_unrecorded_rows": sum(1 for row in rows if row.role is None),
+    }
+
+
 def report(project_root) -> dict:
     """Every P1 metric, over the whole recorded history of this project."""
     rows = load_usage(project_root)
@@ -477,6 +499,7 @@ def report(project_root) -> dict:
             "measured_calls": len(avoided),
             "provider_calls_avoided": sum(1 for row in rows if row.provider_call_avoided),
         },
+        "evidence_reuse": evidence_reuse(rows),
         "time_to_completion_seconds": {
             "mean": _mean(durations),
             "median": _median(durations),

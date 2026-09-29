@@ -87,7 +87,15 @@ validation:
 
     Observed, not validated: no CI run on the pushed commit is recorded here yet, and no new
     record has been written through the RQ flow by someone other than the maintainer.
-  runs: []
+  runs:
+    - date: 2026-09-29
+      job_id: "job_20260929_132534_553288"
+      description: "Delegated verify of the dev branch after f0a4d84: `check_research.py --strict --git` passed on 30 records with 0 warnings; `tests/run.py --only research` could not create its fixture workspace in the read-only sandbox."
+      clean: false
+    - date: 2026-09-29
+      job_id: "local check after job_20260929_132534_553288"
+      description: "`tests/run.py --only research` passed on the maintainer's machine (1 suite), covering the fixtures the summary lists. A test run, not direct use of the decided behavior (CONTRACT.md §14)."
+      clean: false
 
 trade_offs:
   better:
