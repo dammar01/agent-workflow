@@ -161,6 +161,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-009](decisions/DEC-009-literal-credentials-scrubbed-by-lookup.yaml) | Literal credentials in the task, draft and request are found by value and put back to placeholders | accepted | implemented | observed | c584748 |
 | [DEC-010](decisions/DEC-010-scenario-origin-and-structured-diagnosis.yaml) | Scenario-caused failures get their own origin, stay out of the repeat brake, and every non-pass carries a structured diagnosis | accepted | implemented | validated | c584748 |
 | [DEC-011](decisions/DEC-011-research-records-yaml-changelog-split-bench-removed.yaml) | Research records are schema-checked YAML, release notes live per version, and bench/ is retired | accepted | implemented | validated | 665bb4c, c584748 |
+| [DEC-017](decisions/DEC-017-research-questions-as-yaml-records.yaml) | Research questions become YAML records, linked to records both ways | accepted | implemented | observed | 7150b0d |
 <!-- research-inventory:end -->
 
 No `H-XXX`, `EXP-XXX`, or `SYN-XXX` record is tracked: none has been run or has a result.
@@ -171,7 +172,7 @@ Proposed hypotheses, planned experiments, syntheses, and decisions without a res
 kept in `docs/research-drafts/` (same subfolders). That directory is git-ignored and exists
 only on the maintainer's machine; tracked records mention draft IDs as plain text, never as
 links. A draft moves back here only when it has been carried out and has a recorded result.
-Drafts currently held: DEC-012..DEC-017, H-004 and H-008 (the v3.8.0 work, each naming its
+Drafts currently held: DEC-012..DEC-016, H-004 and H-008 (the v3.8.0 work, each naming its
 research question), CASE-004 (moved back on 2026-09-28: the records it relates to are all
 drafts), and H-005, EXP-002, CASE-002, SYN-002, DEC-002 (Markdown, still referenced).
 H-001..H-003, H-006, H-007, EXP-001, EXP-003, CASE-001, CASE-003, SYN-001 and DEC-003 are

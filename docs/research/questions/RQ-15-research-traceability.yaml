@@ -7,9 +7,7 @@ what_exists: |
   Records are schema-checked YAML (DEC-011); since DEC-017 research questions are records too,
   and a version-2 record names the questions it serves, checked both ways by
   tools/maintain/check_research.py.
-records: [DEC-011]
+records: [DEC-011, DEC-017]
 notes: |
   The maintainer's rule: every research record must have a question or evidence that leads to
   a change in this project.
-
-  Draft records: DEC-017.
