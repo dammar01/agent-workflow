@@ -162,6 +162,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-009](decisions/DEC-009-literal-credentials-scrubbed-by-lookup.yaml) | Literal credentials in the task, draft and request are found by value and put back to placeholders | accepted | implemented | observed | c584748 |
 | [DEC-010](decisions/DEC-010-scenario-origin-and-structured-diagnosis.yaml) | Scenario-caused failures get their own origin, stay out of the repeat brake, and every non-pass carries a structured diagnosis | accepted | implemented | validated | c584748 |
 | [DEC-011](decisions/DEC-011-research-records-yaml-changelog-split-bench-removed.yaml) | Research records are schema-checked YAML, release notes live per version, and bench/ is retired | accepted | implemented | validated | 665bb4c, c584748 |
+| [DEC-012](decisions/DEC-012-graph-refresh-hook-ownership-and-timing.yaml) | The Stop hook is the only graph-refresh trigger, prunes before it walks, and records its cost with project size | accepted | implemented | observed | 98449fe |
 | [DEC-017](decisions/DEC-017-research-questions-as-yaml-records.yaml) | Research questions become YAML records, linked to records both ways | accepted | implemented | observed | 7150b0d |
 <!-- research-inventory:end -->
 

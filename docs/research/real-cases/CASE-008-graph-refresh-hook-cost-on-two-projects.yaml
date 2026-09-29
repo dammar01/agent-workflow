@@ -61,8 +61,8 @@ observation: |
     stayed stale. A process list read after the run showed no graphify process left running.
   - On the frontend the refresh path added about 1.6 s of graphify to the scan.
 
-  Added 2026-09-29, a third run after DEC-012's change, still uncommitted in the working
-  tree: `--run-hook --force-stale --wait-refresh --hook dist/config/claude/hooks/graph-refresh.ps1`.
+  Added 2026-09-29, a third run after DEC-012's change (since committed as 98449fe):
+  `--run-hook --force-stale --wait-refresh --hook dist/config/claude/hooks/graph-refresh.ps1`.
   The hook prunes skip directories before walking and hands `graphify update` to a detached
   worker.
 
@@ -94,7 +94,7 @@ evidence:
     --run-hook --force-stale` on each project, 2026-09-29; `hook_refreshed_graph` compares the
     graph's modification time before and after the hook, and the tool put the Laravel graph's
     original time back because the hook had not rewritten it.
-    Third run: the same tool with `--wait-refresh` and the working-tree hook, 2026-09-29;
+    Third run: the same tool with `--wait-refresh` and the hook DEC-012 changed, 2026-09-29;
     `refresh_after_hook_ms` is the time until graphify-out/.refresh.lock was gone, and the
     worker's figures are its `kind: graph_refresh` row in each project's
     .workflow/data/quality.jsonl.

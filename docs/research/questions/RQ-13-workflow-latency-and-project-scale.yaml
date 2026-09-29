@@ -8,7 +8,7 @@ what_exists: |
   graph-refresh Stop hook runs after implementing turns with no timing recorded, and runtime
   lock guards accumulate one per session. Nothing records project size next to latency at run
   time; a one-off measurement of the hook on two projects exists (CASE-008).
-records: [CASE-006, CASE-007, CASE-008]
+records: [CASE-006, CASE-007, CASE-008, DEC-012]
 notes: |
   The maintainer feels latency after execute, in execute+verify turns, in verify alone, and
   when the main agent runs graphify itself; verify is slower on a large Laravel backend than
@@ -21,5 +21,5 @@ notes: |
   and under 2 s on the frontend. The hook is minor next to delegated calls unless graphify
   runs.
 
-  Draft records: DEC-012 (graph-refresh hook), DEC-013 (lock guards), H-008 (cached input and
-  thread continuation).
+  Draft records: DEC-013 (lock guards), H-008 (cached input and thread continuation).
+  DEC-012 moved the graph refresh out of the turn (tracked, commit 98449fe).
