@@ -496,7 +496,7 @@ ini berbeda, perbaiki salah satunya dalam perubahan yang sama.
 | `clean` | lokal | — | prune job, fakta usang/duplikat, sesi lama |
 | `inspect` | lokal | — | daftar job untuk sesi berjalan |
 | `provider` | lokal | — | baca/ubah provider second_agent dan reasoning effort |
-| `report` | lokal | — | ringkasan stream kualitas workspace (`quality.jsonl`), termasuk `e2e` (run) dan `e2e.drafts` (draft), serta `evidence_reuse` dari `usage.jsonl`: command explore/analyze/plan yang dilayani artifact tersimpan dibagi command yang boleh reuse (continuation dihitung sekali; cache input provider tidak termasuk) |
+| `report` | lokal | — | ringkasan stream kualitas workspace (`quality.jsonl`), termasuk `e2e` (run), `e2e.drafts` (draft), dan `graph_refresh` (biaya Stop hook graph per outcome), serta `evidence_reuse` dari `usage.jsonl`: command explore/analyze/plan yang dilayani artifact tersimpan dibagi command yang boleh reuse (continuation dihitung sekali; cache input provider tidak termasuk) |
 | `audit` | lokal | — | baca `audit.jsonl` sesi |
 | `graph-meta` | lokal | — | status snapshot graphify: segar, usang, atau tak ada |
 | `explore` | terdelegasi | ya | peta codebase, entry point, pemilik |
@@ -698,9 +698,17 @@ Dengan `policies.graph_leads_enabled: true`, runtime membaca `graphify-out/graph
 - `explore`/`plan`/`analyze` menerima leads lengkap dan community untuk fan-out;
 - `verify` menerima shortlist ringkas maksimal enam file tanpa community;
 - graph yang lebih tua daripada source `.py` tetap dipakai, tetapi prompt membawa warning stale;
-- graph tidak ada atau rusak → delegated flow tetap berjalan tanpa leads.
+- graph tidak ada, rusak, atau sedang di-refresh (`graphify-out/.refresh.lock` dipegang proses hidup) → delegated flow tetap berjalan tanpa leads.
 
-Runtime Python tidak pernah menjalankan `graphify init`, `build`, `watch`, atau `update`. Bundle Claude/PowerShell saat ini juga menyediakan Stop hook terpisah yang dapat menjalankan `graphify update` setelah `[EXECUTION RESULT]` atau `[REFACTOR RESULT]`, hanya bila graph sudah ada, stale, dan binary tersedia. Hook bersifat fail-open dan tidak menolak response bila gagal, tetapi berjalan sinkron sehingga dapat menambah latency sampai 45 detik (outer timeout 60 detik). Hook tidak pernah membuat graph baru atau menjalankan `init`/`build`/`watch`.
+Runtime Python tidak pernah menjalankan `graphify init`, `build`, `watch`, atau `update`. Satu-satunya pemicu `graphify update` adalah Stop hook `graph-refresh` di bundle Claude (`.ps1` dan `.sh`); `CLAUDE.md` dan skill `refactor` tidak lagi meminta main agent menjalankannya. Hook jalan setelah `[EXECUTION RESULT]` atau `[REFACTOR RESULT]`, hanya bila graph sudah ada, lebih tua dari source, dan binary tersedia:
+
+- scan mtime melewati direktori skip (`vendor`, `node_modules`, `.git`, `.workflow`, `graphify-out`, ...) sebelum masuk, jadi biayanya mengikuti jumlah source, bukan jumlah dependency;
+- graph basi → hook membuat `graphify-out/.refresh.lock` (`pid`, `token`, `started`), menjalankan worker terpisah, lalu kembali. Turn tidak menunggu graphify. Worker menjalankan `graphify update` maksimal 600 detik, mencatat satu baris, lalu menghapus lock miliknya;
+- graphify menulis ulang `graph.json` di tempat, jadi selama lock dipegang proses hidup (dan berumur < 15 menit) runtime memperlakukan graph sebagai tidak tersedia, dan main agent diminta menganggapnya basi. Lock yang ada tetapi tak terbaca dianggap dipegang selama berumur < 15 menit; penggantian lock ke pid worker ditulis ke file sementara lalu di-rename;
+- refresh dihitung sukses bila `graph.json` ditulis ulang, apa pun exit code-nya (graphify exit 1 pada graph besar karena visualisasi HTML);
+- tiap run yang lolos gate pertama pada project yang sudah punya `graph.json` menulis baris `kind: graph_refresh` ke `.workflow/data/quality.jsonl` (bila direktori itu ada) dengan `outcome` (`skipped_fresh`, `skipped_running`, `no_graphify`, `refreshed`, `timeout`, `error`), `hook_ms` (yang dibayar turn), `scan_ms`, `files_visited`, `dirs_skipped`, dan untuk refresh `graphify_ms`, `graphify_exit`, `graph_rewritten`. `--command report` merangkumnya di `graph_refresh`.
+
+Hook fail-open, tidak pernah menolak response, tidak pernah membuat graph baru atau menjalankan `init`/`build`/`watch`. Outer timeout Stop hook tetap 60 detik.
 
 Cache verdict graph memakai fingerprint path, mtime nanosecond, dan ukuran seluruh source
 `.py`. Perubahan isi, penambahan, atau penghapusan source menginvalidasi cache walaupun

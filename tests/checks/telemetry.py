@@ -151,6 +151,40 @@ def _evidence_reuse_counts_commands_it_could_serve() -> None:
     )
 
 
+def _graph_refresh_reports_what_the_turn_paid() -> None:
+    root = Path(tempfile.mkdtemp(prefix="aw-graph-refresh-"))
+    try:
+        for row in (
+            {"kind": "graph_refresh", "outcome": "skipped_fresh", "hook_ms": 200, "scan_ms": 180},
+            {"kind": "graph_refresh", "outcome": "refreshed", "hook_ms": 220, "scan_ms": 190,
+             "graphify_ms": 90000, "graphify_exit": 1, "graph_rewritten": True},
+            {"kind": "graph_refresh", "outcome": "skipped_running", "hook_ms": 10},
+            {"kind": "tests", "ok": True},
+        ):
+            write_quality_record(root, row)
+        summary = telemetry.graph_refresh(root)
+        assert_true(
+            summary["runs"] == 3
+            and summary["by_outcome"] == {"refreshed": 1, "skipped_fresh": 1, "skipped_running": 1},
+            f"graph refresh counts its own rows by outcome, not test rows; got {summary}",
+        )
+        assert_true(
+            summary["hook_ms_median"] == 200 and summary["graphify_ms_median"] == 90000,
+            "the turn's cost (hook_ms) and the detached graphify run are reported apart; "
+            f"got {summary}",
+        )
+        assert_true(
+            telemetry.test_pass_rate(root)["total_runs"] == 1,
+            "graph refresh rows in the quality stream must not count as test runs",
+        )
+        assert_true(
+            telemetry.report(root)["graph_refresh"]["runs"] == 3,
+            "the report carries the graph_refresh section",
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _torn_row_is_skipped_not_fatal() -> None:
     root = Path(tempfile.mkdtemp(prefix="aw-torn-"))
     try:
@@ -173,4 +207,5 @@ def _test_telemetry_metrics() -> None:
     _unjudged_work_is_not_incorrect()
     _report_reports_its_denominators()
     _evidence_reuse_counts_commands_it_could_serve()
+    _graph_refresh_reports_what_the_turn_paid()
     _torn_row_is_skipped_not_fatal()

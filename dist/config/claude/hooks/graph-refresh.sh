@@ -2,13 +2,16 @@
 # graph-refresh.sh - Stop hook (POSIX parity of graph-refresh.ps1).
 # Regenerates graphify-out/ after main_agent actually changed code. Two gates:
 #   1. Did this turn implement? ([EXECUTION RESULT] / [REFACTOR RESULT] in last message)
-#   2. Is the graph older than the sources? (mtime compare)
-# Both must pass. Runs `graphify update` only (never init/build/watch), bounded 45s.
+#   2. Is the graph older than the sources? (mtime compare, skip dirs pruned before descent)
+# Both must pass. The refresh is detached (DEC-012): the hook starts a worker that runs
+# `graphify update` only (never init/build/watch), records one row in the quality stream,
+# and removes graphify-out/.refresh.lock. Readers treat the graph as stale while the lock
+# is held, because graphify rewrites graph.json in place.
 # Never blocks the response (always exit 0).
 RAW="$(cat)"
 [ -z "$RAW" ] && exit 0
 CLAUDE_HOOK_RAW="$RAW" python3 <<'PY'
-import os, sys, json, shutil, subprocess
+import os, sys, json, shutil, subprocess, time
 
 SOURCE_EXT = (
     ".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx",
@@ -18,8 +21,120 @@ SKIP_DIRS = {
     "node_modules", ".git", ".venv", "venv", "__pycache__", "vendor",
     "dist", "build", ".next", "coverage", "graphify-out", ".workflow",
 }
+GRAPHIFY_LIMIT_S = 600
+LOCK_MAX_AGE_S = 900
+
+# The worker runs as its own python process, started in a new session so it outlives the
+# hook, with no handle shared with it. argv: root hook_ms scan_ms visited skipped token
+WORKER = r'''
+import os, sys, json, shutil, subprocess, time
+root, hook_ms, scan_ms, visited, skipped, token = sys.argv[1], *map(int, sys.argv[2:6]), sys.argv[6]
+graph = os.path.join(root, "graphify-out", "graph.json")
+lock = os.path.join(root, "graphify-out", ".refresh.lock")
+hide = {}
+if os.name == "nt":
+    # This worker has no console; without SW_HIDE a console child (graphify.cmd) would
+    # open a visible window of its own.
+    info = subprocess.STARTUPINFO()
+    info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    info.wShowWindow = 0
+    hide = {"startupinfo": info, "creationflags": 0x08000000}  # CREATE_NO_WINDOW
+outcome, exit_code, graphify_ms, rewritten = "error", None, 0, False
+try:
+    before = os.path.getmtime(graph)
+    started = time.monotonic()
+    try:
+        exit_code = subprocess.run(
+            [shutil.which("graphify") or "graphify", "update"], cwd=root,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=int(os.environ.get("GRAPH_REFRESH_LIMIT_S", "600")), **hide,
+        ).returncode
+    except subprocess.TimeoutExpired:
+        outcome = "timeout"
+    graphify_ms = int((time.monotonic() - started) * 1000)
+    rewritten = os.path.getmtime(graph) != before
+    # graphify exits 1 on a large graph when only its HTML view fails, having written
+    # graph.json (CASE-008): a rewritten graph is the success signal, not the exit code.
+    if rewritten:
+        outcome = "refreshed"
+except Exception:
+    pass
+finally:
+    data = os.path.join(root, ".workflow", "data")
+    if os.path.isdir(data):
+        row = {"kind": "graph_refresh", "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+               "hook": "sh", "outcome": outcome, "hook_ms": hook_ms, "scan_ms": scan_ms,
+               "files_visited": visited, "dirs_skipped": skipped, "graphify_ms": graphify_ms,
+               "graphify_exit": exit_code, "graph_rewritten": rewritten}
+        try:
+            with open(os.path.join(data, "quality.jsonl"), "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row) + "\n")
+        except Exception:
+            pass
+    try:
+        with open(lock, encoding="utf-8") as fh:
+            owned = json.load(fh).get("token") == token
+        if owned:
+            os.remove(lock)
+    except Exception:
+        pass
+'''
+
+
+def pid_alive(pid):
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        # os.kill(pid, 0) sends CTRL_C_EVENT on Windows; ask the kernel instead.
+        import ctypes
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return False
+        code = ctypes.c_ulong()
+        ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def lock_held(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lock = json.load(fh)
+        return time.time() - int(lock["started"]) < LOCK_MAX_AGE_S and pid_alive(int(lock["pid"]))
+    except FileNotFoundError:
+        return False
+    except Exception:
+        # Present but unreadable: held while young, like core.graph.graph_index reads it.
+        try:
+            return time.time() - os.path.getmtime(path) < LOCK_MAX_AGE_S
+        except OSError:
+            return False
+
+
+def write_row(root, fields):
+    # Fail-open: a workspace without .workflow/data gets no row.
+    data = os.path.join(root, ".workflow", "data")
+    if not os.path.isdir(data):
+        return
+    row = {"kind": "graph_refresh", "recorded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "hook": "sh"}
+    row.update(fields)
+    try:
+        with open(os.path.join(data, "quality.jsonl"), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row) + "\n")
+    except Exception:
+        pass
+
 
 try:
+    started = time.monotonic()
+    hook_ms = lambda: int((time.monotonic() - started) * 1000)
     raw = os.environ.get("CLAUDE_HOOK_RAW", "")
     if not raw.strip():
         sys.exit(0)
@@ -41,36 +156,82 @@ try:
         # No graph in this project. `graphify init` is never run automatically.
         sys.exit(0)
 
+    lock_path = os.path.join(root, "graphify-out", ".refresh.lock")
+    if lock_held(lock_path):
+        write_row(root, {"outcome": "skipped_running", "hook_ms": hook_ms()})
+        sys.exit(0)
+    try:
+        os.remove(lock_path)
+    except OSError:
+        pass
+
     # Gate 2: is the graph behind the sources?
     graph_time = os.path.getmtime(graph_path)
-    newest = 0.0
+    scan_started = time.monotonic()
+    newest, visited, skipped = 0.0, 0, 0
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        kept = [d for d in dirnames if d not in SKIP_DIRS]
+        skipped += len(dirnames) - len(kept)
+        dirnames[:] = kept
         for fn in filenames:
             if fn.endswith(SOURCE_EXT):
+                visited += 1
                 try:
                     mt = os.path.getmtime(os.path.join(dirpath, fn))
                     if mt > newest:
                         newest = mt
                 except Exception:
                     pass
+    scan_ms = int((time.monotonic() - scan_started) * 1000)
+    scan = {"scan_ms": scan_ms, "files_visited": visited, "dirs_skipped": skipped}
     if newest <= graph_time:
+        write_row(root, {"outcome": "skipped_fresh", "hook_ms": hook_ms(), **scan})
         sys.exit(0)  # graph is current
 
-    graphify = shutil.which("graphify")
-    if not graphify:
+    if not shutil.which("graphify"):
+        write_row(root, {"outcome": "no_graphify", "hook_ms": hook_ms(), **scan})
         sys.exit(0)
 
-    # `update` only. Bounded 45s so a hung graphify does not outlive the hook. A graph too
-    # large to index is a known outcome -- not retried, not reported.
+    # Exclusive create: of two hooks that found the graph stale, one starts the worker.
+    # The token, not the pid, says who owns the lock: the pid Popen reports can belong to
+    # a launcher in front of the interpreter that actually runs.
+    token = os.urandom(8).hex()
     try:
-        subprocess.run(
-            [graphify, "update"],
-            cwd=root,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=45,
-        )
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, json.dumps({"pid": os.getpid(), "token": token, "started": int(time.time())}).encode())
+        os.close(fd)
+    except OSError:
+        sys.exit(0)
+    flags = {}
+    if os.name == "nt":
+        info = subprocess.STARTUPINFO()
+        info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        info.wShowWindow = 0
+        flags["startupinfo"] = info
+        flags["creationflags"] = 0x00000008 | 0x08000000  # DETACHED_PROCESS | CREATE_NO_WINDOW
+    else:
+        flags["start_new_session"] = True
+    env = {**os.environ}
+    env.setdefault("GRAPH_REFRESH_LIMIT_S", str(GRAPHIFY_LIMIT_S))
+    worker = subprocess.Popen(
+        [sys.executable, "-c", WORKER, root, str(hook_ms()), str(scan_ms), str(visited), str(skipped), token],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        close_fds=True, env=env, **flags,
+    )
+    # Hand the lock to the worker before this hook exits: a lock naming the hook's own pid
+    # would read as abandoned the moment it returns, while graphify is still writing.
+    # Only while it still exists: a worker that already finished has removed it. Written
+    # beside the lock and renamed over it, so a reader never sees an empty or half lock.
+    try:
+        if os.path.exists(lock_path):
+            staged = lock_path + "." + token
+            try:
+                with open(staged, "w", encoding="utf-8") as fh:
+                    json.dump({"pid": worker.pid, "token": token, "started": int(time.time())}, fh)
+                os.replace(staged, lock_path)
+            finally:
+                if os.path.exists(staged):
+                    os.remove(staged)
     except Exception:
         pass
     sys.exit(0)

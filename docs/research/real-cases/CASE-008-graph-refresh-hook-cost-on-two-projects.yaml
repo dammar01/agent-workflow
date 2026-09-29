@@ -61,6 +61,23 @@ observation: |
     stayed stale. A process list read after the run showed no graphify process left running.
   - On the frontend the refresh path added about 1.6 s of graphify to the scan.
 
+  Added 2026-09-29, a third run after DEC-012's change, still uncommitted in the working
+  tree: `--run-hook --force-stale --wait-refresh --hook dist/config/claude/hooks/graph-refresh.ps1`.
+  The hook prunes skip directories before walking and hands `graphify update` to a detached
+  worker.
+
+  | | Laravel backend | Next.js frontend |
+  | --- | --- | --- |
+  | Hook, graph stale, what the turn paid (ms) | 527 | 393 |
+  | Refresh finished after the hook returned (ms) | 71,953 | 2,205 |
+  | Worker's own row: scan / graphify (ms) | 178 / 71,560, exit 1, graph.json rewritten | 36 / 1,796, exit 0, graph.json rewritten |
+
+  - The turn no longer waits for graphify: 47,028 ms became 527 ms on the Laravel backend
+    and 3,774 ms became 393 ms on the frontend.
+  - Unbounded by the hook's old 45 s wait, graphify on the Laravel graph ran 72 s, exited 1
+    and rewrote graph.json: the large graph refreshed for the first time in these runs.
+  - A process list read after both runs showed no graphify process left running.
+
 evidence:
   source: |
     Output of `python tools/maintain/measure_graph_hook.py --project <root> --run-hook
@@ -77,6 +94,10 @@ evidence:
     --run-hook --force-stale` on each project, 2026-09-29; `hook_refreshed_graph` compares the
     graph's modification time before and after the hook, and the tool put the Laravel graph's
     original time back because the hook had not rewritten it.
+    Third run: the same tool with `--wait-refresh` and the working-tree hook, 2026-09-29;
+    `refresh_after_hook_ms` is the time until graphify-out/.refresh.lock was gone, and the
+    worker's figures are its `kind: graph_refresh` row in each project's
+    .workflow/data/quality.jsonl.
 
 outcome: mixed
 unexpected_behavior:
@@ -85,7 +106,8 @@ unexpected_behavior:
 limitations:
   - Two projects on one machine; timings depend on disk cache and antivirus scanning.
   - "The stale-graph path was exercised once per project, by backdating graph.json rather than by a real source change."
-  - "One stale-path run on the large graph: whether graphify ever finishes inside 45 s there is not known."
+  - "One stale-path run per hook version and project; graphify's 72 s on the large graph after the change is a single observation."
+  - "The third run drove the hook directly, not through a Claude Code turn: whether Claude Code lets the detached worker outlive the hook is not shown here."
 related: [CASE-006]
 related_notes: |
   Drafts, named as plain text: DEC-012 proposes the pruned scan and one trigger for graphify.

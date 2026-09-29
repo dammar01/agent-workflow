@@ -18,12 +18,15 @@ Read-only unless --run-hook or --run-graphify is given: both may regenerate grap
 --force-stale (with --run-hook) backdates graphify-out/graph.json before the hook runs, so
 the hook takes its refresh path; source files are never touched, and the graph's own mtime
 is put back when the hook did not rewrite it.
+--wait-refresh (with --run-hook) waits for a detached refresh (DEC-012) to release
+graphify-out/.refresh.lock, and reports how long it took after the hook returned.
 Prints one JSON object of counts and timings, nothing from the project's files. Not part of
 the test suite.
 
   python tools/maintain/measure_graph_hook.py --project <root>
   python tools/maintain/measure_graph_hook.py --project <root> --run-hook --run-graphify
   python tools/maintain/measure_graph_hook.py --project <root> --run-hook --force-stale
+  python tools/maintain/measure_graph_hook.py --project <root> --run-hook --force-stale --wait-refresh       --hook dist/config/claude/hooks/graph-refresh.ps1
 """
 from __future__ import annotations
 
@@ -80,6 +83,16 @@ $sw.Stop()
 """
 
 
+def _hidden() -> dict:
+    """No console window per PowerShell started (Windows); the scans start one per repeat."""
+    if os.name != "nt":
+        return {}
+    info = subprocess.STARTUPINFO()
+    info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    info.wShowWindow = 0
+    return {"startupinfo": info, "creationflags": subprocess.CREATE_NO_WINDOW}
+
+
 def _powershell() -> str | None:
     return shutil.which("powershell") or shutil.which("pwsh")
 
@@ -87,7 +100,7 @@ def _powershell() -> str | None:
 def _run_ps(shell: str, script: str, root: Path) -> str:
     done = subprocess.run(
         [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
-        capture_output=True, text=True, env={**os.environ, "MEASURE_ROOT": str(root)}, check=True,
+        capture_output=True, text=True, env={**os.environ, "MEASURE_ROOT": str(root)}, check=True, **_hidden(),
     )
     return done.stdout.strip().splitlines()[-1]
 
@@ -123,13 +136,26 @@ def default_hook() -> Path:
 
 # Older than any source file, so the hook's mtime gate sees the graph as stale.
 STALE_MTIME = 946684800.0  # 2000-01-01T00:00:00Z
+# The detached worker's own bound (600 s) plus room to start and record.
+REFRESH_WAIT_S = 660
 
 
-def measure(root: Path, *, hook: Path, repeat: int, run_hook: bool, run_graphify: bool, force_stale: bool = False) -> dict:
+def _wait_for_refresh(root: Path) -> int | None:
+    """Milliseconds until the refresh lock is gone, or None when it outlived the wait."""
+    lock = root / "graphify-out" / ".refresh.lock"
+    started = time.perf_counter()
+    while lock.exists():
+        if time.perf_counter() - started > REFRESH_WAIT_S:
+            return None
+        time.sleep(0.2)
+    return round((time.perf_counter() - started) * 1000)
+
+
+def measure(root: Path, *, hook: Path, repeat: int, run_hook: bool, run_graphify: bool, force_stale: bool = False, wait_refresh: bool = False) -> dict:
     graph = root / "graphify-out" / "graph.json"
     result: dict = {
         "measured_on": _dt.date.today().isoformat(),
-        "hook_measured": "v3.7.3 graph-refresh.ps1",
+        "hook_measured": str(hook),
         "graph_exists": graph.is_file(),
         **project_size(root),
     }
@@ -160,8 +186,11 @@ def measure(root: Path, *, hook: Path, repeat: int, run_hook: bool, run_graphify
         before = _mtime(graph)
         started = time.perf_counter()
         try:
-            subprocess.run(command, input=payload, capture_output=True, text=True)
+            subprocess.run(command, input=payload, capture_output=True, text=True, **_hidden())
             result["hook_total_ms"] = round((time.perf_counter() - started) * 1000)
+            if wait_refresh:
+                # The turn pays hook_total_ms; this is how long the graph stayed stale after it.
+                result["refresh_after_hook_ms"] = _wait_for_refresh(root)
             result["hook_refreshed_graph"] = _mtime(graph) not in (None, before)
         finally:
             # A hook that did not rewrite the graph leaves it backdated; put its time back.
@@ -175,7 +204,7 @@ def measure(root: Path, *, hook: Path, repeat: int, run_hook: bool, run_graphify
         else:
             before = _mtime(graph)
             started = time.perf_counter()
-            done = subprocess.run([graphify, "update"], cwd=root, capture_output=True, text=True, errors="replace")
+            done = subprocess.run([graphify, "update"], cwd=root, capture_output=True, text=True, errors="replace", **_hidden())
             result["graphify_update_ms"] = round((time.perf_counter() - started) * 1000)
             # graphify reports on stderr and exits 1 when only its HTML view fails; whether
             # graph.json was rewritten is recorded beside the exit code (CASE-008).
@@ -194,16 +223,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-hook", action="store_true", help="also run the installed hook end to end")
     parser.add_argument("--run-graphify", action="store_true", help="also time `graphify update` alone")
     parser.add_argument("--force-stale", action="store_true", help="with --run-hook: backdate graph.json so the hook refreshes it")
+    parser.add_argument("--wait-refresh", action="store_true", help="with --run-hook: wait for a detached refresh to release its lock")
     args = parser.parse_args(argv)
     if args.force_stale and not args.run_hook:
         parser.error("--force-stale needs --run-hook")
+    if args.wait_refresh and not args.run_hook:
+        parser.error("--wait-refresh needs --run-hook")
     root = Path(args.project).resolve()
     if not root.is_dir():
         print(f"not a directory: {root}", file=sys.stderr)
         return 2
     result = measure(
         root, hook=args.hook, repeat=max(1, args.repeat), run_hook=args.run_hook,
-        run_graphify=args.run_graphify, force_stale=args.force_stale,
+        run_graphify=args.run_graphify, force_stale=args.force_stale, wait_refresh=args.wait_refresh,
     )
     print(json.dumps(result, indent=2))
     return 0

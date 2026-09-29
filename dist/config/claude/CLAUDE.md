@@ -199,7 +199,7 @@ LAST_EXPLORE_RESULT→plan,analyze | LAST_PLAN_RESULT→execute | LAST_EXECUTE_D
 ### Graphify
 Cek graphify-out/ sebelum codebase task. Ada → primary context. Tidak ada → offer generate .graphifyignore + `graphify update`.
 .graphifyignore framework-aware (ignore deps/build/secret): node_modules/ vendor/ .venv/ venv/ __pycache__/ target/ dist/ build/ .next/ coverage/ *.log .env .env.*
-Never run: graphify init/build/watch. Auto `graphify update` setelah code change. Error "too large"/"too many nodes" → IGNORE, jangan retry.
+Never run: graphify init/build/watch. `graphify update` setelah code change = tugas Stop hook `graph-refresh` (jalan terpisah dari turn), BUKAN kamu — jangan jalankan sendiri. `graphify-out/.refresh.lock` ada → refresh sedang jalan, graph.json bisa setengah tertulis: anggap graph basi, pakai Read/Grep. Error "too large"/"too many nodes" → IGNORE, jangan retry.
 
 ### Global Forbidden
 Modif file luar scope | /.execute tanpa -y | plan tanpa confidence+atribusi | auto-expand scope |

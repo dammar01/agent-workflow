@@ -65,6 +65,7 @@ from tests.checks.e2e_knowledge import _test_e2e_knowledge  # noqa: E402
 from tests.checks.deps import _test_runtime_is_stdlib_only  # noqa: E402
 from tests.checks.hidden_spawn import _test_every_spawn_hides_its_console  # noqa: E402
 from tests.checks.governance import _test_governance_controls  # noqa: E402
+from tests.checks.graph_refresh import _test_graph_refresh_hook  # noqa: E402
 from tests.checks.graph_verification import _test_graph_verification  # noqa: E402
 from tests.checks.hardening import _test_hardening  # noqa: E402
 from tests.checks.telemetry import _test_telemetry_metrics  # noqa: E402
@@ -176,6 +177,7 @@ SUITES: dict[str, tuple] = {
     "transcript": (_test_transcript_parsing, "a Claude transcript yields human turns and per-turn context, not tool-call counts"),
     "governance": (_test_governance_controls, "provider allowlist, budget ceiling, tool policy, local-first streams"),
     "graph-verification": (_test_graph_verification, "per-node graph provenance, drift vs move, subgraph slicing"),
+    "graph-refresh": (_test_graph_refresh_hook, "the Stop hook prunes, returns before graphify, and readers wait out the refresh lock"),
     "adapters": (_test_adapter_error_normalization, "every adapter normalises errors and counts redactions alike"),
     "adapters-shared": (_test_adapter_redaction_is_shared, "no adapter carries a private copy of the redaction helpers"),
     "adapters-stdin": (_test_stdin_failure_reaches_call_meta, "a failed stdin handover names its cause in the call meta"),

@@ -94,6 +94,7 @@ from tests.checks.installer import (
 from tests.checks.deps import _test_runtime_is_stdlib_only
 from tests.checks.hidden_spawn import _test_every_spawn_hides_its_console
 from tests.checks.governance import _test_governance_controls
+from tests.checks.graph_refresh import _test_graph_refresh_hook
 from tests.checks.graph_verification import _test_graph_verification
 from tests.checks.hardening import _test_hardening
 from tests.checks.telemetry import _test_telemetry_metrics
@@ -1188,6 +1189,7 @@ confidence: high — all requested checks ran
         _test_transcript_parsing()
         _test_governance_controls()
         _test_graph_verification()
+        _test_graph_refresh_hook()
         _test_hardening()
 
         print("tests/scenario: success")

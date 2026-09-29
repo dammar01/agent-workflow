@@ -11,9 +11,11 @@ import hashlib
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 from core.workspace.workspace_paths import workflow_paths
+from utils.osutil import process_alive
 
 GRAPH_DIRNAME = "graphify-out"
 GRAPH_FILENAME = "graph.json"
@@ -51,8 +53,36 @@ def graph_path(project_root) -> Path:
     return Path(project_root) / GRAPH_DIRNAME / GRAPH_FILENAME
 
 
+REFRESH_LOCK_FILENAME = ".refresh.lock"
+_REFRESH_LOCK_MAX_AGE_SECONDS = 900  # the graph-refresh hook's own limit
+
+
+def refresh_in_progress(project_root) -> bool:
+    """True while the graph-refresh worker holds `graphify-out/.refresh.lock`.
+
+    graphify rewrites graph.json in place, so a read during a refresh can see half a file
+    (DEC-012). A lock whose pid is gone, or older than the hook's own limit, holds nothing.
+    A lock that exists but cannot be read is held while it is young: failing open there
+    would read the graph exactly when a writer is mid-way through the lock.
+    """
+    path = Path(project_root) / GRAPH_DIRNAME / REFRESH_LOCK_FILENAME
+    try:
+        lock = json.loads(path.read_text(encoding="utf-8"))
+        age = time.time() - int(lock["started"])
+        return age < _REFRESH_LOCK_MAX_AGE_SECONDS and process_alive(int(lock["pid"]))
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError, KeyError, TypeError):
+        try:
+            return time.time() - path.stat().st_mtime < _REFRESH_LOCK_MAX_AGE_SECONDS
+        except OSError:
+            return False
+
+
 def load_graph(project_root) -> dict | None:
-    """Parsed graph.json, or None when absent/unreadable. Never raises."""
+    """Parsed graph.json, or None when absent/unreadable or being refreshed. Never raises."""
+    if refresh_in_progress(project_root):
+        return None
     path = graph_path(project_root)
     try:
         data = json.loads(path.read_text(encoding="utf-8", errors="replace"))

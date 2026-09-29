@@ -48,6 +48,7 @@ the bytes it would have to check.
 | `/.verify-browser` interview | The questions happen in main_agent's thread, and only after a draft reports the target unconfigured or unreachable. The runtime only sees the request file written afterwards. |
 | Proxy-failure hard gate | Stopping, printing `[PROXY GAGAL]`, and waiting for a yes/no before any local fallback is main_agent behavior after it reads `ok:false`. The runtime returns the failure; it cannot stop main_agent from gathering on its own. |
 | Output contracts (RELAY vs SYNTHESIS, mandatory fields) | Output-side, like `[OPTIONS]`. |
+| Main agent leaves `graphify update` to the Stop hook, and reads the graph as stale while `graphify-out/.refresh.lock` is held | Main agent runs graphify and reads graph.json through its own tools. The runtime honours the lock only for its own reads (`core.graph.graph_index.load_graph`). |
 
 One prompt contract is enforced **partly outside Python**: the pre-flight gate for
 delegated commands. It is prompt-level in `CLAUDE.md`, and in auto-intent mode the
@@ -778,6 +779,7 @@ one-byte file carrying an OS byte-range lock, kept between uses:
 | --- | --- | --- | --- |
 | `facts.jsonl.lock`, `e2e-knowledge.jsonl.lock`, `promote.lock` | `OwnedFileLock` | `{pid, token, at}` | Removed on release; a leftover empty one is a writer that crashed between create and write, reclaimed after the TTL |
 | `storage/jobs/locks/<session>.lock` (agent install, not the project) | job session lock | job id and token | Removed on release |
+| `graphify-out/.refresh.lock` | graph-refresh Stop hook, then its detached worker | `{pid, token, started}` | Removed by the worker holding the token; held means a live pid and younger than 15 minutes, otherwise the next hook removes it |
 | `evidence.jsonl.lock` | OS lock on byte 0 | one NUL byte | Kept: the lock is the open handle, released by closing it |
 | `<lock>.reclaim` | OS lock on byte 0 | one NUL byte | Kept, one per `OwnedFileLock` that was ever reclaimed |
 | `storage/jobs/.capacity.guard`, `<session>.lock.guard`, `<claim>.guard` | OS lock on byte 0 (`JobManager._exclusive_file_guard`) | one NUL byte | Kept, one per session or claim path; they accumulate (CASE-007) |

@@ -44,6 +44,10 @@ the per-call files live: [reference, command table](../reference.md#command) and
 - **Let reuse work.** Repeated or similar questions can reuse earlier evidence and facts.
   Forcing a fresh session turns that off; do it only when you know the earlier evidence is
   stale. The option is in the [CLI reference](../reference.md#cli-langsung).
+- **Slow right after an implementing turn, on a large project?** That used to be the graph
+  refresh running inside the turn. It now runs in the background, so the turn ends first
+  and the graph catches up a little later; the `report` command shows what each refresh
+  cost. How it works: [Graphify in the reference](../reference.md#graphify).
 - **Use the quick verify mode when parsing is all you need.** A project can switch
   `/.verify` to parse checks only, without the secondary agent. It is much faster, but it
   proves only that files parse — **not** that the behavior is correct. The setting and what

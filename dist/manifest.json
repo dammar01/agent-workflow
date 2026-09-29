@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "39d2060798626f573945ea058c022acd2c56c2017ebcffa6a0645ea616f6a3db",
-      "bytes": 26981,
+      "sha256": "d16b4638f61473d6bc017dc798e1ea0d70936dc1c9109760750de88e4896bd89",
+      "bytes": 27207,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -112,8 +112,8 @@
     },
     {
       "path": "claude/skills/refactor.md",
-      "sha256": "1fcd1fdc753d3fc056c0210d580469ffc2c641fdb3c5e60b42fd0a2d4ef07731",
-      "bytes": 286,
+      "sha256": "28e42886e8215885b9b360bd73936b1fc1a00745ff9b8018ac8f6787dbb191c3",
+      "bytes": 364,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -294,15 +294,15 @@
     },
     {
       "path": "claude/hooks/graph-refresh.ps1",
-      "sha256": "e90c7b805d53b483c9ccf83dbf5b49b660304883f2788a79dd4ac76fec35b195",
-      "bytes": 5353,
+      "sha256": "f1ab5d8564cab33759073f67922b4b0d7f006271b2070006a7abd9bca8bd7c2f",
+      "bytes": 14557,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/graph-refresh.sh",
-      "sha256": "de4be2d30a69d90af5ac254701b8a7af00137daed03bae4807ed10a6980e7fde",
-      "bytes": 2677,
+      "sha256": "d75241d00a43be734aa717bb666383042b468ff8af8fb98f69bbaaf1db0a216f",
+      "bytes": 9664,
       "merge": "replace",
       "component": "runtime"
     },

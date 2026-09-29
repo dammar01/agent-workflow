@@ -56,7 +56,7 @@ def load_usage(project_root) -> list[UsageRecord]:
 
 
 def load_quality(project_root) -> list[dict]:
-    """Recorded test/security check outcomes, oldest first."""
+    """Recorded check outcomes (tests, security, e2e, graph refresh), oldest first."""
     path = _stream_path(project_root, QUALITY_STREAM_NAME)
     rows: list[dict] = []
     try:
@@ -416,6 +416,33 @@ def _work_units(rows) -> int:
     return len(_work_groups(rows))
 
 
+def graph_refresh(project_root) -> dict:
+    """What the graph-refresh Stop hook cost, from its rows in the quality stream (DEC-012).
+
+    `hook_ms` is what the turn paid; `graphify_ms` ran detached after it. A refresh counts
+    as done when graph.json was rewritten, whatever graphify's exit code. The hook writes
+    no row for a turn that implemented nothing, so these are implementing turns only.
+    """
+    rows = [row for row in load_quality(project_root) if row.get("kind") == "graph_refresh"]
+    outcomes: dict[str, int] = {}
+    for row in rows:
+        outcome = str(row.get("outcome") or "unknown")
+        outcomes[outcome] = outcomes.get(outcome, 0) + 1
+
+    def _values(key, subset):
+        return [row[key] for row in subset if isinstance(row.get(key), (int, float))]
+
+    refreshes = [row for row in rows if "graphify_ms" in row]
+    return {
+        "runs": len(rows),
+        "by_outcome": dict(sorted(outcomes.items())),
+        "hook_ms_median": _median(_values("hook_ms", rows)),
+        "scan_ms_median": _median(_values("scan_ms", rows)),
+        "graphify_ms_median": _median(_values("graphify_ms", refreshes)),
+        "graphify_ms_max": max(_values("graphify_ms", refreshes), default=None),
+    }
+
+
 _REUSE_ROLES = ("exploration", "reasoning")
 
 
@@ -513,4 +540,5 @@ def report(project_root) -> dict:
         "security": security_pass_rate(rows),
         "tests": test_pass_rate(project_root),
         "e2e": e2e_metrics(project_root, rows),
+        "graph_refresh": graph_refresh(project_root),
     }
