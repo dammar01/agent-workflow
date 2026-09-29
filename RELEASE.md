@@ -66,7 +66,10 @@ explicit list precisely so that an unrelated semver in prose is not rewritten by
    python tools/maintain/check_research.py --strict --git
    ```
 
-   `--strict` refuses `uncommitted`; `--git` checks every named commit exists.
+   `--strict` refuses `uncommitted`; `--git` checks every named commit exists. The same
+   check fails when the README inventory or `docs/research/questions.md` is stale; run it
+   with `--write-inventory` after adding or promoting a record. When
+   `docs/research-drafts/` exists locally, also run `--drafts`: CI has no drafts to check.
 
 5. **Test.** This is the tag gate. All of it, in this order:
 

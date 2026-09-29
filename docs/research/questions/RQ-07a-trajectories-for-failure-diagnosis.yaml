@@ -1,0 +1,24 @@
+schema_version: 2
+id: RQ-07a
+question: "Can recorded trajectories support post-hoc failure diagnosis?"
+date: 2026-09-29
+status: partial
+what_exists: |
+  Audit, usage, quality, per-call metadata, progress, job logs, and continuation metadata
+  exist, but are scattered and have no diagnosis tooling.
+records: []
+notes: |
+  Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
+  recorded before 3.7.3.
+
+  Trajectory data (task, routing, exploration, evidence, plan, execution, failure,
+  verification, intervention, outcome) accumulates only through real use, which makes it
+  valuable for research. Only part of it is recorded today: the runtime keeps routing,
+  evidence, verification verdicts, and continuation and recovery events, but not the plan, the
+  execution, human interventions, or the task outcome (CASE-004, draft). What is recorded is
+  stored in each user's own `.workflow/` and contains their code and prompts. Any collection
+  across users requires their consent and sanitization under CONTRACT.md section 5; nothing in
+  the runtime collects it.
+
+  Draft records: H-005, DEC-015 (drafts). DEC-015 records tasks as skill sequences and their
+  outcome.

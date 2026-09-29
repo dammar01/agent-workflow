@@ -166,9 +166,9 @@ disposition:
   chosen yet is written `[PLACEHOLDER]`, never invented.
 
 The research corpus counts as final when every record has a complete disposition, every
-hypothesis has success criteria, and every research question in
-[questions.md](questions.md) links at least one record. Final does not mean answered: a
-record may be final and still `not_validated`.
+hypothesis has success criteria, every `answered` research question lists at least one
+tracked record, and every version-2 record names the questions it serves (§16). Final does
+not mean answered: a record may be final and still `not_validated`.
 
 ## 15. Tracked records and drafts
 
@@ -181,13 +181,18 @@ without one is removed, not rounded.
 Proposed hypotheses, planned experiments, syntheses, and decisions without implementation
 are drafts. Drafts live in `docs/research-drafts/` with the same subfolders. That directory
 is git-ignored: it is the maintainer's local working area, not part of a release. Tracked
-records refer to a draft by its ID in plain text, never by a link. A draft returns to
-`docs/research/` when it has been carried out and its result is recorded in it.
+records refer to a draft by its ID in plain text, never by a link or an ID field. A draft
+returns to `docs/research/` when it has been carried out and its result is recorded in it.
+
+A research question (`RQ`) is tracked as soon as it is asked: a question is never carried
+out, so it has nothing to wait for. Its `records` name tracked records only, and the drafts
+serving it are named in its `notes`, so a clean clone without drafts validates the same way.
 
 Tracked records are frozen as of 3.7.3: their content changes only to add a new result or
 to correct a factual error against its source, never to add untested reasoning. The one
 exception is the format conversion of §16 (DEC-011), which changed their encoding, not
-their content, and filled the commits they named as `unknown` from Git history.
+their content, and filled the commits they named as `unknown` from Git history. Schema
+version 2 (DEC-017) did not touch them: a tracked record at version 1 stays valid as it is.
 
 ## 16. Record format
 
@@ -197,7 +202,18 @@ fixes the fields per type and which of them are enums; unknown keys are refused,
 cannot be invented in one record. `tools/maintain/check_research.py` enforces it in the test
 suite and in CI, together with the rules the schema cannot express:
 
-- IDs are unique and match the file name; the prefix matches the directory.
+- IDs are unique across tracked records and drafts, and match the file name; the prefix
+  matches the directory. IDs are `PREFIX-NNN`; a research question is `RQ-NN` with an
+  optional lowercase letter for a sub-question (`RQ-07a`).
+- Records are `schema_version` 2. A tracked `DEC`, `H`, `EXP`, `CASE`, `SYN`, `ARC` or `LIT`
+  may stay at version 1: it was frozen before version 2 (§15). Drafts and `RQ` records are
+  always version 2.
+- Every version-2 `DEC`, `H`, `EXP`, `CASE` and `SYN` names the research question(s) it
+  serves under `questions`: a record that serves no question has no reason to change the
+  project. The links hold both ways: an `RQ`'s `records` are tracked records, each of which
+  (at version 2) names the `RQ` back, and a tracked version-2 record's `RQ` lists it. An
+  `answered` `RQ` lists at least one record; `proposed` and `partial` may list none yet.
+  Version-1 records carry no `questions` and are linked from the `RQ` side only.
 - An implemented or partially implemented `DEC` names the commit(s) that carry it
   (`implementation.commits`). `uncommitted` is allowed while the change is in the working
   tree and is refused by `--strict`, which a release runs; replace it with the hash once the
@@ -216,10 +232,13 @@ suite and in CI, together with the rules the schema cannot express:
 
 Drafts in `docs/research-drafts/` follow the same format; `--drafts` validates them without
 the tracked gate and refuses a Markdown draft. Drafts written before 3.7.3's conversion are
-Markdown until the maintainer converts them, which `--drafts` reports one by one.
+Markdown until the maintainer converts them, which `--drafts` reports one by one. A draft in
+a nested directory such as `_archive/` is not read. CI has no drafts directory, so `--drafts`
+is a local check the maintainer runs; CI checks the tracked corpus.
 
-The README inventory is generated from the records (`--write-inventory`) and the check fails
-when it is stale. Prose goes in block scalars (`|`); a list item that starts with a backtick
+The README inventory and [questions.md](questions.md) are generated from the records
+(`--write-inventory`), and the check fails when either is stale; `RQ` records appear only in
+questions.md. Prose goes in block scalars (`|`); a list item that starts with a backtick
 is quoted. The schema is part of this contract: changing a field or an enum bumps
 `schema_version` and is recorded as a `DEC`. PyYAML is a development dependency
 (`requirements-dev.txt`); the runtime never reads these records.

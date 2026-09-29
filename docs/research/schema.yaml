@@ -6,7 +6,8 @@
 # Field specs:
 #   type      str | text | date | int | bool | id | commit | enum | list | map
 #             str: one line, non-empty. text: prose, may span lines, non-empty.
-#             date: YYYY-MM-DD. id: a record ID (PREFIX-NNN). commit: 7..40 hex, or the
+#             date: YYYY-MM-DD. id: a record ID (PREFIX-NNN; a research question is
+#             RQ-NN with an optional lowercase letter, RQ-07a). commit: 7..40 hex, or the
 #             literal `uncommitted` (allowed while the change is in the working tree;
 #             refused by --strict).
 #   required  default true. An optional field may be absent; when present it is checked.
@@ -15,8 +16,12 @@
 #   items     for list: the spec each item follows. min_items: default 0.
 #   fields    for map (and list items of type map): the nested specs.
 # Unknown keys are refused at every level, so a typo is an error, not a silent new field.
+#
+# Version 2 (DEC-017) added the RQ type and the `questions` field. A DEC, H, EXP, CASE or SYN
+# at version 2 must name the research question(s) it serves; records tracked at version 1
+# are frozen (CONTRACT.md §15) and stay valid without it. RQ records and drafts are version 2.
 
-schema_version: 1
+schema_version: 2
 
 enums:
   provenance_type: [direct, adapted, synthesized, observed, unknown]
@@ -32,6 +37,7 @@ enums:
   case_environment: [private_production, maintainer_development, team_development, public_repository, synthetic]
   visibility: [public, sanitized]
   syn_status: [draft, final]
+  rq_status: [proposed, partial, answered]
   arc_status: [implemented, validated, partially_validated, deprecated, unknown]
   arc_follow_up: [become_decision, become_hypothesis, archival]
   lit_relationship: [direct, adapted, supports, challenges, conceptually_related, future_direction, unknown]
@@ -113,6 +119,7 @@ types:
       revisit_when: {type: list, min_items: 1, items: {type: text}}
       supersedes: {type: list, required: false, items: {type: id, ids: [DEC]}}
       revises: {type: list, required: false, items: {type: id, ids: [DEC]}}
+      questions: {type: list, required: false, items: {type: id, ids: [RQ]}}
 
   H:
     directory: hypotheses
@@ -143,6 +150,7 @@ types:
       experiments: {type: list, required: false, items: {type: id, ids: [EXP]}}
       limitations: {type: list, min_items: 1, items: {type: text}}
       related_decisions: {type: list, required: false, items: {type: id, ids: [DEC]}}
+      questions: {type: list, required: false, items: {type: id, ids: [RQ]}}
       disposition: {$ref: disposition}
 
   EXP:
@@ -196,6 +204,7 @@ types:
       threats_to_validity: {type: list, min_items: 1, items: {type: text}}
       outcome: {type: enum, enum: outcome}
       related: {$ref: references}
+      questions: {type: list, required: false, items: {type: id, ids: [RQ]}}
       disposition: {$ref: disposition}
 
   CASE:
@@ -235,6 +244,7 @@ types:
           commits: {type: list, required: false, items: {type: commit}}
           commits_note: {type: str, required: false}
           feature: {type: str}
+      questions: {type: list, required: false, items: {type: id, ids: [RQ]}}
       disposition: {$ref: disposition}
 
   SYN:
@@ -261,6 +271,7 @@ types:
           level: {type: enum, enum: confidence}
           reason: {type: text}
       open_questions: {type: list, required: false, items: {type: text}}
+      questions: {type: list, required: false, items: {type: id, ids: [RQ]}}
       disposition: {$ref: disposition}
 
   ARC:
@@ -303,6 +314,22 @@ types:
       notes: {type: text, required: false}
       disposition: {$ref: disposition}
 
+  RQ:
+    directory: questions
+    title: Research question — what is asked, what exists today, and which records serve it
+    # A question is never carried out, so it is tracked as soon as it is asked.
+    tracked_when: {}
+    fields:
+      schema_version: {type: int}
+      id: {type: id, ids: [RQ]}
+      question: {type: str}
+      date: {type: date}
+      status: {type: enum, enum: rq_status}
+      what_exists: {type: text}
+      # Tracked records only; drafts are named in `notes` as plain text (CONTRACT.md §15).
+      records: {type: list, items: {type: id, ids: [DEC, H, EXP, CASE, SYN, ARC, LIT]}}
+      notes: {type: text, required: false}
+
 # Rules the field specs cannot express, enforced by the validator (CONTRACT.md §14–§16):
 #   - file name is `<id>-<kebab-slug>.yaml` inside the type's directory; IDs are unique.
 #   - H and EXP carry no commit anywhere (they are external to the code).
@@ -315,3 +342,8 @@ types:
 #     docs/research-drafts/.
 #   - every referenced ID resolves to a tracked record, or to a draft when
 #     docs/research-drafts/ exists; otherwise it is reported.
+#   - schema_version is 2; a tracked DEC/H/EXP/CASE/SYN/ARC/LIT may stay at 1 (frozen).
+#   - a version-2 DEC/H/EXP/CASE/SYN names at least one RQ in `questions`.
+#   - an RQ's `records` are tracked records; an `answered` RQ lists at least one; a listed
+#     version-2 record names the RQ back, and a tracked version-2 record's RQ lists it.
+#   - docs/research/questions.md is generated from the RQ records (--write-inventory).

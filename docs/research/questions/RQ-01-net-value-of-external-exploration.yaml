@@ -1,0 +1,14 @@
+schema_version: 2
+id: RQ-01
+question: "When does external repository exploration provide net engineering value?"
+date: 2026-09-29
+status: proposed
+what_exists: |
+  Usage telemetry; the 3-arm harness was removed in 3.7.3 without results (DEC-011); no
+  net-value measure.
+records: []
+notes: |
+  Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
+  recorded before 3.7.3.
+
+  Draft records: CASE-003 (archived draft). See also docs/evaluation/README.md.

@@ -101,17 +101,19 @@ which it occurred.
 | [real-cases/](real-cases/) | `CASE-XXX` | Sanitized real-world usage and implementation observations |
 | [decisions/](decisions/) | `DEC-XXX` | Architectural or behavioral decisions and their rationale |
 | [design-archaeology/](design-archaeology/) | `ARC-XXX` | Historical decisions whose original provenance may be incomplete |
+| [questions/](questions/) | `RQ-XX` | Research questions, what exists for each today, and the records serving them |
 
 Every record is YAML. Each directory holds a `_TEMPLATE.yaml`: copy it, name the file
 `<ID>-<kebab-slug>.yaml`, fill it in, and run `python tools/maintain/check_research.py`. The
 fields, their enums, and the rules the check enforces are in [schema.yaml](schema.yaml) and
 [CONTRACT.md](CONTRACT.md) §16. `H` and `EXP` records are external to the code and carry no
-commit; an implemented `DEC` names the commit(s) that implement it.
+commit; an implemented `DEC` names the commit(s) that implement it. A record at schema
+version 2 names the research question(s) it serves under `questions`, and the `RQ` lists it
+back (DEC-017); records tracked at version 1 are frozen without it.
 
-Two further files tie records together without being records themselves:
-[questions.md](questions.md) lists open research questions (`RQ-XX`) with what already
-exists for each, and [logs/](logs/) holds fixed summaries of research periods that link to
-the records they produced.
+[questions.md](questions.md) is the index of the `RQ` records, generated like the inventory
+below, and [logs/](logs/) holds fixed summaries of research periods that link to the records
+they produced.
 
 ## Epistemic status
 
@@ -148,6 +150,8 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | ID | Title | Type status | Implementation | Validation | Commit |
 | --- | --- | --- | --- | --- | --- |
 | [CASE-005](real-cases/CASE-005-verify-browser-drafts-never-ready.yaml) | `/.verify-browser` drafts never reached `ready` | negative | implemented | observed | — |
+| [CASE-006](real-cases/CASE-006-latency-and-cached-input-in-maintainer-use.yaml) | Latency by project and cached input share in maintainer use | inconclusive | implemented | observed | — |
+| [CASE-007](real-cases/CASE-007-accumulating-one-byte-lock-guards.yaml) | One-byte lock guards accumulate and look like a defect | mixed | implemented | observed | — |
 | [DEC-001](decisions/DEC-001-verify-browser-delegated.yaml) | `/.verify-browser` is a delegated command | accepted | implemented | validated | dd70afd |
 | [DEC-004](decisions/DEC-004-data-e2e-only-test-attribute.yaml) | `data-e2e` is the only test attribute | accepted | implemented | observed | dd70afd |
 | [DEC-005](decisions/DEC-005-repeat-brake-releases-on-change.yaml) | The repeat brake releases on a project change and is remembered as knowledge | accepted | implemented | observed | dd70afd |
@@ -167,11 +171,13 @@ Proposed hypotheses, planned experiments, syntheses, and decisions without a res
 kept in `docs/research-drafts/` (same subfolders). That directory is git-ignored and exists
 only on the maintainer's machine; tracked records mention draft IDs as plain text, never as
 links. A draft moves back here only when it has been carried out and has a recorded result.
-Drafts currently held: H-001..H-007, EXP-001..EXP-003, SYN-001..SYN-002, DEC-002, DEC-003,
-CASE-004 (moved back on 2026-09-28: the records it relates to are all drafts), and CASE-001..CASE-003 (real observations without a kept artifact, so they cannot be
-re-checked). Drafts use the same YAML format; the ones written before the 3.7.3 conversion
-are still Markdown and are listed by `check_research.py --drafts` until converted. A draft
-returns here only as a YAML record that passes the check.
+Drafts currently held: DEC-012..DEC-017, H-004 and H-008 (the v3.8.0 work, each naming its
+research question), CASE-004 (moved back on 2026-09-28: the records it relates to are all
+drafts), and H-005, EXP-002, CASE-002, SYN-002, DEC-002 (Markdown, still referenced).
+H-001..H-003, H-006, H-007, EXP-001, EXP-003, CASE-001, CASE-003, SYN-001 and DEC-003 are
+kept in `docs/research-drafts/_archive/`, which the check does not read. Drafts use the
+same YAML format; the Markdown ones are listed by `check_research.py --drafts` until
+converted. A draft returns here only as a YAML record that passes the check.
 
 No `LIT-XXX` or `ARC-XXX` record exists yet. For literature this is deliberate: papers
 remembered during research were not recorded because their metadata was not available

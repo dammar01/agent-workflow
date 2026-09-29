@@ -1,0 +1,14 @@
+schema_version: 2
+id: RQ-10
+question: "How should responsibility be allocated across the human, the agents, and the runtime?"
+date: 2026-09-29
+status: partial
+what_exists: |
+  An allocation exists (explore, decompose, decide, execute, verify, remember) but has not
+  been evaluated.
+records: []
+notes: |
+  Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
+  recorded before 3.7.3.
+
+  Draft records: SYN-002, DEC-002 (drafts).

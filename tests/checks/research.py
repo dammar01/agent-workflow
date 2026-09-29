@@ -77,6 +77,89 @@ _EXP = {
 }
 
 
+_RQ = {
+    "schema_version": 2,
+    "id": "RQ-90",
+    "question": "Does it hold?",
+    "date": "2026-09-29",
+    "status": "proposed",
+    "what_exists": "w",
+    "records": [],
+}
+
+
+def _yaml(record: dict) -> str:
+    import yaml
+
+    return yaml.safe_dump(record, sort_keys=False, allow_unicode=True)
+
+
+def _check_research_questions(check_research, research: Path, root: Path, write, errors_for) -> None:
+    """RQ records (DEC-017): ID grammar, versions, and the links both ways."""
+    dec2 = {**_DEC, "schema_version": 2, "questions": ["RQ-90"]}
+
+    # Version 2 names its questions; a frozen version-1 record does not have to.
+    no_questions = errors_for("decisions", "DEC-900-a.yaml", {**_DEC, "schema_version": 2})
+    assert_true("name the research question" in no_questions, f"a version-2 record without questions is refused:\n{no_questions}")
+    assert_true(errors_for("decisions", "DEC-900-a.yaml", _DEC) == "", "a tracked version-1 record stays valid (frozen)")
+    old_rq = errors_for("questions", "RQ-90-a.yaml", {**_RQ, "schema_version": 1})
+    assert_true("schema_version must be 2" in old_rq, f"an RQ is never version 1:\n{old_rq}")
+
+    # ID grammar: RQ-NN with an optional letter; the other types keep three digits.
+    assert_true(errors_for("questions", "RQ-07a-sub.yaml", {**_RQ, "id": "RQ-07a"}) == "", "RQ-07a is a valid question ID")
+    for directory, bad in (("questions", "RQ-7-a.yaml"), ("questions", "RQ-900-a.yaml"), ("decisions", "DEC-90-a.yaml")):
+        out = errors_for(directory, bad, _RQ)
+        assert_true("file name must be" in out, f"{bad} is refused:\n{out}")
+
+    # Both ways: the RQ lists the record, and the record names the RQ.
+    rq_path = write("questions", "RQ-90-a.yaml", {**_RQ, "records": ["DEC-900"]})
+    assert_true(errors_for("decisions", "DEC-900-a.yaml", dec2) == "", "an RQ and the record it lists pass together")
+    one_way = errors_for("decisions", "DEC-900-a.yaml", {**dec2, "questions": ["RQ-91"]})
+    assert_true("whose questions do not name RQ-90" in one_way, f"a listed record that does not name the RQ is refused:\n{one_way}")
+    rq_path.unlink()
+    rq_path = write("questions", "RQ-90-a.yaml", _RQ)
+    unlisted = errors_for("decisions", "DEC-900-a.yaml", dec2)
+    assert_true("whose records do not list DEC-900" in unlisted, f"a tracked record its RQ does not list is refused:\n{unlisted}")
+    rq_path.unlink()
+
+    # An RQ lists tracked records only, and an answered one lists at least one.
+    drafted = errors_for("questions", "RQ-90-a.yaml", {**_RQ, "records": ["H-777"]})
+    assert_true("is not a tracked record" in drafted, f"an RQ listing a draft is refused:\n{drafted}")
+    answered = errors_for("questions", "RQ-90-a.yaml", {**_RQ, "status": "answered"})
+    assert_true("answered question lists at least one" in answered, f"an answered RQ without records is refused:\n{answered}")
+
+    # The questions index is generated in RQ order; the README inventory leaves RQs out.
+    write("questions", "RQ-07a-sub.yaml", {**_RQ, "id": "RQ-07a"})
+    write("questions", "RQ-10-b.yaml", {**_RQ, "id": "RQ-10"})
+    code, out = _run_tool(check_research, [])
+    assert_true(code == 1 and "questions index is stale" in out, f"a stale questions index fails:\n{out}")
+    code, out = _run_tool(check_research, ["--write-inventory"])
+    index = (research / "questions.md").read_text(encoding="utf-8")
+    readme = (research / "README.md").read_text(encoding="utf-8")
+    assert_true(code == 0 and index.index("RQ-07a") < index.index("RQ-10"), f"--write-inventory lists RQs in order:\n{out}\n{index}")
+    assert_true("RQ-07a" not in readme, "the README inventory leaves RQ records out")
+
+    # Drafts are version 2 and never duplicate a tracked ID; _archive is not read.
+    drafts = root / "docs" / "research-drafts"
+    (drafts / "decisions").mkdir(parents=True, exist_ok=True)
+    draft = drafts / "decisions" / "DEC-905-d.yaml"
+    draft.write_text(_yaml({**_DEC, "id": "DEC-905"}), encoding="utf-8")
+    code, out = _run_tool(check_research, ["--drafts"])
+    assert_true("DEC-905-d.yaml: schema_version must be 2" in out, f"a version-1 draft is refused:\n{out}")
+    draft.unlink()
+    duplicate = drafts / "questions" / "RQ-10-b.yaml"
+    duplicate.parent.mkdir(exist_ok=True)
+    duplicate.write_text(_yaml({**_RQ, "id": "RQ-10"}), encoding="utf-8")
+    code, out = _run_tool(check_research, [])
+    assert_true("duplicate id RQ-10" in out, f"a draft duplicating a tracked ID is refused:\n{out}")
+    duplicate.unlink()
+    archived = drafts / "decisions" / "_archive" / "DEC-906-old.md"
+    archived.parent.mkdir(parents=True)
+    archived.write_text("# old\n", encoding="utf-8")
+    code, out = _run_tool(check_research, ["--drafts"])
+    assert_true("DEC-906" not in out, f"an archived draft is not read:\n{out}")
+
+
 def _run_tool(module, argv: list[str]) -> tuple[int, str]:
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer), contextlib.redirect_stderr(buffer):
@@ -97,7 +180,7 @@ def _test_research_records_follow_the_schema() -> None:
 
     # A temporary corpus: the real schema and README, one record per case.
     root = Path(tempfile.mkdtemp(prefix="research-check-"))
-    saved = (check_research.RESEARCH, check_research.DRAFTS, check_research.SCHEMA, check_research.README, check_research.REPO_ROOT)
+    saved = (check_research.RESEARCH, check_research.DRAFTS, check_research.SCHEMA, check_research.README, check_research.REPO_ROOT, check_research.QUESTIONS)
     try:
         research = root / "docs" / "research"
         research.mkdir(parents=True)
@@ -105,6 +188,10 @@ def _test_research_records_follow_the_schema() -> None:
         (research / "README.md").write_text(
             f"# r\n\n{check_research.INVENTORY_BEGIN}\n{check_research.INVENTORY_END}\n", encoding="utf-8"
         )
+        (research / "questions.md").write_text(
+            f"# q\n\n{check_research.QUESTIONS_BEGIN}\n{check_research.QUESTIONS_END}\n", encoding="utf-8"
+        )
+        check_research.QUESTIONS = research / "questions.md"
         schema = yaml.safe_load((research / "schema.yaml").read_text(encoding="utf-8"))
         for type_spec in schema["types"].values():
             (research / type_spec["directory"]).mkdir()
@@ -193,6 +280,8 @@ def _test_research_records_follow_the_schema() -> None:
         code, _ = _run_tool(check_research, ["--write-inventory"])
         readme = (research / "README.md").read_text(encoding="utf-8")
         assert_true(code == 0 and "[DEC-900](decisions/DEC-900-a-decision.yaml)" in readme and "dd70afd" in readme, f"--write-inventory lists it with its commit:\n{readme}")
+        (research / "decisions" / "DEC-900-a-decision.yaml").unlink()
+        _check_research_questions(check_research, research, root, write, errors_for)
     finally:
-        (check_research.RESEARCH, check_research.DRAFTS, check_research.SCHEMA, check_research.README, check_research.REPO_ROOT) = saved
+        (check_research.RESEARCH, check_research.DRAFTS, check_research.SCHEMA, check_research.README, check_research.REPO_ROOT, check_research.QUESTIONS) = saved
         shutil.rmtree(root, ignore_errors=True)

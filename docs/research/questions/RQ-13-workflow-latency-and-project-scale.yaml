@@ -1,0 +1,20 @@
+schema_version: 2
+id: RQ-13
+question: "How does workflow latency — delegated calls and the hooks around them — grow with the size of the active project, and which component dominates?"
+date: 2026-09-29
+status: proposed
+what_exists: |
+  Usage rows record `duration_seconds` and provider token counts per delegated call. The
+  graph-refresh Stop hook runs after implementing turns with no timing recorded, and runtime
+  lock guards accumulate one per session. Nothing records project size next to latency, so
+  latency cannot be attributed to scale.
+records: [CASE-006, CASE-007]
+notes: |
+  The maintainer feels latency after execute, in execute+verify turns, in verify alone, and
+  when the main agent runs graphify itself; verify is slower on a large Laravel backend than
+  on a frontend project (CASE-006). Verify alone never runs the hook, so the hook cannot be
+  the whole answer. Measurements come from a large Laravel project, not from this repository,
+  whose size does not represent the problem.
+
+  Draft records: DEC-012 (graph-refresh hook), DEC-013 (lock guards), H-008 (cached input and
+  thread continuation).

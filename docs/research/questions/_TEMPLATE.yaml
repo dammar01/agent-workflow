@@ -1,0 +1,13 @@
+# RQ — copy to RQ-NN-<kebab-slug>.yaml (RQ-NNa for a sub-question). Schema: ../schema.yaml.
+# Rules: ../CONTRACT.md §14–§16. A question is tracked as soon as it is asked.
+schema_version: 2
+id: RQ-NN
+question: "<one line, quoted>"
+date: YYYY-MM-DD
+status: proposed            # proposed | partial | answered
+what_exists: |
+  What the repository has today that bears on the question — not whether it is answered.
+records: []                 # tracked record IDs only; `answered` needs at least one.
+                            # Each version-2 record listed here names this RQ under `questions`.
+notes: |                    # optional — narrative; drafts are named here as plain text
+  ...
