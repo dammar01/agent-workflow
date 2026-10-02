@@ -180,7 +180,182 @@ def _check_the_next_draft_is_offered_it() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+_SAVE_ROLE = {"role": "button", "name": "Simpan"}
+_SAVE_E2E = {"e2e": "save"}
+
+
+def _save_scenario(candidates: list[dict]) -> dict:
+    return {
+        "version": 1,
+        "claims": [{"id": "saved", "severity": "blocking", "source_refs": ["src/Login.vue:3"]}],
+        "steps": [
+            {"id": "open", "action": "goto", "url": "/form"},
+            {"id": "save", "action": "click", "selector_candidates": candidates},
+            {"id": "done", "action": "expect_title", "contains": "Form", "claim_id": "saved"},
+        ],
+    }
+
+
+def _save_report(scenario: dict, winner: int, *, status: str = "passed", source_ref: str | None = None) -> dict:
+    events = []
+    for index, step in enumerate(scenario["steps"], start=1):
+        event = {"type": "progress", "step": index, "step_id": step["id"], "action": step["action"],
+                 "status": "passed", "claim_id": step.get("claim_id")}
+        if step["id"] == "save":
+            event["status"] = status
+            event["selection"] = {"candidate": winner, "match_counts": [0] * winner + [1], "fallback_used": winner > 0}
+            if source_ref:
+                event["selection"]["source_ref"] = source_ref
+            if status == "failed":
+                event["error"] = {"kind": "action_timeout"}
+                event["page_stable"] = True
+        events.append(event)
+    events.append({"type": "result", "status": "finished"})
+    return build_report(events, scenario)
+
+
+def _check_proven_selectors_rank_first_and_demote() -> None:
+    """DEC-016: the candidate that matched is recorded, may lead the next draft as `proven`,
+    and drops back to the usual order after one miss and retires after two."""
+    from core.evidence.e2e.spec import validate_scenario
+
+    root = _project()
+    try:
+        first = _save_scenario([
+            {"selector": _SAVE_ROLE, "selector_provenance": {"type": "heuristic"}},
+            {"selector": _SAVE_E2E, "selector_provenance": {"type": "heuristic"}},
+        ])
+        knowledge.ingest(root, _save_report(first, winner=1), first, BASE, "sid-1", clean_first_attempt=True)
+        assert_true(
+            knowledge.proven_selectors(root, BASE) == [_SAVE_E2E],
+            f"the candidate that matched is what is proven, not the list: {knowledge.proven_selectors(root, BASE)}",
+        )
+        knowledge.write_sidecar(root, "sid-2", BASE)
+        sidecar = json.loads(
+            (data_dir(root) / "sessions" / "sid-2" / "runtime" / knowledge.SIDECAR_NAME).read_text(encoding="utf-8")
+        )
+        assert_true(sidecar.get("proven") == [_SAVE_E2E], f"the next draft is told what it may cite as proven: {sidecar}")
+
+        leading = _save_scenario([
+            {"selector": _SAVE_E2E, "selector_provenance": {"type": "proven"}},
+            {"selector": _SAVE_ROLE, "selector_provenance": {"type": "heuristic"}},
+        ])
+        policy = {"base_url": BASE, "proven_selectors": knowledge.proven_selectors(root, BASE)}
+        assert_true(not validate_scenario(leading, policy), f"a proven selector may lead: {validate_scenario(leading, policy)}")
+        (root / "src" / "Form.vue").write_text(
+            '<template>\n<button data-e2e="save">Simpan</button>\n</template>\n', encoding="utf-8"
+        )
+        plain = {"base_url": BASE, "project_root": str(root)}
+        for provenance, policy_for, may_lead in (
+            ({"type": "source", "ref": "src/Form.vue:2"}, plain, True),
+            # A citation that is well formed but points at nothing is still a guess.
+            ({"type": "source", "ref": "src/Form.vue:1"}, plain, False),
+            ({"type": "source", "ref": "src/Missing.vue:2"}, plain, False),
+            ({"type": "source", "ref": "src/Form.vue"}, plain, False),
+            ({"type": "source", "ref": "../outside.vue:2"}, plain, False),
+            # A line number past int()'s digit limit reads as not cited instead of raising.
+            ({"type": "source", "ref": "src/Form.vue:" + "9" * 5000}, plain, False),
+            ({"type": "heuristic"}, plain, False),
+            # No project to check the citation against: it may not lead.
+            ({"type": "source", "ref": "src/Form.vue:2"}, {"base_url": BASE}, False),
+        ):
+            source_first = _save_scenario([
+                {"selector": _SAVE_E2E, "selector_provenance": provenance},
+                {"selector": _SAVE_ROLE, "selector_provenance": {"type": "heuristic"}},
+            ])
+            errors = validate_scenario(source_first, policy_for)
+            assert_true(
+                (not errors) == may_lead,
+                f"an e2e with provenance {provenance} {'may' if may_lead else 'may not'} lead role: {errors}",
+            )
+        # The citation is read like the tagging pass reads a line: the exact attribute value,
+        # in an opening tag, in a template file, outside a comment.
+        from core.evidence.e2e.spec import _cites_e2e
+
+        (root / "src" / "Cases.vue").write_text(
+            '<div data-e2e="save-delete">save</div>\n'
+            '<!-- <button data-e2e="save"> -->\n'
+            "<p>data-e2e save</p>\n"
+            '<y :data-e2e="save">\n'
+            "<x data-e2e=save />\n",
+            encoding="utf-8",
+        )
+        (root / "src" / "builder.py").write_text('html = "<b data-e2e=\\"save\\">"\n', encoding="utf-8")
+        for ref, cited in (
+            ("src/Cases.vue:1", False),  # another value that starts the same
+            ("src/Cases.vue:2", False),  # commented out
+            ("src/Cases.vue:3", False),  # prose, not an attribute
+            ("src/Cases.vue:4", False),  # a binding, not a literal
+            ("src/Cases.vue:5", True),   # unquoted literal
+            ("src/builder.py:1", False),  # not a template
+            ("src/Cases\x00.vue:1", False),  # malformed: refused, not raised
+        ):
+            assert_true(
+                _cites_e2e(str(root), ref, "save") is cited,
+                f"`{ref}` {'carries' if cited else 'does not carry'} data-e2e=\"save\"",
+            )
+        role_first = _save_scenario([
+            {"selector": _SAVE_ROLE, "selector_provenance": {"type": "heuristic"}},
+            {"selector": _SAVE_E2E, "selector_provenance": {"type": "heuristic"}},
+        ])
+        assert_true(not validate_scenario(role_first, plain), "an old role-first draft stays valid")
+        unbacked = validate_scenario(leading, {"base_url": BASE, "proven_selectors": []})
+        assert_true(
+            any("proven" in error for error in unbacked),
+            f"`proven` the store does not back is refused, so a draft cannot promote its own guess: {unbacked}",
+        )
+
+        # The proven selector misses once (the role fallback wins): demoted, still a hint.
+        knowledge.ingest(root, _save_report(leading, winner=1), leading, BASE, "sid-2", clean_first_attempt=True)
+        after_miss = knowledge.proven_selectors(root, BASE)
+        assert_true(
+            _SAVE_E2E not in after_miss and _SAVE_ROLE in after_miss,
+            "one miss demotes the proven selector; the fallback that matched in that clean run "
+            f"is proven in its place: {after_miss}",
+        )
+        demoted = [e for e in knowledge.load(root) if e.get("matched") == _SAVE_E2E]
+        assert_true(
+            demoted and all(not e.get("stale") for e in demoted) and demoted[0]["consecutive_fails"] == 1,
+            f"one miss weakens the entry once, it does not retire it: {demoted}",
+        )
+        # A step that fails AFTER its proven selector matched (the click timed out) is not a
+        # miss of that selector.
+        before = [e["consecutive_fails"] for e in knowledge.load(root) if e.get("matched") == _SAVE_E2E]
+        knowledge.ingest(root, _save_report(leading, winner=0, status="failed"), leading, BASE, "sid-2b", clean_first_attempt=True)
+        after = [e["consecutive_fails"] for e in knowledge.load(root) if e.get("matched") == _SAVE_E2E]
+        assert_true(before == after, f"a failure after the proven selector matched does not demote it: {before} -> {after}")
+        # A second miss retires it.
+        knowledge.ingest(root, _save_report(leading, winner=1), leading, BASE, "sid-3", clean_first_attempt=True)
+        retired = [e for e in knowledge.load(root) if e.get("matched") == _SAVE_E2E]
+        assert_true(retired and all(e.get("stale") for e in retired), f"two misses retire it: {retired}")
+
+        # Anchored proof whose source line is gone is not offered, even before `clean` runs.
+        anchored = _save_scenario([
+            {"selector": {"e2e": "save-anchored"}, "selector_provenance": {"type": "source", "ref": "src/Form.vue:2"}},
+        ])
+        knowledge.ingest(root, _save_report(anchored, winner=0, source_ref="src/Form.vue:2"), anchored, BASE, "sid-4", clean_first_attempt=True)
+        assert_true({"e2e": "save-anchored"} in knowledge.proven_selectors(root, BASE), "an anchored proof is offered while its line exists")
+        (root / "src" / "Form.vue").write_text("<template>\n</template>\n", encoding="utf-8")
+        assert_true(
+            {"e2e": "save-anchored"} not in knowledge.proven_selectors(root, BASE),
+            "a proof whose anchored line is gone is not offered as proven",
+        )
+
+        # `matched` comes from the placeholder scenario: a placeholder stays a placeholder.
+        placeholder = _save_scenario([
+            {"selector": {"label": "${E2E_FIELD_LABEL}"}, "selector_provenance": {"type": "heuristic"}},
+        ])
+        knowledge.ingest(root, _save_report(placeholder, winner=0), placeholder, BASE, "sid-5", clean_first_attempt=True)
+        assert_true(
+            {"label": "${E2E_FIELD_LABEL}"} in knowledge.proven_selectors(root, BASE),
+            "the proven selector is stored in placeholder form, never a resolved value",
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _test_e2e_knowledge() -> None:
+    _check_proven_selectors_rank_first_and_demote()
     root = _project()
     try:
         _check_a_run_records_what_it_proved(root)

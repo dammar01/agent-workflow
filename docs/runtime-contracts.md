@@ -557,8 +557,18 @@ fenced JSON scenario), `spec_uncertainties`. Validation runs in both phases, bef
   tokens are never recorded. An
   HTTP 2xx proves nothing on its own — the assertions do;
 - a step uses one `selector` or `selector_candidates` (1–5, strongest first: role, label,
-  e2e, text, css), each with a `selector_provenance` (optionally `ref`, a
-  `path[:line]`), optionally scoped by `within` (a selector for the modal, form or table);
+  e2e, text, css), each with a `selector_provenance` (`source`, `existing_test`,
+  `runtime_probe`, `heuristic` or `proven`; optionally `ref`, a `path[:line]`), optionally
+  scoped by `within` (a selector for the modal, form or table). Two kinds of candidate may
+  lead the list ahead of that order (`spec.leads_rank`, DEC-016): an `e2e` with provenance
+  `source` and a `path:line` ref whose cited line, in a template file inside the project and
+  outside an HTML comment, has an opening tag with `data-e2e` set to exactly that value
+  (read like the tagging pass reads a line; checked at validation; without a project root
+  it may not lead), and a
+  `proven` selector — one the browser knowledge store
+  lists for this origin (`knowledge.proven_selectors`). `proven` is checked against the
+  store at validation; one it does not back is `spec_invalid`. Once the usual order starts,
+  every later candidate obeys it, so a role-first list stays valid;
   the player tries only those candidates, needs exactly one match, and reports the
   candidate used, each candidate's match count and whether a fallback was used. `e2e`
   matches the project's `data-e2e` attribute (`[data-e2e="<value>"]`, `spec.e2e_css`) — the
@@ -643,10 +653,17 @@ that page), `navigation`, `page_ready` and `selector` (matched exactly one eleme
 `repeat_failure` and `failure_hint` entries above —
 built from the placeholder scenario, with a non-placeholder `fill` value dropped. Only proof
 counts: a passed, non-writing step in a run that passed on its FIRST attempt. A failed step
-weakens the matching entry; `STALE_AFTER_FAILS` (2) in a row retire it. A selector with a
+weakens the matching entry; `STALE_AFTER_FAILS` (2) in a row retire it. A selector entry
+also records `matched`, the candidate that matched; it is `proven` while the entry is live
+and has not missed since it last passed, and, when anchored, while its source line still
+exists (checked when proven selectors are read, not only by `clean`). A `proven` candidate
+that does not match — nothing matched, or a later candidate won; a step that fails after it
+matched is not a miss — weakens every entry it was proven by, whatever the
+step's key, so one miss demotes it to the usual order and two retire it. The application
+fingerprint is not consulted for this: it changes on every commit. A selector with a
 `source_ref` is anchored like a fact; `--command clean` relocates a moved anchor and drops
 retired entries and vanished anchors. A draft gets the live entries for its origin (bounded
-per kind) in the sidecar `sessions/<session>/runtime/e2e_knowledge.json`, named in the prompt
+per kind) and the `proven` selectors in the sidecar `sessions/<session>/runtime/e2e_knowledge.json`, named in the prompt
 only when it holds something, as hints that still have to be grounded in code;
 `meta.e2e.knowledge` reports `offered` on a draft and `added | confirmed | weakened |
 retired` on a run. `promotable_claims()` turns anchored entries proven in

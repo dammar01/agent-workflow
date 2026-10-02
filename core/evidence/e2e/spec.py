@@ -44,11 +44,15 @@ SELECTOR_KEYS = frozenset({"role", "name", "label", "e2e", "text", "css"})
 # Keys a draft reaches for from habit, with the key to use instead. Named in the error so a
 # repair continuation can fix the scenario rather than guess.
 RETIRED_SELECTOR_KEYS = {"testid": "e2e", "data-testid": "e2e", "data-e2e": "e2e"}
-PROVENANCE = frozenset({"source", "existing_test", "runtime_probe", "heuristic"})
+# `proven`: a selector the browser knowledge store recorded as the one that matched in a
+# clean earlier run against this origin (DEC-016). Valid only when the store backs it.
+PROVENANCE = frozenset({"source", "existing_test", "runtime_probe", "heuristic", "proven"})
 SEVERITIES = frozenset({"blocking", "non_blocking"})
 SIDE_EFFECTS = frozenset({"none", "creates_test_data", "modifies_test_data", "deletes_test_data"})
 # Plan §10 preference order. A candidate list must not rank a weaker selector above a
 # stronger one: the player tries candidates in order, so the order IS the fallback rule.
+# Two kinds of candidate may lead the list ahead of it (DEC-016, `leads_rank`): an `e2e`
+# selector the codebase names (provenance `source` with a path:line), and a `proven` one.
 SELECTOR_RANK = ("role", "label", "e2e", "text", "css")
 MAX_SELECTOR_CANDIDATES = 5
 # Readiness a step waits for before its action (after navigation, for goto). Declared per
@@ -170,6 +174,9 @@ _STEP_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _REQUEST_PATH = re.compile(r"^/[^\s?#*\\]*$")
 # `path[:line[-line]]` relative to the project, or `req:<id>` for a written requirement.
 _SOURCE_REF = re.compile(r"^(?:req:\S.{0,198}|[^\s|,:\\]{1,200}(?::\d+(?:-\d+)?)?)$")
+# Bounded digits: `int()` refuses a string past Python's digit limit with ValueError, and a
+# malformed citation must read as "not cited", not raise during validation.
+_SOURCE_LINE_REF = re.compile(r"^[^\s|,:\\]{1,200}:\d{1,7}(?:-\d{1,7})?$")
 _REF_PARTS = re.compile(r"^(?P<path>[^:]+?)(?::(?P<start>\d+)(?:-(?P<end>\d+))?)?$")
 _UNSAFE_URL_CHARS = re.compile(r"[\\\s\x00-\x1f]")
 _CLAIM_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -337,6 +344,84 @@ def selector_rank(selector: Mapping) -> int | None:
         if key in selector:
             return rank
     return None
+
+
+def leads_rank(selector: Mapping, provenance: object, policy: Mapping | None) -> bool:
+    """Whether this candidate may sit ahead of the usual order (DEC-016).
+
+    A `data-e2e` a developer placed and the draft cites, or a selector the knowledge store
+    proved on this origin. A guess — heuristic, runtime probe — never jumps the order.
+    """
+    if not isinstance(provenance, Mapping):
+        return False
+    kind = provenance.get("type")
+    if kind == "source":
+        ref = provenance.get("ref")
+        # A path AND a line: the tagging pass and the knowledge anchor both need the line,
+        # and a bare path or a `req:` reference names no element.
+        if "e2e" not in selector or not isinstance(ref, str) or not _SOURCE_LINE_REF.match(ref.strip()):
+            return False
+        # And the cited line must really carry that attribute: a well-formed reference to a
+        # file that is not there, or a line without the value, is a guess wearing a citation.
+        return _cites_e2e((policy or {}).get("project_root"), ref.strip(), str(selector["e2e"]))
+    if kind == "proven":
+        return selector in list((policy or {}).get("proven_selectors") or [])
+    return False
+
+
+def _cites_e2e(project_root: object, ref: str, value: str) -> bool:
+    """Whether `path:line[-line]` inside the project puts `data-e2e="value"` on an element.
+
+    Held to the tagging pass's reading of a cited line (`tagging._OPEN_TAG`, comments,
+    template suffixes): the attribute must sit in an opening tag, with exactly this value,
+    in a template file, outside an HTML comment. A substring is not enough — `save` must not
+    pass on `data-e2e="save-delete"`, on prose, or on a commented-out element.
+    """
+    from core.evidence.e2e.tagging import _COMMENTED, _OPEN_TAG, TEMPLATE_SUFFIXES, _inside_open_comment
+
+    if not project_root or not value:
+        return False
+    parts = _REF_PARTS.match(ref)
+    if not parts or not parts.group("start"):
+        return False
+    try:
+        root = Path(str(project_root)).resolve()
+        target = (root / parts.group("path")).resolve()
+        if root != target and root not in target.parents:
+            return False
+        if target.suffix.lower() not in TEMPLATE_SUFFIXES:
+            return False
+        lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
+    except (OSError, ValueError):
+        # A ref with a NUL or another character the filesystem refuses is a malformed
+        # citation, not a reason for validation to raise.
+        return False
+    start = int(parts.group("start"))
+    end = int(parts.group("end") or start)
+    attribute = re.compile(
+        rf"(?<![\w:-]){re.escape(E2E_ATTRIBUTE)}\s*=\s*(?:\"{re.escape(value)}\"|'{re.escape(value)}'|{re.escape(value)}(?=[\s/>]|$))"
+    )
+    for number in range(max(start, 1), end + 1):
+        if number > len(lines):
+            break
+        line = lines[number - 1]
+        if _COMMENTED.search(line) or _inside_open_comment(lines[: number - 1]):
+            continue
+        if any(attribute.search(match.group("attrs")) for match in _OPEN_TAG.finditer(line)):
+            return True
+    return False
+
+
+def _proven_errors(where: str, selector: object, provenance: object, policy: Mapping | None) -> list[str]:
+    """`proven` is a claim about the knowledge store, checked against it."""
+    if not isinstance(provenance, Mapping) or provenance.get("type") != "proven":
+        return []
+    if selector in list((policy or {}).get("proven_selectors") or []):
+        return []
+    return [
+        f"{where}: selector_provenance 'proven' names no selector the browser knowledge "
+        "store proved on this origin; use the provenance the selector actually has"
+    ]
 
 
 def _selector_errors(where: str, selector: object) -> list[str]:
@@ -559,6 +644,7 @@ def _step_errors(where: str, step: Mapping, policy: Mapping, claim_ids: set[str]
                 errors.append(f"{where}: selector_candidates must list 1..{MAX_SELECTOR_CANDIDATES} entries")
             else:
                 ranks: list[int] = []
+                leading = True
                 seen: list[dict] = []
                 for position, item in enumerate(candidates):
                     at = f"{where}.selector_candidates[{position}]"
@@ -567,20 +653,31 @@ def _step_errors(where: str, step: Mapping, policy: Mapping, claim_ids: set[str]
                         continue
                     found = _selector_errors(at, item.get("selector"))
                     found += _provenance_errors(at, item.get("selector_provenance"))
+                    if not found:
+                        found += _proven_errors(at, item["selector"], item.get("selector_provenance"), policy)
                     errors.extend(found)
                     if found:
                         continue
                     if item["selector"] in seen:
                         errors.append(f"{at}: duplicate selector")
                     seen.append(item["selector"])
+                    # Candidates that may lead are exempt only while they lead; once the
+                    # usual order has started, every later candidate obeys it.
+                    if leading and leads_rank(item["selector"], item.get("selector_provenance"), policy):
+                        continue
+                    leading = False
                     ranks.append(selector_rank(item["selector"]))
                 if ranks != sorted(ranks):
                     errors.append(
-                        f"{where}: selector_candidates must run strongest first ({' > '.join(SELECTOR_RANK)})"
+                        f"{where}: selector_candidates must run strongest first ({' > '.join(SELECTOR_RANK)}); "
+                        "only a source-cited e2e or a proven selector may lead ahead of that order"
                     )
         else:
-            errors.extend(_selector_errors(where, step.get("selector")))
-            errors.extend(_provenance_errors(where, step.get("selector_provenance")))
+            single = _selector_errors(where, step.get("selector"))
+            single += _provenance_errors(where, step.get("selector_provenance"))
+            if not single:
+                single += _proven_errors(where, step["selector"], step.get("selector_provenance"), policy)
+            errors.extend(single)
     if "within" in step:
         if action not in _ACTIONS_WITH_SELECTOR:
             errors.append(f"{where}: within scopes a selector, and {action} has none")

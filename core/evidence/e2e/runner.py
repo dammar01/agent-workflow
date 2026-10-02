@@ -299,7 +299,14 @@ def _spec_errors(scenario: dict, existing_tests: list, config: dict, project_roo
     # they cover; a listed test that will not run covers nothing.
     runnable, skipped = e2e_existing.select(existing_tests, config, project_root)
     covered = {cid for test in runnable for cid in test["covers"]}
-    errors = validate_scenario(scenario, config, covered=covered)
+    # `proven` is checked against the store, so a draft cannot promote its own guess.
+    policy = {
+        **config,
+        "proven_selectors": e2e_knowledge.proven_selectors(project_root, str(config.get("base_url") or "")),
+        # A source `e2e` may lead only when its cited line is really there (DEC-016).
+        "project_root": str(project_root),
+    }
+    errors = validate_scenario(scenario, policy, covered=covered)
     if not errors:
         errors = validate_existing_tests(existing_tests, {c["id"] for c in _claim_ids(scenario)})
     if not errors:

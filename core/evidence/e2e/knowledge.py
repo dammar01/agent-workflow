@@ -122,6 +122,33 @@ def _step_view(step: dict) -> dict:
     return view
 
 
+def _matched_selector(step: dict, selection: dict) -> dict | None:
+    from core.evidence.e2e.spec import step_selectors
+
+    index = selection.get("candidate")
+    candidates = step_selectors(step)
+    if not isinstance(index, int) or not 0 <= index < len(candidates):
+        return None
+    return candidates[index]["selector"]
+
+
+def _proven_missed(step: dict, selection: dict, outcome: str) -> list[dict]:
+    """`proven` candidates this step tried that did not match.
+
+    Every proven candidate before the one that matched, or all of them when none did. Matched
+    against the store by selector, not by the step's key: a draft that puts a proven
+    selector first has a different candidate list, so its key names a different entry.
+    """
+    from core.evidence.e2e.spec import step_selectors
+
+    candidates = step_selectors(step)
+    index = selection.get("candidate")
+    # A step can fail after its selector matched (the click timed out, the fill was
+    # refused); then only the candidates before the one that matched missed.
+    tried = candidates[:index] if isinstance(index, int) else candidates
+    return [c["selector"] for c in tried if c.get("provenance") == "proven"]
+
+
 def _uses_password(step: dict) -> bool:
     return step.get("value") == _PASSWORD_PLACEHOLDER
 
@@ -164,15 +191,17 @@ def observations(report: dict, scenario: dict, base_url: str) -> list[dict]:
         selection = row.get("selection") or {}
         if action not in ("goto", "probe") and not writes and (step.get("selector") or step.get("selector_candidates")):
             key = json.dumps([route, action, step.get("within"), step.get("selector") or step.get("selector_candidates")], sort_keys=True)
-            rows.append(
-                {
-                    "kind": "selector",
-                    "key": key,
-                    "route": route,
-                    "outcome": outcome,
-                    "body": {"step": _step_view(step), "source_ref": selection.get("source_ref")},
-                }
-            )
+            body = {"step": _step_view(step), "source_ref": selection.get("source_ref")}
+            # Which candidate matched, from the placeholder scenario (never the resolved
+            # one): what a later draft may cite as `proven` and rank first (DEC-016).
+            matched = _matched_selector(step, selection) if outcome == "pass" else None
+            if matched is not None:
+                body["matched"] = matched
+            row_out = {"kind": "selector", "key": key, "route": route, "outcome": outcome, "body": body}
+            missed = _proven_missed(step, selection, outcome)
+            if missed:
+                row_out["proven_missed"] = missed
+            rows.append(row_out)
         if _uses_password(step) and outcome == "pass" and login is None:
             start = max((i for i in range(index + 1) if steps[i].get("action") == "goto"), default=None)
             if start is not None:
@@ -231,10 +260,30 @@ def ingest(project_root: Path, report: dict, scenario: dict, base_url: str, sess
     with _Lock(project_root):
         entries = {entry["id"]: entry for entry in load(project_root)}
         for row in rows:
+            # A proven selector that missed demotes every entry it was proven by, whatever
+            # the key of the step that tried it (DEC-016: one miss demotes, two retire).
+            weakened_here: set[str] = set()
+            for missed in row.get("proven_missed") or []:
+                for proven_entry in entries.values():
+                    if (
+                        proven_entry.get("kind") == "selector"
+                        and proven_entry.get("origin") == origin
+                        and proven_entry.get("matched") == missed
+                        and not proven_entry.get("stale")
+                        and proven_entry["id"] not in weakened_here
+                    ):
+                        weakened_here.add(proven_entry["id"])
+                        proven_entry["fail_count"] = int(proven_entry.get("fail_count") or 0) + 1
+                        proven_entry["consecutive_fails"] = int(proven_entry.get("consecutive_fails") or 0) + 1
+                        summary["weakened"] += 1
+                        if proven_entry["consecutive_fails"] >= STALE_AFTER_FAILS:
+                            proven_entry["stale"] = True
+                            summary["retired"] += 1
             entry_id = _entry_id(row["kind"], origin, row["key"])
             entry = entries.get(entry_id)
             if row["outcome"] == "fail":
-                if entry is None or entry.get("stale"):
+                # Already counted above when the step's own entry is the one it proved.
+                if entry is None or entry.get("stale") or entry_id in weakened_here:
                     continue
                 entry["fail_count"] = int(entry.get("fail_count") or 0) + 1
                 entry["consecutive_fails"] = int(entry.get("consecutive_fails") or 0) + 1
@@ -416,6 +465,45 @@ def relevant(project_root: Path, base_url: str) -> list[dict]:
     return [{k: v for k, v in entry.items() if k not in ("last_session",)} for entry in chosen]
 
 
+def proven_selectors(project_root: Path, base_url: str) -> list[dict]:
+    """Selectors a draft may cite as `proven` and rank first on this origin (DEC-016).
+
+    The matched candidate of a live selector entry that has not missed since it last
+    passed: one miss demotes it to the usual order (it stays a hint), two retire it
+    (`STALE_AFTER_FAILS`), and `prune` drops an entry whose anchored source line is gone.
+    The application fingerprint is deliberately not consulted: it changes on every commit,
+    and would retire every proven selector with it.
+    """
+    from core.evidence.fact_store import current_anchor_line
+
+    origin = origin_of(base_url)
+    if not origin:
+        return []
+    proven: list[dict] = []
+    cache: dict = {}
+    for entry in load(project_root):
+        matched = entry.get("matched")
+        if not (
+            entry.get("kind") == "selector"
+            and entry.get("origin") == origin
+            and not entry.get("stale")
+            and not int(entry.get("consecutive_fails") or 0)
+            and isinstance(matched, dict)
+            and matched
+            and not _uses_retired_selector(entry)
+            and matched not in proven
+        ):
+            continue
+        # Checked here rather than left to `prune`: that one runs on `--command clean`, and
+        # a selector whose anchored line is gone must not lead the very next draft.
+        if entry.get("anchor_hash") and current_anchor_line(
+            project_root, entry.get("file"), entry.get("line"), entry.get("anchor_hash"), cache
+        ) is None:
+            continue
+        proven.append(matched)
+    return proven
+
+
 def write_sidecar(project_root: Path, session_id: str, base_url: str) -> int:
     """Write the draft's `e2e_knowledge.json`; returns how many entries it offers."""
     entries = relevant(project_root, base_url)
@@ -425,9 +513,13 @@ def write_sidecar(project_root: Path, session_id: str, base_url: str) -> int:
         "origin": origin_of(base_url),
         "note": (
             "Hints from earlier browser runs against this origin. Re-derive every selector "
-            "from the code before using it; an entry whose file:line no longer matches is stale."
+            "from the code before using it; an entry whose file:line no longer matches is stale. "
+            "A selector listed under `proven` matched in a clean earlier run and has not "
+            "missed since: cite it with selector_provenance {\"type\": \"proven\"} and it may "
+            "lead the candidate list, ahead of role and label."
         ),
         "entries": entries,
+        "proven": proven_selectors(project_root, base_url),
     }
     tmp = runtime_dir / f"{SIDECAR_NAME}.{os.getpid()}.tmp"
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
