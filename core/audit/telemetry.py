@@ -542,27 +542,27 @@ def by_effort(rows) -> dict:
     """Time and tokens per command, split by the effort the adapter passed (H-010).
 
     Per command (a continuation is one), keyed `<command>/<effort>`; `default` is a call
-    that sent no effort flag. Input tokens only where the provider measured them. Rows
-    before contract v3 are left out.
+    that sent no effort flag. `commands` counts every command in the bucket; each median
+    only those where the value was measured, input and output tokens apart, so an adapter
+    that reports one and not the other never reads as zero. Rows before contract v3 are
+    left out.
     """
-    buckets: dict[str, dict[str, list]] = {}
+    buckets: dict[str, dict] = {}
     for group in _work_groups(rows):
         head = group[0]
         # Before contract v3 no effort was recorded; those rows would all read `default`.
         if (head.contract_version or 0) < 3:
             continue
         key = f"{head.command}/{head.effort or 'default'}"
-        bucket = buckets.setdefault(key, {"durations": [], "input": [], "output": []})
-        durations = [row.duration_seconds for row in group if row.duration_seconds is not None]
-        if durations:
-            bucket["durations"].append(sum(durations))
-        measured = [row for row in group if row.actual_input_tokens is not None]
-        if measured:
-            bucket["input"].append(sum(row.actual_input_tokens for row in measured))
-            bucket["output"].append(sum(row.actual_output_tokens or 0 for row in measured))
+        bucket = buckets.setdefault(key, {"commands": 0, "durations": [], "input": [], "output": []})
+        bucket["commands"] += 1
+        for field, name in (("duration_seconds", "durations"), ("actual_input_tokens", "input"), ("actual_output_tokens", "output")):
+            measured = [getattr(row, field) for row in group if getattr(row, field) is not None]
+            if measured:
+                bucket[name].append(sum(measured))
     return {
         key: {
-            "commands": len(bucket["durations"]),
+            "commands": bucket["commands"],
             "duration_seconds_median": _median(bucket["durations"]),
             "input_tokens_median": _median(bucket["input"]),
             "output_tokens_median": _median(bucket["output"]),

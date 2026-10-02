@@ -1,5 +1,5 @@
 # SYN — copy to SYN-NNN-<kebab-slug>.yaml. Tracked here only once final.
-schema_version: 1
+schema_version: 2
 id: SYN-NNN
 title: <one line>
 date: YYYY-MM-DD
@@ -24,3 +24,4 @@ open_questions: []
 disposition:
   implementation_status: not_applicable
   validation_status: not_validated
+questions: [RQ-NN]          # the research question(s) this record serves; each RQ lists it back (CONTRACT.md §16)

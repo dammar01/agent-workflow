@@ -52,6 +52,13 @@ _NUM = {"RQ": re.compile(r"^\d{2}[a-z]?$")}
 _NUM_DEFAULT = re.compile(r"^\d{3}$")
 # Version 1 is the frozen format of records tracked before DEC-017; RQ never had it.
 LEGACY_VERSION = 1
+# The records tracked at version 1 when version 2 arrived — a closed list. Without it a new
+# record written at version 1 would pass as frozen and skip `questions` (CONTRACT.md §16).
+FROZEN_V1 = frozenset({
+    "CASE-005",
+    "DEC-001", "DEC-004", "DEC-005", "DEC-006", "DEC-007",
+    "DEC-008", "DEC-009", "DEC-010", "DEC-011",
+})
 # Types that must name the research question(s) they serve from version 2 on.
 QUESTIONED = ("DEC", "H", "EXP", "CASE", "SYN")
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -210,7 +217,7 @@ def check_record(path: Path, schema: dict, report: Report, *, tracked: bool) -> 
         report.error(rel, f"id '{record.get('id')}' does not match the file name ({match['id']})")
     version = record.get("schema_version")
     current = schema["schema_version"]
-    if tracked and prefix != "RQ" and version == LEGACY_VERSION:
+    if tracked and version == LEGACY_VERSION and match["id"] in FROZEN_V1:
         pass  # frozen before DEC-017 (CONTRACT.md §15); it keeps the format it was tracked in
     elif version != current:
         report.error(rel, f"schema_version must be {current}")

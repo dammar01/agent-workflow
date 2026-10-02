@@ -102,6 +102,8 @@ def _check_research_questions(check_research, research: Path, root: Path, write,
     no_questions = errors_for("decisions", "DEC-900-a.yaml", {**_DEC, "schema_version": 2})
     assert_true("name the research question" in no_questions, f"a version-2 record without questions is refused:\n{no_questions}")
     assert_true(errors_for("decisions", "DEC-900-a.yaml", _DEC) == "", "a tracked version-1 record stays valid (frozen)")
+    unfrozen = errors_for("decisions", "DEC-907-a.yaml", {**_DEC, "id": "DEC-907"})
+    assert_true("schema_version must be 2" in unfrozen, f"a version-1 record outside the frozen list is refused:\n{unfrozen}")
     old_rq = errors_for("questions", "RQ-90-a.yaml", {**_RQ, "schema_version": 1})
     assert_true("schema_version must be 2" in old_rq, f"an RQ is never version 1:\n{old_rq}")
 
@@ -181,6 +183,9 @@ def _test_research_records_follow_the_schema() -> None:
     # A temporary corpus: the real schema and README, one record per case.
     root = Path(tempfile.mkdtemp(prefix="research-check-"))
     saved = (check_research.RESEARCH, check_research.DRAFTS, check_research.SCHEMA, check_research.README, check_research.REPO_ROOT, check_research.QUESTIONS)
+    saved_frozen = check_research.FROZEN_V1
+    # The fixtures below are version-1 records; they stand in for the frozen list.
+    check_research.FROZEN_V1 = frozenset({"DEC-900", "DEC-901", "DEC-902", "H-900", "H-901", "EXP-900"})
     try:
         research = root / "docs" / "research"
         research.mkdir(parents=True)
@@ -284,4 +289,5 @@ def _test_research_records_follow_the_schema() -> None:
         _check_research_questions(check_research, research, root, write, errors_for)
     finally:
         (check_research.RESEARCH, check_research.DRAFTS, check_research.SCHEMA, check_research.README, check_research.REPO_ROOT, check_research.QUESTIONS) = saved
+        check_research.FROZEN_V1 = saved_frozen
         shutil.rmtree(root, ignore_errors=True)

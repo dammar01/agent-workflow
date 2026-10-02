@@ -1,7 +1,7 @@
 # EXP — copy to EXP-NNN-<kebab-slug>.yaml. The benchmark method lives here (arms, metrics,
 # results). No commit anywhere: pin the version under test instead.
 # Tracked here only once completed or abandoned, with its results.
-schema_version: 1
+schema_version: 2
 id: EXP-NNN
 title: <one line>
 date: YYYY-MM-DD
@@ -37,3 +37,4 @@ related: []
 disposition:
   implementation_status: not_applicable
   validation_status: not_validated
+questions: [RQ-NN]          # the research question(s) this record serves; each RQ lists it back (CONTRACT.md §16)

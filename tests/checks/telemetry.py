@@ -242,6 +242,22 @@ def _by_effort_splits_commands_and_skips_old_rows() -> None:
         f"a continuation adds up within its command, unmeasured tokens stay None; got {split}",
     )
 
+    # A command with no measured duration still counts; input measured without output is
+    # not an output of zero.
+    partial = telemetry.by_effort([
+        _usage(command="analyze", prompt_id="q1", effort="low", duration_seconds=10,
+               actual_input_tokens=100, actual_output_tokens=50),
+        _usage(command="analyze", prompt_id="q2", effort="low", duration_seconds=None,
+               actual_input_tokens=300),
+    ])["analyze/low"]
+    assert_true(
+        partial["commands"] == 2
+        and partial["duration_seconds_median"] == 10
+        and partial["input_tokens_median"] == 200
+        and partial["output_tokens_median"] == 50,
+        f"commands counts every command; an unmeasured output stays out of its median; got {partial}",
+    )
+
 
 def _graph_leads_reports_calls_that_ran_during_a_refresh() -> None:
     rows = [

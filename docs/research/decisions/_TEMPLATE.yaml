@@ -1,6 +1,6 @@
 # DEC — copy to DEC-NNN-<kebab-slug>.yaml. Schema: ../schema.yaml. Rules: ../CONTRACT.md §14–§16.
 # Tracked here only once implemented (implementation_status implemented/partially_implemented).
-schema_version: 1
+schema_version: 2
 id: DEC-NNN
 title: <one line>
 date: YYYY-MM-DD
@@ -49,3 +49,4 @@ limitations:
 revisit_when:
   - <evidence that should reopen it>
 # supersedes: [DEC-NNN]    revises: [DEC-NNN]    (optional)
+questions: [RQ-NN]          # the research question(s) this record serves; each RQ lists it back (CONTRACT.md §16)

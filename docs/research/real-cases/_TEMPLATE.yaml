@@ -1,6 +1,6 @@
 # CASE — copy to CASE-NNN-<kebab-slug>.yaml. No transcripts, company names, internal URLs,
 # source code, or business metrics. Every figure needs a source that can be re-counted.
-schema_version: 1
+schema_version: 2
 id: CASE-NNN
 title: <one line>
 recorded_on: YYYY-MM-DD
@@ -45,3 +45,4 @@ implementation:
 disposition:
   implementation_status: implemented
   validation_status: observed
+questions: [RQ-NN]          # the research question(s) this record serves; each RQ lists it back (CONTRACT.md §16)

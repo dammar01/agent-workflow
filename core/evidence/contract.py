@@ -596,6 +596,13 @@ _NONE_WORD = re.compile(
     r"(?P<rest>.*)",
     re.IGNORECASE,
 )
+# The old pattern, word for word: what a first line may say when its item goes on. The
+# wider spellings (`none.`, `nothing found`, `no findings`) would read `- none.` followed by
+# a finding on the next line as empty.
+_NONE_PLAIN = re.compile(
+    r"(?:none|\(none\)|n/?a|not applicable)(?:\s*(?P<note>\([^\r\n]*\)))?",
+    re.IGNORECASE,
+)
 _NONE_SEPARATOR = re.compile(r"\s*[;:,—–-]\s*(?P<note>.*)")
 _TAG_FIELD = re.compile(r"\b(?:severity|origin|scope_relation)\s*[:=]", re.IGNORECASE)
 # A note after a separator is the whole note, from a closed list of neutral phrases. A
@@ -635,13 +642,8 @@ class _NoneSentinel:
         For a first line whose item continues on further lines. A separator note there
         would let `none - clean` stand in front of a finding written on the next line.
         """
-        match = _NONE_WORD.fullmatch((text or "").strip())
-        if not match:
-            return False
-        rest = match.group("rest").strip()
-        if not rest or re.fullmatch(r"[.!]+", rest):
-            return True
-        return rest.startswith("(") and rest.endswith(")") and not _TAG_FIELD.search(rest)
+        match = _NONE_PLAIN.fullmatch((text or "").strip())
+        return bool(match) and not _TAG_FIELD.search(match.group("note") or "")
 
     def fullmatch(self, text: str) -> bool:
         text = (text or "").strip()

@@ -206,8 +206,9 @@ suite and in CI, together with the rules the schema cannot express:
   matches the directory. IDs are `PREFIX-NNN`; a research question is `RQ-NN` with an
   optional lowercase letter for a sub-question (`RQ-07a`).
 - Records are `schema_version` 2. A tracked `DEC`, `H`, `EXP`, `CASE`, `SYN`, `ARC` or `LIT`
-  may stay at version 1: it was frozen before version 2 (§15). Drafts and `RQ` records are
-  always version 2.
+  may stay at version 1 only if it was frozen before version 2 (§15); the checker holds
+  that closed list (`FROZEN_V1` in `tools/maintain/check_research.py`), so a new record
+  written at version 1 is refused. Drafts and `RQ` records are always version 2.
 - Every version-2 `DEC`, `H`, `EXP`, `CASE` and `SYN` names the research question(s) it
   serves under `questions`: a record that serves no question has no reason to change the
   project. The links hold both ways: an `RQ`'s `records` are tracked records, each of which

@@ -1,6 +1,6 @@
 # H — copy to H-NNN-<kebab-slug>.yaml. An external claim: no commit anywhere in this record.
 # Tracked here only once its outcome is recorded (not pending); until then it is a draft.
-schema_version: 1
+schema_version: 2
 id: H-NNN
 title: <one line>
 date: YYYY-MM-DD
@@ -35,3 +35,4 @@ related_decisions: []
 disposition:
   implementation_status: not_applicable
   validation_status: not_validated
+questions: [RQ-NN]          # the research question(s) this record serves; each RQ lists it back (CONTRACT.md §16)

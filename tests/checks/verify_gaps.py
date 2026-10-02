@@ -406,3 +406,10 @@ def _test_empty_section_is_not_a_finding() -> None:
         not plain.get("blocking_findings"),
         f"a plain `none (why)` with a continuation line stays empty, as before: {plain}",
     )
+    # Only the old pattern's forms: the wider spellings never reached this far before.
+    for first in ("none.", "(none).", "none!", "no findings", "nothing found", "tidak ada", "none (severity: high)"):
+        kept = _reviewer_sections(_report(f"\n- {first}\n  caller X fails on retry", "\n- none"))
+        assert_true(
+            len(kept.get("blocking_findings") or []) == 1,
+            f"`{first}` followed by a continuation line is kept as an item: {kept}",
+        )

@@ -1,5 +1,5 @@
 # LIT — copy to LIT-NNN-<kebab-slug>.yaml. Only claims the source actually makes.
-schema_version: 1
+schema_version: 2
 id: LIT-NNN
 title: <title of the source>
 authors: [<author>]
