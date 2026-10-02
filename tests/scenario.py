@@ -44,6 +44,7 @@ from tests.checks.support import (
 from tests.checks.facts import (
     _test_anchor_relocation,
     _test_evidence_anchor_relocation,
+    _test_evidence_lock_file,
     _test_evidence_reuse,
     _test_facts_concurrency,
 )
@@ -1146,6 +1147,7 @@ confidence: high — all requested checks ran
         _test_anchor_relocation()
         _test_evidence_anchor_relocation()
         _test_evidence_reuse()
+        _test_evidence_lock_file()
         _test_redaction_boundary()
         _test_quick_verify_gaps()
         _test_verification_routing()

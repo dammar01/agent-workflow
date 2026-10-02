@@ -378,6 +378,7 @@ def _a_continuation_records_each_call_and_counts_the_saving_once() -> None:
             {
                 "adapter_meta": {
                     "duration_seconds": 1.0,
+                    "resumed": False,
                     "provider_usage": {
                         "input_tokens": 100,
                         "output_tokens": 300,
@@ -391,6 +392,8 @@ def _a_continuation_records_each_call_and_counts_the_saving_once() -> None:
             {
                 "adapter_meta": {
                     "duration_seconds": 2.0,
+                    "resumed": True,
+                    "thread_changed": True,
                     "provider_usage": {
                         "input_tokens": 50,
                         "output_tokens": 20,
@@ -408,6 +411,8 @@ def _a_continuation_records_each_call_and_counts_the_saving_once() -> None:
             "prompt_id": "pid-1",
             "response_chars": 900,
             "token_source": "provider",
+            # The aggregate carries the LAST invocation's flag; the first row must not inherit it.
+            "resumed": True,
         }
         executor._record_usage(
             {
@@ -437,6 +442,16 @@ def _a_continuation_records_each_call_and_counts_the_saving_once() -> None:
             rows[0]["actual_output_tokens"] == 300 and rows[1]["actual_output_tokens"] == 20,
             "each row carries the tokens ITS call spent; repeating the aggregate on both "
             "would bill the retry for the first attempt as well",
+        )
+        assert_true(
+            [row["provider_resumed"] for row in rows] == [False, True],
+            "each row carries ITS call's thread state: a fresh first call followed by a "
+            f"resumed retry must not both read as resumed; got {[row['provider_resumed'] for row in rows]}",
+        )
+        assert_true(
+            [row["provider_thread_changed"] for row in rows] == [None, True],
+            "a lost thread is flagged on the invocation it happened in, and an adapter that "
+            f"did not say stays None; got {[row['provider_thread_changed'] for row in rows]}",
         )
         assert_true(
             rows[0]["digest_chars"] is None and rows[1]["digest_chars"] == 120,

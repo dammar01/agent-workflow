@@ -587,10 +587,81 @@ _VERIFY_SECTION_NAMES = (
     "checks_run",
     "not_verified",
 )
-_NONE_ITEM = re.compile(
-    r"^(?:none|\(none\)|n/?a|not applicable)(?:\s*\([^\r\n]*\))?$",
+# Whole phrases only. `tidak ada` or `no` followed by any word would also take "tidak ada
+# validasi untuk X" and "no check on X", which are findings.
+_NONE_WORD = re.compile(
+    r"(?:none|\(none\)|n/?a|not applicable|nothing(?: (?:found|to report))?"
+    r"|no (?:blocking )?(?:findings?|issues?|escalations?|notes?)"
+    r"|tidak ada(?: (?:temuan|masalah|isu|catatan|eskalasi)(?: blocking)?)?)"
+    r"(?P<rest>.*)",
     re.IGNORECASE,
 )
+_NONE_SEPARATOR = re.compile(r"\s*[;:,—–-]\s*(?P<note>.*)")
+_TAG_FIELD = re.compile(r"\b(?:severity|origin|scope_relation)\s*[:=]", re.IGNORECASE)
+# A note after a separator is the whole note, from a closed list of neutral phrases. A
+# blocklist of problem words was tried and lost: every round of review found another word
+# ("issue", "defect", "concern") that let a real finding read as empty. Free explanation
+# belongs in parentheses, which the verify prompt asks for; anything else after a separator
+# stays a finding, and the continuation asks for `- none`.
+_NEUTRAL_NOTE = re.compile(
+    r"(?:all\s+)?(?:clean|bersih|ok|okay|fine|passed|lulus|aman"
+    r"|nothing (?:found|blocking|to report)|no (?:issues?|findings?|problems?)"
+    r"|semua bersih|tidak ada (?:temuan|masalah))[.!]*",
+    re.IGNORECASE,
+)
+
+
+class _NoneSentinel:
+    """An entry that says "nothing to report" — in the spellings agents actually write.
+
+    The old pattern took only `none` or `none (why)`. Agents also write `none.`,
+    `none; all clean`, `none - clean`, `tidak ada`, and every one of those was
+    read as an untagged finding: in `blocking_findings` that is a blocking finding, so a
+    clean DONE became `fail`, and the continuation then asked for tags on it (CASE-009).
+
+    Still a finding, fail-closed: a sentinel word running straight into text with no
+    separator (`none of the callers handle X`), any note carrying tag fields, and a note
+    after a separator that is anything but a neutral phrase (`none - caller X fails`,
+    `none; all inspected paths are clean`). A parenthetical note is free, as it always was:
+    the verify prompt asks for `- none (say why: what you checked)`. Multi-line text is
+    never a sentinel.
+
+    Exposes `fullmatch` so callers written against the old compiled pattern keep working.
+    """
+
+    def fullmatch_plain(self, text: str) -> bool:
+        """The forms the old pattern took: a sentinel alone, or with a parenthetical note.
+
+        For a first line whose item continues on further lines. A separator note there
+        would let `none - clean` stand in front of a finding written on the next line.
+        """
+        match = _NONE_WORD.fullmatch((text or "").strip())
+        if not match:
+            return False
+        rest = match.group("rest").strip()
+        if not rest or re.fullmatch(r"[.!]+", rest):
+            return True
+        return rest.startswith("(") and rest.endswith(")") and not _TAG_FIELD.search(rest)
+
+    def fullmatch(self, text: str) -> bool:
+        text = (text or "").strip()
+        if "\n" in text:
+            return False
+        match = _NONE_WORD.fullmatch(text)
+        if not match:
+            return False
+        rest = match.group("rest").strip()
+        if not rest or re.fullmatch(r"[.!]+", rest):
+            return True
+        if rest.startswith("(") and rest.endswith(")"):
+            return not _TAG_FIELD.search(rest)
+        separated = _NONE_SEPARATOR.fullmatch(rest)
+        if not separated:
+            return False
+        return bool(_NEUTRAL_NOTE.fullmatch(separated.group("note").strip()))
+
+
+_NONE_ITEM = _NoneSentinel()
 _VERIFY_TAG_VALUES = {
     "severity": {"critical", "high", "medium", "low"},
     "origin": {"introduced", "regression", "pre_existing", "unknown"},

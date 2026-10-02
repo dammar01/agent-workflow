@@ -330,3 +330,79 @@ def _test_empty_section_is_not_a_finding() -> None:
         len(_section_items(padded, "notes")) == 1,
         "indentation and trailing spaces around a heading stay tolerated",
     )
+
+    # The other spellings agents write for "nothing found". Each used to read as an
+    # untagged blocking finding, so a clean DONE came back `fail` (CASE-009).
+    for clean in (
+        "none.",
+        "None; all clean",
+        "none (checked core/evidence/contract.py:590 and its callers, clean)",
+        "none - semua bersih",
+        "none - clean",
+        "none: nothing blocking",
+        "(none)",
+        "none (tidak ada blocking findings)",
+        "tidak ada",
+        "Tidak ada temuan",
+        "no blocking findings",
+        "nothing to report",
+        "none (checked hooks and telemetry)",
+    ):
+        verdict = validate_verification_contract(_report(f"\n- {clean}", f"\n- {clean}"))
+        assert_true(
+            verdict["verdict"] == "pass" and verdict["blocking_findings"] == 0,
+            f"`- {clean}` says nothing was found and must stay a clean pass: {verdict}",
+        )
+    # And what must still be a finding: a sentinel word running into a claim, a note that
+    # carries tags, or a phrase that only starts like one.
+    for finding in (
+        "none of the callers handle a missing token",
+        "none; severity: high | origin: introduced | scope_relation: in_scope",
+        "tidak ada validasi untuk input kosong",
+        "no check on the empty path",
+        "nothing stops a second writer",
+        # A note after a separator must end clean and name no problem.
+        "none - caller X fails",
+        "none; caller X fails, rest clean",
+        "none - see below",
+        # A blocklist of problem words lost to each of these in review; only a closed list
+        # of neutral phrases may follow a separator. Explanation goes in parentheses.
+        "none - issue in caller X, clean",
+        "none - defect found, clean",
+        "none - concern remains, clean",
+        "none; all inspected paths are clean",
+    ):
+        verdict = validate_verification_contract(_report(f"\n- {finding}", "\n- none"))
+        assert_true(
+            verdict["verdict"] == "fail" and verdict["blocking_findings"] == 1,
+            f"`- {finding}` is a claim, not an empty section, and keeps blocking: {verdict}",
+        )
+
+    # The browser reviewer's normalizer reads the same sentinel; it must not keep as a
+    # finding what the validator above now drops.
+    from core.evidence.contract import _NONE_ITEM
+
+    assert_true(
+        not _NONE_ITEM.fullmatch("none - clean\ncaller X fails"),
+        "text spanning lines is never a sentinel, whatever its first line says",
+    )
+
+    from core.evidence.e2e.normalize import _reviewer_sections
+
+    reviewed = _reviewer_sections(_report("\n- none; all clean", "\n- tidak ada"))
+    assert_true(
+        not reviewed.get("blocking_findings") and not reviewed.get("escalations"),
+        f"the E2E normalizer drops the same sentinels as the validator: {reviewed}",
+    )
+    # The normalizer joins continuation lines into the item and judges the first line. A
+    # separator note there must not hide what follows; the plain forms keep their old reach.
+    hidden = _reviewer_sections(_report("\n- none - clean\n  caller X fails on retry", "\n- none"))
+    assert_true(
+        len(hidden.get("blocking_findings") or []) == 1,
+        f"`none - clean` followed by a continuation line is kept as an item: {hidden}",
+    )
+    plain = _reviewer_sections(_report("\n- none (checked the retry path)\n  and the timeout path", "\n- none"))
+    assert_true(
+        not plain.get("blocking_findings"),
+        f"a plain `none (why)` with a continuation line stays empty, as before: {plain}",
+    )

@@ -151,6 +151,121 @@ def _evidence_reuse_counts_commands_it_could_serve() -> None:
     )
 
 
+def _reuse_misses_are_broken_down_by_reason() -> None:
+    rows = [
+        _usage(command="explore", role="exploration", prompt_id="p1", reuse_outcome="no_prior"),
+        _usage(command="explore", role="exploration", prompt_id="p1", reuse_outcome="no_prior"),
+        _usage(command="analyze", role="reasoning", prompt_id="p2", reuse_outcome="stale"),
+        _usage(command="analyze", role="reasoning", reused_evidence=True, reuse_outcome="hit"),
+        # Written before contract v3: named, not guessed.
+        _usage(command="explore", role="exploration", prompt_id="p3"),
+    ]
+    reuse = telemetry.evidence_reuse(rows)
+    assert_true(
+        reuse["by_outcome"] == {"hit": 1, "no_prior": 1, "stale": 1, "unrecorded": 1},
+        "each reuse-eligible command carries one outcome, a continuation counted once and a "
+        f"pre-v3 row as unrecorded; got {reuse['by_outcome']}",
+    )
+
+
+def _provider_cache_share_splits_continuations() -> None:
+    rows = [
+        _usage(prompt_id="p1", provider_call_index=0, provider_resumed=False,
+               actual_input_tokens=1000, actual_cached_input_tokens=200),
+        _usage(prompt_id="p1", provider_call_index=1, provider_resumed=True,
+               actual_input_tokens=1000, actual_cached_input_tokens=900),
+        # The provider did not report a cached count: outside the share, not a zero in it.
+        _usage(prompt_id="p2", actual_input_tokens=500),
+    ]
+    cache = telemetry.provider_cache(rows)
+    assert_true(
+        cache["all"]["share"] == 0.55 and cache["all"]["measured_calls"] == 2,
+        f"share is cached over measured input, unreported rows left out; got {cache['all']}",
+    )
+    assert_true(
+        cache["first_call"]["share"] == 0.2 and cache["continuation"]["share"] == 0.9,
+        f"a continuation's cache share is reported apart from first calls; got {cache}",
+    )
+    assert_true(
+        cache["fresh_thread"]["share"] == 0.2 and cache["resumed_thread"]["share"] == 0.9
+        and cache["fresh_thread"]["measured_calls"] + cache["resumed_thread"]["measured_calls"] == 2,
+        f"fresh and resumed threads are split, a row that did not say is in neither; got {cache}",
+    )
+    assert_true(
+        telemetry.provider_cache([])["all"]["share"] is None,
+        "no measured input is no answer, not a share of zero",
+    )
+
+
+def _provider_threads_flag_lost_sessions() -> None:
+    rows = [
+        _usage(provider="codex", provider_resumed=False),
+        _usage(provider="codex", provider_resumed=True),
+        _usage(provider="codex", provider_resumed=True, provider_thread_changed=True),
+        _usage(provider="opencode"),
+        # Contract v2: could not report resume state, so it is not counted at all.
+        _usage(provider="codex", contract_version=2),
+        _usage(provider="legacy-only", contract_version=2),
+    ]
+    threads = telemetry.provider_threads(rows)
+    assert_true(
+        threads["codex"] == {"resumed": 2, "fresh": 1, "unknown": 0, "thread_changed": 1}
+        and threads["opencode"] == {"resumed": 0, "fresh": 0, "unknown": 1, "thread_changed": 0}
+        and "legacy-only" not in threads,
+        "resume health is counted per provider, a lost thread named, an unreported row "
+        f"unknown rather than fresh, a pre-v3 row left out; got {threads}",
+    )
+
+
+def _by_effort_splits_commands_and_skips_old_rows() -> None:
+    rows = [
+        _usage(command="explore", prompt_id="p1", effort="low", duration_seconds=100,
+               actual_input_tokens=1000, actual_output_tokens=10),
+        _usage(command="explore", prompt_id="p1", effort="low", duration_seconds=20,
+               actual_input_tokens=500, actual_output_tokens=5),
+        _usage(command="explore", prompt_id="p2", effort="high", duration_seconds=300,
+               actual_input_tokens=4000, actual_output_tokens=40),
+        _usage(command="explore", prompt_id="p3", duration_seconds=50),
+        # Contract v2: no effort was recorded, so it cannot be put in any bucket.
+        _usage(command="explore", prompt_id="p4", contract_version=2, duration_seconds=999),
+    ]
+    split = telemetry.by_effort(rows)
+    assert_true(
+        set(split) == {"explore/low", "explore/high", "explore/default"},
+        f"one bucket per command and effort, old rows left out; got {sorted(split)}",
+    )
+    assert_true(
+        split["explore/low"]["duration_seconds_median"] == 120
+        and split["explore/low"]["input_tokens_median"] == 1500
+        and split["explore/high"]["input_tokens_median"] == 4000
+        and split["explore/default"]["input_tokens_median"] is None,
+        f"a continuation adds up within its command, unmeasured tokens stay None; got {split}",
+    )
+
+
+def _graph_leads_reports_calls_that_ran_during_a_refresh() -> None:
+    rows = [
+        _usage(command="verify", prompt_id="p1", graph_status="refreshing", graph_ms=3),
+        _usage(command="verify", prompt_id="p1", graph_status="refreshing", graph_ms=3),
+        _usage(command="explore", prompt_id="p2", graph_status="used", graph_ms=40),
+        _usage(command="analyze", prompt_id="p3", graph_status="absent", graph_ms=1),
+        _usage(command="explore", prompt_id="p4"),
+    ]
+    leads = telemetry.graph_leads(rows)
+    assert_true(
+        leads["by_status"] == {"absent": 1, "refreshing": 1, "unrecorded": 1, "used": 1},
+        f"graph status is counted per command; got {leads['by_status']}",
+    )
+    assert_true(
+        leads["refreshing_by_command"] == {"verify": 1},
+        f"calls that went without leads because of a refresh are named by command; got {leads}",
+    )
+    assert_true(
+        leads["lookup_ms_median"] == 3 and leads["lookup_ms_max"] == 40,
+        f"lookup cost is reported per command; got {leads}",
+    )
+
+
 def _graph_refresh_reports_what_the_turn_paid() -> None:
     root = Path(tempfile.mkdtemp(prefix="aw-graph-refresh-"))
     try:
@@ -207,5 +322,10 @@ def _test_telemetry_metrics() -> None:
     _unjudged_work_is_not_incorrect()
     _report_reports_its_denominators()
     _evidence_reuse_counts_commands_it_could_serve()
+    _reuse_misses_are_broken_down_by_reason()
+    _provider_cache_share_splits_continuations()
+    _graph_leads_reports_calls_that_ran_during_a_refresh()
+    _provider_threads_flag_lost_sessions()
+    _by_effort_splits_commands_and_skips_old_rows()
     _graph_refresh_reports_what_the_turn_paid()
     _torn_row_is_skipped_not_fatal()

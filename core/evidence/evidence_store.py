@@ -350,6 +350,20 @@ def find_fresh(
     If the most-recent match is stale, return None (re-delegate) rather than reaching for
     an older, necessarily-staler entry.
     """
+    return find_fresh_with_reason(project_root, command, task, context)[0]
+
+
+def find_fresh_with_reason(
+    project_root: Path,
+    command: str,
+    task: str | None,
+    context: dict | None = None,
+) -> tuple[dict | None, str]:
+    """`find_fresh`, plus why it missed: `hit`, `no_prior`, or `stale`.
+
+    The reason is what CASE-009 could not measure. A zero reuse rate made of queries that
+    never repeat and one made of repeats whose anchors moved call for different fixes.
+    """
     qh = _query_hash(command, task, context)
     with _EvidenceLock(project_root):
         rows = _load(project_root)
@@ -362,5 +376,7 @@ def find_fresh(
             _save(project_root, usable)
     for entry in reversed(usable):
         if entry.get("query_hash") == qh:
-            return entry if _is_fresh(project_root, entry) else None
-    return None
+            if _is_fresh(project_root, entry):
+                return entry, "hit"
+            return None, "stale"
+    return None, "no_prior"

@@ -457,11 +457,146 @@ def evidence_reuse(rows) -> dict:
     eligible = [row for row in rows if row.role in _REUSE_ROLES]
     groups = _work_groups(eligible)
     reused = sum(1 for group in groups if any(row.reused_evidence for row in group))
+    # One outcome per command. Rows written before contract v3 carry none and are counted
+    # as `unrecorded`, so the breakdown never claims more history than it has.
+    outcomes: dict[str, int] = {}
+    for group in groups:
+        recorded = next((row.reuse_outcome for row in group if row.reuse_outcome), None)
+        key = recorded or "unrecorded"
+        outcomes[key] = outcomes.get(key, 0) + 1
     return {
         "reused": reused,
         "eligible_commands": len(groups),
         "rate": round(reused / len(groups), 3) if groups else None,
+        "by_outcome": dict(sorted(outcomes.items())),
         "role_unrecorded_rows": sum(1 for row in rows if row.role is None),
+    }
+
+
+def provider_cache(rows) -> dict:
+    """Share of measured input the provider served from its own prompt cache (H-008).
+
+    Per provider invocation, not per command: caching happens per request. Only rows where
+    the provider reported both counts enter the share. Two splits: a continuation resends
+    the first call's prefix, and a resumed thread resends the whole thread so far. A row
+    whose adapter did not say whether it resumed is in neither thread bucket.
+    """
+
+    def _share(subset):
+        measured = [
+            row for row in subset
+            if row.actual_input_tokens and row.actual_cached_input_tokens is not None
+        ]
+        total = sum(row.actual_input_tokens for row in measured)
+        cached = sum(row.actual_cached_input_tokens for row in measured)
+        return {
+            "measured_calls": len(measured),
+            "input_tokens": total,
+            "cached_input_tokens": cached,
+            "share": round(cached / total, 3) if total else None,
+        }
+
+    def _is_continuation(row):
+        return isinstance(row.provider_call_index, int) and row.provider_call_index > 0
+
+    continuation = [row for row in rows if _is_continuation(row)]
+    first = [row for row in rows if not _is_continuation(row)]
+    return {
+        "all": _share(rows),
+        "first_call": _share(first),
+        "continuation": _share(continuation),
+        "fresh_thread": _share([row for row in rows if row.provider_resumed is False]),
+        "resumed_thread": _share([row for row in rows if row.provider_resumed is True]),
+    }
+
+
+def provider_threads(rows) -> dict:
+    """Whether provider sessions stay stateful, per provider, per invocation.
+
+    `thread_changed` is the alarm: a resumed call answered on a different thread, so the
+    session silently lost what it held. `unknown` is an adapter that does not report it
+    (opencode), never counted as fresh. Rows before contract v3 are left out, as in
+    `by_effort`: none of them could report it, and counting them would bury the adapters
+    that do not under history.
+    """
+    out: dict[str, dict] = {}
+    for row in rows:
+        if (row.contract_version or 0) < 3:
+            continue
+        entry = out.setdefault(
+            row.provider or "unknown",
+            {"resumed": 0, "fresh": 0, "unknown": 0, "thread_changed": 0},
+        )
+        if row.provider_resumed is True:
+            entry["resumed"] += 1
+        elif row.provider_resumed is False:
+            entry["fresh"] += 1
+        else:
+            entry["unknown"] += 1
+        if row.provider_thread_changed:
+            entry["thread_changed"] += 1
+    return dict(sorted(out.items()))
+
+
+def by_effort(rows) -> dict:
+    """Time and tokens per command, split by the effort the adapter passed (H-010).
+
+    Per command (a continuation is one), keyed `<command>/<effort>`; `default` is a call
+    that sent no effort flag. Input tokens only where the provider measured them. Rows
+    before contract v3 are left out.
+    """
+    buckets: dict[str, dict[str, list]] = {}
+    for group in _work_groups(rows):
+        head = group[0]
+        # Before contract v3 no effort was recorded; those rows would all read `default`.
+        if (head.contract_version or 0) < 3:
+            continue
+        key = f"{head.command}/{head.effort or 'default'}"
+        bucket = buckets.setdefault(key, {"durations": [], "input": [], "output": []})
+        durations = [row.duration_seconds for row in group if row.duration_seconds is not None]
+        if durations:
+            bucket["durations"].append(sum(durations))
+        measured = [row for row in group if row.actual_input_tokens is not None]
+        if measured:
+            bucket["input"].append(sum(row.actual_input_tokens for row in measured))
+            bucket["output"].append(sum(row.actual_output_tokens or 0 for row in measured))
+    return {
+        key: {
+            "commands": len(bucket["durations"]),
+            "duration_seconds_median": _median(bucket["durations"]),
+            "input_tokens_median": _median(bucket["input"]),
+            "output_tokens_median": _median(bucket["output"]),
+        }
+        for key, bucket in sorted(buckets.items())
+    }
+
+
+def graph_leads(rows) -> dict:
+    """How delegated calls found the graph, and what the lookup cost (RQ-13, DEC-012).
+
+    Counted per command. `refreshing` is a call that ran while the refresh worker held the
+    lock and so went without leads; for a verify that is the case the latency question is
+    about.
+    """
+    groups = _work_groups(rows)
+    statuses: dict[str, int] = {}
+    refreshing_by_command: dict[str, int] = {}
+    lookup_ms = []
+    for group in groups:
+        head = next((row for row in group if row.graph_status), None)
+        status = head.graph_status if head else "unrecorded"
+        statuses[status] = statuses.get(status, 0) + 1
+        if head is None:
+            continue
+        if status == "refreshing":
+            refreshing_by_command[head.command] = refreshing_by_command.get(head.command, 0) + 1
+        if isinstance(head.graph_ms, (int, float)):
+            lookup_ms.append(head.graph_ms)
+    return {
+        "by_status": dict(sorted(statuses.items())),
+        "refreshing_by_command": dict(sorted(refreshing_by_command.items())),
+        "lookup_ms_median": _median(lookup_ms),
+        "lookup_ms_max": max(lookup_ms, default=None),
     }
 
 
@@ -527,6 +662,10 @@ def report(project_root) -> dict:
             "provider_calls_avoided": sum(1 for row in rows if row.provider_call_avoided),
         },
         "evidence_reuse": evidence_reuse(rows),
+        "provider_cache": provider_cache(rows),
+        "provider_threads": provider_threads(rows),
+        "by_effort": by_effort(rows),
+        "graph_leads": graph_leads(rows),
         "time_to_completion_seconds": {
             "mean": _mean(durations),
             "median": _median(durations),

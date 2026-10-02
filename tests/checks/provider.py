@@ -971,6 +971,37 @@ def _test_agy_provider() -> None:
             os.environ[opt_in_env] = previous_opt_in
         shutil.rmtree(select_root, ignore_errors=True)
 
+    # Resume health reaches last_call_meta, which is what the usage row reads.
+    class _ConversationAgy(AgyAdapter):
+        def _popen_capture(self, args, cwd, timeout, phase, on_session):
+            self.last_call_meta = {"phase": phase}
+            if on_session:
+                on_session("conv-new")
+            return {
+                "output_complete": True,
+                "returncode": 0,
+                "stdout": "[EVIDENCE]",
+                "stderr": "",
+                "timed_out": False,
+                "duration_seconds": 0.1,
+                "idle_seconds": 0.0,
+            }
+
+    agy_root = Path(tempfile.mkdtemp(prefix="agy-resume-"))
+    try:
+        kept = _ConversationAgy(timeout_seconds=60)
+        kept.run("task", {"provider_session_id": "conv-new"}, None, str(agy_root))
+        lost = _ConversationAgy(timeout_seconds=60)
+        lost.run("task", {"provider_session_id": "conv-old"}, None, str(agy_root))
+        assert_true(
+            (kept.last_call_meta.get("resumed"), kept.last_call_meta.get("thread_changed")) == (True, False)
+            and (lost.last_call_meta.get("resumed"), lost.last_call_meta.get("thread_changed")) == (True, True),
+            "agy reports resume and a lost conversation on last_call_meta: "
+            f"kept={kept.last_call_meta} lost={lost.last_call_meta}",
+        )
+    finally:
+        shutil.rmtree(agy_root, ignore_errors=True)
+
 
 def _assert_codex_provider() -> None:
     """Codex: the second real provider, and the proof the seam holds for shipped code.
@@ -1113,6 +1144,8 @@ def _assert_codex_provider() -> None:
         )
 
         def _popen_capture(self, args, prompt, cwd, timeout, phase, on_session):
+            # The real seam rebinds last_call_meta per spawn; so does this one.
+            self.last_call_meta = {"phase": phase}
             return {
                 "output_complete": True,
                 "returncode": 0,
@@ -1129,6 +1162,15 @@ def _assert_codex_provider() -> None:
         """The id arrives only when the buffered stream is handed over at exit."""
 
         _stdout = started + "\n" + _NoSessionCodex._stdout
+
+    class _LiveEventCodex(_LateEventCodex):
+        """The id arrives live, as `_drain` reports it from stdout line 1."""
+
+        def _popen_capture(self, args, prompt, cwd, timeout, phase, on_session):
+            outcome = super()._popen_capture(args, prompt, cwd, timeout, phase, on_session)
+            if on_session:
+                on_session("019fe9cb-5a19-7303-b571-38d04f2d395a")
+            return outcome
 
     orphan = _NoSessionCodex(command="codex").run("task", {}, None, None)
     assert_true(
@@ -1155,6 +1197,26 @@ def _assert_codex_provider() -> None:
     assert_true(
         carried["ok"],
         f"a resumed call already knows its thread id and must not fail: {carried}",
+    )
+
+    # Resume health reaches the usage row through last_call_meta, not the result meta.
+    kept = _NoSessionCodex(command="codex")
+    kept.run("task", {"provider_session_id": "019fe9cb-5a19-7303-b571-38d04f2d395a"}, None, None)
+    fresh = _LiveEventCodex(command="codex")
+    fresh.run("task", {}, None, None)
+    lost = _LiveEventCodex(command="codex")
+    lost_result = lost.run("task", {"provider_session_id": "thread-that-codex-dropped"}, None, None)
+    assert_true(
+        (kept.last_call_meta.get("resumed"), kept.last_call_meta.get("thread_changed")) == (True, False)
+        and (fresh.last_call_meta.get("resumed"), fresh.last_call_meta.get("thread_changed")) == (False, False),
+        "a resumed call on its own thread and a fresh call both reach last_call_meta: "
+        f"kept={kept.last_call_meta} fresh={fresh.last_call_meta}",
+    )
+    assert_true(
+        lost.last_call_meta.get("thread_changed") is True
+        and lost_result["meta"].get("thread_changed") is True,
+        "a resumed call answered on a different thread is flagged: the session lost its "
+        f"state without an error; got {lost.last_call_meta}",
     )
 
     # The seam itself: defaults must follow the SELECTED provider. Before this, a config

@@ -73,6 +73,7 @@ from tests.checks.transcript import _test_transcript_parsing  # noqa: E402
 from tests.checks.facts import (  # noqa: E402
     _test_anchor_relocation,
     _test_evidence_anchor_relocation,
+    _test_evidence_lock_file,
     _test_evidence_reuse,
     _test_facts_concurrency,
 )
@@ -146,6 +147,7 @@ SUITES: dict[str, tuple] = {
     "anchor-relocation": (_test_anchor_relocation, "facts survive a line moving"),
     "evidence-anchor-relocation": (_test_evidence_anchor_relocation, "evidence anchors survive a line moving"),
     "evidence-reuse": (_test_evidence_reuse, "identical query served from a fresh artifact"),
+    "evidence-lock-file": (_test_evidence_lock_file, "evidence.jsonl.lock is a persistent one-byte OS lock that excludes other processes"),
     "redaction": (_test_redaction_boundary, "secret boundary on outbound payloads"),
     "verify-gaps": (_test_quick_verify_gaps, "quick verify reports gaps as incomplete"),
     "verify-routing": (_test_verification_routing, "the routing table decides what blocks, both ways"),

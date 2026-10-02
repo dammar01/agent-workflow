@@ -36,14 +36,20 @@ _VERIFY_SHAPE_KINDS = {
 # `finding_misrouted` is deliberately NOT here. The router already moves a blocking-class
 # finding into the verdict on its own, so nothing is lost by leaving it where the agent
 # put it — and a re-prompt would only offer it the chance to retract a true finding.
+# Both name the sentinel. Without it, an entry that only said nothing was found came back
+# as a finding the agent was told neither to remove nor to leave untagged — so it got tags,
+# and the verdict was moved to match it: a clean verify turned into a fail (CASE-009).
 _VERIFY_WANT_BY_KIND = {
     "invalid_finding_tags": (
         "the same findings again, each opening line carrying severity, origin and "
-        "scope_relation — no new findings, no removals"
+        "scope_relation — no new findings, no removals; an entry that only says nothing "
+        "was found is not a finding: write it as exactly `- none`, without tags"
     ),
     "verdict_mismatch": (
         "the verdict line alone, made consistent with the blocking_findings you already "
-        "reported — change the verdict, not the findings"
+        "reported — change the verdict, not the findings; but if an entry under "
+        "blocking_findings only says nothing was found, write it as exactly `- none` and "
+        "keep the verdict"
     ),
 }
 

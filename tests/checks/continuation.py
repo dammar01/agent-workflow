@@ -416,6 +416,20 @@ def _test_contract_continuation() -> None:
             settled_result.get("ok") and len(settled.calls) == 1,
             f"an honest incomplete verdict must be left alone: calls={len(settled.calls)}",
         )
+
+        # A "nothing found" spelled in a way the parser does not take must be steered back
+        # to `- none`. Asking only for tags is how the entry got tagged as a finding and a
+        # clean verify became a fail (CASE-009).
+        from core.provider.continuation import _contract_gap
+
+        odd_none = _VERIFICATION.replace(
+            "blocking_findings: none", "blocking_findings:\n- semua jalur bersih"
+        )
+        gap = _contract_gap("verify", "verification", {"ok": True, "content": odd_none, "meta": {}})
+        assert_true(
+            gap is not None and "`- none`" in gap.get("wants", ""),
+            f"the re-prompt names `- none` for an entry that only says nothing was found: {gap}",
+        )
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

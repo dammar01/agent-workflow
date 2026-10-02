@@ -786,7 +786,10 @@ one-byte file carrying an OS byte-range lock, kept between uses:
 
 A one-byte file shows as empty in most editors; its content is `\0`, which the Windows
 byte-range lock (`msvcrt.locking`) needs to lock. Deleting a kept file while no process runs is
-harmless: it is recreated on the next use.
+harmless: it is recreated on the next use. Deleting it while a process holds it is what the
+design rules out: Windows refuses the delete, and on POSIX the next writer creates a new,
+unlocked file, so two writers run at once. The `evidence-lock-file` test suite checks both,
+and that a second process waits for the holder.
 
 ## Call telemetry
 
@@ -803,6 +806,23 @@ fail differently:
   are written separately, on the return path. A failure there is swallowed silently — no
   `call_meta_error`, no field on the result. A missing usage or audit row is therefore not
   evidence that the call failed.
+
+Usage rows carry contract version 3. Version 3 adds six fields, all `None` on older rows:
+
+- `reuse_outcome` — why the reuse lookup did or did not serve the command: `hit`,
+  `no_prior`, `stale`, `unreadable`, `error`, `not_offered`, `disabled`.
+- `graph_status` — `used`, `empty`, `absent`, `refreshing`, `disabled`.
+- `graph_ms` — how long the graph lookup took.
+- `provider_resumed` — whether the provider resumed an existing thread, as the adapter
+  reports it on `last_call_meta` (codex, agy). `None` where the adapter does not say:
+  opencode always runs on a session it opened or resumed and cannot tell the two apart.
+- `provider_thread_changed` — a resumed call answered on a different thread id, so the
+  session lost its state without an error (codex, agy).
+- `effort` — the reasoning effort the adapter passed; `None` means no flag was sent and the
+  provider's own default applied.
+
+`refreshing` means the call ran while `graphify-out/.refresh.lock` was held and went without
+leads. The lookup never waits on that lock.
 
 ## Workspace layout
 

@@ -246,11 +246,17 @@ def _section_blocks(body: str, name: str) -> list[str]:
             current.append(stripped)
     if current is not None and items:
         items[-1] = "\n  ".join(current)
-    return [
-        item
-        for item in items
-        if item and not _NONE_ITEM.fullmatch(item.split("\n", 1)[0].strip())
-    ]
+    return [item for item in items if item and not _is_none_item(item)]
+
+
+def _is_none_item(item: str) -> bool:
+    """A sentinel, judged by its first line. An item that continues on further lines gets
+    only the plain forms (`none`, `none (why)`): a separator note such as `none - clean`
+    in front of a continuation line could hide the finding written there."""
+    first, _, more = item.partition("\n")
+    if more.strip():
+        return _NONE_ITEM.fullmatch_plain(first)
+    return _NONE_ITEM.fullmatch(first)
 
 
 def _reviewer_sections(content: str | None) -> dict[str, list[str]]:

@@ -224,6 +224,42 @@ def _check_runner(flavour: str, command: list[str]) -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _check_call_during_refresh() -> None:
+    """A delegated call during a refresh goes without leads, and says so (RQ-13).
+
+    Never waits: a verify that ran while the worker held the lock must record
+    `refreshing`, not block on it and not pass as a project with no graph.
+    """
+    from core.provider.executor import graph_leads_for_call
+
+    root = Path(tempfile.mkdtemp(prefix="graph-leads-call-"))
+    try:
+        cases = [
+            ("live", lambda p: _write_lock(p, os.getpid(), time.time()), "refreshing"),
+            ("torn", lambda p: (p / "graphify-out" / ".refresh.lock").write_text('{"pid": ', encoding="utf-8"), "refreshing"),
+            ("expired", lambda p: _write_lock(p, os.getpid(), time.time() - 3600), "empty"),
+            ("released", lambda p: None, "empty"),
+            ("absent", lambda p: shutil.rmtree(p / "graphify-out"), "absent"),
+        ]
+        for name, arrange, expected in cases:
+            project = _project(root / name, stale=False)
+            arrange(project)
+            started = time.monotonic()
+            leads, status, ms = graph_leads_for_call(project, "app")
+            waited = time.monotonic() - started
+            assert_true(
+                status == expected and leads is None,
+                f"[{name}] graph status for a delegated call: expected {expected}, got {status}",
+            )
+            assert_true(
+                waited < 1 and isinstance(ms, int) and ms >= 0,
+                f"[{name}] the lookup must not wait on the refresh lock; took {waited:.2f}s",
+            )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _test_graph_refresh_hook() -> None:
+    _check_call_during_refresh()
     for flavour, command in _runners():
         _check_runner(flavour, command)

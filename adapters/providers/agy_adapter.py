@@ -393,6 +393,12 @@ class AgyAdapter:
         }
         if guard.get("mutated"):
             meta["workspace_mutated"] = True
+        # Same as codex: a resumed call naming a different conversation lost its state, and
+        # last_call_meta is what the usage row reads.
+        meta["thread_changed"] = bool(resume_id) and captured["session_id"] != resume_id
+        if isinstance(self.last_call_meta, dict):
+            self.last_call_meta["resumed"] = meta["resumed"]
+            self.last_call_meta["thread_changed"] = meta["thread_changed"]
 
         content = self.clean_output(stdout)
         tail = _error_tail(stderr, stdout)

@@ -506,10 +506,20 @@ def _reused_evidence_reports_its_anchor_ratio() -> None:
             workflow_paths(root, session_id)["logs_dir"] / "run-ratio" / "output.raw.md",
             content, context=context,
         )
-        result = Executor()._maybe_reuse(root, "analyze", "ratio query", session_id, context)
+        executor = Executor()
+        result = executor._maybe_reuse(root, "analyze", "ratio query", session_id, context)
         assert_true(
             result is not None and result["digest"]["anchors"] == {"certified": 2, "total": 2},
             f"a reused digest carries the ratio its evidence_ref reports: {result and result.get('digest')}",
+        )
+        assert_true(
+            executor._reuse_outcome == "hit",
+            f"a served artifact records the outcome `hit`: {executor._reuse_outcome}",
+        )
+        executor._maybe_reuse(root, "analyze", "other query", session_id, context)
+        assert_true(
+            executor._reuse_outcome == "no_prior",
+            f"a query never asked before records `no_prior`: {executor._reuse_outcome}",
         )
         assert_true(
             "anchors" not in stored,

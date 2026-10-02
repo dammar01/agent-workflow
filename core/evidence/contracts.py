@@ -25,8 +25,10 @@ from typing import Any
 
 # Bumped to 2 when the actual_* token fields landed. The number is a reading aid, not a
 # gate: `_coerce` drops unknown keys either way, so a v1 row stays readable and simply
-# reports its actual_* fields as None — which is the truth about it.
-CONTRACT_VERSION = 2
+# reports its actual_* fields as None — which is the truth about it. Bumped to 3 for
+# reuse_outcome/graph_status/graph_ms/provider_resumed/provider_thread_changed/effort; a
+# v2 row reads them as None, "not recorded".
+CONTRACT_VERSION = 3
 
 # Where the usage stream lands, relative to the project's `.workflow` directory. A sibling
 # of redactions.jsonl and deliberately project-local: telemetry about a codebase is
@@ -286,6 +288,27 @@ class UsageRecord:
     premium_context_avoided_tokens: int | None = None
     reused_evidence: bool = False
     provider_call_avoided: bool = False
+    # Why the reuse lookup did or did not serve this command: `hit`, `no_prior` (the exact
+    # query never ran before), `stale` (it ran, an anchor has moved since), `unreadable`,
+    # `error`, `not_offered` (a role reuse does not apply to), `disabled`. CASE-009 saw a
+    # zero reuse rate and could not say which of these it was made of.
+    reuse_outcome: str | None = None
+    # Graph leads for this call: `used`, `empty` (a graph, nothing matched), `absent`,
+    # `refreshing` (the refresh worker held the lock, DEC-012), `disabled`. `graph_ms` is
+    # what the lookup took, the part of a call's latency the graph is responsible for.
+    graph_status: str | None = None
+    graph_ms: int | None = None
+    # Whether the provider resumed an existing thread for this invocation, as the adapter
+    # reported it (codex, agy). None where the adapter does not say: unknown, not fresh.
+    # H-008 separates a cached share earned by a static prefix from one earned by a
+    # growing resumed thread, and needs this to tell the two apart.
+    provider_resumed: bool | None = None
+    # A resumed call whose provider answered on a DIFFERENT thread id: the session lost its
+    # state without an error. None where the adapter does not report it.
+    provider_thread_changed: bool | None = None
+    # Reasoning effort the adapter passed (`low`, `medium`, `high`, ...). None is the
+    # provider's own default, not "unknown effort": no flag was sent.
+    effort: str | None = None
     # How many credential-shaped values the redaction boundary scrubbed from this call.
     # A count, never the values: the whole reason they were scrubbed is that they should
     # exist nowhere on disk, and telemetry is not an exception to that.
@@ -344,6 +367,9 @@ def usage_from_result(
     spec: TaskSpec,
     call_meta: dict | None,
     recorded_at: str,
+    reuse_outcome: str | None = None,
+    graph_status: str | None = None,
+    graph_ms: int | None = None,
 ) -> UsageRecord:
     """Assemble a UsageRecord from what a finished call already knows.
 
@@ -420,4 +446,14 @@ def usage_from_result(
         # premium context avoided, which measures main_agent's context rather than the
         # second agent's spend.
         provider_call_avoided=bool(meta.get("reused_evidence")),
+        reuse_outcome=reuse_outcome,
+        graph_status=graph_status,
+        graph_ms=graph_ms,
+        provider_resumed=(
+            call.get("resumed") if isinstance(call.get("resumed"), bool) else None
+        ),
+        provider_thread_changed=(
+            call.get("thread_changed") if isinstance(call.get("thread_changed"), bool) else None
+        ),
+        effort=call.get("effort") if isinstance(call.get("effort"), str) else None,
     )

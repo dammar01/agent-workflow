@@ -339,6 +339,13 @@ class CodexAdapter:
             "sandbox": self.sandbox,
             "stderr": ensure_text(outcome["stderr"]).strip(),
         }
+        # A resumed call that reports a different thread id opened a new thread instead:
+        # the session silently lost its state. Copied onto last_call_meta as well, which is
+        # what the usage row reads; `meta` alone never reaches telemetry.
+        meta["thread_changed"] = bool(resume_id) and captured["session_id"] != resume_id
+        if isinstance(self.last_call_meta, dict):
+            self.last_call_meta["resumed"] = meta["resumed"]
+            self.last_call_meta["thread_changed"] = meta["thread_changed"]
         tail = _error_tail(outcome["stderr"], outcome["stdout"])
         content = self._read_last_message(last_message, outcome["stdout"])
         last_message.unlink(missing_ok=True)

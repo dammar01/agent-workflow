@@ -1,3 +1,4 @@
+import time
 from pathlib import Path
 
 from adapters.contract.base import SecondAgentAdapter
@@ -105,6 +106,30 @@ _FANOUT_WARNINGS = {
 
 
 
+def graph_leads_for_call(project_root, task: str) -> tuple[dict | None, str, int]:
+    """Graph leads for one delegated call, with what happened and what it cost.
+
+    Returns (leads, status, ms). Status is `used`, `empty` (a graph, nothing matched),
+    `absent`, or `refreshing`. Recorded for RQ-13: DEC-012 makes a call during a refresh
+    go without leads, and without this it is indistinguishable from having no graph. A
+    lock taken between the check and the read lands as `empty`; rare, and still a call
+    without leads.
+    """
+    started = time.monotonic()
+    leads = None
+    if graph_index.refresh_in_progress(project_root):
+        status = "refreshing"
+    else:
+        leads = graph_index.leads(project_root, task)
+        if leads:
+            status = "used"
+        elif graph_index.graph_path(project_root).is_file():
+            status = "empty"
+        else:
+            status = "absent"
+    return leads, status, round((time.monotonic() - started) * 1000)
+
+
 def _scope_width(project_root, session_id: str | None) -> dict | None:
     """How far the working tree has spread against the scope the plan declared.
 
@@ -173,6 +198,13 @@ class Executor:
         # attribute the adapter writes is rebound wholesale on the second run, so whatever
         # the first one measured is gone unless it was copied out before then.
         self._call_metas: list[dict] = []
+
+    # Per-call usage instrumentation, reset in `_execute`. Class-level defaults, not
+    # `__init__` assignments: `_record_usage` swallows every error, so an executor built
+    # without `__init__` would otherwise lose its usage row to an AttributeError silently.
+    _reuse_outcome: str | None = None
+    _graph_status: str | None = None
+    _graph_ms: int | None = None
 
     def _adapter_for(self, project_root):
         """The adapter THIS project selects, resolved late enough to know the project.
@@ -474,6 +506,19 @@ class Executor:
                 "actual_output_tokens": None,
                 "actual_reasoning_tokens": None,
                 "actual_cached_input_tokens": None,
+                # This invocation's own thread state: a continuation's first call can be
+                # fresh while its retry resumes, and the aggregate carries only the last.
+                # A bool, so taking it from the raw snapshot routes nothing around redaction.
+                "resumed": (
+                    adapter_meta.get("resumed")
+                    if isinstance(adapter_meta.get("resumed"), bool)
+                    else None
+                ),
+                "thread_changed": (
+                    adapter_meta.get("thread_changed")
+                    if isinstance(adapter_meta.get("thread_changed"), bool)
+                    else None
+                ),
             }
             _apply_provider_usage(row, adapter_meta.get("provider_usage"))
             rows.append(row)
@@ -563,6 +608,9 @@ class Executor:
                     spec=spec,
                     call_meta=call_meta,
                     recorded_at=recorded_at,
+                    reuse_outcome=self._reuse_outcome,
+                    graph_status=self._graph_status,
+                    graph_ms=self._graph_ms,
                 )
                 payload = record.to_dict()
                 write_usage_record(project_root, payload)
@@ -645,7 +693,10 @@ class Executor:
         evidence_store.find_fresh (exact query + all anchors unchanged).
         """
         try:
-            hit = evidence_store.find_fresh(project_root, command, task, context)
+            self._reuse_outcome = "error"
+            hit, self._reuse_outcome = evidence_store.find_fresh_with_reason(
+                project_root, command, task, context
+            )
             if not hit:
                 return None
             ap = hit.get("artifact_path")
@@ -653,6 +704,7 @@ class Executor:
                 project_root, hit
             )
             if not content or not content.strip():
+                self._reuse_outcome = "unreadable"
                 return None
             result = {
                 "ok": True,
@@ -691,6 +743,7 @@ class Executor:
                     }
             return result
         except Exception:
+            self._reuse_outcome = "error"
             return None
 
     def _run_delegated(
@@ -913,6 +966,9 @@ class Executor:
                     "role": route.get("role"),
                     "model": route.get("model"),
                     "timeout_seconds": self.adapter.timeout_seconds,
+                    # The effort this adapter passed; None is the provider's own default,
+                    # whatever that is configured to outside this runtime.
+                    "effort": getattr(self.adapter, "effort", None),
                     "prompt_chars": _prompt_chars,
                     "response_chars": _resp_chars,
                     "estimated_input_tokens": _prompt_chars // 4,
@@ -1227,6 +1283,12 @@ class Executor:
         normalized_command = command.strip().lower()
         self._last_call_meta = None
         self._call_metas = []
+        # Per-call instrumentation for the usage row (v3.8.0 phase 1): why reuse missed,
+        # and whether graph leads were there to use. None means the call never got as far
+        # as asking — the runtime-only paths return before either question comes up.
+        self._reuse_outcome = None
+        self._graph_status = None
+        self._graph_ms = None
         provider_session_id = session["session_id"]
         session_id = str(workflow_session_id or provider_session_id)
         effective_session_manager = (
@@ -1378,7 +1440,11 @@ class Executor:
         graph_leads = None
         fanout = False
         if graph_leads_enabled(project_root):
-            graph_leads = graph_index.leads(project_root, task)
+            graph_leads, self._graph_status, self._graph_ms = graph_leads_for_call(
+                project_root, task
+            )
+        else:
+            self._graph_status = "disabled"
         if route["role"] in ("exploration", "reasoning"):
             facts = fact_store.load_relevant(project_root, task)
             known_facts = [
@@ -1447,6 +1513,10 @@ class Executor:
                 )
 
         bound = bind_session(project_root, session_id)
+        if not allow_reuse:
+            self._reuse_outcome = "disabled"
+        elif route["role"] not in ("exploration", "reasoning"):
+            self._reuse_outcome = "not_offered"
         if allow_reuse and route["role"] in ("exploration", "reasoning"):
             reused = self._maybe_reuse(
                 project_root,

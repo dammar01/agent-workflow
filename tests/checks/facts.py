@@ -218,8 +218,101 @@ def _test_evidence_anchor_relocation() -> None:
             is None,
             "an artifact citing a line whose CONTENT changed must not be reused",
         )
+        assert_true(
+            evidence_store.find_fresh_with_reason(
+                root, "analyze", "shifted query", context=context
+            )[1] == "stale"
+            and evidence_store.find_fresh_with_reason(
+                root, "analyze", "never asked", context=context
+            ) == (None, "no_prior"),
+            "a miss names its cause: a moved anchor is `stale`, an unseen query `no_prior`",
+        )
     finally:
         _shutil.rmtree(root, ignore_errors=True)
+
+
+_HOLD_EVIDENCE_LOCK = """
+import sys, time
+from pathlib import Path
+from core.evidence.evidence_store import _EvidenceLock
+with _EvidenceLock(Path(sys.argv[1])):
+    print("held", flush=True)
+    time.sleep(float(sys.argv[2]))
+"""
+
+
+def _test_evidence_lock_file() -> None:
+    """`evidence.jsonl.lock` is a persistent one-byte OS lock, not an owner record.
+
+    It holds a single NUL byte (so it reads as empty), survives release, and excludes a
+    second process while held. Deleting it under a holder is what the design rules out:
+    Windows refuses the delete, and on POSIX a new file would be a second, unlocked lock.
+    """
+    import subprocess
+    import sys
+
+    from core.evidence.evidence_store import _EvidenceLock
+    from core.workspace.workspace_paths import workflow_paths
+
+    repo = Path(__file__).resolve().parents[2]
+    root = Path(tempfile.mkdtemp(prefix="evidence-lock-"))
+    try:
+        with _EvidenceLock(root):
+            pass
+        lock = workflow_paths(root)["evidence_store"].with_name("evidence.jsonl.lock")
+        assert_true(
+            lock.read_bytes() == b"\0",
+            f"the lock file is one NUL byte and stays after release: {lock.read_bytes()!r}",
+        )
+
+        hold_s = 1.5
+
+        def _acquire_while_held(before_acquire) -> float:
+            holder = subprocess.Popen(
+                [sys.executable, "-c", _HOLD_EVIDENCE_LOCK, str(root), str(hold_s)],
+                cwd=repo,
+                env={**os.environ, "PYTHONPATH": str(repo)},
+                stdout=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                assert_true(holder.stdout.readline().strip() == "held", "the holder process took the lock")
+                before_acquire()
+                started = time.monotonic()
+                with _EvidenceLock(root):
+                    return time.monotonic() - started
+            finally:
+                holder.wait(timeout=30)
+
+        waited = _acquire_while_held(lambda: None)
+        assert_true(
+            waited >= hold_s * 0.5,
+            f"a second process waits for the holder, it does not share the lock; waited {waited:.2f}s",
+        )
+
+        refused: list[bool] = []
+
+        def _delete_lock() -> None:
+            try:
+                lock.unlink()
+                refused.append(False)
+            except OSError:
+                refused.append(True)
+
+        waited = _acquire_while_held(_delete_lock)
+        if os.name == "nt":
+            assert_true(
+                refused == [True] and waited >= hold_s * 0.5,
+                f"Windows refuses to delete a held lock file, so exclusion holds; refused={refused}",
+            )
+        else:
+            assert_true(
+                refused == [False] and waited < hold_s * 0.5,
+                "on POSIX a deleted lock file is replaced by a new, unlocked one: exclusion is "
+                f"lost, which is why the file is never cleaned up; waited {waited:.2f}s",
+            )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def _test_evidence_reuse() -> None:

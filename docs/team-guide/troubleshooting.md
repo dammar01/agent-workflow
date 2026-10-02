@@ -12,6 +12,7 @@ troubleshooting table](../../README.md#quick-start); commands and their options 
 | A warning that `.workflow` was built by an older tool version | Run `upgrade` for that project |
 | The provider CLI is not found | Install it and make sure it is on `PATH` |
 | Commands fail after you moved the tool checkout | Run `upgrade` from the new location |
+| Empty-looking `.lock` files in `.workflow/data` | `evidence.jsonl.lock` and the `.guard`/`.reclaim` files hold one invisible byte and stay between uses: normal. Other lock files are removed on release, so an empty one left behind is a writer that crashed and is reclaimed later. Do not delete any while something runs ([which ones and why](../runtime-contracts.md)) |
 
 ## "PROXY GAGAL" / proxy failed
 
