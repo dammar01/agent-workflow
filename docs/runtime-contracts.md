@@ -556,6 +556,22 @@ fenced JSON scenario), `spec_uncertainties`. Validation runs in both phases, bef
   `no response before the run ended`, including when the player crashes. Bodies, cookies and
   tokens are never recorded. An
   HTTP 2xx proves nothing on its own — the assertions do;
+- every request the page sends, reads included, is also recorded as metadata for page
+  optimization (`core/evidence/e2e/network.py`, DEC-014), apart from the ledger above: `seq`,
+  `start_ms` from the start of the run, `method`, `url` (`sanitize_endpoint`: no query,
+  fragment or credentials, id-shaped segments `:id`), `resource_type`, `navigation`,
+  `redirected_from`, `step_id`, `status`, `from_service_worker`, `failure`, `duration_ms` and
+  `ttfb_ms` (Playwright `request.timing`), and `sizes` (`request.sizes()`: request/response
+  body and header bytes). No body, header, cookie, query value or HAR is read. Always on.
+  Rows are a rolling window of the newest `MAX_ROWS` (500); older rows are dropped and
+  counted (`rows_dropped`, `truncated`), while the summary — `requests`, `failed`,
+  `response_bytes`, `by_type`, `by_status`, the ten slowest, the ten most repeated
+  endpoints — is folded over every request of the run. All four lifecycle listeners sit on
+  the browser context, so a popup's requests are recorded and closed too. A URL is capped at
+  500 characters, and a URL inside a failure text is sanitized the same way. Delivered at
+  the end of the run (and on a player crash) as `network` events of at most 50 rows and
+  48 KB, and one `network_summary`, inside the supervisor's 64 KB line limit; `report.json` carries them as `network: {rows,
+  summary}`. HTTP-cache hits and initiators are not observable through Playwright;
 - a step uses one `selector` or `selector_candidates` (1–5, strongest first: role, label,
   e2e, text, css), each with a `selector_provenance` (`source`, `existing_test`,
   `runtime_probe`, `heuristic` or `proven`; optionally `ref`, a `path[:line]`), optionally
@@ -671,7 +687,10 @@ retired` on a run. `promotable_claims()` turns anchored entries proven in
 
 Metrics: every run (not a draft) appends one `kind: e2e_run` row to
 `.workflow/data/quality.jsonl` — raw counts, the stage prompt ids, a scenario hash, `run_kind`
-(`fake`, `smoke`, `project`) and an optional `WORKFLOW_E2E_LABEL`. `main.py --command
+(`fake`, `smoke`, `project`), an optional `WORKFLOW_E2E_LABEL`, the base_url `origin`, and
+the network summary as `network`. `meta.e2e.page_requests` carries the same summary plus
+`since_last_run`: the change in requests, failures, response bytes and per-type counts and
+bytes against the last run of the same kind on the same origin (None for the first). `main.py --command
 report` derives `e2e` from those rows, split by run kind: verdict, incomplete-by-reason
 and origin rates, browser runs per claim, probes, screenshots kept against screenshots
 sent to a model, tokens per run (joined through `usage.jsonl`), reproducibility across

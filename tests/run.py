@@ -54,6 +54,7 @@ from tests.checks.e2e_doctor import _test_e2e_doctor_readiness  # noqa: E402
 from tests.checks.e2e_existing_tests import _test_e2e_existing_tests  # noqa: E402
 from tests.checks.e2e_metrics import _test_e2e_metrics  # noqa: E402
 from tests.checks.e2e_normalize import _test_e2e_classification_and_verdicts  # noqa: E402
+from tests.checks.e2e_network import _test_e2e_network  # noqa: E402
 from tests.checks.e2e_redact import _test_e2e_redaction_variants  # noqa: E402
 from tests.checks.e2e_smoke import _test_e2e_real_browser_smoke  # noqa: E402
 from tests.checks.e2e_routing import _test_e2e_routing  # noqa: E402
@@ -154,6 +155,7 @@ SUITES: dict[str, tuple] = {
     "verify-empty-section": (_test_empty_section_is_not_a_finding, "an empty section holds nothing, not the next heading"),
     "e2e-spec": (_test_e2e_spec_contract, "[E2E SPEC] parses, validates, and knows when only the section is missing"),
     "e2e-normalize": (_test_e2e_classification_and_verdicts, "app/harness/unknown origins and the fail-closed verdict matrix"),
+    "e2e-network": (_test_e2e_network, "request metadata: rolling window, whole-run totals, no query values, cross-run difference"),
     "e2e-supervisor": (_test_e2e_supervisor, "the player child process: protocol, idle/total timeouts, tree kill"),
     "e2e-routing": (_test_e2e_routing, "verify-browser: draft then confirmed run under one lock, request and secrets.json profiles only, /.verify back to delegated|syntax"),
     "e2e-browser": (_test_e2e_browser_session, "the real player's step semantics, origin guard, and observers against a stand-in page"),

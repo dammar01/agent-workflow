@@ -354,6 +354,17 @@ def _test_e2e_real_browser_smoke() -> None:
         assert_true(report["browser_verdict"] == "pass", f"pass: {report['reason']} {report['failures']}")
         assert_true(result["meta"]["verdict"] == "pass" and _verify_exit_code("verify", result) == 0, f"browser pass + clean review: pass, exit 0: {result['meta']['verdict']}")
         assert_true("trace.zip" not in files and not any(name.endswith(".png") for name in files), f"a pass keeps no screenshot or trace: {sorted(files)}")
+        # Request metadata from a real Chromium (DEC-014): the page's loads were seen, with
+        # sizes and timing, and no URL carries a query.
+        network = report.get("network") or {}
+        summary = network.get("summary") or {}
+        rows = network.get("rows") or []
+        assert_true(
+            summary.get("requests", 0) > 0 and rows and any(row.get("navigation") for row in rows)
+            and any(isinstance(row.get("sizes"), dict) for row in rows)
+            and all("?" not in str(row.get("url")) for row in rows),
+            f"a real run records the page's requests with sizes and sanitized URLs: {summary}",
+        )
         assert_true(_leaks(result, directory) == [], f"no raw or encoded credential anywhere: {_leaks(result, directory)}")
 
         # --- the same flow failing: HTML kept and scrubbed, screenshot and trace withheld ---------

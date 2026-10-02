@@ -215,6 +215,7 @@ def build_report(events: list[dict], scenario: dict | None, *, run_meta: dict | 
       observations: [{kind, url, status, detail, same_origin, main_request}]
       harness: [{reason, detail}]
       requests: [the request ledger records, in order]
+      network: {"rows": [request metadata, newest MAX_ROWS], "summary": {...}} | None
       trail: [{step_id, action, status, selection, ready, requests, error}] — step to
              selector to readiness to action to request to result, one row per step
       cleanup: {"status": not_planned|not_needed|passed|failed|not_run, "groups": [...],
@@ -239,6 +240,8 @@ def build_report(events: list[dict], scenario: dict | None, *, run_meta: dict | 
     artifacts: list[dict] = []
     probes: list[dict] = []
     requests: list[dict] = []
+    network_rows: list[dict] = []
+    network_summary: dict | None = None
     trail: list[dict] = []
     cleanup_events: dict[str, dict] = {}
     finished = False
@@ -247,6 +250,12 @@ def build_report(events: list[dict], scenario: dict | None, *, run_meta: dict | 
         kind = event.get("type")
         if kind == "request":
             requests.append({key: event.get(key) for key in _REQUEST_FIELDS})
+            continue
+        if kind == "network":
+            network_rows.extend(row for row in event.get("rows") or [] if isinstance(row, dict))
+            continue
+        if kind == "network_summary":
+            network_summary = {key: value for key, value in event.items() if key != "type"}
             continue
         if kind == "cleanup":
             cleanup_events[str(event.get("step_id"))] = {key: event.get(key) for key in _CLEANUP_FIELDS}
@@ -419,6 +428,8 @@ def build_report(events: list[dict], scenario: dict | None, *, run_meta: dict | 
         "probes": probes,
         "finished": finished,
         "requests": requests,
+        # Request metadata for page optimization (DEC-014); None when the player sent none.
+        "network": {"rows": network_rows, "summary": network_summary} if network_summary is not None else None,
         "trail": trail,
         "cleanup": cleanup_report(scenario, cleanup_events, requests, {str(row["step_id"]): row["status"] for row in trail}),
     }

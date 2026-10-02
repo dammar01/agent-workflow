@@ -1560,6 +1560,7 @@ def _test_e2e_browser_session() -> None:
 
         # --- trace policy through run_scenario, with a stand-in Playwright module -------------------
         tracing_calls: list[tuple] = []
+        context_events: list[str] = []
 
         class _Tracing:
             def start(self, **kwargs):
@@ -1586,7 +1587,7 @@ def _test_e2e_browser_session() -> None:
                 pass
 
             def on(self, event, handler):
-                pass
+                context_events.append(event)
 
             def close(self):
                 tracing_calls.append(("close_context", None))
@@ -1643,6 +1644,12 @@ def _test_e2e_browser_session() -> None:
                 launch_calls[-1] == {"headless": False, "slow_mo": expected, "args": []},
                 f"slow_mo_ms={given!r} launches with {launch_calls[-1]}",
             )
+        # Request metadata listens on the context, not the page: a popup's requests start on
+        # the context and must also finish there, or they read as unfinished (DEC-014).
+        assert_true(
+            {"request", "response", "requestfinished", "requestfailed"} <= set(context_events),
+            f"every network lifecycle event is registered on the context: {sorted(set(context_events))}",
+        )
         # headed is the shipped default; a config that asks for headless still gets it
         real_run([{"action": "goto", "url": "/login"}], secrets=False, headless=True)
         assert_true(launch_calls[-1]["headless"] is True, f"headless: true reaches the launch: {launch_calls[-1]}")

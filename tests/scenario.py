@@ -71,6 +71,7 @@ from tests.checks.e2e_doctor import _test_e2e_doctor_readiness
 from tests.checks.e2e_existing_tests import _test_e2e_existing_tests
 from tests.checks.e2e_metrics import _test_e2e_metrics
 from tests.checks.e2e_normalize import _test_e2e_classification_and_verdicts
+from tests.checks.e2e_network import _test_e2e_network
 from tests.checks.e2e_redact import _test_e2e_redaction_variants
 from tests.checks.e2e_smoke import _test_e2e_real_browser_smoke
 from tests.checks.e2e_routing import _test_e2e_routing
@@ -1155,6 +1156,7 @@ confidence: high — all requested checks ran
         _test_cli_script_reaches_its_exit_code()
         _test_e2e_spec_contract()
         _test_e2e_classification_and_verdicts()
+        _test_e2e_network()
         _test_e2e_supervisor()
         _test_e2e_routing()
         _test_e2e_browser_session()

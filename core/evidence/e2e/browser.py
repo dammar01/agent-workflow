@@ -23,6 +23,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urljoin, urlsplit
 
 from core.evidence.e2e.preflight import is_local_dev_host, same_origin
+from core.evidence.e2e.network import NetworkLedger
 from core.evidence.e2e.redact import sanitize_endpoint
 from core.evidence.e2e.request import blocked_request_target, destructive_request_target, read_only_request_target
 from core.evidence.e2e.spec import DESTRUCTIVE_METHODS, SAFE_METHODS, SELECTOR_RANK, WRITE_METHODS, carries_method_override, e2e_css, navigation_error, request_path_matches, resolve_upload, selector_rank, step_selectors
@@ -374,6 +375,10 @@ class Session:
         self.last_step_id: str | None = None
         self._request_seq = 0
         self._open_requests: dict[int, tuple[dict, float, object]] = {}
+        # Every request's metadata, reads included, for page optimization (DEC-014). Apart
+        # from the ledger above, whose meaning is "writes a step made".
+        self.network = NetworkLedger(clock)
+        self._network_flushed = False
         self.run_started = clock()
         self._last_emit = clock()
 
@@ -919,6 +924,10 @@ class Session:
         to have blocked anything: the step that caused it fails, saying the redirect was
         followed.
         """
+        try:
+            self.network.start(request, self.current_step_id)
+        except Exception:  # metadata is never a reason for the run to fail
+            pass
         if getattr(request, "redirected_from", None) is None:
             return
         url = str(request.url)
@@ -992,6 +1001,37 @@ class Session:
     def on_request_failed(self, request) -> None:
         failure = getattr(request, "failure", None)
         self._ledger_close(request, str(failure) if failure else "request failed")
+
+    # ---- request metadata (DEC-014) ----------------------------------------------------
+    # Registered on the context, like `request`: a popup's requests start there, and a
+    # page-only response/finished/failed listener would leave them open to the end of the run.
+    def on_network_response(self, response) -> None:
+        try:
+            self.network.response(response)
+        except Exception:  # metadata is never a reason for the run to fail
+            pass
+
+    def on_network_finished(self, request) -> None:
+        try:
+            self.network.finish(request, None)
+        except Exception:
+            pass
+
+    def on_network_failed(self, request) -> None:
+        failure = getattr(request, "failure", None)
+        try:
+            self.network.finish(request, str(failure) if failure else "request failed")
+        except Exception:
+            pass
+
+    def flush_network(self) -> None:
+        """The run's request metadata, once, whether the run ended or crashed."""
+        if self._network_flushed:
+            return
+        self._network_flushed = True
+        self.network.finish_open(_LEDGER_UNFINISHED)
+        for event in self.network.events():
+            self.emit(event)
 
     def flush_requests(self) -> None:
         """Writes still waiting when the run ends are reported as such, not dropped."""
@@ -1433,6 +1473,7 @@ class Session:
         self.report_destructive_requests()
         self.report_uninspectable_writes()
         self.flush_requests()
+        self.flush_network()
 
     def run_cleanup(self, cleanup: list[dict], statuses: dict[str, str]) -> None:
         """Cleanup steps, one `cleanup` event each, reported apart from the test.
@@ -1660,6 +1701,9 @@ def run_scenario(scenario: dict, config: dict, artifacts_dir: str, emit, *, has_
                 session.page = context.new_page()
                 context.route("**/*", session.guard)
                 context.on("request", session.on_request)
+                context.on("response", session.on_network_response)
+                context.on("requestfinished", session.on_network_finished)
+                context.on("requestfailed", session.on_network_failed)
                 session.page.on("framenavigated", session.on_frame_navigated)
                 session.page.on("console", session.on_console)
                 session.page.on("pageerror", session.on_page_error)
@@ -1681,6 +1725,10 @@ def run_scenario(scenario: dict, config: dict, artifacts_dir: str, emit, *, has_
                         pass
                     try:
                         session.flush_requests()
+                    except Exception:
+                        pass
+                    try:
+                        session.flush_network()
                     except Exception:
                         pass
                 _finish_trace(context, session, tracing, crashed, artifacts_dir, has_secrets, emit)

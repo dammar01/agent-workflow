@@ -185,6 +185,13 @@ def _record_run(
     exercised nothing.
     """
     report = report or {}
+    origin = e2e_knowledge.origin_of(str((e2e_meta.get("config") or {}).get("base_url") or "")) or None
+    run_kind = _run_kind(e2e_meta.get("fake"))
+    network = _network_compact((report.get("network") or {}).get("summary"))
+    if network is not None:
+        # Read before this run's row is written, so "last run" is the one before it.
+        # Not `network`: preflight already reports the write hosts and resolver pins there.
+        e2e_meta["page_requests"] = {**network, "since_last_run": _network_diff(project_root, origin, run_kind, network)}
     claims = report.get("claims") or {}
     failures = report.get("failures") or []
     artifacts = report.get("artifacts") or []
@@ -199,7 +206,10 @@ def _record_run(
             "recorded_at": now_iso(),
             "session_id": session_id,
             "correlation_id": correlation_id_for(project_root, session_id, task),
-            "run_kind": _run_kind(e2e_meta.get("fake")),
+            "run_kind": run_kind,
+            "origin": origin,
+            # Request metadata totals (DEC-014), over every request of the run.
+            "network": network,
             "label": os.environ.get(LABEL_ENV) or None,
             "verdict": verdict,
             "browser_verdict": e2e_meta.get("browser_verdict"),
@@ -246,6 +256,55 @@ def _record_run(
             "duration_seconds": round(time.monotonic() - started, 3),
         },
     )
+
+
+def _network_compact(summary: dict | None) -> dict | None:
+    """The run-level totals of the network summary, the part worth a quality row."""
+    if not isinstance(summary, dict):
+        return None
+    return {
+        key: summary.get(key)
+        for key in ("requests", "failed", "response_bytes", "by_type", "by_status", "rows_dropped", "truncated", "slowest", "repeated")
+    }
+
+
+def _network_diff(project_root: Path, origin: str | None, run_kind: str, current: dict) -> dict | None:
+    """What changed since the last run of the same kind against the same origin, or None."""
+    from core.audit.telemetry import load_quality
+
+    if not origin:
+        return None
+    previous = None
+    for row in load_quality(project_root):
+        if (
+            row.get("kind") == "e2e_run"
+            and row.get("origin") == origin
+            and row.get("run_kind") == run_kind
+            and isinstance(row.get("network"), dict)
+        ):
+            previous = row
+    if previous is None:
+        return None
+    before = previous["network"]
+    current_types = current.get("by_type") or {}
+    before_types = before.get("by_type") or {}
+
+    def _delta(key: str) -> int:
+        return int(current.get(key) or 0) - int(before.get(key) or 0)
+
+    def _type_delta(kind: str, field: str) -> int:
+        return int((current_types.get(kind) or {}).get(field) or 0) - int((before_types.get(kind) or {}).get(field) or 0)
+
+    return {
+        "previous_run_at": previous.get("recorded_at"),
+        "requests": _delta("requests"),
+        "failed": _delta("failed"),
+        "response_bytes": _delta("response_bytes"),
+        "by_type": {
+            kind: {"count": _type_delta(kind, "count"), "bytes": _type_delta(kind, "bytes")}
+            for kind in sorted({*current_types, *before_types})
+        },
+    }
 
 
 # Heaviest and least readable first. The runner's own files — spec, events, report,
