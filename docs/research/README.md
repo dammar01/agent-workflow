@@ -108,8 +108,9 @@ Every record is YAML. Each directory holds a `_TEMPLATE.yaml`: copy it, name the
 fields, their enums, and the rules the check enforces are in [schema.yaml](schema.yaml) and
 [CONTRACT.md](CONTRACT.md) §16. `H` and `EXP` records are external to the code and carry no
 commit; an implemented `DEC` names the commit(s) that implement it. A record at schema
-version 2 names the research question(s) it serves under `questions`, and the `RQ` lists it
-back (DEC-017); records tracked at version 1 are frozen without it.
+version 2 or later names the research question(s) it serves under `questions`, and the `RQ`
+lists it back (DEC-017); records tracked at version 1 are frozen without it, and records
+tracked at version 2 are frozen at that version (DEC-019).
 
 [questions.md](questions.md) is the index of the `RQ` records, generated like the inventory
 below, and [logs/](logs/) holds fixed summaries of research periods that link to the records

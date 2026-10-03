@@ -78,6 +78,18 @@ validation:
       job_id: "job_20260928_035021_734713"
       description: "Delegated draft then run through `.workflow/run`; Login + dashboard on the maintainer's private web project: 7/7 steps passed, browser verdict pass; the run verdict was incomplete only because mobile rendering was listed under not_verified."
       clean: true
+  uses: 67
+  consistent: true
+  maintainer_decision: |
+    2026-10-03, critical interview: kept validated. What this decision fixes is the delegated
+    flow, and every run in the window went through it. The derived run verdict reached pass in
+    none of them (incomplete or fail); that belongs to the verification verdict, not to the
+    flow, and is not claimed here. The run above is `clean: true` on the browser verdict, the
+    "equivalent success outcome" of CONTRACT.md §14, not on the derived run verdict; under
+    schema version 3 the measurement below is what this validation rests on.
+  measurements:
+    - source: "quality.jsonl (kind e2e_run) of the maintainer's private web project, rows recorded 2026-09-28..2026-10-02, counted by the primary agent on 2026-10-03"
+      value: "67 delegated runs; 55 reached the browser; browser verdict pass 14, incomplete 31, fail 10; derived run verdict pass 0"
 
 trade_offs:
   better:

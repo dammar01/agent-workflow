@@ -1,8 +1,8 @@
-schema_version: 2
+schema_version: 3
 id: RQ-08
 question: "Can an adaptive harness improve future coding-agent behavior without changing model weights?"
 date: 2026-09-29
-status: proposed
+status: unanswered
 what_exists: |
   Stateful orchestration and memory (facts) exist; experience does not.
 records: []

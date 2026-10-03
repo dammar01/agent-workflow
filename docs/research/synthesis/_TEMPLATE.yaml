@@ -1,5 +1,5 @@
 # SYN — copy to SYN-NNN-<kebab-slug>.yaml. Tracked here only once final.
-schema_version: 2
+schema_version: 3
 id: SYN-NNN
 title: <one line>
 date: YYYY-MM-DD

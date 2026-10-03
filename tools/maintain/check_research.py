@@ -59,6 +59,12 @@ FROZEN_V1 = frozenset({
     "DEC-001", "DEC-004", "DEC-005", "DEC-006", "DEC-007",
     "DEC-008", "DEC-009", "DEC-010", "DEC-011",
 })
+# The records tracked at version 2 when version 3 arrived (DEC-019) — closed the same way.
+# RQ records are not on it: they moved to version 3 with the binary status.
+FROZEN_V2 = frozenset({
+    "CASE-006", "CASE-007", "CASE-008", "CASE-009", "CASE-010",
+    "DEC-012", "DEC-013", "DEC-014", "DEC-015", "DEC-016", "DEC-017", "DEC-018",
+})
 # Types that must name the research question(s) they serve from version 2 on.
 QUESTIONED = ("DEC", "H", "EXP", "CASE", "SYN")
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -219,12 +225,17 @@ def check_record(path: Path, schema: dict, report: Report, *, tracked: bool) -> 
     current = schema["schema_version"]
     if tracked and version == LEGACY_VERSION and match["id"] in FROZEN_V1:
         pass  # frozen before DEC-017 (CONTRACT.md §15); it keeps the format it was tracked in
+    elif tracked and version == 2 and match["id"] in FROZEN_V2:
+        pass  # frozen before DEC-019, the same way
     elif version != current:
         report.error(rel, f"schema_version must be {current}")
-    if prefix in QUESTIONED and version == current and not record.get("questions"):
+    if prefix in QUESTIONED and isinstance(version, int) and version >= 2 and not record.get("questions"):
         report.error(rel, "questions: name the research question(s) this record serves (RQ-NN, CONTRACT.md §16)")
-    if prefix == "RQ" and record.get("status") == "answered" and not record.get("records"):
-        report.error(rel, "an answered question lists at least one tracked record under records")
+    if prefix == "RQ" and record.get("status") == "answered":
+        if not record.get("records"):
+            report.error(rel, "an answered question lists at least one tracked record under records")
+        if not record.get("decision"):
+            report.error(rel, "an answered question carries the maintainer's decision (decision: date, method, summary)")
 
     # H and EXP are external to the code: no commit anywhere in them.
     if prefix in ("H", "EXP"):
@@ -247,7 +258,10 @@ def check_record(path: Path, schema: dict, report: Report, *, tracked: bool) -> 
     if validation in _EVALUATED:
         if prefix == "DEC":
             runs = _get(record, "validation.runs") or []
-            if not any(isinstance(run, dict) and run.get("clean") is True for run in runs):
+            clean = any(isinstance(run, dict) and run.get("clean") is True for run in runs)
+            if validation == "validated":
+                _check_validated_decision(record, clean, rel, report)
+            elif not clean:
                 report.error(rel, f"a DEC is {validation} only on a named clean direct-use run (validation.runs, clean: true)")
         elif prefix == "EXP":
             if record.get("status") != "completed" or not record.get("results"):
@@ -265,6 +279,22 @@ def check_record(path: Path, schema: dict, report: Report, *, tracked: bool) -> 
                     "otherwise it belongs in docs/research-drafts/ (CONTRACT.md §15)",
                 )
     return {"id": match["id"], "path": path, "record": record, "found": found, "rel": rel}
+
+
+def _check_validated_decision(record: dict, clean: bool, rel: str, report: Report) -> None:
+    """A validated DEC (DEC-019): repeated use, consistent, decided by the maintainer, and
+    measured — a clean run or a named telemetry measurement. Use alone is the creator's
+    word; the measurement is what it cannot supply by itself."""
+    validation = record.get("validation") or {}
+    uses = validation.get("uses")
+    if not isinstance(uses, int) or isinstance(uses, bool) or uses < 2:
+        report.error(rel, "a validated DEC was used repeatedly: validation.uses >= 2")
+    if validation.get("consistent") is not True:
+        report.error(rel, "a validated DEC behaved the same each time: validation.consistent: true")
+    if not validation.get("maintainer_decision"):
+        report.error(rel, "a validated DEC names the maintainer's decision: validation.maintainer_decision")
+    if not clean and not validation.get("measurements"):
+        report.error(rel, "a validated DEC is measured: a clean run (validation.runs, clean: true) or validation.measurements")
 
 
 class _Scoped:
@@ -320,10 +350,13 @@ def _check_question_links(records: dict[str, dict], tracked: dict[str, dict], re
     clean clone — so a tracked RQ never depends on a draft. A version-2 record lists its RQs
     under `questions`; a listed record names the RQ back, and a tracked record's RQ lists it.
     Version-1 records are frozen without `questions` and are linked from the RQ side only.
+    An answered RQ needs one of its records to be validated: a question is not answered by a
+    record that has not been shown to work (DEC-019).
     """
     for record_id, entry in records.items():
         record = entry["record"]
         if record_id.startswith("RQ-"):
+            validated = False
             for index, listed in enumerate(record.get("records") or []):
                 target = tracked.get(str(listed))
                 if target is None:
@@ -332,6 +365,10 @@ def _check_question_links(records: dict[str, dict], tracked: dict[str, dict], re
                 named = target["record"].get("questions") or []
                 if target["record"].get("schema_version") != LEGACY_VERSION and record_id not in named:
                     report.error(entry["rel"], f"records lists {listed}, whose questions do not name {record_id}")
+                if (target["record"].get("disposition") or {}).get("validation_status") == "validated":
+                    validated = True
+            if record.get("status") == "answered" and record.get("records") and not validated:
+                report.error(entry["rel"], "an answered question lists at least one validated record (DEC-019)")
         else:
             for question in record.get("questions") or []:
                 target = records.get(str(question))

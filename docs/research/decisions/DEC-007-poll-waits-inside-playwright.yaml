@@ -83,6 +83,15 @@ validation:
       job_id: "job_20260928_035021_734713"
       description: "Guarded POST /api/v1/auth/login (864 ms, 200) then expect_url /home passed; Login + dashboard on the maintainer's private web project: 7/7 steps passed, browser verdict pass; the run verdict was incomplete only because mobile rendering was listed under not_verified."
       clean: true
+  uses: 55
+  consistent: true
+  maintainer_decision: |
+    2026-10-03, critical interview: kept validated. Step timing stayed plausible over every run
+    that reached the browser. Two runs ended `stuck` with no recorded cause; they are an open
+    limit of this record, not evidence against it.
+  measurements:
+    - source: "quality.jsonl (kind e2e_run) of the maintainer's private web project, rows recorded 2026-09-28..2026-10-02, counted by the primary agent on 2026-10-03"
+      value: "55 runs reached the browser; run duration median 40.6 s, max 174.9 s; 2 ended stuck"
 
 trade_offs:
   better:

@@ -651,18 +651,21 @@ class Executor:
                     "project_root": str(project_root),
                 },
             )
-            # One task event per command (DEC-015), carrying the verdict the reply declared.
-            # A declared DONE with blocking findings still counts as NEEDS FIX; a DONE the
-            # runtime only marks `incomplete` for its not_verified gaps stays DONE.
-            task_verdict = None
+            # One task event per command (DEC-015), carrying the verdict the reply declared
+            # and the one the runtime derived from it. Only a derived `pass` closes a task
+            # (DEC-020): a DONE the runtime marks `incomplete`, for not_verified gaps too,
+            # leaves it open. A declared DONE with blocking findings counts as NEEDS FIX.
+            task_verdict = derived_verdict = None
             if command == "verify" and result.get("ok"):
                 assessment = validate_verification_contract(result.get("content") or "")
-                task_verdict = "NEEDS FIX" if assessment["verdict"] == "fail" else assessment["declared_verdict"]
+                derived_verdict = assessment["verdict"]
+                task_verdict = "NEEDS FIX" if derived_verdict == "fail" else assessment["declared_verdict"]
             task_telemetry.record_skill(
                 project_root,
                 session_id,
                 command,
                 verdict=task_verdict,
+                derived=derived_verdict,
                 next_action=(result.get("digest") or {}).get("recommended_next_action")
                 if isinstance(result.get("digest"), dict) else None,
                 prompt_id=payload["prompt_id"],

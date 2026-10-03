@@ -1,8 +1,8 @@
-schema_version: 2
+schema_version: 3
 id: RQ-10
 question: "How should responsibility be allocated across the human, the agents, and the runtime?"
 date: 2026-09-29
-status: partial
+status: unanswered
 what_exists: |
   An allocation exists (explore, decompose, decide, execute, verify, remember) but has not
   been evaluated.

@@ -1,8 +1,8 @@
-schema_version: 2
+schema_version: 3
 id: RQ-05
 question: "Can delegated latency become parallel human work instead of blocking time?"
 date: 2026-09-29
-status: partial
+status: unanswered
 what_exists: |
   Runtime jobs are asynchronous and the runner starts as a background task; the primary agent
   still waits for the digest before reasoning.

@@ -1,8 +1,8 @@
-schema_version: 2
+schema_version: 3
 id: RQ-03
 question: "How much of the perceived benefit comes from the workflow versus the prompt abstraction?"
 date: 2026-09-29
-status: proposed
+status: unanswered
 what_exists: |
   Benchmark has no prompt-strategy factor.
 records: []

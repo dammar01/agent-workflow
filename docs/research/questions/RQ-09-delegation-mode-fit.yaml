@@ -1,8 +1,8 @@
-schema_version: 2
+schema_version: 3
 id: RQ-09
 question: "Which delegation mode fits a task: direct, assisted, or autonomous?"
 date: 2026-09-29
-status: proposed
+status: unanswered
 what_exists: |
   Direct and assisted exist; `/.execute` always requires explicit approval, so autonomous does
   not.

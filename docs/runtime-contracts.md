@@ -869,7 +869,8 @@ leads. The lookup never waits on that lock.
 The executor appends one `source: runtime` event per delegated command from `_record_usage`,
 after the usage and audit rows and inside the same fail-open block: `skill` (the command),
 `verdict` (verify only: the reply's declared verdict, `NEEDS FIX` when the contract finds a
-blocking finding), `next_action`, `prompt_id`. A finalised browser run is `verify`, its draft
+blocking finding), `derived` (verify only: the runtime's derived verdict, `pass`,
+`incomplete` or `fail`; DEC-020), `next_action`, `prompt_id`. A finalised browser run is `verify`, its draft
 `verify-browser`. The `task-events` PostToolUse hook appends `source: hook` events for what
 never reaches the runtime: `skill` for a local workflow skill loaded by `Read` of
 `~/.claude/skills/<name>.md` or by the `Skill` tool (delegated skills are skipped, the runtime
@@ -883,11 +884,14 @@ records nothing. The hook resolves MAIN_SESSION_ID through
 every path.
 
 Nothing is derived at write time. `derive_tasks` walks the events in order per session: the
-first event opens a task; an `edit` clears a DONE seen before it; a commit whose `paths`
-include a file the task edited closes it, as `completed` after a DONE or
-`unverified_closed` otherwise; a commit hash is counted once; a commit no open task claims
-is `unclaimed_commits`. A task still open at the end is `ready_to_commit`, `open`, or
-`read_only` (no edits); events without a session are `unknown`.
+first event opens a task; an `edit` clears a verdict seen before it; a verify whose
+`derived` is `pass`, on a task that edited something, closes it as `completed` (DEC-020).
+A commit closes nothing: one whose `paths` include a file the open task edited joins that
+task's sequence, otherwise one that includes a file of the task the session last completed
+joins that one; a commit hash is counted once; a commit neither claims is
+`unclaimed_commits`. A task still open at the end is `open`, or `read_only` (no edits);
+events without a session are `unknown`. Events written before DEC-020 carry no `derived`,
+so their tasks stay `open`.
 
 ## Workspace layout
 

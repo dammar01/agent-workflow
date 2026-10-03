@@ -18,10 +18,15 @@
 # Unknown keys are refused at every level, so a typo is an error, not a silent new field.
 #
 # Version 2 (DEC-017) added the RQ type and the `questions` field. A DEC, H, EXP, CASE or SYN
-# at version 2 must name the research question(s) it serves; records tracked at version 1
-# are frozen (CONTRACT.md §15) and stay valid without it. RQ records and drafts are version 2.
+# from version 2 on must name the research question(s) it serves; records tracked at
+# version 1 are frozen (CONTRACT.md §15) and stay valid without it.
+#
+# Version 3 (DEC-019) made a research question's status binary (answered | unanswered), gave
+# an answered question a `decision` block, and gave a DEC's `validation` the four predicates a
+# `validated` decision now needs (uses, consistent, maintainer_decision, a measurement).
+# Records tracked at version 2 are frozen like version 1; RQ records and drafts are version 3.
 
-schema_version: 2
+schema_version: 3
 
 enums:
   provenance_type: [direct, adapted, synthesized, observed, unknown]
@@ -37,7 +42,8 @@ enums:
   case_environment: [private_production, maintainer_development, team_development, public_repository, synthetic]
   visibility: [public, sanitized]
   syn_status: [draft, final]
-  rq_status: [proposed, partial, answered]
+  rq_status: [answered, unanswered]
+  rq_decision_method: [critical_interview]
   arc_status: [implemented, validated, partially_validated, deprecated, unknown]
   arc_follow_up: [become_decision, become_hypothesis, archival]
   lit_relationship: [direct, adapted, supports, challenges, conceptually_related, future_direction, unknown]
@@ -110,6 +116,18 @@ types:
                 job_id: {type: str}
                 description: {type: text}
                 clean: {type: bool}
+          # The predicates of a `validated` decision (CONTRACT.md §14); optional otherwise.
+          uses: {type: int, required: false}
+          consistent: {type: bool, required: false}
+          maintainer_decision: {type: text, required: false}
+          measurements:
+            type: list
+            required: false
+            items:
+              type: map
+              fields:
+                source: {type: text}
+                value: {type: str}
       trade_offs:
         type: map
         fields:
@@ -328,6 +346,15 @@ types:
       what_exists: {type: text}
       # Tracked records only; drafts are named in `notes` as plain text (CONTRACT.md §15).
       records: {type: list, items: {type: id, ids: [DEC, H, EXP, CASE, SYN, ARC, LIT]}}
+      # Required by the validator when the question is answered; a sanitized summary of the
+      # maintainer's decision, never a transcript (CONTRACT.md §4–§5).
+      decision:
+        type: map
+        required: false
+        fields:
+          date: {type: date}
+          method: {type: enum, enum: rq_decision_method}
+          summary: {type: text}
       notes: {type: text, required: false}
 
 # Rules the field specs cannot express, enforced by the validator (CONTRACT.md §14–§16):
@@ -337,13 +364,19 @@ types:
 #     one commit; `uncommitted` is a warning, and an error under --strict.
 #   - validation_status other than not_validated/observed needs validated_by and validated_on.
 #   - validated / partially_validated / rejected needs an evaluation: an EXP reference for
-#     H, SYN, ARC and LIT; for a DEC, at least one validation run with clean: true.
+#     H, SYN, ARC and LIT; for a partially_validated or rejected DEC, at least one validation
+#     run with clean: true.
+#   - a validated DEC has validation.uses >= 2, validation.consistent: true, a
+#     validation.maintainer_decision, and a measurement: a clean run or a
+#     validation.measurements entry.
 #   - a tracked record meets its type's tracked_when; anything else belongs in
 #     docs/research-drafts/.
 #   - every referenced ID resolves to a tracked record, or to a draft when
 #     docs/research-drafts/ exists; otherwise it is reported.
-#   - schema_version is 2; a tracked DEC/H/EXP/CASE/SYN/ARC/LIT may stay at 1 (frozen).
-#   - a version-2 DEC/H/EXP/CASE/SYN names at least one RQ in `questions`.
-#   - an RQ's `records` are tracked records; an `answered` RQ lists at least one; a listed
-#     version-2 record names the RQ back, and a tracked version-2 record's RQ lists it.
+#   - schema_version is 3; a tracked DEC/H/EXP/CASE/SYN/ARC/LIT may stay at 1 or 2 when it
+#     is on the frozen list of that version.
+#   - a version-2-or-later DEC/H/EXP/CASE/SYN names at least one RQ in `questions`.
+#   - an RQ's `records` are tracked records; an `answered` RQ lists at least one validated
+#     record and carries a `decision`; a listed version-2-or-later record names the RQ back,
+#     and a tracked version-2-or-later record's RQ lists it.
 #   - docs/research/questions.md is generated from the RQ records (--write-inventory).

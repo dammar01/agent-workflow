@@ -1,8 +1,8 @@
-schema_version: 2
+schema_version: 3
 id: RQ-06
 question: "Does persistent repository knowledge reduce repeated exploration and change later behavior?"
 date: 2026-09-29
-status: partial
+status: unanswered
 what_exists: |
   Fact store (recurrence and durable facts), anchored evidence reuse, graph leads, promoted
   knowledge; facts and promoted knowledge are injected into exploration and reasoning prompts,

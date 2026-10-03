@@ -109,6 +109,17 @@ validation:
       job_id: "job_20260928_031907_120639"
       description: "Grounded selector matching two elements ended `incomplete: scenario_error`; the standing app streak (1) was neither counted nor cleared; diagnosis scenario_selector_ambiguous / fix_scenario; a failure_hint was written, and the next draft (job_20260928_031939_034230) chose a unique selector; the following run passed."
       clean: true
+  uses: 41
+  consistent: true
+  maintainer_decision: |
+    2026-10-03, critical interview: kept validated. Every non-pass run carried a structured
+    diagnosis, and scenario errors stayed out of the repeat brake. The classifier could not
+    tell app from scenario for 19 of 39 failing steps, which end as `unknown_origin` with the
+    `investigate` diagnosis; that coverage is outside what this decision claims and is a
+    candidate for a decision of its own.
+  measurements:
+    - source: "quality.jsonl (kind e2e_run) of the maintainer's private web project, rows recorded 2026-09-28..2026-10-02, counted by the primary agent on 2026-10-03"
+      value: "41 non-pass runs reached the browser; failing steps by origin app 10, scenario 10, unknown 19; repeat_failure once"
 
 trade_offs:
   better:

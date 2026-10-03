@@ -1,8 +1,8 @@
-schema_version: 2
+schema_version: 3
 id: RQ-04
 question: "Can task complexity predict when workflow activation is worthwhile?"
 date: 2026-09-29
-status: proposed
+status: unanswered
 what_exists: |
   `scope_width` and fan-out computed per call but only in transient result metadata, not
   persisted; no routing on them.

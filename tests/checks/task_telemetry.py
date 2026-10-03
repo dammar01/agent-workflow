@@ -1,4 +1,5 @@
-"""Tasks are sequences of skill calls, closed by a commit that includes their edits (DEC-015)."""
+"""Tasks are sequences of skill calls, closed by a verify the runtime derives as pass (DEC-015,
+DEC-020); a commit joins the task it belongs to and closes nothing."""
 
 import json
 import os
@@ -16,8 +17,8 @@ from tests.checks.support import assert_true
 HOOKS = Path(__file__).resolve().parents[2] / "dist" / "config" / "claude" / "hooks"
 
 
-def _skill(sid, skill, verdict=None):
-    return {"kind": "skill", "session_id": sid, "skill": skill, "verdict": verdict, "at": "t"}
+def _skill(sid, skill, verdict=None, derived=None):
+    return {"kind": "skill", "session_id": sid, "skill": skill, "verdict": verdict, "derived": derived, "at": "t"}
 
 
 def _edit(sid, path):
@@ -29,43 +30,60 @@ def _commit(sid, commit, *paths):
 
 
 def _check_states() -> None:
+    passed = _skill("s", "verify", "DONE", "pass")
     cases = {
-        "completed": [_skill("s", "plan"), _edit("s", "a.py"), _skill("s", "verify", "DONE"), _commit("s", "c1", "a.py")],
-        "unverified_closed": [_edit("s", "a.py"), _commit("s", "c1", "a.py")],
-        "after NEEDS FIX": [_edit("s", "a.py"), _skill("s", "verify", "NEEDS FIX"), _commit("s", "c1", "a.py")],
-        "after INCOMPLETE": [_edit("s", "a.py"), _skill("s", "verify", "INCOMPLETE"), _commit("s", "c1", "a.py")],
-        "edited after DONE": [_edit("s", "a.py"), _skill("s", "verify", "DONE"), _edit("s", "a.py"), _commit("s", "c1", "a.py")],
-        "ready_to_commit": [_edit("s", "a.py"), _skill("s", "verify", "DONE")],
-        "open": [_edit("s", "a.py"), _skill("s", "verify", "NEEDS FIX")],
+        "completed": [_skill("s", "plan"), _edit("s", "a.py"), passed],
+        "completed without a commit": [_edit("s", "a.py"), passed],
+        "DONE derived incomplete": [_edit("s", "a.py"), _skill("s", "verify", "DONE", "incomplete")],
+        "NEEDS FIX": [_edit("s", "a.py"), _skill("s", "verify", "NEEDS FIX", "fail")],
+        "committed, never verified": [_edit("s", "a.py"), _commit("s", "c1", "a.py")],
+        "DONE before the derived verdict": [_edit("s", "a.py"), _skill("s", "verify", "DONE")],
         "read_only": [_skill("s", "analyze")],
+        "read-only pass": [_skill("s", "verify", "DONE", "pass")],
         "unknown": [_edit(None, "a.py")],
     }
     expected = {
-        "after NEEDS FIX": "unverified_closed",
-        "after INCOMPLETE": "unverified_closed",
-        "edited after DONE": "unverified_closed",
+        "completed without a commit": "completed",
+        "DONE derived incomplete": "open",
+        "NEEDS FIX": "open",
+        "committed, never verified": "open",
+        "DONE before the derived verdict": "open",
+        "read-only pass": "read_only",
     }
     for name, events in cases.items():
         tasks, _ = derive_tasks(events)
         want = expected.get(name, name)
         assert_true(len(tasks) == 1 and tasks[0]["state"] == want, f"[{name}] expected {want}: {tasks}")
 
-    tasks, _ = derive_tasks(cases["completed"])
+    # The commit recommended after a pass joins the task it closed; it closes nothing itself.
+    tasks, unclaimed = derive_tasks([_skill("s", "plan"), _edit("s", "a.py"), passed, _commit("s", "c1", "a.py")])
     assert_true(
-        tasks[0]["sequence"] == ["plan", "edit", "verify", "commit"] and tasks[0]["commit"] == "c1",
-        f"a task keeps its ordered sequence, edits collapsed: {tasks[0]['sequence']}",
+        len(tasks) == 1 and tasks[0]["state"] == "completed" and unclaimed == 0
+        and tasks[0]["sequence"] == ["plan", "edit", "verify", "commit"] and tasks[0]["commit"] == "c1",
+        f"a task keeps its ordered sequence, edits collapsed, the commit after its pass included: {tasks}",
     )
 
-    # An unrelated commit closes nothing; the same commit seen twice counts once; a commit
-    # starts the next task; sessions never share a task.
+    # An edit after a pass is the next task; an unrelated commit is unclaimed; the same
+    # commit seen twice counts once; sessions never share a task.
     tasks, unclaimed = derive_tasks([
-        _edit("s", "a.py"), _commit("s", "c0", "other.py"), _skill("s", "verify", "DONE"),
+        _edit("s", "a.py"), _commit("s", "c0", "other.py"), passed,
         _commit("s", "c1", "a.py"), _commit("s", "c1", "a.py"),
         _edit("s", "b.py"), _edit("t", "b.py"),
     ])
     assert_true(
         [t["state"] for t in tasks] == ["completed", "open", "open"] and unclaimed == 1,
-        f"commit attribution by edited path, per session, once per hash: {[t['state'] for t in tasks]} unclaimed={unclaimed}",
+        f"tasks split at a pass, commits attributed by edited path, per session, once per hash: {[t['state'] for t in tasks]} unclaimed={unclaimed}",
+    )
+
+    # A commit matching both the open task and the one just completed joins the open one;
+    # a commit without a session is never claimed.
+    tasks, unclaimed = derive_tasks([
+        _edit("s", "a.py"), passed, _edit("s", "a.py"), _commit("s", "c1", "a.py"), _commit(None, "c2", "a.py"),
+    ])
+    assert_true(
+        [t["state"] for t in tasks] == ["completed", "open"] and tasks[0]["commit"] is None
+        and tasks[1]["commit"] == "c1" and unclaimed == 1,
+        f"the open task claims a shared commit first; a sessionless commit is unclaimed: {tasks} unclaimed={unclaimed}",
     )
 
 
@@ -73,12 +91,13 @@ def _check_runtime_event() -> None:
     root = Path(tempfile.mkdtemp(prefix="task-events-"))
     try:
         (root / ".workflow" / "data").mkdir(parents=True)
-        task_telemetry.record_skill(root, "s1", "verify", verdict="DONE", next_action="/.commit", prompt_id="p1")
+        task_telemetry.record_skill(root, "s1", "verify", verdict="DONE", derived="incomplete", next_action="/.commit", prompt_id="p1")
         (root / ".workflow" / "data" / "tasks.jsonl").open("a", encoding="utf-8").write("{torn\n")
         events = task_telemetry.load_events(root)
         assert_true(
-            len(events) == 1 and events[0]["source"] == "runtime" and events[0]["verdict"] == "DONE",
-            f"the runtime writes one event per command; a torn line is skipped: {events}",
+            len(events) == 1 and events[0]["source"] == "runtime" and events[0]["verdict"] == "DONE"
+            and events[0]["derived"] == "incomplete",
+            f"the runtime writes one event per command with both verdicts; a torn line is skipped: {events}",
         )
         summary = task_telemetry.report(root)
         assert_true(summary["by_state"] == {"read_only": 1}, f"report reads the stream: {summary}")

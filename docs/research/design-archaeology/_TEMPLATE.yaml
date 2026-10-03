@@ -1,6 +1,6 @@
 # ARC — copy to ARC-NNN-<kebab-slug>.yaml. A reconstructed record of a decision made before
 # this corpus existed. List every inferred statement under `inferred`; never invent sources.
-schema_version: 2
+schema_version: 3
 id: ARC-NNN
 title: <one line>
 reconstructed_on: YYYY-MM-DD

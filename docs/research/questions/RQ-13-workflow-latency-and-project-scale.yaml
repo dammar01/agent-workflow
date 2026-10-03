@@ -1,8 +1,8 @@
-schema_version: 2
+schema_version: 3
 id: RQ-13
 question: "How does workflow latency — delegated calls and the hooks around them — grow with the size of the active project, and which component dominates?"
 date: 2026-09-29
-status: proposed
+status: unanswered
 what_exists: |
   Usage rows record `duration_seconds` and provider token counts per delegated call, and
   from usage contract version 3 the graph lookup's status and time (`graph_status`,

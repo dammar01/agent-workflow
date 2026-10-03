@@ -1,6 +1,6 @@
 # CASE — copy to CASE-NNN-<kebab-slug>.yaml. No transcripts, company names, internal URLs,
 # source code, or business metrics. Every figure needs a source that can be re-counted.
-schema_version: 2
+schema_version: 3
 id: CASE-NNN
 title: <one line>
 recorded_on: YYYY-MM-DD

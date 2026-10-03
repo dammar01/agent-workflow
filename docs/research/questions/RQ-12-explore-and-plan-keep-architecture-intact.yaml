@@ -1,8 +1,8 @@
-schema_version: 2
+schema_version: 3
 id: RQ-12
 question: "Does exploring and planning before implementation keep a mature repository's architecture intact (less duplication, unchosen coupling, drift) compared with locally verified iteration?"
 date: 2026-09-29
-status: proposed
+status: unanswered
 what_exists: |
   `explore` and `plan` precede `/.execute`; no drift measure exists.
 records: []

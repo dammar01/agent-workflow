@@ -78,14 +78,21 @@ _EXP = {
 
 
 _RQ = {
-    "schema_version": 2,
+    "schema_version": 3,
     "id": "RQ-90",
     "question": "Does it hold?",
     "date": "2026-09-29",
-    "status": "proposed",
+    "status": "unanswered",
     "what_exists": "w",
     "records": [],
 }
+
+_VALIDATED = {
+    "implementation_status": "implemented", "validation_status": "validated",
+    "validated_by": "maintainer", "validated_on": "2026-10-03",
+}
+_PREDICATES = {"uses": 3, "consistent": True, "maintainer_decision": "kept validated"}
+_DECISION = {"date": "2026-10-03", "method": "critical_interview", "summary": "s"}
 
 
 def _yaml(record: dict) -> str:
@@ -95,17 +102,26 @@ def _yaml(record: dict) -> str:
 
 
 def _check_research_questions(check_research, research: Path, root: Path, write, errors_for) -> None:
-    """RQ records (DEC-017): ID grammar, versions, and the links both ways."""
-    dec2 = {**_DEC, "schema_version": 2, "questions": ["RQ-90"]}
+    """RQ records (DEC-017, DEC-019): ID grammar, versions, binary status, and the links both ways."""
+    dec2 = {**_DEC, "schema_version": 3, "questions": ["RQ-90"]}
 
-    # Version 2 names its questions; a frozen version-1 record does not have to.
-    no_questions = errors_for("decisions", "DEC-900-a.yaml", {**_DEC, "schema_version": 2})
-    assert_true("name the research question" in no_questions, f"a version-2 record without questions is refused:\n{no_questions}")
+    # The current version names its questions; a frozen version-1 or version-2 record keeps
+    # the format it was tracked in.
+    no_questions = errors_for("decisions", "DEC-900-a.yaml", {**_DEC, "schema_version": 3})
+    assert_true("name the research question" in no_questions, f"a current record without questions is refused:\n{no_questions}")
     assert_true(errors_for("decisions", "DEC-900-a.yaml", _DEC) == "", "a tracked version-1 record stays valid (frozen)")
     unfrozen = errors_for("decisions", "DEC-907-a.yaml", {**_DEC, "id": "DEC-907"})
-    assert_true("schema_version must be 2" in unfrozen, f"a version-1 record outside the frozen list is refused:\n{unfrozen}")
-    old_rq = errors_for("questions", "RQ-90-a.yaml", {**_RQ, "schema_version": 1})
-    assert_true("schema_version must be 2" in old_rq, f"an RQ is never version 1:\n{old_rq}")
+    assert_true("schema_version must be 3" in unfrozen, f"a version-1 record outside the frozen list is refused:\n{unfrozen}")
+    frozen_v2 = {**_DEC, "id": "DEC-903", "schema_version": 2, "questions": ["RQ-91"]}
+    rq91 = write("questions", "RQ-91-a.yaml", {**_RQ, "id": "RQ-91", "records": ["DEC-903"]})
+    assert_true(errors_for("decisions", "DEC-903-a.yaml", frozen_v2) == "", "a tracked version-2 record on the frozen list stays valid")
+    rq91.unlink()
+    unfrozen_v2 = errors_for("decisions", "DEC-904-a.yaml", {**frozen_v2, "id": "DEC-904"})
+    assert_true("schema_version must be 3" in unfrozen_v2, f"a version-2 record outside the frozen list is refused:\n{unfrozen_v2}")
+    old_rq = errors_for("questions", "RQ-90-a.yaml", {**_RQ, "schema_version": 2})
+    assert_true("schema_version must be 3" in old_rq, f"an RQ is always the current version:\n{old_rq}")
+    half = errors_for("questions", "RQ-90-a.yaml", {**_RQ, "status": "partial"})
+    assert_true("not in rq_status" in half, f"a question is never half-answered:\n{half}")
 
     # ID grammar: RQ-NN with an optional letter; the other types keep three digits.
     assert_true(errors_for("questions", "RQ-07a-sub.yaml", {**_RQ, "id": "RQ-07a"}) == "", "RQ-07a is a valid question ID")
@@ -130,6 +146,21 @@ def _check_research_questions(check_research, research: Path, root: Path, write,
     answered = errors_for("questions", "RQ-90-a.yaml", {**_RQ, "status": "answered"})
     assert_true("answered question lists at least one" in answered, f"an answered RQ without records is refused:\n{answered}")
 
+    # An answered RQ (DEC-019): a validated record and the maintainer's decision.
+    dec_path = write("decisions", "DEC-900-a.yaml", dec2)
+    unproven = errors_for("questions", "RQ-90-a.yaml", {**_RQ, "status": "answered", "records": ["DEC-900"], "decision": _DECISION})
+    assert_true("at least one validated record" in unproven, f"an answered RQ whose records are not validated is refused:\n{unproven}")
+    dec_path.unlink()
+    dec_path = write("decisions", "DEC-900-a.yaml", {
+        **dec2, "disposition": _VALIDATED,
+        "validation": {"summary": "s", "runs": [{"date": "2026-10-03", "job_id": "j", "description": "d", "clean": True}], **_PREDICATES},
+    })
+    undecided = errors_for("questions", "RQ-90-a.yaml", {**_RQ, "status": "answered", "records": ["DEC-900"]})
+    assert_true("maintainer's decision" in undecided, f"an answered RQ without a decision is refused:\n{undecided}")
+    settled = {**_RQ, "status": "answered", "records": ["DEC-900"], "decision": _DECISION}
+    assert_true(errors_for("questions", "RQ-90-a.yaml", settled) == "", "a validated record plus a decision answers the question")
+    dec_path.unlink()
+
     # The questions index is generated in RQ order; the README inventory leaves RQs out.
     write("questions", "RQ-07a-sub.yaml", {**_RQ, "id": "RQ-07a"})
     write("questions", "RQ-10-b.yaml", {**_RQ, "id": "RQ-10"})
@@ -147,7 +178,7 @@ def _check_research_questions(check_research, research: Path, root: Path, write,
     draft = drafts / "decisions" / "DEC-905-d.yaml"
     draft.write_text(_yaml({**_DEC, "id": "DEC-905"}), encoding="utf-8")
     code, out = _run_tool(check_research, ["--drafts"])
-    assert_true("DEC-905-d.yaml: schema_version must be 2" in out, f"a version-1 draft is refused:\n{out}")
+    assert_true("DEC-905-d.yaml: schema_version must be 3" in out, f"a version-1 draft is refused:\n{out}")
     draft.unlink()
     duplicate = drafts / "questions" / "RQ-10-b.yaml"
     duplicate.parent.mkdir(exist_ok=True)
@@ -183,9 +214,10 @@ def _test_research_records_follow_the_schema() -> None:
     # A temporary corpus: the real schema and README, one record per case.
     root = Path(tempfile.mkdtemp(prefix="research-check-"))
     saved = (check_research.RESEARCH, check_research.DRAFTS, check_research.SCHEMA, check_research.README, check_research.REPO_ROOT, check_research.QUESTIONS)
-    saved_frozen = check_research.FROZEN_V1
+    saved_frozen = (check_research.FROZEN_V1, check_research.FROZEN_V2)
     # The fixtures below are version-1 records; they stand in for the frozen list.
     check_research.FROZEN_V1 = frozenset({"DEC-900", "DEC-901", "DEC-902", "H-900", "H-901", "EXP-900"})
+    check_research.FROZEN_V2 = frozenset({"DEC-903"})
     try:
         research = root / "docs" / "research"
         research.mkdir(parents=True)
@@ -232,10 +264,23 @@ def _test_research_records_follow_the_schema() -> None:
             "implemented DEC names a commit": ("decisions", "DEC-900-a.yaml", {**_DEC, "implementation": {**_DEC["implementation"], "commits": []}}, "needs at least 1"),
             "tracked DEC is implemented": ("decisions", "DEC-900-a.yaml", {**_DEC, "disposition": {"implementation_status": "not_implemented", "validation_status": "not_validated"}}, "research-drafts"),
             "validated needs the maintainer": ("decisions", "DEC-900-a.yaml", {**_DEC, "disposition": {"implementation_status": "implemented", "validation_status": "validated"}}, "needs validated_by and validated_on"),
-            "validated DEC needs a clean run": (
+            "partially validated DEC needs a clean run": (
                 "decisions", "DEC-900-a.yaml",
-                {**_DEC, "disposition": {"implementation_status": "implemented", "validation_status": "validated", "validated_by": "maintainer", "validated_on": "2026-09-28"}},
+                {**_DEC, "disposition": {**_VALIDATED, "validation_status": "partially_validated"}},
                 "clean direct-use run",
+            ),
+            "validated DEC was used repeatedly": ("decisions", "DEC-900-a.yaml", {**_DEC, "disposition": _VALIDATED}, "validation.uses >= 2"),
+            "validated DEC is consistent": ("decisions", "DEC-900-a.yaml", {**_DEC, "disposition": _VALIDATED}, "validation.consistent: true"),
+            "validated DEC names the decision": ("decisions", "DEC-900-a.yaml", {**_DEC, "disposition": _VALIDATED}, "validation.maintainer_decision"),
+            "validated DEC is measured": (
+                "decisions", "DEC-900-a.yaml",
+                {**_DEC, "disposition": _VALIDATED, "validation": {"summary": "s", **_PREDICATES}},
+                "a validated DEC is measured",
+            ),
+            "one use is not repeated": (
+                "decisions", "DEC-900-a.yaml",
+                {**_DEC, "disposition": _VALIDATED, "validation": {"summary": "s", **_PREDICATES, "uses": 1}},
+                "validation.uses >= 2",
             ),
             "H carries no commit": ("hypotheses", "H-900-a.yaml", {**_HYP, "success_criteria": {**_HYP["success_criteria"], "commit": "abc1234"}}, "unknown key"),
             "tracked H has an outcome": ("hypotheses", "H-900-a.yaml", {**_HYP, "outcome": "pending"}, "research-drafts"),
@@ -245,6 +290,17 @@ def _test_research_records_follow_the_schema() -> None:
         for rule, (directory, name, record, expected) in cases.items():
             out = errors_for(directory, name, copy.deepcopy(record))
             assert_true(expected in out, f"rule '{rule}' is enforced (expected '{expected}'):\n{out}")
+
+        # A validated DEC (DEC-019): the four predicates, measured by a clean run or by a
+        # named telemetry figure.
+        measured = {**_DEC, "disposition": _VALIDATED, "validation": {
+            "summary": "s", **_PREDICATES, "measurements": [{"source": "quality.jsonl rows 1-9", "value": "9 runs"}],
+        }}
+        assert_true(errors_for("decisions", "DEC-900-a.yaml", measured) == "", "a validated DEC measured by telemetry passes")
+        by_run = {**_DEC, "disposition": _VALIDATED, "validation": {
+            "summary": "s", **_PREDICATES, "runs": [{"date": "2026-10-03", "job_id": "j", "description": "d", "clean": True}],
+        }}
+        assert_true(errors_for("decisions", "DEC-900-a.yaml", by_run) == "", "a validated DEC measured by a clean run passes")
 
         # `uncommitted` is a warning, and an error only under --strict (a release).
         loose = {**_DEC, "implementation": {**_DEC["implementation"], "commits": ["uncommitted"]}}
@@ -289,5 +345,5 @@ def _test_research_records_follow_the_schema() -> None:
         _check_research_questions(check_research, research, root, write, errors_for)
     finally:
         (check_research.RESEARCH, check_research.DRAFTS, check_research.SCHEMA, check_research.README, check_research.REPO_ROOT, check_research.QUESTIONS) = saved
-        check_research.FROZEN_V1 = saved_frozen
+        check_research.FROZEN_V1, check_research.FROZEN_V2 = saved_frozen
         shutil.rmtree(root, ignore_errors=True)

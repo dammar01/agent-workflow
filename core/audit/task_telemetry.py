@@ -1,4 +1,5 @@
-"""Tasks as sequences of skill calls, closed by a commit (DEC-015).
+"""Tasks as sequences of skill calls, closed by a verify the runtime derives as pass
+(DEC-015, revised by DEC-020).
 
 Events come from two writers into `tasks.jsonl`: the runtime records each delegated
 command it runs, and the `task-events` hook records what never passes through it — a
@@ -6,20 +7,19 @@ local skill being loaded, a file edited, a commit made. Nothing is derived at wr
 the hook stays a few lines of append, and a better reading of the same history needs no
 migration.
 
-A task is the run of events in one MAIN_SESSION_ID from its first event until a commit
-that includes a file it edited. Its state:
+A task is the run of events in one MAIN_SESSION_ID from its first event until a verify
+whose derived verdict is `pass` after the task edited something. A commit is the
+recommended next step, not the closing one: a commit that includes a file of a task just
+completed joins that task's sequence, and a commit on an open task leaves it open. Its state:
 
-- `completed`: committed after a verify whose declared verdict was DONE, with no edit since.
-- `unverified_closed`: committed without such a verify (none, NEEDS FIX, INCOMPLETE, or
-  edited after the DONE).
-- `ready_to_commit`: DONE verify, no edit since, not committed yet.
-- `open`: edits not yet verified DONE and not committed. Uncommitted work is unfinished.
-- `read_only`: skills ran, nothing was edited; nothing for a commit to close.
+- `completed`: closed by a derived `pass` with no edit since.
+- `open`: edits not yet verified `pass`, committed or not.
+- `read_only`: skills ran, nothing was edited; nothing for a verify to close.
 - `unknown`: events without a session identity, which cannot be put in a task.
 
-The declared verdict is read, not the runtime's derived one: a read-only second agent
-lists the tests it could not run, and the derived verdict turns a clean DONE into
-`incomplete` (CASE-009, DEC-015 limitations).
+The derived verdict is read, not the declared one (DEC-020): a DONE the runtime turns into
+`incomplete` — a gap under not_verified included — does not close a task. Events written
+before DEC-020 carry no derived verdict, and their tasks stay open.
 """
 
 from __future__ import annotations
@@ -35,8 +35,12 @@ RECENT = 10
 
 
 def record_skill(project_root, session_id: str | None, skill: str, *, verdict: str | None = None,
-                 next_action: str | None = None, prompt_id: str | None = None) -> None:
-    """The runtime's event for one delegated command. Never raises."""
+                 derived: str | None = None, next_action: str | None = None,
+                 prompt_id: str | None = None) -> None:
+    """The runtime's event for one delegated command. Never raises.
+
+    `verdict` is what the verify reply declared; `derived` is the runtime's verdict on it
+    (pass | incomplete | fail), the one that closes a task."""
     try:
         write_task_event(Path(project_root), {
             "v": TASK_EVENT_VERSION,
@@ -46,6 +50,7 @@ def record_skill(project_root, session_id: str | None, skill: str, *, verdict: s
             "kind": "skill",
             "skill": skill,
             "verdict": verdict,
+            "derived": derived,
             "next_action": next_action,
             "prompt_id": prompt_id,
         })
@@ -79,6 +84,8 @@ def derive_tasks(events: list[dict]) -> tuple[list[dict], int]:
     """Tasks in the order they started, and the number of commits no task claimed."""
     tasks: list[dict] = []
     current: dict[str | None, dict] = {}
+    # The task each session last completed: the commit recommended after its pass joins it.
+    closed: dict[str | None, dict] = {}
     seen_commits: set[str] = set()
     unclaimed = 0
     for event in events:
@@ -90,17 +97,20 @@ def derive_tasks(events: list[dict]) -> tuple[list[dict], int]:
             if not commit or commit in seen_commits:
                 continue
             seen_commits.add(commit)
-            task = current.get(session)
             listed = event.get("paths") or []
             paths = {str(p) for p in ([listed] if isinstance(listed, str) else listed)}
-            if session is None or task is None or not (task["edited"] & paths):
+            owner = None
+            if session is not None:
+                for candidate in (current.get(session), closed.get(session)):
+                    if candidate is not None and candidate["edited"] & paths:
+                        owner = candidate
+                        break
+            if owner is None:
                 unclaimed += 1
                 continue
-            task["sequence"].append("commit")
-            task["commit"] = commit
-            task["ended_at"] = at
-            task["state"] = "completed" if task["verdict"] == "DONE" else "unverified_closed"
-            del current[session]
+            owner["sequence"].append("commit")
+            owner["commit"] = commit
+            owner["ended_at"] = at
             continue
         task = current.get(session)
         if task is None:
@@ -109,7 +119,7 @@ def derive_tasks(events: list[dict]) -> tuple[list[dict], int]:
         task["ended_at"] = at
         if kind == "edit":
             task["edited"].add(str(event.get("path") or ""))
-            # A DONE vouches for the tree it saw; an edit after it is unverified work.
+            # A pass vouches for the tree it saw; an edit after it is unverified work.
             task["verdict"] = None
             if not task["sequence"] or task["sequence"][-1] != "edit":
                 task["sequence"].append("edit")
@@ -119,13 +129,15 @@ def derive_tasks(events: list[dict]) -> tuple[list[dict], int]:
         if skill == "verify":
             verdict = str(event.get("verdict") or "").strip().upper().replace("_", " ")
             task["verdict"] = verdict or None
+            if str(event.get("derived") or "").strip().lower() == "pass" and task["edited"] and session is not None:
+                task["state"] = "completed"
+                closed[session] = task
+                del current[session]
     for task in current.values():
         if task["session_id"] is None:
             task["state"] = "unknown"
         elif not task["edited"]:
             task["state"] = "read_only"
-        elif task["verdict"] == "DONE":
-            task["state"] = "ready_to_commit"
         else:
             task["state"] = "open"
     return tasks, unclaimed

@@ -147,18 +147,33 @@ disposition:
   [methodology.md](methodology.md) "Evidence tiers", but no designed evaluation.
 - `validated`, `partially_validated`, and `rejected` require an evaluation the record names
   (usually an `EXP-XXX`) and a result measured against the record's stated success criteria.
-- Exception for decisions (`DEC-XXX`) only: a DEC is `validated` when the maintainer's
-  direct use of the decided behavior runs clean. All three conditions must hold:
+- Exception for decisions (`DEC-XXX`) only: a DEC is evaluated on the maintainer's direct
+  use of the decided behavior instead of an `EXP`. A run counts as clean when all three
+  conditions hold; a clean run is required for `partially_validated` and `rejected`, and is one
+  of the two measurements a `validated` DEC may name (next item):
   1. The runtime verdict is `pass`, or the equivalent success outcome for that behavior.
   2. The run needed no manual workaround: no `ignore_repeat_brake`, no hand-edited request
      or scenario, and no runtime patch mid-run.
   3. The maintainer reported no issue with that run.
 
   The record's Validation section names the run: its date, its job id, and a sanitised
-  description of what was exercised. Any condition missing makes it `observed`, not
-  `validated`. This is `creator_observation` evidence (see methodology.md "Evidence
+  description of what was exercised. Any condition missing makes the run not clean. This is
+  `creator_observation` evidence (see methodology.md "Evidence
   tiers"). It shows the decision works in the maintainer's use, not that it generalises.
   Hypotheses (`H-XXX`) still require an `EXP-XXX`.
+- Since schema version 3 (DEC-019) a `validated` DEC needs four things in its `validation`
+  block, all of them; a clean run alone is no longer enough, and a measurement can stand in
+  for it:
+  1. `uses` of 2 or more: the decided behavior was used repeatedly, not once.
+  2. `consistent: true`: it behaved the same way each time, with no use pointing the other
+     way.
+  3. `maintainer_decision`: the maintainer's explicit decision, a sanitized summary.
+  4. A measurement: a clean run as above, or a `measurements` entry with a named,
+     re-countable source and its figure.
+
+  Repeated use and the maintainer's word are the creator's evidence; the measurement is what
+  that evidence cannot supply by itself. `partially_validated` and `rejected` keep the
+  clean-run rule above.
 - Only the maintainer sets `validated_by` and `validated_on`. Setting any value other than
   `not_validated` or `observed` without them is incomplete.
 - Every hypothesis states its success criteria: the primary metric, what counts as
@@ -167,8 +182,16 @@ disposition:
 
 The research corpus counts as final when every record has a complete disposition, every
 hypothesis has success criteria, every `answered` research question lists at least one
-tracked record, and every version-2 record names the questions it serves (§16). Final does
-not mean answered: a record may be final and still `not_validated`.
+validated record and the maintainer's decision, and every version-2-or-later record names
+the questions it serves (§16). Final does not mean answered: a record may be final and still
+`not_validated`.
+
+A research question is `answered` or `unanswered`, never half-answered: a partial answer is
+an unfinished one, and calling it answered invites the bias the status exists to prevent.
+What already bears on an unanswered question is written in its `what_exists` and `records`,
+not in its status. An `answered` question lists at least one `validated` record and carries
+a `decision` block: the date, the method (`critical_interview`), and a sanitized summary of
+the maintainer's decision, never a transcript (§4, §5).
 
 ## 15. Tracked records and drafts
 
@@ -193,6 +216,9 @@ to correct a factual error against its source, never to add untested reasoning. 
 exception is the format conversion of §16 (DEC-011), which changed their encoding, not
 their content, and filled the commits they named as `unknown` from Git history. Schema
 version 2 (DEC-017) did not touch them: a tracked record at version 1 stays valid as it is.
+Schema version 3 (DEC-019) froze the version-2 records the same way. The four decisions then
+`validated` received the version-3 predicates as a new result from the maintainer's
+re-evaluation, which is the kind of change this section allows.
 
 ## 16. Record format
 
@@ -205,16 +231,18 @@ suite and in CI, together with the rules the schema cannot express:
 - IDs are unique across tracked records and drafts, and match the file name; the prefix
   matches the directory. IDs are `PREFIX-NNN`; a research question is `RQ-NN` with an
   optional lowercase letter for a sub-question (`RQ-07a`).
-- Records are `schema_version` 2. A tracked `DEC`, `H`, `EXP`, `CASE`, `SYN`, `ARC` or `LIT`
-  may stay at version 1 only if it was frozen before version 2 (§15); the checker holds
-  that closed list (`FROZEN_V1` in `tools/maintain/check_research.py`), so a new record
-  written at version 1 is refused. Drafts and `RQ` records are always version 2.
-- Every version-2 `DEC`, `H`, `EXP`, `CASE` and `SYN` names the research question(s) it
-  serves under `questions`: a record that serves no question has no reason to change the
-  project. The links hold both ways: an `RQ`'s `records` are tracked records, each of which
-  (at version 2) names the `RQ` back, and a tracked version-2 record's `RQ` lists it. An
-  `answered` `RQ` lists at least one record; `proposed` and `partial` may list none yet.
-  Version-1 records carry no `questions` and are linked from the `RQ` side only.
+- Records are `schema_version` 3. A tracked `DEC`, `H`, `EXP`, `CASE`, `SYN`, `ARC` or `LIT`
+  may stay at version 1 or 2 only if it was frozen before the next version (§15); the
+  checker holds those closed lists (`FROZEN_V1`, `FROZEN_V2` in
+  `tools/maintain/check_research.py`), so a new record written at an old version is refused.
+  Drafts and `RQ` records are always the current version.
+- Every version-2-or-later `DEC`, `H`, `EXP`, `CASE` and `SYN` names the research
+  question(s) it serves under `questions`: a record that serves no question has no reason to
+  change the project. The links hold both ways: an `RQ`'s `records` are tracked records, each
+  of which (from version 2) names the `RQ` back, and a tracked record's `RQ` lists it. An
+  `answered` `RQ` lists at least one `validated` record and carries a `decision` (§14); an
+  `unanswered` one may list none yet. Version-1 records carry no `questions` and are linked
+  from the `RQ` side only.
 - An implemented or partially implemented `DEC` names the commit(s) that carry it
   (`implementation.commits`). `uncommitted` is allowed while the change is in the working
   tree and is refused by `--strict`, which a release runs; replace it with the hash once the
@@ -225,7 +253,8 @@ suite and in CI, together with the rules the schema cannot express:
   arms, metrics, results — is written as an `EXP`.
 - `validation_status` beyond `observed` needs `validated_by` and `validated_on` (§14) and an
   evaluation: an `EXP` reference, a completed `EXP` with results, or for a `DEC` a
-  `validation.runs` entry with `clean: true`.
+  `validation.runs` entry with `clean: true`. A `validated` `DEC` needs the four predicates
+  of §14 instead.
 - A tracked record meets its type's `tracked_when` in the schema (§15); anything else is a
   draft.
 - Every referenced ID resolves to a tracked record, or to a draft when

@@ -1,6 +1,6 @@
 # H — copy to H-NNN-<kebab-slug>.yaml. An external claim: no commit anywhere in this record.
 # Tracked here only once its outcome is recorded (not pending); until then it is a draft.
-schema_version: 2
+schema_version: 3
 id: H-NNN
 title: <one line>
 date: YYYY-MM-DD

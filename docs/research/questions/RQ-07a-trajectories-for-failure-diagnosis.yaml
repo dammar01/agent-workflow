@@ -1,8 +1,8 @@
-schema_version: 2
+schema_version: 3
 id: RQ-07a
 question: "Can recorded trajectories support post-hoc failure diagnosis?"
 date: 2026-09-29
-status: partial
+status: unanswered
 what_exists: |
   Audit, usage, quality, per-call metadata, progress, job logs, and continuation metadata
   exist, but are scattered and have no diagnosis tooling.

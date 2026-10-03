@@ -104,6 +104,14 @@ validation:
       job_id: "local release-layout scan after CASE-004 moved to drafts"
       description: "Changelog split and bench removal: `stamp_version.py --check` and `gen_manifest.py --check` pass; a scan of every tracked Markdown/YAML file outside prompt/ found 0 broken relative links, including every link from CHANGELOG.md into docs/releases/; every remaining mention of `bench/` describes its removal; `tests/run.py --only stamp-version --only manifest --only deps` passed."
       clean: true
+  uses: 10
+  consistent: true
+  maintainer_decision: |
+    2026-10-03, critical interview: kept validated. Research records have been written and
+    checked as schema YAML in every research change since the conversion.
+  measurements:
+    - source: "git log --since=2026-09-28 -- docs/research, counted on 2026-10-03"
+      value: "10 commits touching docs/research; check_research.py OK on 38 records at 4e5582e"
 
 trade_offs:
   better:
