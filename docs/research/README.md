@@ -172,6 +172,8 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-016](decisions/DEC-016-proven-selectors-outrank-role-and-label.yaml) | Proven selectors — source data-e2e and knowledge-store matches — outrank role and label | accepted | implemented | not_validated | f6edbef |
 | [DEC-017](decisions/DEC-017-research-questions-as-yaml-records.yaml) | Research questions become YAML records, linked to records both ways | accepted | implemented | observed | 7150b0d |
 | [DEC-018](decisions/DEC-018-verify-none-sentinel-grammar.yaml) | A verify section that says nothing was found is read as empty in the spellings agents write, and the re-prompt names `- none` | accepted | implemented | not_validated | cb7ee4e, 23250f1 |
+| [DEC-019](decisions/DEC-019-binary-questions-and-measured-validation.yaml) | Research questions are answered or unanswered, and a validated decision is used, consistent, decided, and measured | accepted | implemented | not_validated | 72c2ac7 |
+| [DEC-020](decisions/DEC-020-task-closed-by-derived-pass.yaml) | A task is closed by a verify the runtime derives as pass; a commit is recommended, not required | accepted | implemented | not_validated | 72c2ac7 |
 <!-- research-inventory:end -->
 
 No `H-XXX`, `EXP-XXX`, or `SYN-XXX` record is tracked: none has been run or has a result.
