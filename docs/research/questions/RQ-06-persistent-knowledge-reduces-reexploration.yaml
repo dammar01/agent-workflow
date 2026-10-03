@@ -7,7 +7,7 @@ what_exists: |
   Fact store (recurrence and durable facts), anchored evidence reuse, graph leads, promoted
   knowledge; facts and promoted knowledge are injected into exploration and reasoning prompts,
   but there is no outcome to update loop and the effect is not measured.
-records: [CASE-009]
+records: [CASE-009, DEC-016]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.
@@ -18,5 +18,5 @@ notes: |
   read before any new mechanism is proposed. In the maintainer's telemetry from 2026-08-15 to
   2026-09-27 it read zero (CASE-004, draft).
 
-  Draft records: H-004, CASE-004, DEC-016 (drafts). DEC-016 treats proven browser selectors as
-  reused knowledge.
+  Draft records: H-004, CASE-004. DEC-016 (tracked, commit f6edbef) treats proven browser
+  selectors as reused knowledge.

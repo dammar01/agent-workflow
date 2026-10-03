@@ -10,7 +10,7 @@ what_exists: |
   since DEC-012, and runtime lock guards accumulate one per session. Nothing records project
   size next to latency at run time; one-off measurements exist for the hook on two projects
   (CASE-008) and for verify spread and the lookup on every local project (CASE-010).
-records: [CASE-006, CASE-007, CASE-008, CASE-010, DEC-012]
+records: [CASE-006, CASE-007, CASE-008, CASE-010, DEC-012, DEC-013]
 notes: |
   The maintainer feels latency after execute, in execute+verify turns, in verify alone, and
   when the main agent runs graphify itself; verify is slower on a large Laravel backend than
@@ -27,6 +27,9 @@ notes: |
   a project; the lookup's file ranking rises with node count to 9.1 s at 34.6k nodes, 9% of
   that project's median verify; about half of verify replies name a test command.
 
-  Draft records: DEC-013 (lock guards), H-008 (cached input and thread continuation), H-009
-  and EXP-004 (graph cost inside verify), H-010 (reasoning effort).
-  DEC-012 moved the graph refresh out of the turn (tracked, commit 98449fe).
+  Draft records: H-008 (cached input and thread continuation), H-009 and EXP-004 (graph cost
+  inside verify), H-010 (reasoning effort).
+  DEC-012 moved the graph refresh out of the turn (tracked, commit 98449fe). DEC-013 lets
+  `clean` remove the guards of dead sessions (tracked, commit 2dd7d7e). From commit 2dd7d7e
+  verify-browser rows also record whether a refresh ran beside them (`graph_status`
+  `refreshing`/`available`/`absent`).

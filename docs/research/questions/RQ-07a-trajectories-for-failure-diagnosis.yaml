@@ -6,7 +6,7 @@ status: partial
 what_exists: |
   Audit, usage, quality, per-call metadata, progress, job logs, and continuation metadata
   exist, but are scattered and have no diagnosis tooling.
-records: [CASE-009]
+records: [CASE-009, DEC-015]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.
@@ -20,5 +20,5 @@ notes: |
   across users requires their consent and sanitization under CONTRACT.md section 5; nothing in
   the runtime collects it.
 
-  Draft records: H-005, DEC-015 (drafts). DEC-015 records tasks as skill sequences and their
-  outcome.
+  Draft records: H-005. DEC-015 (tracked, commit 2dd7d7e) records tasks as skill sequences
+  and their outcome in `tasks.jsonl`, from the runtime and a PostToolUse hook.

@@ -165,7 +165,12 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-010](decisions/DEC-010-scenario-origin-and-structured-diagnosis.yaml) | Scenario-caused failures get their own origin, stay out of the repeat brake, and every non-pass carries a structured diagnosis | accepted | implemented | validated | c584748 |
 | [DEC-011](decisions/DEC-011-research-records-yaml-changelog-split-bench-removed.yaml) | Research records are schema-checked YAML, release notes live per version, and bench/ is retired | accepted | implemented | validated | 665bb4c, c584748 |
 | [DEC-012](decisions/DEC-012-graph-refresh-hook-ownership-and-timing.yaml) | The Stop hook is the only graph-refresh trigger, prunes before it walks, and records its cost with project size | accepted | implemented | observed | 98449fe |
+| [DEC-013](decisions/DEC-013-safe-orphan-guard-cleanup.yaml) | Document the one-byte lock guards, and let `clean` remove those of dead sessions | accepted | implemented | not_validated | 2dd7d7e |
+| [DEC-014](decisions/DEC-014-verify-browser-network-metadata.yaml) | verify-browser records ordered request metadata, compared across runs, never bodies or headers | accepted | implemented | not_validated | 60263ba |
+| [DEC-015](decisions/DEC-015-tasks-as-skill-sequences-closed-by-commit.yaml) | A task is a recorded sequence of skill calls, completed by a commit of its edits after a DONE verify | accepted | implemented | not_validated | 2dd7d7e |
+| [DEC-016](decisions/DEC-016-proven-selectors-outrank-role-and-label.yaml) | Proven selectors — source data-e2e and knowledge-store matches — outrank role and label | accepted | implemented | not_validated | f6edbef |
 | [DEC-017](decisions/DEC-017-research-questions-as-yaml-records.yaml) | Research questions become YAML records, linked to records both ways | accepted | implemented | observed | 7150b0d |
+| [DEC-018](decisions/DEC-018-verify-none-sentinel-grammar.yaml) | A verify section that says nothing was found is read as empty in the spellings agents write, and the re-prompt names `- none` | accepted | implemented | not_validated | cb7ee4e, 23250f1 |
 <!-- research-inventory:end -->
 
 No `H-XXX`, `EXP-XXX`, or `SYN-XXX` record is tracked: none has been run or has a result.
@@ -176,8 +181,8 @@ Proposed hypotheses, planned experiments, syntheses, and decisions without a res
 kept in `docs/research-drafts/` (same subfolders). That directory is git-ignored and exists
 only on the maintainer's machine; tracked records mention draft IDs as plain text, never as
 links. A draft moves back here only when it has been carried out and has a recorded result.
-Drafts currently held: DEC-012..DEC-016, H-004 and H-008 (the v3.8.0 work, each naming its
-research question), CASE-004 (moved back on 2026-09-28: the records it relates to are all
+Drafts currently held: H-004, H-008, H-009, H-010 and EXP-004 (v3.8.0 research still to be
+carried out, each naming its research question), CASE-004 (moved back on 2026-09-28: the records it relates to are all
 drafts), and H-005, EXP-002, CASE-002, SYN-002, DEC-002 (Markdown, still referenced).
 H-001..H-003, H-006, H-007, EXP-001, EXP-003, CASE-001, CASE-003, SYN-001 and DEC-003 are
 kept in `docs/research-drafts/_archive/`, which the check does not read. Drafts use the
