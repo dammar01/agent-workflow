@@ -819,13 +819,16 @@ one-byte file carrying an OS byte-range lock, kept between uses:
 | `evidence.jsonl.lock` | OS lock on byte 0 | one NUL byte | Kept: the lock is the open handle, released by closing it |
 | `<lock>.reclaim` | OS lock on byte 0 | one NUL byte | Kept, one per `OwnedFileLock` that was ever reclaimed |
 | `storage/jobs/.capacity.guard`, `<session>.lock.guard`, `<claim>.guard` | OS lock on byte 0 (`JobManager._exclusive_file_guard`) | one NUL byte | Kept, one per session or claim path; they accumulate (CASE-007) |
+| `sessions/<id>/runtime/lock.guard` | OS lock on byte 0 (`_RuntimeTransitionGuard`) | one NUL byte | Kept between uses; `clean` removes it when the session has no live runtime lock and the guard can be locked without waiting (DEC-013). A holder keeps it. On POSIX it is unlinked while locked and a process that was waiting on it reopens the path; Windows refuses the delete while another process has it open, and that refusal keeps it |
 
 A one-byte file shows as empty in most editors; its content is `\0`, which the Windows
 byte-range lock (`msvcrt.locking`) needs to lock. Deleting a kept file while no process runs is
 harmless: it is recreated on the next use. Deleting it while a process holds it is what the
 design rules out: Windows refuses the delete, and on POSIX the next writer creates a new,
 unlocked file, so two writers run at once. The `evidence-lock-file` test suite checks both,
-and that a second process waits for the holder.
+and that a second process waits for the holder. The runtime guard is the one exception made
+safe on purpose (DEC-013): `_RuntimeTransitionGuard` re-checks on POSIX that the path still
+names the file it locked and reopens it if not, which is what lets `clean` remove it.
 
 ## Call telemetry
 
@@ -847,7 +850,7 @@ Usage rows carry contract version 3. Version 3 adds six fields, all `None` on ol
 
 - `reuse_outcome` — why the reuse lookup did or did not serve the command: `hit`,
   `no_prior`, `stale`, `unreadable`, `error`, `not_offered`, `disabled`.
-- `graph_status` — `used`, `empty`, `absent`, `refreshing`, `disabled`.
+- `graph_status` — `used`, `empty`, `absent`, `refreshing`, `disabled`; for `verify-browser`, `available`, `absent` or `refreshing` from `graph_state_for_call`, taken once per command before the browser pipeline: its prompts carry no leads, so only whether a refresh ran beside it is recorded, and `graph_ms` is the cost of that check.
 - `graph_ms` — how long the graph lookup took.
 - `provider_resumed` — whether the provider resumed an existing thread, as the adapter
   reports it on `last_call_meta` (codex, agy). `None` where the adapter does not say:
@@ -859,6 +862,32 @@ Usage rows carry contract version 3. Version 3 adds six fields, all `None` on ol
 
 `refreshing` means the call ran while `graphify-out/.refresh.lock` was held and went without
 leads. The lookup never waits on that lock.
+
+## Task events
+
+`tasks.jsonl` (DEC-015, `core/audit/task_telemetry.py`) is append-only and has two writers.
+The executor appends one `source: runtime` event per delegated command from `_record_usage`,
+after the usage and audit rows and inside the same fail-open block: `skill` (the command),
+`verdict` (verify only: the reply's declared verdict, `NEEDS FIX` when the contract finds a
+blocking finding), `next_action`, `prompt_id`. A finalised browser run is `verify`, its draft
+`verify-browser`. The `task-events` PostToolUse hook appends `source: hook` events for what
+never reaches the runtime: `skill` for a local workflow skill loaded by `Read` of
+`~/.claude/skills/<name>.md` or by the `Skill` tool (delegated skills are skipped, the runtime
+has them), `edit` with a project-relative `path` (`.workflow/` and `.git/` excluded), and
+`commit` with `commit` and `paths` from `git log -1 --name-only --relative`, only when HEAD
+moved during the command: the same hook on `PreToolUse` (matcher `Bash`) saves HEAD for a
+`git commit` under `.workflow/data/task-hook/<tool_use_id>.head`, and `PostToolUse` reads
+and removes it. A failed commit leaves HEAD where it was and records nothing; no saved HEAD
+records nothing. The hook resolves MAIN_SESSION_ID through
+`~/.claude/session_registry.json`, writes only when `.workflow/data/` exists, and exits 0 on
+every path.
+
+Nothing is derived at write time. `derive_tasks` walks the events in order per session: the
+first event opens a task; an `edit` clears a DONE seen before it; a commit whose `paths`
+include a file the task edited closes it, as `completed` after a DONE or
+`unverified_closed` otherwise; a commit hash is counted once; a commit no open task claims
+is `unclaimed_commits`. A task still open at the end is `ready_to_commit`, `open`, or
+`read_only` (no edits); events without a session are `unknown`.
 
 ## Workspace layout
 

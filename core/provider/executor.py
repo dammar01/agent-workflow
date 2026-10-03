@@ -24,7 +24,7 @@ from core.evidence.contract import (
 from core.evidence.contracts import TaskSpec, correlation_id_for, usage_from_result
 from adapters.shared.usage import token_source_for
 from core.policy.governance import budget_limit, budget_state
-from core.audit import telemetry
+from core.audit import task_telemetry, telemetry
 from core.evidence import fact_store
 from core.evidence import evidence_store
 from core.graph import graph_index
@@ -128,6 +128,23 @@ def graph_leads_for_call(project_root, task: str) -> tuple[dict | None, str, int
         else:
             status = "absent"
     return leads, status, round((time.monotonic() - started) * 1000)
+
+
+def graph_state_for_call(project_root) -> tuple[str, int]:
+    """Whether a graph refresh was running when a call that takes no leads started.
+
+    For `verify-browser`, whose prompts carry no graph leads: the latency question (RQ-13,
+    EXP-004) is about a refresh competing with the call, not about leads, so the lookup is
+    not run. Status is `refreshing`, `available` (a graph, not consulted) or `absent`.
+    """
+    started = time.monotonic()
+    if graph_index.refresh_in_progress(project_root):
+        status = "refreshing"
+    elif graph_index.graph_path(project_root).is_file():
+        status = "available"
+    else:
+        status = "absent"
+    return status, round((time.monotonic() - started) * 1000)
 
 
 def _scope_width(project_root, session_id: str | None) -> dict | None:
@@ -633,6 +650,22 @@ class Executor:
                     "redactions": payload["redactions"],
                     "project_root": str(project_root),
                 },
+            )
+            # One task event per command (DEC-015), carrying the verdict the reply declared.
+            # A declared DONE with blocking findings still counts as NEEDS FIX; a DONE the
+            # runtime only marks `incomplete` for its not_verified gaps stays DONE.
+            task_verdict = None
+            if command == "verify" and result.get("ok"):
+                assessment = validate_verification_contract(result.get("content") or "")
+                task_verdict = "NEEDS FIX" if assessment["verdict"] == "fail" else assessment["declared_verdict"]
+            task_telemetry.record_skill(
+                project_root,
+                session_id,
+                command,
+                verdict=task_verdict,
+                next_action=(result.get("digest") or {}).get("recommended_next_action")
+                if isinstance(result.get("digest"), dict) else None,
+                prompt_id=payload["prompt_id"],
             )
         except Exception:
             # Instrumentation, not the call. Broad on purpose: this runs on the return
@@ -1414,6 +1447,8 @@ class Executor:
             except ValueError:
                 verify_route = route
             bound = bind_session(project_root, session_id)
+            # Once per command: the run is finalised, and its usage row written, once.
+            self._graph_status, self._graph_ms = graph_state_for_call(project_root)
             result = e2e_runner.run(
                 self,
                 project_root=project_root,

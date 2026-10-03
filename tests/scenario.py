@@ -48,6 +48,8 @@ from tests.checks.facts import (
     _test_evidence_reuse,
     _test_facts_concurrency,
 )
+from tests.checks.runtime_guards import _test_runtime_guard_cleanup
+from tests.checks.task_telemetry import _test_task_telemetry
 from tests.checks.redaction import _test_redaction_boundary
 from tests.checks.verify_gaps import (
     _test_empty_section_is_not_a_finding,
@@ -1149,6 +1151,8 @@ confidence: high — all requested checks ran
         _test_evidence_anchor_relocation()
         _test_evidence_reuse()
         _test_evidence_lock_file()
+        _test_runtime_guard_cleanup()
+        _test_task_telemetry()
         _test_redaction_boundary()
         _test_quick_verify_gaps()
         _test_verification_routing()

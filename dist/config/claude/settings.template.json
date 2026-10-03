@@ -47,6 +47,28 @@
             "timeout": 15
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"{{HOME}}\\.claude\\hooks\\task-events.ps1\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Read|Skill|Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"{{HOME}}\\.claude\\hooks\\task-events.ps1\"",
+            "timeout": 10
+          }
+        ]
       }
     ]
   },

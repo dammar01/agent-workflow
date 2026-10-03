@@ -315,6 +315,10 @@ def run(
         from core.evidence.e2e import knowledge as e2e_knowledge
 
         browser_knowledge = e2e_knowledge.prune(project_root)
+        from core.workspace.runtime_lock import prune_runtime_guards
+
+        # Before the session sweep, so a guard is judged by its lock, not dropped with its dir.
+        guards = prune_runtime_guards(workflow_paths(project_root)["sessions_dir"])
         sessions = prune_sessions(project_root)
         return {
             "ok": True,
@@ -325,9 +329,10 @@ def run(
                 f"logs removed {summary['logs_removed']}; "
                 f"facts kept {facts['kept']}, dropped {facts['removed']} stale; "
                 f"browser knowledge kept {browser_knowledge['kept']}, dropped {browser_knowledge['removed']}; "
+                f"runtime guards removed {guards['removed']}, kept {guards['kept']}; "
                 f"sessions removed {sessions['removed']}, kept {sessions['kept']}"
             ),
-            "meta": {**summary, "locks": locks, "facts": facts, "e2e_knowledge": browser_knowledge, "sessions": sessions},
+            "meta": {**summary, "locks": locks, "facts": facts, "e2e_knowledge": browser_knowledge, "runtime_guards": guards, "sessions": sessions},
         }
 
     if normalized_command == "inspect":

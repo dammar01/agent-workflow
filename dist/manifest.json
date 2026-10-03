@@ -356,6 +356,20 @@
       "component": "runtime"
     },
     {
+      "path": "claude/hooks/task-events.ps1",
+      "sha256": "e04ec8ae8f84b115cfa09bc0405a404eec9d1ed9771f35abb501e16d170e82dd",
+      "bytes": 6376,
+      "merge": "replace",
+      "component": "runtime"
+    },
+    {
+      "path": "claude/hooks/task-events.sh",
+      "sha256": "08d485e7bfdcd701f5ba4335153e101e4493f6540fad8a51db3faa11d7d300a4",
+      "bytes": 5337,
+      "merge": "replace",
+      "component": "runtime"
+    },
+    {
       "path": "claude/hooks/workflow-statusline.ps1",
       "sha256": "22b99dfcb43ac62ff55a197730ef09a886a2d2f7cbeb32df18f6763d74b0fba9",
       "bytes": 12447,
@@ -427,8 +441,8 @@
     },
     {
       "path": "claude/settings.template.json",
-      "sha256": "1a67d3dc5b4708b4930611fbd59a495649287dd76fce9fa6b8532c99acfa1ce9",
-      "bytes": 1944,
+      "sha256": "a7d64035cc2df8bb219531b688572584e2e8048b6d613faa839ad60399c3b719",
+      "bytes": 2572,
       "merge": "merge",
       "component": "runtime"
     },

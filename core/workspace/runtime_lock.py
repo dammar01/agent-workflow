@@ -29,22 +29,29 @@ class _RuntimeTransitionGuard:
     def __enter__(self):
         _RUNTIME_TRANSITION_THREAD_LOCK.acquire()
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            self.handle = self.path.open("a+b")
-            if osutil.IS_WINDOWS:
-                import msvcrt
+            while True:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                self.handle = self.path.open("a+b")
+                if osutil.IS_WINDOWS:
+                    import msvcrt
 
-                self.handle.seek(0, os.SEEK_END)
-                if self.handle.tell() == 0:
-                    self.handle.write(b"\0")
-                    self.handle.flush()
-                self.handle.seek(0)
-                msvcrt.locking(self.handle.fileno(), msvcrt.LK_LOCK, 1)
-            else:
+                    self.handle.seek(0, os.SEEK_END)
+                    if self.handle.tell() == 0:
+                        self.handle.write(b"\0")
+                        self.handle.flush()
+                    self.handle.seek(0)
+                    msvcrt.locking(self.handle.fileno(), msvcrt.LK_LOCK, 1)
+                    return self
                 import fcntl
 
                 fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX)
-            return self
+                # `clean` may have unlinked the guard while this process waited on it
+                # (DEC-013). The lock is then on a file no one else will open: start over
+                # on whatever the path names now.
+                if _same_file(self.handle, self.path):
+                    return self
+                self.handle.close()
+                self.handle = None
         except Exception:
             if self.handle is not None:
                 self.handle.close()
@@ -69,6 +76,91 @@ class _RuntimeTransitionGuard:
                 self.handle.close()
                 self.handle = None
             _RUNTIME_TRANSITION_THREAD_LOCK.release()
+
+
+def _same_file(handle, path: Path) -> bool:
+    try:
+        named = os.stat(path)
+    except FileNotFoundError:
+        return False
+    held = os.fstat(handle.fileno())
+    return (named.st_dev, named.st_ino) == (held.st_dev, held.st_ino)
+
+
+def remove_orphan_guard(lock_path: Path) -> str:
+    """Remove a session's transition guard when no process can be using it (DEC-013).
+
+    Returns `removed`, `kept` (taken by someone, or the session's runtime lock is live) or
+    `absent`. The guard is locked without waiting, so a holder keeps it. On POSIX it is
+    unlinked while held; a process that was waiting on it sees the path changed and opens
+    the new file (`_RuntimeTransitionGuard`). Windows refuses to delete a file another
+    process has open, so the guard is unlinked after release and a refusal keeps it.
+    """
+    guard = lock_path.with_name(f"{lock_path.name}.guard")
+    with _RUNTIME_TRANSITION_THREAD_LOCK:
+        try:
+            handle = guard.open("r+b")
+        except FileNotFoundError:
+            return "absent"
+        except OSError:
+            return "kept"
+        try:
+            if osutil.IS_WINDOWS:
+                import msvcrt
+
+                try:
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                except OSError:
+                    return "kept"
+                try:
+                    if _runtime_lock_is_live(lock_path):
+                        return "kept"
+                finally:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    return "kept"
+                if not _same_file(handle, guard) or _runtime_lock_is_live(lock_path):
+                    return "kept"
+                try:
+                    guard.unlink()
+                except FileNotFoundError:
+                    return "absent"
+                except OSError:
+                    return "kept"
+                return "removed"
+        finally:
+            handle.close()
+        try:
+            guard.unlink()
+        except FileNotFoundError:
+            return "absent"
+        except OSError:
+            return "kept"
+        return "removed"
+
+
+def _runtime_lock_is_live(lock_path: Path) -> bool:
+    if not lock_path.exists():
+        return False
+    return _runtime_lock_is_active(lock_path, _runtime_lock_payload(lock_path))
+
+
+def prune_runtime_guards(sessions_dir: Path) -> dict:
+    """`clean`: drop the transition guards of sessions with no live runtime lock."""
+    counts = {"removed": 0, "kept": 0}
+    if not sessions_dir.is_dir():
+        return counts
+    for guard in sorted(sessions_dir.glob("*/runtime/lock.guard")):
+        outcome = remove_orphan_guard(guard.with_name("lock"))
+        if outcome in counts:
+            counts[outcome] += 1
+    return counts
 
 
 def _runtime_lock_payload(lock_path: Path) -> dict | None:

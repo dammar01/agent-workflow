@@ -493,10 +493,10 @@ ini berbeda, perbaiki salah satunya dalam perubahan yang sama.
 | `init` | lokal | — | scaffold `.workflow/`; regenerate runner script |
 | `upgrade` | lokal | — | migrasi layout `.workflow/data/`, refresh workspace, config override-only, preserve sessions |
 | `doctor` | lokal | — | cek kesiapan, tulis `reports/doctor.json` |
-| `clean` | lokal | — | prune job, fakta usang/duplikat, sesi lama |
+| `clean` | lokal | — | prune job, fakta usang/duplikat, guard runtime-lock milik sesi tanpa lock hidup (`sessions/<id>/runtime/lock.guard`; guard yang sedang dipegang proses lain tetap), sesi lama |
 | `inspect` | lokal | — | daftar job untuk sesi berjalan |
 | `provider` | lokal | — | baca/ubah provider second_agent dan reasoning effort |
-| `report` | lokal | — | ringkasan stream kualitas workspace (`quality.jsonl`), termasuk `e2e` (run), `e2e.drafts` (draft), dan `graph_refresh` (biaya Stop hook graph per outcome), serta dari `usage.jsonl`: `evidence_reuse` (command explore/analyze/plan yang dilayani artifact tersimpan dibagi command yang boleh reuse, continuation dihitung sekali; `by_outcome` memecah per `reuse_outcome`: `hit`, `no_prior`, `stale`, `unreadable`, `error`, `not_offered`, `disabled`, dan `unrecorded` untuk baris sebelum contract v3), `provider_cache` (share cached input dari input terukur provider: `all`, `first_call`, `continuation`, `fresh_thread`, `resumed_thread`; baris yang adapternya tidak melaporkan `resumed` tidak masuk dua bucket thread), `provider_threads` (per provider: `resumed`, `fresh`, `unknown`, dan `thread_changed` = call resume yang dijawab di thread lain, tanda sesi kehilangan state; baris sebelum contract v3 tidak dihitung), `by_effort` (per `<command>/<effort>`: jumlah command, median durasi, median input/output token — tiap median hanya dari command yang nilainya terukur, output tak terukur tidak dihitung nol; `default` = tanpa flag effort; baris sebelum contract v3 tidak dihitung), dan `graph_leads` (`graph_status` per command, `refreshing_by_command`, median/max `graph_ms`) |
+| `report` | lokal | — | ringkasan stream kualitas workspace (`quality.jsonl`), termasuk `e2e` (run), `e2e.drafts` (draft), dan `graph_refresh` (biaya Stop hook graph per outcome), serta dari `usage.jsonl`: `evidence_reuse` (command explore/analyze/plan yang dilayani artifact tersimpan dibagi command yang boleh reuse, continuation dihitung sekali; `by_outcome` memecah per `reuse_outcome`: `hit`, `no_prior`, `stale`, `unreadable`, `error`, `not_offered`, `disabled`, dan `unrecorded` untuk baris sebelum contract v3), `provider_cache` (share cached input dari input terukur provider: `all`, `first_call`, `continuation`, `fresh_thread`, `resumed_thread`; baris yang adapternya tidak melaporkan `resumed` tidak masuk dua bucket thread), `provider_threads` (per provider: `resumed`, `fresh`, `unknown`, dan `thread_changed` = call resume yang dijawab di thread lain, tanda sesi kehilangan state; baris sebelum contract v3 tidak dihitung), `by_effort` (per `<command>/<effort>`: jumlah command, median durasi, median input/output token — tiap median hanya dari command yang nilainya terukur, output tak terukur tidak dihitung nol; `default` = tanpa flag effort; baris sebelum contract v3 tidak dihitung), dan `graph_leads` (`graph_status` per command, `refreshing_by_command`, median/max `graph_ms`); serta dari `tasks.jsonl`: `tasks` (lihat [Task telemetry](#task-telemetry)) |
 | `audit` | lokal | — | baca `audit.jsonl` sesi |
 | `graph-meta` | lokal | — | status snapshot graphify: segar, usang, atau tak ada |
 | `explore` | terdelegasi | ya | peta codebase, entry point, pemilik |
@@ -698,7 +698,7 @@ Dengan `policies.graph_leads_enabled: true`, runtime membaca `graphify-out/graph
 - `explore`/`plan`/`analyze` menerima leads lengkap dan community untuk fan-out;
 - `verify` menerima shortlist ringkas maksimal enam file tanpa community;
 - graph yang lebih tua daripada source `.py` tetap dipakai, tetapi prompt membawa warning stale;
-- graph tidak ada, rusak, atau sedang di-refresh (`graphify-out/.refresh.lock` dipegang proses hidup) → delegated flow tetap berjalan tanpa leads dan tidak menunggu lock. Baris `usage.jsonl` mencatat `graph_status` (`used`, `empty`, `absent`, `refreshing`, `disabled`) dan `graph_ms`.
+- graph tidak ada, rusak, atau sedang di-refresh (`graphify-out/.refresh.lock` dipegang proses hidup) → delegated flow tetap berjalan tanpa leads dan tidak menunggu lock. Baris `usage.jsonl` mencatat `graph_status` (`used`, `empty`, `absent`, `refreshing`, `disabled`) dan `graph_ms`. `verify-browser` tidak memakai leads, jadi tidak melakukan lookup; ia hanya mencatat sekali per command apakah refresh sedang berjalan: `refreshing`, `available` (graph ada, tidak dibaca), atau `absent`.
 
 Runtime Python tidak pernah menjalankan `graphify init`, `build`, `watch`, atau `update`. Satu-satunya pemicu `graphify update` adalah Stop hook `graph-refresh` di bundle Claude (`.ps1` dan `.sh`); `CLAUDE.md` dan skill `refactor` tidak lagi meminta main agent menjalankannya. Hook jalan setelah `[EXECUTION RESULT]` atau `[REFACTOR RESULT]`, hanya bila graph sudah ada, lebih tua dari source, dan binary tersedia:
 
@@ -713,6 +713,17 @@ Hook fail-open, tidak pernah menolak response, tidak pernah membuat graph baru a
 Cache verdict graph memakai fingerprint path, mtime nanosecond, dan ukuran seluruh source
 `.py`. Perubahan isi, penambahan, atau penghapusan source menginvalidasi cache walaupun
 `graph.json` tidak berubah.
+
+---
+
+## Task telemetry
+
+`--command report` → `tasks` membaca `.workflow/data/tasks.jsonl` (DEC-015). Satu task = rangkaian event dalam satu MAIN_SESSION_ID, dari event pertamanya sampai commit yang memuat file yang ia edit. Event ditulis dua pihak, tanpa instruksi tambahan di prompt:
+
+- runtime: satu event per command delegated (`explore`, `analyze`, `plan`, `verify`, `verify-browser`), membawa verdict yang **dideklarasikan** reply verify (`DONE` dengan blocking finding dihitung `NEEDS FIX`; `DONE` yang oleh runtime dianggap `incomplete` hanya karena `not_verified` tetap `DONE`);
+- hook `task-events` (`.ps1`/`.sh`; `PostToolUse` matcher `Read|Skill|Edit|Write|MultiEdit|NotebookEdit|Bash`, `PreToolUse` matcher `Bash`): skill lokal dimuat (`Read` `~/.claude/skills/<name>.md` atau tool `Skill`), file di dalam project diedit (bukan `.workflow/`/`.git/`), dan `git commit` yang benar-benar memindahkan HEAD: `PreToolUse` menyimpan HEAD sebelum command, `PostToolUse` mencatat commit hanya bila HEAD berubah. Commit gagal, atau tanpa HEAD tersimpan, tidak dicatat.
+
+State: `completed` (commit setelah verify `DONE` tanpa edit sesudahnya), `unverified_closed` (commit tanpa verify `DONE`), `ready_to_commit` (`DONE`, belum commit), `open` (ada edit, belum `DONE`, belum commit — perubahan yang belum di-commit berarti belum selesai), `read_only` (tidak ada edit), `unknown` (event tanpa identitas sesi). Output: `tasks`, `by_state`, `skill_counts`, `unclaimed_commits` (commit yang tidak memuat file task mana pun), dan `recent` (10 task terakhir dengan `sequence`). Stream ini terpisah dari `usage.jsonl`: skill lokal dan edit bukan call delegated dan tidak boleh masuk budget governance.
 
 ---
 

@@ -7,7 +7,12 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-from core.evidence.contracts import AUDIT_STREAM_NAME, QUALITY_STREAM_NAME, USAGE_STREAM_NAME
+from core.evidence.contracts import (
+    AUDIT_STREAM_NAME,
+    QUALITY_STREAM_NAME,
+    TASK_STREAM_NAME,
+    USAGE_STREAM_NAME,
+)
 from core.workspace.runtime_lock import (
     _runtime_lock_payload,
     acquire_runtime_lock,
@@ -295,6 +300,11 @@ def write_quality_record(project_root: Path, record: dict) -> None:
     green test run inflate the count of delegated work.
     """
     _append_stream(project_root, QUALITY_STREAM_NAME, record)
+
+
+def write_task_event(project_root: Path, record: dict) -> None:
+    """Append one task lifecycle event (DEC-015). Fail-open like every observing stream."""
+    _append_stream(project_root, TASK_STREAM_NAME, record)
 
 
 def write_usage_record(project_root: Path, record: dict) -> None:

@@ -41,6 +41,11 @@ AUDIT_STREAM_NAME = "audit.jsonl"
 # Outcomes of checks run AGAINST the repo (tests, security sweeps) as opposed to calls the
 # runtime made. Different actor, different stream.
 QUALITY_STREAM_NAME = "quality.jsonl"
+# Task lifecycle events (DEC-015): skills, edits and commits, from the runtime and from the
+# task-events hook. Not usage: local skills and edits are not delegated calls, and governance
+# budgets read the usage stream as billable work.
+TASK_STREAM_NAME = "tasks.jsonl"
+TASK_EVENT_VERSION = 1
 
 
 def _coerce(cls, payload: dict | None):
@@ -294,7 +299,8 @@ class UsageRecord:
     # zero reuse rate and could not say which of these it was made of.
     reuse_outcome: str | None = None
     # Graph leads for this call: `used`, `empty` (a graph, nothing matched), `absent`,
-    # `refreshing` (the refresh worker held the lock, DEC-012), `disabled`. `graph_ms` is
+    # `refreshing` (the refresh worker held the lock, DEC-012), `disabled`; `available` for
+    # verify-browser, which takes no leads and only records the refresh state. `graph_ms` is
     # what the lookup took, the part of a call's latency the graph is responsible for.
     graph_status: str | None = None
     graph_ms: int | None = None

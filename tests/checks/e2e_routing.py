@@ -1352,6 +1352,18 @@ def _test_e2e_routing() -> None:
         rows = _usage_rows(root)
         assert_true(len(rows) == len(adapter.calls) == 2, f"draft + run: one row per invocation: rows={len(rows)} calls={len(adapter.calls)}")
         assert_true(sorted(r.get("command") for r in rows) == ["verify", "verify-browser"], f"the draft is billed as verify-browser, the run as verify: {[r.get('command') for r in rows]}")
+        assert_true(
+            all(r.get("graph_status") == "absent" and isinstance(r.get("graph_ms"), int) for r in rows),
+            f"each browser command records whether a graph refresh ran beside it: {[(r.get('graph_status'), r.get('graph_ms')) for r in rows]}",
+        )
+        from core.audit.task_telemetry import load_events
+
+        task_events = load_events(root)
+        assert_true(
+            sorted(e.get("skill") for e in task_events) == ["verify", "verify-browser"]
+            and all(e.get("source") == "runtime" for e in task_events),
+            f"one task event per delegated command (DEC-015): {task_events}",
+        )
 
         root = workspace("e2e-usage-reviewfail-")
         adapter = _adapter(fail={"verify"})

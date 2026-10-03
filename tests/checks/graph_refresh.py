@@ -230,7 +230,7 @@ def _check_call_during_refresh() -> None:
     Never waits: a verify that ran while the worker held the lock must record
     `refreshing`, not block on it and not pass as a project with no graph.
     """
-    from core.provider.executor import graph_leads_for_call
+    from core.provider.executor import graph_leads_for_call, graph_state_for_call
 
     root = Path(tempfile.mkdtemp(prefix="graph-leads-call-"))
     try:
@@ -254,6 +254,12 @@ def _check_call_during_refresh() -> None:
             assert_true(
                 waited < 1 and isinstance(ms, int) and ms >= 0,
                 f"[{name}] the lookup must not wait on the refresh lock; took {waited:.2f}s",
+            )
+            # verify-browser takes no leads: same refresh judgement, no lookup.
+            state, state_ms = graph_state_for_call(project)
+            assert_true(
+                state == {"empty": "available"}.get(expected, expected) and isinstance(state_ms, int),
+                f"[{name}] graph state for a browser call: expected {expected}, got {state}",
             )
     finally:
         shutil.rmtree(root, ignore_errors=True)

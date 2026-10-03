@@ -600,6 +600,13 @@ def graph_leads(rows) -> dict:
     }
 
 
+def task_report(project_root) -> dict:
+    """DEC-015 tasks: by state, their skill sequences, and commits no task claimed."""
+    from core.audit import task_telemetry
+
+    return task_telemetry.report(project_root)
+
+
 def report(project_root) -> dict:
     """Every P1 metric, over the whole recorded history of this project."""
     rows = load_usage(project_root)
@@ -680,4 +687,6 @@ def report(project_root) -> dict:
         "tests": test_pass_rate(project_root),
         "e2e": e2e_metrics(project_root, rows),
         "graph_refresh": graph_refresh(project_root),
+        # Its own stream: tasks span local skills and commits, which are not usage rows.
+        "tasks": task_report(project_root),
     }
