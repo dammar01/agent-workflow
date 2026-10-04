@@ -39,6 +39,10 @@ try {
     # never set, so every prompt classified as "no command" and the runtime gate never armed.
     $prompt    = [string]$payload.prompt
     if ([string]::IsNullOrWhiteSpace($prompt)) { $prompt = [string]$payload.user_prompt }
+    # A background task's completion reaches this hook as a prompt, but the user did not
+    # write it: its task names and output excerpts matched the NL map and armed the gate
+    # (DEC-045). It neither arms nor clears a marker; the user's own prompt decides.
+    if ($prompt.TrimStart().StartsWith('<task-notification>', [System.StringComparison]::Ordinal)) { exit 0 }
     $claudeSid = $payload.session_id
     $cwd       = $payload.cwd
     if ([string]::IsNullOrWhiteSpace($claudeSid)) { exit 0 }

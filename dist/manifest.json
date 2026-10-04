@@ -322,15 +322,15 @@
     },
     {
       "path": "claude/hooks/intent-gate-set.ps1",
-      "sha256": "a04d0af3cae1e590b59555795a65d792cb5177252783a57f60b9e2e83272775f",
-      "bytes": 4618,
+      "sha256": "49abc2d8d6cd970f13f89c24991ac7e5db0ce3fb91bae6452770dbc594b5501b",
+      "bytes": 4991,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/intent-gate-set.sh",
-      "sha256": "21dbeb3587da24fc4799407771a5467dd2abfa6ed31b2832057e5a6d6e5d4b22",
-      "bytes": 3528,
+      "sha256": "975730459a94c13b5f03a5ee5e1fcc51a6cd8ff9d7b1655e6e57c9024ba2ca9f",
+      "bytes": 3869,
       "merge": "replace",
       "component": "runtime"
     },

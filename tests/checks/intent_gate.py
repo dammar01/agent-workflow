@@ -64,6 +64,31 @@ def _check_prompt_field() -> None:
             subprocess.run(command, input=payload, text=True, env=env, capture_output=True, timeout=60)
             marker = project / ".workflow" / "data" / "sessions" / "m1" / "runtime" / "delegated.marker"
             assert_true(marker.is_file(), f"[{label}] a delegated prompt in Claude Code's `prompt` field arms the gate")
+
+            # DEC-045: a background task's notification is not the user's prompt. One whose
+            # text matches the NL map neither arms the gate nor clears the user's marker.
+            def notify(text: str) -> None:
+                note = json.dumps({"session_id": "c1", "cwd": str(project), "hook_event_name": "UserPromptSubmit", "prompt": text})
+                subprocess.run(command, input=note, text=True, env={**env, "CLAUDE_HOOK_RAW": note}, capture_output=True, timeout=60)
+
+            notification = (
+                "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n"
+                "<summary>Background command \"Delegate analyze audit to second agent\" completed</summary>\n"
+                "</task-notification>"
+            )
+            armed_by_user = marker.read_text(encoding="utf-8")
+            notify(notification)
+            assert_true(
+                marker.is_file() and marker.read_text(encoding="utf-8") == armed_by_user,
+                f"[{label}] a task notification leaves the user's marker as it was",
+            )
+            marker.unlink()
+            notify(notification)
+            assert_true(not marker.exists(), f"[{label}] a task notification matching the NL map does not arm the gate")
+            notify("  " + notification)
+            assert_true(not marker.exists(), f"[{label}] leading whitespace does not hide a task notification")
+            notify("analisa kenapa <task-notification> muncul di log")
+            assert_true(marker.is_file(), f"[{label}] a user prompt that merely mentions the tag still arms the gate")
         finally:
             shutil.rmtree(base, ignore_errors=True)
 

@@ -346,6 +346,11 @@ mengikuti instruksi user di luar blok (CLAUDE.md user, memory, project). Hook
 `graph-refresh`) dan `statusLine` tetap, karena hanya mencatat. Jalankan `--auto-intent`
 untuk memulihkan mode default. Tanpa kedua flag, upgrade mempertahankan mode sebelumnya.
 
+Prompt yang diawali `<task-notification>` (notifikasi background task yang Claude Code kirim
+lewat `UserPromptSubmit`) diabaikan `intent-gate-set`: tidak memasang marker dan tidak menghapus
+marker yang dipasang prompt user di turn yang sama (DEC-045). Sebelumnya nama task atau potongan
+output di notifikasi bisa cocok dengan NL map dan memasang gate yang tidak diminta.
+
 Sampai 3.8.0 `intent-gate-set` membaca prompt dari field `user_prompt`, yang tidak pernah
 dikirim Claude Code (field-nya `prompt`). Akibatnya gate runtime tidak pernah aktif dan hanya
 lapisan prompt yang bekerja. Sejak perbaikan itu, di mode auto-intent `intent-gate-check`

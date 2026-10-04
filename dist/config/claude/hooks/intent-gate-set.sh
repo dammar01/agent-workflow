@@ -31,6 +31,11 @@ try:
     # Claude Code sends the prompt as `prompt`; `user_prompt` alone was never set, so the
     # runtime gate never armed.
     prompt = str(payload.get("prompt") or payload.get("user_prompt") or "")
+    # A background task's completion reaches this hook as a prompt, but the user did not
+    # write it: its task names and output excerpts matched the NL map and armed the gate
+    # (DEC-045). It neither arms nor clears a marker; the user's own prompt decides.
+    if prompt.lstrip().startswith("<task-notification>"):
+        sys.exit(0)
     claude_sid = payload.get("session_id")
     cwd = payload.get("cwd")
     if not claude_sid:
