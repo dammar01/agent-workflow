@@ -184,6 +184,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-023](decisions/DEC-023-bundle-scoped-to-its-commands.yaml) | The installed bundle stays out of the user's own configuration — command-only scope, provider-call scope, block-only writes, uninstall | accepted | implemented | not_validated | 8d2d42b |
 | [DEC-024](decisions/DEC-024-codex-sandbox-refusal-fails-named.yaml) | A codex Windows sandbox refusal fails as `sandbox_unavailable` with ordered fix steps; the runtime never lowers the sandbox | accepted | implemented | not_validated | 7351846 |
 | [DEC-025](decisions/DEC-025-verify-tests-chosen-by-main-agent-run-by-runtime.yaml) | Verify tests are chosen by the main agent and run by the runtime; the second agent only reads and traces | accepted | implemented | not_validated | 3a378c7 |
+| [DEC-026](decisions/DEC-026-benchmark-calculation-contract.yaml) | Benchmark figures follow a versioned metric registry and carry a provenance stamp; recounting is maintainer-only | accepted | implemented | not_validated | 1301a3e |
 <!-- research-inventory:end -->
 
 No `H-XXX`, `EXP-XXX`, or `SYN-XXX` record is tracked: none has been run or has a result.
