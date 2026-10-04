@@ -160,7 +160,7 @@ function Get-RealPath([string]$Path) {
             $target = [string](@($item.Target)[0])
             if ([string]::IsNullOrWhiteSpace($target)) { return $null }
             if (-not [System.IO.Path]::IsPathRooted($target)) { $target = Join-Path (Split-Path -Parent $cur) $target }
-            if ($i + 1 -lt $parts.Count) { $target = Join-Path $target ($parts[($i + 1)..($parts.Count - 1)] -join '\') }
+            if ($i + 1 -lt $parts.Count) { $target = Join-Path $target ($parts[($i + 1)..($parts.Count - 1)] -join [System.IO.Path]::DirectorySeparatorChar) }
             $next = [System.IO.Path]::GetFullPath($target)
             break
         }
@@ -180,12 +180,14 @@ function Test-SkillRead([string]$Candidate) {
     if (@($Candidate -split '[\\/]') -contains '..') { return $false }
     if (-not $Candidate.EndsWith('.md', [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
     try {
-        $skills = Get-RealPath (Join-Path $env:USERPROFILE '.claude\skills')
+        $skills = Get-RealPath (Join-Path (Join-Path $env:USERPROFILE '.claude') 'skills')
         $full = Get-RealPath $Candidate
         if ($null -eq $skills -or $null -eq $full) { return $false }
         if (-not $full.EndsWith('.md', [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
         if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { return $false }
-        return $full.StartsWith($skills.TrimEnd('\', '/') + '\', [System.StringComparison]::OrdinalIgnoreCase)
+        # The separator of the running OS: Get-RealPath rebuilds with Join-Path, which spells
+        # a pwsh path on Linux with `/`, so a hardcoded `\` refused every skill there.
+        return $full.StartsWith($skills.TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
     } catch { return $false }
 }
 

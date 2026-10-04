@@ -308,8 +308,8 @@
     },
     {
       "path": "claude/hooks/intent-gate-check.ps1",
-      "sha256": "f9e94e9f983839d646ea46af9c618eebb12a4c76e13e95dce03cff5e399bb165",
-      "bytes": 22006,
+      "sha256": "58315b5d694c75ba32c46a01174655eead77764b26155266e392e4837a831d9f",
+      "bytes": 22275,
       "merge": "replace",
       "component": "runtime"
     },

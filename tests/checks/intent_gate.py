@@ -267,7 +267,7 @@ class _ArmedGate:
             "tool_name": tool, "tool_input": tool_input,
         })
         done = subprocess.run(
-            self.command, input=payload, text=True, encoding="utf-8",
+            self.command, input=payload, text=True, encoding="utf-8", errors="replace",
             env={**self.env, "CLAUDE_HOOK_RAW": payload}, capture_output=True, timeout=60,
         )
         return done.returncode
@@ -438,7 +438,7 @@ def _test_intent_gate_non_ascii_root() -> None:
                 **os.environ, "HOME": str(home), "USERPROFILE": str(home),
                 "CLAUDE_HOOK_RAW": payload, "HOOK_DIR": str(HOOKS),
             }
-            subprocess.run(command, input=payload, text=True, encoding="utf-8", env=env, capture_output=True, timeout=60)
+            subprocess.run(command, input=payload, text=True, encoding="utf-8", errors="replace", env=env, capture_output=True, timeout=60)
             marker = project / ".workflow" / "data" / "sessions" / "m1" / "runtime" / "delegated.marker"
             assert_true(marker.is_file(), f"[{label}] intent-gate-set must arm the gate under a non-ASCII root")
         finally:
