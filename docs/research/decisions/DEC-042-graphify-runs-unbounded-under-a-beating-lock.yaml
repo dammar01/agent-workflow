@@ -48,7 +48,7 @@ evidence_notes: |
   delegated call during a beating lock records `refreshing`.
 implementation:
   version: 3.8.1
-  commits: [uncommitted]
+  commits: [f23fe24587d96d7a3e950ded0b70662226c8830c]
   components:
     - dist/config/claude/hooks/graph-refresh.ps1, graph-refresh.sh (no limit, beat, lock rule)
     - core/graph/graph_index.py (refresh_lock_state, release_stale_refresh_lock)
