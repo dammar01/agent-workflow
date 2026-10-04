@@ -173,12 +173,16 @@ def tool_commit(repo_root: Path | None = None) -> str | None:
             return None
         if os.path.normcase(str(Path(top.stdout.strip()).resolve())) != os.path.normcase(str(root.resolve())):
             return None
-        head =subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10,
+        head = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10,
                               **osutil.hidden_run_kwargs())
         if head.returncode != 0:
             return None
         dirty = subprocess.run(["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"],
                                capture_output=True, text=True, timeout=10, **osutil.hidden_run_kwargs())
+        # A status that failed says nothing about the tree: an empty stdout from it is not
+        # a clean tree, and a bare hash would claim one.
+        if dirty.returncode != 0:
+            return None
         return head.stdout.strip() + ("+dirty" if dirty.stdout.strip() else "")
     except (OSError, subprocess.SubprocessError):
         return None
@@ -265,6 +269,11 @@ _KEY_SHAPE = re.compile(r"[A-Za-z0-9_.:+-](?:[A-Za-z0-9_.:+ -]{0,62}[A-Za-z0-9_.
 # provenance() puts them: they are this module's constants, not data.
 _PRODUCERS = frozenset(m["producer"] for m in REGISTRY.values())
 _FIXED = {("provenance", "recount"): frozenset({RECOUNT}), ("provenance", "producer"): _PRODUCERS}
+# The maps a producer keys by project. Their keys are data, not field names: each must be a
+# label the tools write (`PA`, `Project AB`), so a folder name there is refused by shape,
+# whatever its length, without matching labels against names they may share a letter with.
+_PROJECT_MAPS = frozenset({"per_project", "by_project"})
+_LABEL_SHAPE = re.compile(r"(?:P|Project )[A-Z]+")
 
 
 def _key_text(key) -> str:
@@ -294,10 +303,13 @@ def _check_shape(value, path: tuple, values: list) -> None:
         values.append((path, value))
         return
     if isinstance(value, dict):
+        labelled = bool(path) and path[-1] in _PROJECT_MAPS
         for key, item in value.items():
             text = _key_text(key)
             if not _KEY_SHAPE.fullmatch(text):
                 raise ValueError(f"export refused: a key under {_where(path)} is not identifier-shaped")
+            if labelled and not _LABEL_SHAPE.fullmatch(text):
+                raise ValueError(f"export refused: a key under {_where(path)} is not a project label")
             _check_shape(item, path + (text,), values)
         return
     if isinstance(value, (list, tuple)):
@@ -324,16 +336,18 @@ def write_export(report: dict, dest: Path, forbidden=()) -> Path:
     (`schema`, `recount`) is added after the check, by construction. `forbidden` holds the
     names of the projects whose data went into the report; a data value holding one as whole
     words (case-insensitive: `data` does not match `metadata`, `main` not `maintain`) is
-    refused. Keys are not read for names: they are the tool's own field names, and the
-    project labels it writes. The error names the JSON path and which forbidden name, by
-    position, collided — never the value. The caller decides what goes in: aggregates and
-    the provenance stamp, never prompt text.
+    refused, at any length: a project named `ui` is as identifying as one named `shop-api`.
+    Keys are not read for names: they are the tool's own field names, except under a
+    per-project map (`per_project`, `by_project`), where every key must be a project label.
+    The error names the JSON path and which forbidden name, by position, collided — never
+    the value. The caller decides what goes in: aggregates and the provenance stamp, never
+    prompt text.
     """
     if not isinstance(report, dict):
         raise ValueError("export refused: the report is not a JSON object")
     values: list = []
     _check_shape(report, (), values)
-    names = [(i, _tokens(w)) for i, w in enumerate(forbidden) if w and len(w) > 2]
+    names = [(i, _tokens(w)) for i, w in enumerate(forbidden) if w]
     for path, value in values:
         tokens = _tokens(value)
         for i, name in names:

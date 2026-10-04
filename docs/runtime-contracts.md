@@ -55,7 +55,9 @@ delegated commands. It is prompt-level in `CLAUDE.md`, and in auto-intent mode t
 `intent-gate-set` / `intent-gate-check` hooks in Claude Code block gather tools (including
 the `PowerShell` tool, and writes to the runner scripts) until `.workflow/run` dispatches;
 a Bash or PowerShell call passes only when it parses as one plain call to
-`<root>/.workflow/{run,check,inspect}` with constant arguments. That enforcement lives in the agent host, not in this runtime,
+`<root>/.workflow/{run,check,inspect}` with constant arguments, and a Read passes when it
+names an existing `.md` whose real path lies inside `~/.claude/skills` (the skill that says
+how to dispatch, DEC-039). That enforcement lives in the agent host, not in this runtime,
 and it fails open. The full prompt-layer list, with what each contract requires, is in
 [reference.md, "Kontrak lapisan prompt"](reference.md#kontrak-lapisan-prompt).
 
@@ -586,7 +588,11 @@ fenced JSON scenario), `spec_uncertainties`. Validation runs in both phases, bef
   it may not lead), and a
   `proven` selector — one the browser knowledge store
   lists for this origin, route and `within` (`knowledge.proven_selectors` returns
-  `{selector, route, within}`; elsewhere the selector is an ordinary candidate). `proven` is checked against the
+  `{selector, route, within}`; elsewhere the selector is an ordinary candidate). The route is
+  the URL path with identifier segments as `:id`, by `sanitize_endpoint`'s rule
+  (`/users/123/edit` and `/users/456/edit` are `/users/:id/edit`; route words stay apart,
+  DEC-040); an entry recorded under a raw id route matches nothing until a clean run
+  re-proves it. `proven` is checked against the
   store at validation; one it does not back is `spec_invalid`. Once the usual order starts,
   every later candidate obeys it, so a role-first list stays valid;
   the player tries only those candidates, needs exactly one match, and reports the

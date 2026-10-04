@@ -9,8 +9,9 @@ The calculation contract for every benchmark figure this project reports. The re
   `runtime.workflow_task`, `outcome.coding_task`), and so is "saved" (`runtime.context_avoided`,
   `outcome.context_saved`, and the status line's own figure). They are not interchangeable.
 - **Each producer stamps its output** with a `provenance` block: registry version, the metric
-  versions it computed, the tool's commit (`+dirty` when uncommitted), its parameters, and a hash
-  over its inputs (contents only, no paths).
+  versions it computed, the tool's commit (`+dirty` when uncommitted; `null` when the install
+  is not the top of its own work tree or `git status` fails, since a failed status cannot
+  prove a clean tree), its parameters, and a hash over its inputs (contents only, no paths).
 - **Recount:** on the machine holding the inputs only: inputs are private transcripts, usage streams and git history; the method is public, the data is not.
 - **Measuring your own use.** Any user can run the offline tools over their own projects; the
   figures are theirs. `--export <file>` writes a copy that may be shared (aggregates and the
@@ -18,7 +19,10 @@ The calculation contract for every benchmark figure this project reports. The re
   or identifier-shaped strings (`[A-Za-z0-9_.:+-]`, at most 64), keys likewise plus single
   spaces, and the fixed `recount`/`producer` texts only where the stamp writes them; anything
   else is refused naming its JSON path, never its value. A contributing project's name found
-  as whole words in a value is refused too. How to run them:
+  as whole words in a value is refused too, at any length (`ui` as well as `shop-api`; `ui`
+  does not match `build`). Under `per_project` and `by_project` every key must be a project
+  label the tools write (`PA`, `Project AB`), so a folder name there is refused by shape
+  (DEC-038). How to run them:
   [Measure your own use](../team-guide/measure-your-use.md).
 - The statistics differ between producers on purpose: unifying them would change figures
   already recorded (CASE-011, CASE-012). Each metric names its convention below.

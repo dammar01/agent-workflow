@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -178,6 +179,34 @@ def _test_metrics_contract() -> None:
             raise AssertionError("a project name is refused")
         assert_true(not (root / "bad.json").exists(), "a refused export writes nothing")
 
+        # A short project name is checked like a long one, still as whole words: `ui` refuses
+        # a value holding the word `ui`, not one holding `build` or `quick`.
+        for short, value in (("ui", "ui"), ("ab", "x-AB-y"), ("a", "a")):
+            try:
+                metrics.write_export({"note": value}, root / "bad.json", forbidden=[short])
+            except ValueError as exc:
+                assert_true("#1" in str(exc), f"a short project name is refused by position: {exc}")
+            else:
+                raise AssertionError(f"a project named {short!r} is refused like any other")
+        metrics.write_export({"note": "build-quick", "per_project": {"PA": {"sessions": 1}}},
+                             root / "short.json", forbidden=["ui", "a"])
+        # Under a per-project map every key is a label the tools write; a folder name there is
+        # refused by its shape, at any length, and labels pass even when a project shares
+        # a letter with them.
+        for key in ("ui", "shop-api", "acme", "Project ab", "PA1"):
+            for field in ("per_project", "by_project"):
+                try:
+                    metrics.write_export({field: {key: {"sessions": 1}}}, root / "bad.json", forbidden=[])
+                except ValueError as exc:
+                    assert_true(f"$.{field}" in str(exc) and key not in str(exc),
+                                f"the refusal names the map, not the key: {exc}")
+                else:
+                    raise AssertionError(f"a {field} key {key!r} that is not a label is refused")
+        metrics.write_export({"per_project": {"PA": {"sessions": 1}, "PAB": {"sessions": 2}},
+                              "by_project": {"Project A": {"tasks": 1}}},
+                             root / "labels.json", forbidden=["a", "ab"])
+        assert_true(not (root / "bad.json").exists(), "a refused export writes nothing")
+
         # Real exports from both tools pass, from projects folders named `data` and `main`.
         _check_tool_exports(root)
     finally:
@@ -226,6 +255,16 @@ def _test_metrics_contract() -> None:
         assert_true(metrics.tool_commit(repo / "core") is None,
                     "a root inside some other work tree stamps no commit")
         assert_true(metrics.tool_commit(repo) is not None, "the repository's own top stamps its commit")
+        # A status that fails is not a clean tree: no stamp, rather than a hash claiming one.
+        real_run = subprocess.run
+
+        def failing_status(argv, *a, **kw):
+            if "status" in argv:
+                return subprocess.CompletedProcess(argv, 128, stdout="", stderr="fatal")
+            return real_run(argv, *a, **kw)
+
+        with mock.patch.object(metrics.subprocess, "run", failing_status):
+            assert_true(metrics.tool_commit(repo) is None, "a failed git status stamps no commit")
 
 
 def _check_tool_exports(root: Path) -> None:

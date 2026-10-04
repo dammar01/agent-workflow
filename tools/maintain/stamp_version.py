@@ -95,6 +95,16 @@ EXEMPT: dict[str, tuple[str, ...]] = {
         # Provider CLI releases (config/providers.py stable_version), not ours.
         "(`stable_version`): opencode",
         "Rilis codex 0.155.0 sampai",
+        # v3.8.0 behavior described as history once 3.8.1 shipped.
+        "dan template sejak 3.8.0",
+        "dari draft 3.8.0)",
+        "Sampai 3.8.0 `intent-gate-set`",
+        "Pada 3.8.0 ini teramati",
+        "Sebelum 3.8.0 hook ini jalan",
+    ),
+    "dist/config/claude/hooks/task-events.ps1": (
+        # The v3.8.0 draft's matcher, described as history.
+        "the 3.8.0 draft hooked",
     ),
     "dist/config/claude/settings.template.json": (
         # Marketplace pins: the plugin repos' own release tags, not ours.

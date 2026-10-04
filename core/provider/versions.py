@@ -108,13 +108,13 @@ def _disk_store(key: str, version: str | None) -> None:
 
 def _parse(stdout: str, stderr: str) -> str | None:
     """The first line carrying a semantic version, stdout first and then stderr (some CLIs
-    print a banner or a warning before it, or write it to stderr); else stdout's first line."""
+    print a banner or a warning before it, or write it to stderr); else None. A banner with
+    no version in it is not the CLI's version, and a usage row would carry it as one."""
     for stream in (stdout, stderr):
         for line in (stream or "").splitlines():
             if _SEMVER.search(line):
                 return line.strip()[:80] or None
-    lines = (stdout or "").strip().splitlines()
-    return (lines[0].strip()[:80] or None) if lines else None
+    return None
 
 
 def read_version(command: str) -> str | None:

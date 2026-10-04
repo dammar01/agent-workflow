@@ -37,6 +37,7 @@ import re
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
+from core.evidence.e2e.redact import sanitize_endpoint
 from core.workspace.workspace_paths import now_iso, workflow_paths
 from utils.owned_lock import OwnedFileLock
 
@@ -106,11 +107,19 @@ def origin_of(base_url: str) -> str:
 
 def route_of(url: object, base_url: str) -> str:
     """The path a goto reaches: the route every step after it runs on. Shared with the spec
-    validator, so `proven` is checked on the same route it was recorded on."""
+    validator, so `proven` is checked on the same route it was recorded on.
+
+    Identifier segments read as `:id`, by the request ledger's rule (`sanitize_endpoint`):
+    `/users/123/edit` and `/users/456/edit` are one page, so a selector proven on one is
+    proven on the other, and no row is keyed by an id or token. Route words (`/users`,
+    `/settings/profile`) stay apart."""
     try:
-        return urlsplit(urljoin(base_url or "http://localhost/", str(url or "/"))).path or "/"
+        sanitized = sanitize_endpoint(urljoin(base_url or "http://localhost/", str(url or "/")))
     except ValueError:
         return "/"
+    if sanitized.startswith("["):
+        return "/"
+    return urlsplit(sanitized).path or "/"
 
 
 _route = route_of

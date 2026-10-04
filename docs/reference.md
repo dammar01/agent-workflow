@@ -1,4 +1,4 @@
-# agent-workflow v3.8.0
+# agent-workflow v3.8.1
 
 Runtime orkestrasi mandiri untuk alur kerja dua-agent. Tanpa dependency pihak ketiga.
 
@@ -70,7 +70,7 @@ git --version
 
 ---
 
-## Install (v3.8.0)
+## Install (v3.8.1)
 
 ### Anggota tim baru — urutan lengkap dari nol
 
@@ -249,7 +249,8 @@ agent-workflow | Second Agent 15.2M tok (14.5M cached) / 8 calls | Saved 642.7k 
 
 Kedua angka selalu tampil, termasuk saat bernilai nol. Segmen yang hilang terbaca sebagai rusak, bukan sebagai kosong.
 
-Angka diambil dari `<project_root>/.workflow/data/usage.jsonl` (atau `.workflow/usage.jsonl` pada workspace yang belum di-upgrade), di-cache 30 detik. Sesi Claude
+Angka diambil dari `<project_root>/.workflow/data/usage.jsonl` (atau `.workflow/usage.jsonl` pada workspace yang belum di-upgrade). Flavor PowerShell meng-cache hasilnya 30 detik; flavor `.sh` menghitung
+ulang tiap render (angka sama, hanya biaya baca berbeda). Sesi Claude
 dipetakan ke `MAIN_SESSION_ID` lewat `~/.claude/session_registry.json` yang ditulis
 `session-bind`. Belum ada `usage.jsonl`, atau sesi belum terpetakan, badge cuma menampilkan
 nama project — tak pernah menggagalkan prompt.
@@ -362,8 +363,19 @@ dengan `--name-only`, `--name-status`, atau `--stat[=N]`, plus opsional `--cache
 `--relative`, `--no-renames`, `--no-color`, `--`, ref, dan path (opsi lain seperti `-p` atau
 `--output` tetap diblokir); Read `<root>/.workflow/config.json`; Read/Write
 `sessions/<id>/verify/tests.json` milik sesi itu. Dependents hanya bisa disimpulkan dari nama
-file di diff. Matcher `PreToolUse` tidak memuat `Write`, jadi Write memang tak pernah di-gate.
+file di diff. Matcher `PreToolUse` memuat `Write`/`Edit`/`MultiEdit`/`NotebookEdit`, tetapi
+hook hanya menolak tulis ke script runner `.workflow/{run,check,inspect}` (ekstensi apa pun)
+selama marker ada (menulis ulang runner lalu menjalankannya akan membuat allowlist runner jadi command bebas);
+tulis ke file lain, termasuk `tests.json`, lolos.
 `.ps1` hook diuji di Windows PowerShell 5.1 (`powershell`), shell yang dipasang settings.
+
+Untuk semua `command` di marker, Read definisi skill juga lolos: path absolut tanpa segmen
+`..`, berakhiran `.md`, file-nya ada, dan path aslinya (semua symlink/junction diikuti) berada
+di dalam path asli `~/.claude/skills`. Symlink boleh menunjuk ke mana pun di dalam folder skill,
+tidak keluar darinya. Alasannya: tool Skill menyuruh agent membaca `~/.claude/skills/<name>.md`
+sesudah prompt yang memanggilnya mempersenjatai gate, sehingga instruksi cara dispatch terkunci
+sampai sesudah dispatch (DEC-039). Grep/Glob atas folder itu, file selain `.md`, dan path
+relatif tetap diblokir.
 
 `dist/config/claude/CLAUDE.md` sengaja memuat **kedua** stanza mode — `COMMAND-ONLY` dan
 `AUTO-INTENT`, masing-masing dibungkus marker `<!-- <MODE>:START -->` / `<!-- <MODE>:END -->`.
@@ -617,7 +629,7 @@ ini berbeda, perbaiki salah satunya dalam perubahan yang sama.
 
 ² Ketiga tahap `promote-*` menerima **path ke file JSON** lewat `--prompt`, bukan dokumennya sendiri: satu dokumen knowledge melewati batas argv 8191 karakter Windows dengan mudah. Tahapnya dipisah karena persetujuan user terjadi di antaranya — CLI tak bisa bertanya apa pun, jadi verifikasi berhenti pada vonis, main_agent yang menjalankan review, dan penulisan adalah panggilan terpisah yang hanya bisa terjadi sesudahnya. `promote-write` menolak di luar `policies.production_branch`.
 
-³ `verify-browser` adalah command **terdelegasi**: ia terdaftar di registry DELEGATED dan ikut pre-flight gate seperti `explore`/`plan`/`analyze`/`verify`. Ia membaca **request per sesi** (`.workflow/data/sessions/<session>/e2e/request.json`) di atas default project dari section `e2e` di `config.json`. Pembagian kerjanya tiga tahap: second_agent menyusun draft spec (tahap 1) dan me-review bukti browser (tahap 3); di antaranya, **player runtime** — proses anak yang dijalankan runtime (`python -m core.evidence.e2e.player`) — menggerakkan Playwright (tahap 2). main_agent tidak menjalankan browser dan second_agent juga tidak (sandbox read-only). Wawancara terjadi di main_agent hanya sesudah draft melaporkan target belum dikonfigurasi. Tahap `draft` tidak membawa vonis; tahap `run` diselesaikan sebagai `verify` sehingga vonis dan exit code-nya sama dengan verifikasi lain. Section `[E2E SPEC]` yang gagal validasi mendapat satu perbaikan di thread provider yang sama (`meta.e2e.repair`); satu-satunya atribut test adalah `data-e2e` lewat key selector `e2e` — `testid` ditolak (**breaking**); rem `repeat_failure` lepas sendiri bila project (di luar `.workflow/`, via Git) atau runtime (`TOOL_VERSION` + digest kode `core/evidence/e2e/`) berubah sejak kegagalan terakhir, streak bucket `app` hanya bertambah untuk kegagalan dengan signature sama (halaman, field, kondisi), dan tercatat sebagai knowledge `repeat_failure` untuk draft berikutnya. Nilai credential yang terketik literal di task, draft, atau `request.json` dicari lewat lookup `secrets.json` dan dikembalikan ke `${NAME}` (`request.json` ditulis ulang; nama key dilaporkan di `meta.e2e.secret_literals`, nilainya tidak pernah), dan `fill` ke field password tanpa placeholder → `spec_invalid`; kegagalan yang disebabkan scenario sendiri — selector tebakan yang meleset, selector apa pun yang cocok >1 elemen, write/navigasi yang ditolak policy run — ber-origin `scenario` dan berakhir `incomplete: scenario_error`, tidak di-retry dan tidak dihitung rem; tiap run non-pass dan tiap penolakan rem membawa `meta.e2e.diagnosis` (`cause`, `next_step`, `failed`, `fix_hint`, `reusable`), penyebab reusable disimpan sebagai knowledge `failure_hint`; tiap draft menulis baris `kind: e2e_draft` (kategori error validator, hasil repair) yang dirangkum `--command report` di `e2e.drafts`. Network: setiap run selalu mencatat metadata semua request halaman (urutan, URL tanpa query, tipe, status, timing, ukuran; tanpa body/header/cookie), 500 baris terbaru plus ringkasan atas semua request, di `report.json` → `network` dan `meta.e2e.page_requests`, termasuk `since_last_run` (perubahan dibanding run sebelumnya pada origin yang sama). Urutan selector: kandidat mengikuti role+name > label > e2e > text > css, kecuali dua jenis yang boleh memimpin — `e2e` ber-provenance `source` dengan ref `path:line`, dan selector `proven` yang tercatat di browser knowledge untuk origin, route (path `goto` terakhir), dan `within` step itu (dicek ke store; klaim `proven` tanpa dasar atau di route/scope lain → `spec_invalid`); selector `proven` yang meleset turun ke urutan biasa, dua run berturut yang meleset memensiunkannya (satu run melemahkan entry paling banyak sekali); step yang gagal sesudah selector-nya cocok bukan miss; pass hanya dicatat dari run yang lulus di percobaan pertama. URL network dibersihkan dari parameter path `;…` dan segmen berbentuk token (16+ huruf-angka tanpa pemisah, 16+ campuran huruf besar-kecil, 24+ dengan angka) jadi `:id`. Kontrak lengkap: `docs/runtime-contracts.md`, bagian `/.verify-browser`.
+³ `verify-browser` adalah command **terdelegasi**: ia terdaftar di registry DELEGATED dan ikut pre-flight gate seperti `explore`/`plan`/`analyze`/`verify`. Ia membaca **request per sesi** (`.workflow/data/sessions/<session>/e2e/request.json`) di atas default project dari section `e2e` di `config.json`. Pembagian kerjanya tiga tahap: second_agent menyusun draft spec (tahap 1) dan me-review bukti browser (tahap 3); di antaranya, **player runtime** — proses anak yang dijalankan runtime (`python -m core.evidence.e2e.player`) — menggerakkan Playwright (tahap 2). main_agent tidak menjalankan browser dan second_agent juga tidak (sandbox read-only). Wawancara terjadi di main_agent hanya sesudah draft melaporkan target belum dikonfigurasi. Tahap `draft` tidak membawa vonis; tahap `run` diselesaikan sebagai `verify` sehingga vonis dan exit code-nya sama dengan verifikasi lain. Section `[E2E SPEC]` yang gagal validasi mendapat satu perbaikan di thread provider yang sama (`meta.e2e.repair`); satu-satunya atribut test adalah `data-e2e` lewat key selector `e2e` — `testid` ditolak (**breaking**); rem `repeat_failure` lepas sendiri bila project (di luar `.workflow/`, via Git) atau runtime (`TOOL_VERSION` + digest kode `core/evidence/e2e/`) berubah sejak kegagalan terakhir, streak bucket `app` hanya bertambah untuk kegagalan dengan signature sama (halaman, field, kondisi), dan tercatat sebagai knowledge `repeat_failure` untuk draft berikutnya. Nilai credential yang terketik literal di task, draft, atau `request.json` dicari lewat lookup `secrets.json` dan dikembalikan ke `${NAME}` (`request.json` ditulis ulang; nama key dilaporkan di `meta.e2e.secret_literals`, nilainya tidak pernah), dan `fill` ke field password tanpa placeholder → `spec_invalid`; kegagalan yang disebabkan scenario sendiri — selector tebakan yang meleset, selector apa pun yang cocok >1 elemen, write/navigasi yang ditolak policy run — ber-origin `scenario` dan berakhir `incomplete: scenario_error`, tidak di-retry dan tidak dihitung rem; tiap run non-pass dan tiap penolakan rem membawa `meta.e2e.diagnosis` (`cause`, `next_step`, `failed`, `fix_hint`, `reusable`), penyebab reusable disimpan sebagai knowledge `failure_hint`; tiap draft menulis baris `kind: e2e_draft` (kategori error validator, hasil repair) yang dirangkum `--command report` di `e2e.drafts`. Network: setiap run selalu mencatat metadata semua request halaman (urutan, URL tanpa query, tipe, status, timing, ukuran; tanpa body/header/cookie), 500 baris terbaru plus ringkasan atas semua request, di `report.json` → `network` dan `meta.e2e.page_requests`, termasuk `since_last_run` (perubahan dibanding run sebelumnya pada origin yang sama). Urutan selector: kandidat mengikuti role+name > label > e2e > text > css, kecuali dua jenis yang boleh memimpin — `e2e` ber-provenance `source` dengan ref `path:line`, dan selector `proven` yang tercatat di browser knowledge untuk origin, route (path `goto` terakhir, segmen identifier jadi `:id`: `/users/123` dan `/users/456` satu route), dan `within` step itu (dicek ke store; klaim `proven` tanpa dasar atau di route/scope lain → `spec_invalid`); selector `proven` yang meleset turun ke urutan biasa, dua run berturut yang meleset memensiunkannya (satu run melemahkan entry paling banyak sekali); step yang gagal sesudah selector-nya cocok bukan miss; pass hanya dicatat dari run yang lulus di percobaan pertama. URL network dibersihkan dari parameter path `;…` dan segmen berbentuk token (16+ huruf-angka tanpa pemisah, 16+ campuran huruf besar-kecil, 24+ dengan angka) jadi `:id`. Kontrak lengkap: `docs/runtime-contracts.md`, bagian `/.verify-browser`.
 
 Tidak ada command Python `execute`. `/.execute -y` tetap tersedia sebagai command user-facing di main_agent; menulis kode sengaja tidak didelegasikan ke runtime atau second_agent.
 
@@ -754,7 +766,7 @@ Pakai `codex` bila project-nya memang tak menyimpan rahasia, atau bila kamu mene
 
 Sejak v3.7.1 posisi ini eksplisit: `codex` dan `agy` diperlakukan sebagai **trusted provider**. Selain tanpa batas baca, adapter keduanya meneruskan seluruh environment proses ke CLI provider (credential di env ikut terlihat). Itu diterima sebagai risiko, bukan diperbaiki dengan allowlist — allowlist bisa memutus auth CLI provider, dan provider yang sudah bisa membaca `.env` tak dijaga apa pun oleh env yang dipangkas. Sebagai gantinya risikonya selalu terlihat: `/.doctor` menulis cek `second_agent_read_boundary` dan satu `WARNING` di `recommended_fixes` tiap kali provider aktif `codex`/`agy` (bukan issue — readiness tetap READY), dan `/.provider` menyebutnya saat memilih.
 
-Kunci reliability (v3.8.0):
+Kunci reliability (v3.8.1):
 
 | Kunci | Default | Arti |
 | --- | --- | --- |
@@ -868,7 +880,8 @@ Jadi `auto_verify_after_execute: false` tidak mematikan `/.verify`; ia hanya men
   alasan menyatakan tak ada test yang relevan dan tidak menambah gap; baris
   `runtime: no test requested — <alasan>` tetap tertulis di `checks_run` tetapi **tidak dihitung**
   sebagai check, jadi verdict bergantung pada check review itu sendiri (tanpa check →
-  `incomplete`, `checks_missing`). Gap yang ditulis runtime (prefix `tests:`: tanpa request,
+  `incomplete`, `checks_missing`). Project tanpa test suite memakai jalur yang sama: skill
+  verify meminta `commands: []` dengan alasan itu, bukan melewatkan `tests.json`. Gap yang ditulis runtime (prefix `tests:`: tanpa request,
   request tak terpakai, command ditolak, crash) berjenis `runtime_gap` dan membuat exit 2;
   kelonggaran exit 0 untuk `incomplete` hanya berlaku bagi gap yang dideklarasikan agent
   (`verification_gap`). Command berisi karakter kontrol (C0 selain tab, DEL) ditolak sebelum
@@ -1068,7 +1081,7 @@ pernah tercatat, runtime gagal sebagai `session_capture_failed` dan clean run di
 Request berbeda pada session yang masih terkunci tetap ditolak sebagai
 `job_already_running`.
 
-### Liveness worker (v3.8.0)
+### Liveness worker (v3.8.1)
 
 PID yang hidup **tidak** berarti sedang bekerja. Worker karena itu melaporkan heartbeat sekaligus usia output stream, lalu job diklasifikasi tiga keadaan:
 

@@ -39,6 +39,7 @@ def _runners() -> list[tuple[str, list[str]]]:
 def _test_intent_gate_reads_the_prompt_field() -> None:
     _check_prompt_field()
     _check_verify_lane()
+    _check_skill_read_lane()
 
 
 def _check_prompt_field() -> None:
@@ -185,6 +186,55 @@ def _check_verify_lane() -> None:
                 assert_true(code == 2, f"[{label}] a runner path inside another command must block: {command_line}; exit {code}")
         finally:
             shutil.rmtree(base, ignore_errors=True)
+
+
+def _check_skill_read_lane() -> None:
+    """Under any pending marker a Read of a skill definition passes, and nothing near it.
+
+    The Skill tool tells the agent to read ~/.claude/skills/<name>.md, while the prompt
+    that invoked it already armed the gate: the instruction saying how to dispatch was
+    blocked until after the dispatch. The lane is an existing .md whose real path lies in
+    ~/.claude/skills; `..`, a relative path, another extension, a missing file, and a link
+    that leaves the folder stay blocked.
+    """
+    for label, command in _check_runners():
+        gate = _ArmedGate(label, command)
+        try:
+            skills = gate.home / ".claude" / "skills"
+            (skills / "pkg").mkdir(parents=True)
+            (skills / "analyze.md").write_text("# Skill: analyze\n", encoding="utf-8")
+            (skills / "pkg" / "SKILL.md").write_text("# nested\n", encoding="utf-8")
+            (skills / "notes.txt").write_text("x\n", encoding="utf-8")
+            (gate.home / ".claude" / "settings.md").write_text("x\n", encoding="utf-8")
+            (gate.project / "secret.md").write_text("x\n", encoding="utf-8")
+            for intent in ("plan", "analyze", "verify"):
+                gate.arm(intent)
+                gate.expect("Read", {"file_path": str(skills / "analyze.md")}, 0, f"a pending {intent} lets a skill be read")
+                gate.expect("Read", {"file_path": str(skills / "pkg" / "SKILL.md")}, 0, "a skill in a subfolder")
+            gate.arm("plan")
+            blocked = [
+                (str(skills / "notes.txt"), "a file that is not .md"),
+                (str(skills / "missing.md"), "a skill that does not exist"),
+                (str(gate.home / ".claude" / "settings.md"), "a .md outside the skills folder"),
+                (str(skills / ".." / "settings.md"), "a path stepping out with .."),
+                (os.path.join(".claude", "skills", "analyze.md"), "a relative path"),
+                (str(gate.project / "secret.md"), "a project file"),
+            ]
+            for path, why in blocked:
+                gate.expect("Read", {"file_path": path}, 2, f"{why} stays blocked")
+            gate.expect("Grep", {"pattern": "x", "path": str(skills)}, 2, "a Grep over the skills folder stays blocked")
+            try:
+                os.symlink(gate.project / "secret.md", skills / "out.md")
+                os.symlink(skills / "analyze.md", skills / "in.md")
+            except (OSError, NotImplementedError):
+                print(f"  note: [{label}] no symlink privilege; the link cases of the skill-read lane are not exercised")
+            else:
+                gate.expect("Read", {"file_path": str(skills / "out.md")}, 2, "a link leaving the skills folder stays blocked")
+                gate.expect("Read", {"file_path": str(skills / "in.md")}, 0, "a link inside the skills folder passes")
+            gate.disarm()
+            gate.expect("Read", {"file_path": str(gate.project / "secret.md")}, 0, "with no marker every Read passes")
+        finally:
+            gate.close()
 
 
 class _ArmedGate:

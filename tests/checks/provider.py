@@ -1039,16 +1039,23 @@ def _check_version_cache(versions_module) -> None:
         assert_true(read() is None and len(calls) == 3, "no readable version is None")
         assert_true(read() is None and len(calls) == 3, "and that None is cached, not retried every run")
 
+        # Exit 0 with only a banner: no release in it, so the reading is None, cached like any
+        # completed answer. The banner itself is never kept as the CLI's version.
+        exe.write_bytes(b"v3b: banner only")
+        answers.append((0, "Welcome to fakecli!\nRun fakecli --help\n", "no version here"))
+        assert_true(read() is None and len(calls) == 4, "a banner without a version is None")
+        assert_true(read() is None and len(calls) == 4, "and that None is cached")
+
         exe.write_bytes(b"v4 that hangs")
         answers.extend([(None, "", ""), (0, "fakecli 4.0.0", "")])
-        assert_true(read() is None and len(calls) == 4, "a timeout reads as None")
-        assert_true(read() == "fakecli 4.0.0" and len(calls) == 5, "but is not remembered across runs")
+        assert_true(read() is None and len(calls) == 5, "a timeout reads as None")
+        assert_true(read() == "fakecli 4.0.0" and len(calls) == 6, "but is not remembered across runs")
 
         stale = versions_module._cache_key(str(exe))
         assert_true(stale is not None, "an existing executable has a cache key")
         os.utime(exe, ns=(0, 0))
         answers.append((0, "fakecli 4.0.1", ""))
-        assert_true(read() == "fakecli 4.0.1" and len(calls) == 6, "an mtime change alone invalidates")
+        assert_true(read() == "fakecli 4.0.1" and len(calls) == 7, "an mtime change alone invalidates")
 
         versions_module.CACHE_PATH = work / "cache-file-is-a-dir"
         versions_module.CACHE_PATH.mkdir()

@@ -1,9 +1,9 @@
-# Claude Code — Personal Global Config (v3.8.0)
+# Claude Code — Personal Global Config (v3.8.1)
 # Skills: ~/.claude/skills/   Memory: ~/.claude/memory/
 
-<!-- WORKFLOW-MAIN-AGENT:START — v3.8.0, do not edit manually -->
+<!-- WORKFLOW-MAIN-AGENT:START — v3.8.1, do not edit manually -->
 
-## Workflow Main Agent — v3.8.0
+## Workflow Main Agent — v3.8.1
 
 role: orchestrator + user interface + direct executor. Kamu BUKAN second_agent.
 second_agent: OpenCode (read-only evidence), dipanggil via .workflow/run script.
@@ -74,7 +74,7 @@ Gap paling sering: intent TERDETEKSI, routing ke second_agent TIDAK ditegakkan. 
 - Alat ≠ eksekutor. MCP native (laravel-boost dll) tersedia di main_agent BUKAN izin direct. second_agent PUNYA akses sama (read-only DB via MCP). Alat tersedia ≠ alat harus kamu jalankan sendiri.
 - Keyword-ALAT ≠ keyword-EKSEKUTOR. User sebut nama tool ("pakai laravel-boost", "grep X") = arah EVIDENCE, BUKAN perintah main_agent eksekusi sendiri. Satu kata user tak menggeser division of labor — bulk-gather tetap → second_agent.
 - Pengecualian (persis Division of Labor): [LOCAL_MODE] / proxy gagal, ATAU slice KUALITAS presisi-tinggi yg second_agent struktural tak cukup — DAN slice itu KECIL (satu/dua anchor, bukan file besar/direktori penuh). VOLUME besar walau minta file:line = tetap delegate; "cuma satu direktori" TAPI file/isi besar BUKAN low-volume. Di luar itu, gather-sebelum-run = malas, DILARANG. Pakai pengecualian → sebut alasan di [INTENT].
-NB: gate ini DUA-LAPIS. (1) PROMPT-level (self-enforced, aturan di atas). (2) RUNTIME: UserPromptSubmit hook `intent-gate-set` klasifikasi prompt via NL-map → tulis marker `delegated.marker` bila DELEGATED; PreToolUse hook `intent-gate-check` HARD-block gather-tool (mcp__*/Read/Grep/Glob, Bash DAN PowerShell) via exit 2 selama marker ada; Bash/PowerShell di-allowlist: cuma SATU panggilan polos ke `<root>/.workflow/{run,check,inspect}` yang lolos (di-parse, bukan regex: argumen konstan, nol `&&`/`;`/pipe/redirect/`$(..)`/`(..)`, interpreter cuma `-File`, path di luar root ditolak), jadi `cat`/`rg`/`git show`/`Get-Content` ikut ke-block; Write/Edit ke script runner itu juga ke-block selama marker ada; marker `verify` saja juga meloloskan pilih-test (skill verify): `git diff --name-only|--name-status|--stat` bersih, Read `.workflow/config.json` + `<session>/verify/tests.json`, Write tests.json itu — selain itu tetap ke-block; `.workflow/run` meng-clear marker saat dispatch. Escape: `$env:WORKFLOW_LOCAL_MODE=1` (Windows) / `export WORKFLOW_LOCAL_MODE=1` (POSIX) / `local_mode.flag` / hapus marker. Fail-open (registry/marker absent → allow). Hook `.ps1` dan `.sh` memiliki kontrak yang sama; installer memilih flavor OS aktif dan rewrite command template `powershell`→`bash` di POSIX.
+NB: gate ini DUA-LAPIS. (1) PROMPT-level (self-enforced, aturan di atas). (2) RUNTIME: UserPromptSubmit hook `intent-gate-set` klasifikasi prompt via NL-map → tulis marker `delegated.marker` bila DELEGATED; PreToolUse hook `intent-gate-check` HARD-block gather-tool (mcp__*/Read/Grep/Glob, Bash DAN PowerShell) via exit 2 selama marker ada; Bash/PowerShell di-allowlist: cuma SATU panggilan polos ke `<root>/.workflow/{run,check,inspect}` yang lolos (di-parse, bukan regex: argumen konstan, nol `&&`/`;`/pipe/redirect/`$(..)`/`(..)`, interpreter cuma `-File`, path di luar root ditolak), jadi `cat`/`rg`/`git show`/`Get-Content` ikut ke-block; Write/Edit ke script runner itu juga ke-block selama marker ada; marker `verify` saja juga meloloskan pilih-test (skill verify): `git diff --name-only|--name-status|--stat` bersih, Read `.workflow/config.json` + `<session>/verify/tests.json`, Write tests.json itu — selain itu tetap ke-block; Read definisi skill (`.md` yang path aslinya di dalam `~/.claude/skills`) lolos untuk semua command; `.workflow/run` meng-clear marker saat dispatch. Escape: `$env:WORKFLOW_LOCAL_MODE=1` (Windows) / `export WORKFLOW_LOCAL_MODE=1` (POSIX) / `local_mode.flag` / hapus marker. Fail-open (registry/marker absent → allow). Hook `.ps1` dan `.sh` memiliki kontrak yang sama; installer memilih flavor OS aktif dan rewrite command template `powershell`→`bash` di POSIX.
 
 ### Session (satu otoritas)
 MAIN_SESSION_ID dari blok [SESSION BINDING] hook (STEP 5b) — AUTHORITATIVE, override semua.

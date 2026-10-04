@@ -498,6 +498,52 @@ def _check_a_failure_after_the_match_is_not_a_miss() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _check_dynamic_routes_share_a_scope() -> None:
+    """DEC-040: identifier segments are one route. A selector proven on `/users/123/edit`
+    is proven on `/users/456/edit`, and no row is keyed by the id (a navigation row keeps
+    the step's own URL in its body, the address a next draft can open); a page with other
+    route words (`/users/123/view`, `/users`) is still another route."""
+    from core.evidence.e2e.spec import validate_scenario
+
+    for url, route in (
+        ("/users/123/edit", "/users/:id/edit"),
+        (BASE + "/orders/550e8400-e29b-41d4-a716-446655440000?tab=2", "/orders/:id"),
+        ("/settings/profile", "/settings/profile"),
+        ("/posts/my-first-article", "/posts/my-first-article"),
+        # A numeric route word is folded like an id: `/reports/2024` and `/reports/2025`
+        # are one route. Deliberate: the scope reuses the redaction sanitizer, which cannot
+        # tell a year from a record id, and pages one template renders share their selectors.
+        ("/reports/2024", "/reports/:id"),
+        ("/reports/2025", "/reports/:id"),
+        ("/", "/"),
+    ):
+        got = knowledge.route_of(url, BASE)
+        assert_true(got == route, f"route_of({url!r}) is {route!r}: {got!r}")
+
+    root = _project()
+    try:
+        heuristic = [{"selector": _SAVE_ROLE, "selector_provenance": {"type": "heuristic"}}]
+        first = _two_saves(heuristic, url="/users/123/edit")
+        knowledge.ingest(root, _steps_report(first, {"save": ("passed", _FIRST_WON), "save-again": ("passed", _FIRST_WON)}),
+                         first, BASE, "sid-1", clean_first_attempt=True)
+        assert_true(
+            {"selector": _SAVE_ROLE, "route": "/users/:id/edit", "within": None} in knowledge.proven_selectors(root, BASE),
+            f"proven on the route with its id as :id: {knowledge.proven_selectors(root, BASE)}",
+        )
+        routes = {e.get("route") for e in knowledge.load(root)}
+        assert_true(routes == {"/users/:id/edit"}, f"every row is keyed by the route, never the id: {routes}")
+        policy = {"base_url": BASE, "proven_selectors": knowledge.proven_selectors(root, BASE)}
+        proven = [{"selector": _SAVE_ROLE, "selector_provenance": {"type": "proven"}}]
+        other_id = _two_saves(proven, url="/users/456/edit")
+        assert_true(not validate_scenario(other_id, policy),
+                    f"another id is the same page: {validate_scenario(other_id, policy)}")
+        for url in ("/users/123/view", "/users", "/users/123/edit/extra"):
+            errors = validate_scenario(_two_saves(proven, url=url), policy)
+            assert_true(any("proven" in e and "route" in e for e in errors), f"{url} is another route: {errors}")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _check_proven_is_scoped_by_route_and_within() -> None:
     """A selector proven on one route under one `within` is proven there only: another route
     or container neither may cite it as proven nor demotes it. A store row written before
@@ -616,6 +662,7 @@ def _test_e2e_knowledge() -> None:
     _check_one_run_weakens_an_entry_once()
     _check_a_failure_after_the_match_is_not_a_miss()
     _check_proven_is_scoped_by_route_and_within()
+    _check_dynamic_routes_share_a_scope()
     _check_a_failed_run_proves_nothing()
     _check_a_missing_proven_selector_is_grounded()
     root = _project()

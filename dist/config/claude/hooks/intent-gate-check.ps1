@@ -27,6 +27,9 @@
 # (no patch, no file output), a Read of .workflow/config.json or of this session's
 # verify/tests.json, and a Write of that tests.json. Everything else stays blocked.
 #
+# Under any pending marker a Read of a skill definition passes: an existing .md whose real
+# path lies inside ~/.claude/skills. The skill says how to dispatch; it is not evidence.
+#
 # Escape hatches (allow despite marker):
 #   - env  WORKFLOW_LOCAL_MODE=1
 #   - file .workflow/data/sessions/<MAIN_SESSION_ID>/runtime/local_mode.flag exists
@@ -137,6 +140,53 @@ function Test-RunnerFile([string]$Candidate, [string]$Root) {
         $leaf = [System.IO.Path]::GetFileName($parent)
         return ($parent.Contains('~') -and ($leaf -eq '.workflow' -or $leaf.Contains('~')))
     } catch { return $true }
+}
+
+function Get-RealPath([string]$Path) {
+    # $Path with every symlink or junction along it followed, as os.path.realpath gives it in
+    # the .sh flavour; $null when a link cannot be read or the chain runs past 40 hops.
+    # 5.1 has no ResolveLinkTarget, so the walk is by hand, one component at a time.
+    $full = [System.IO.Path]::GetFullPath($Path)
+    for ($hop = 0; $hop -lt 40; $hop++) {
+        $drive = [System.IO.Path]::GetPathRoot($full)
+        $parts = @($full.Substring($drive.Length).Split([char[]]@('\', '/'), [System.StringSplitOptions]::RemoveEmptyEntries))
+        $cur = $drive
+        $next = $null
+        for ($i = 0; $i -lt $parts.Count; $i++) {
+            $cur = Join-Path $cur $parts[$i]
+            $item = Get-Item -LiteralPath $cur -Force -ErrorAction SilentlyContinue
+            if ($null -eq $item) { return $full }
+            if (@('SymbolicLink', 'Junction') -notcontains [string]$item.LinkType) { continue }
+            $target = [string](@($item.Target)[0])
+            if ([string]::IsNullOrWhiteSpace($target)) { return $null }
+            if (-not [System.IO.Path]::IsPathRooted($target)) { $target = Join-Path (Split-Path -Parent $cur) $target }
+            if ($i + 1 -lt $parts.Count) { $target = Join-Path $target ($parts[($i + 1)..($parts.Count - 1)] -join '\') }
+            $next = [System.IO.Path]::GetFullPath($target)
+            break
+        }
+        if ($null -eq $next) { return $full.TrimEnd('\', '/') }
+        $full = $next
+    }
+    return $null
+}
+
+function Test-SkillRead([string]$Candidate) {
+    # True when a Read names a skill definition: an existing .md file whose real path (every
+    # link followed) lies inside the real ~/.claude/skills. A skill is the instruction the
+    # agent must read to know how to dispatch, not evidence, so blocking it before the run
+    # locked the two together. An absolute path only, no `..` in it; a link may point
+    # anywhere inside the skills folder, never out of it. Same rule as skill_read in the .sh.
+    if ([string]::IsNullOrWhiteSpace($Candidate) -or -not [System.IO.Path]::IsPathRooted($Candidate)) { return $false }
+    if (@($Candidate -split '[\\/]') -contains '..') { return $false }
+    if (-not $Candidate.EndsWith('.md', [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
+    try {
+        $skills = Get-RealPath (Join-Path $env:USERPROFILE '.claude\skills')
+        $full = Get-RealPath $Candidate
+        if ($null -eq $skills -or $null -eq $full) { return $false }
+        if (-not $full.EndsWith('.md', [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
+        if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { return $false }
+        return $full.StartsWith($skills.TrimEnd('\', '/') + '\', [System.StringComparison]::OrdinalIgnoreCase)
+    } catch { return $false }
 }
 
 function ConvertFrom-MsysPath([string]$Path) {
@@ -324,6 +374,9 @@ False positive? Escapes: set `$env:WORKFLOW_LOCAL_MODE=1, create $localFlag, or 
             if ($cmd -eq 'verify' -and (Test-DiffWords $words)) { exit 0 }
         }
     }
+
+    # Any command: a Read of a skill definition, the instruction that says how to dispatch.
+    if ($toolName -eq 'Read' -and (Test-SkillRead ([string]$payload.tool_input.file_path))) { exit 0 }
 
     # verify: the test allowlist and this session's test request, nothing else.
     if ($cmd -eq 'verify' -and @('Read', 'Write') -contains $toolName) {

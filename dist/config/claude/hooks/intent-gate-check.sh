@@ -11,6 +11,8 @@
 # A pending verify marker also lets through what skills/verify.md asks before the run: a
 # clean `git diff --name-only|--name-status|--stat ...`, a Read of .workflow/config.json or
 # of this session's verify/tests.json, and a Write of that tests.json.
+# Under any pending marker a Read of a skill definition passes: an existing .md whose real
+# path lies inside ~/.claude/skills. The skill says how to dispatch; it is not evidence.
 # Escapes: WORKFLOW_LOCAL_MODE=1 / local_mode.flag. Marker/session absent -> allow (fail-open).
 # exit 2 = block ; every other path exits 0. Exit code flows from python3 (no trailing exit).
 RAW="$(cat)"
@@ -108,6 +110,26 @@ def runner_file(candidate, root):
         return "~" in parent and (leaf == ".workflow" or "~" in leaf)
     except Exception:
         return True
+
+
+def skill_read(candidate, home):
+    # True when a Read names a skill definition: an existing .md file whose real path (every
+    # link followed) lies inside the real ~/.claude/skills. A skill is the instruction the
+    # agent must read to know how to dispatch, not evidence, so blocking it before the run
+    # locked the two together. An absolute path only, no `..` in it; a link may point
+    # anywhere inside the skills folder, never out of it. Same rule as Test-SkillRead in the .ps1.
+    if not candidate.strip() or not os.path.isabs(candidate):
+        return False
+    if ".." in re.split(r"[\\/]", candidate) or not candidate.lower().endswith(".md"):
+        return False
+    try:
+        skills = os.path.realpath(os.path.join(home, ".claude", "skills")).rstrip("\\/")
+        full = os.path.realpath(candidate)
+        if not full.lower().endswith(".md") or not os.path.isfile(full):
+            return False
+        return os.path.normcase(full).startswith(os.path.normcase(skills) + os.sep)
+    except Exception:
+        return False
 
 
 def msys_path(path):
@@ -336,6 +358,10 @@ try:
                 sys.exit(0)
             if cmd == "verify" and diff_words(words):
                 sys.exit(0)
+
+    # Any command: a Read of a skill definition, the instruction that says how to dispatch.
+    if tool_name == "Read" and skill_read(str(ti.get("file_path") or ""), home):
+        sys.exit(0)
 
     # verify: the test allowlist and this session's test request, nothing else.
     if cmd == "verify" and tool_name in ("Read", "Write"):

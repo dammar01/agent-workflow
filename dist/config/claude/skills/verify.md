@@ -15,15 +15,19 @@ syntax → QUICK: runtime check parse lokal file berubah (git diff HEAD + untrac
 Second agent cuma baca + telusur; runtime yang menjalankan test. Kamu yang memilih:
 1. Dari diff + dependents (siapa memanggil yang berubah), pilih test yang menutup perubahan.
    Targeted — file/suite terkait saja, BUKAN seluruh suite. Tak ada test relevan (docs, config
-   murni) → `commands: []` + alasan.
+   murni) ATAU project tak punya test suite sama sekali → TETAP tulis tests.json berisi
+   `commands: []` + alasan (mis. "project tanpa test suite"). Itu permintaan eksplisit
+   "nol test", BUKAN gap: runtime cuma mencatat `runtime: no test requested` dan verdict
+   bertumpu pada review. Melewatkan tests.json = gap runtime, exit nonzero.
 2. Write `.workflow/data/sessions/<MAIN_SESSION_ID>/verify/tests.json`:
    `{"commands": ["<cmd>", ...], "reason": "<kenapa test ini menutup perubahan>"}` (max 5).
 3. Runtime hanya menjalankan command yang diawali prefix di `commands.verify_test_commands`
    (`.workflow/config.json`), tanpa shell (`&&`/pipe/redirect ditolak). Di luar allowlist →
-   `not_verified`. Allowlist kosong → sebut ke user, sarankan prefix yang perlu ditambahkan.
+   `not_verified`. Allowlist kosong → sebut ke user, sarankan prefix yang perlu ditambahkan;
+   project tanpa test suite → tak ada prefix untuk disarankan, tulis `commands: []` (langkah 1).
 Gate: selama marker verify aktif (sebelum `.workflow/run verify`) yang lolos HANYA `git diff --name-only|--name-status|--stat [ref] [-- path]`
 (bersih, nol pipe/`&&`/redirect), Read `.workflow/config.json` + tests.json sesi ini, dan Write tests.json itu. Baca isi file src/test → ke-block; cukup nama file dari diff.
-Tanpa tests.json → verify jadi `incomplete` (gap "no test request"). Test gagal → blocking.
+Tanpa tests.json → verify jadi `incomplete` (gap `tests:`, exit nonzero). `commands: []` eksplisit ≠ tanpa tests.json. Test gagal → blocking.
 
 ## Protocol (verify_mode=delegated)
 1. Logic: solve problem? assumptions valid? konsisten pola codebase? → PASS/FAIL + reason

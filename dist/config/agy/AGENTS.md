@@ -1,5 +1,5 @@
-<!-- WORKFLOW-SECOND-AGENT:START — v3.8.0, do not edit manually -->
-# Agy Second Agent — v3.8.0
+<!-- WORKFLOW-SECOND-AGENT:START — v3.8.1, do not edit manually -->
+# Agy Second Agent — v3.8.1
 
 ## Scope
 This block applies ONLY when the request's instructions — inline, or in the file attached
