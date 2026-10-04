@@ -106,7 +106,10 @@ function Get-LiveLockPid([string]$LockPath) {
     # would read or refresh the graph exactly while its owner is writing the lock.
     if (-not (Test-Path -LiteralPath $LockPath)) { return 0 }
     try {
-        $lock = Get-Content -LiteralPath $LockPath -Raw | ConvertFrom-Json
+        # -ErrorAction Stop: pwsh 7 reports bad JSON as a non-terminating error, which skipped
+        # the catch below and read a torn lock as started at 0, so as abandoned.
+        $lock = Get-Content -LiteralPath $LockPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        if ($null -eq $lock -or $null -eq $lock.started) { throw 'unreadable lock' }
         $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [long]$lock.started
         if ($age -lt $LockMaxAgeSeconds -and (Get-Process -Id ([int]$lock.pid) -ErrorAction SilentlyContinue)) {
             return [int]$lock.pid
@@ -114,7 +117,8 @@ function Get-LiveLockPid([string]$LockPath) {
         return 0
     } catch {
         try {
-            $age = ([DateTime]::UtcNow - (Get-Item -LiteralPath $LockPath).LastWriteTimeUtc).TotalSeconds
+            # -Force: off Windows a dot-file is hidden, and Get-Item without it finds nothing.
+            $age = ([DateTime]::UtcNow - (Get-Item -LiteralPath $LockPath -Force).LastWriteTimeUtc).TotalSeconds
             if ($age -lt $LockMaxAgeSeconds) { return -1 }
         } catch { }
     }
@@ -163,9 +167,13 @@ if ($WorkerRoot) {
         # and take minutes, and this is a background side effect the user did not ask for.
         # Output goes to temp files, never to 'NUL': Start-Process treats a redirect target
         # as a literal path and would create a file called NUL in the project.
-        $proc = Start-Process -FilePath $graphify -ArgumentList 'update' -WorkingDirectory $WorkerRoot `
-                              -WindowStyle Hidden -PassThru `
-                              -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+        $start = @{
+            FilePath = $graphify; ArgumentList = 'update'; WorkingDirectory = $WorkerRoot; PassThru = $true
+            RedirectStandardOutput = $outFile; RedirectStandardError = $errFile
+        }
+        # -WindowStyle exists only on Windows; pwsh elsewhere refuses the parameter.
+        if (($null -eq $IsWindows) -or $IsWindows) { $start.WindowStyle = 'Hidden' }
+        $proc = Start-Process @start
         # Holding the handle is what makes ExitCode readable after exit; without it
         # Start-Process -PassThru reports $null.
         $null = $proc.Handle
@@ -304,7 +312,18 @@ try {
     # hook through makes it wait for graphify. A WMI-created process inherits nothing from
     # this hook, gets a hidden console, and is outside the hook's job, so it outlives it.
     $workerPid = 0
-    try {
+    # $IsWindows is absent on Windows PowerShell 5.1, which only runs on Windows.
+    $onWindows = ($null -eq $IsWindows) -or $IsWindows
+    if (-not $onWindows) {
+        # pwsh off Windows: no WMI, and -WindowStyle throws, which left the refresh unstarted
+        # behind a lock naming this exiting hook. Output goes to temp files so the worker does
+        # not inherit the pipes the hook is read through, which would make the caller wait
+        # for graphify.
+        $workerPid = (Start-Process -FilePath $shell -PassThru -ArgumentList $workerArgs `
+            -RedirectStandardOutput ([System.IO.Path]::GetTempFileName()) `
+            -RedirectStandardError ([System.IO.Path]::GetTempFileName())).Id
+    }
+    else { try {
         $envList = [string[]]@(Get-ChildItem env: | ForEach-Object { "$($_.Name)=$($_.Value)" })
         $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{
             ShowWindow = [uint16]0; EnvironmentVariables = $envList
@@ -313,8 +332,8 @@ try {
             CommandLine = "`"$shell`" $workerArgs"; CurrentDirectory = $root; ProcessStartupInformation = $startup
         }
         if ($created.ReturnValue -eq 0) { $workerPid = [int]$created.ProcessId }
-    } catch { }
-    if (-not $workerPid) {
+    } catch { } }
+    if (-not $workerPid -and $onWindows) {
         # No WMI (service stopped, policy): a hidden window that may flash beats no refresh.
         $workerPid = (Start-Process -FilePath $shell -WindowStyle Hidden -PassThru -ArgumentList $workerArgs).Id
     }

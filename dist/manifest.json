@@ -294,8 +294,8 @@
     },
     {
       "path": "claude/hooks/graph-refresh.ps1",
-      "sha256": "2e0e04e0e85e4cef60bd7615e2b047de7d62f7f454bd0e1de4dc8dfc6bdafee0",
-      "bytes": 17653,
+      "sha256": "d84284de1872ce5337f40c762f9314f92fd33be9bd5d3adb26747c3061dbf3e5",
+      "bytes": 18958,
       "merge": "replace",
       "component": "runtime"
     },
