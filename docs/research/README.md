@@ -161,6 +161,8 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [CASE-013](real-cases/CASE-013-runtime-intent-gate-never-armed.yaml) | The runtime half of the pre-flight gate never armed — its hook read a prompt field Claude Code does not send | negative | implemented | observed | 8d2d42b |
 | [CASE-014](real-cases/CASE-014-provider-less-browser-runs-counted-as-verifies.yaml) | Browser runs that never reached a provider were recorded as verify usage rows — 197 of 836 in the CASE-009 window | negative | implemented | observed | — |
 | [CASE-015](real-cases/CASE-015-codex-windows-sandbox-fails-on-thread-resume.yaml) | Codex on Windows failed a resumed verify at its elevated sandbox, and the runtime called it `unknown` | negative | implemented | observed | 8d2d42b |
+| [CASE-016](real-cases/CASE-016-codex-resume-sandbox-regression-bisect.yaml) | Codex resumes a thread on Windows through 0.154.0 and fails every resume from 0.155.0 to 0.160.0 | negative | implemented | observed | — |
+| [CASE-017](real-cases/CASE-017-verify-browser-usage-recount-after-dec-022.yaml) | Verify-browser usage is one row per provider invocation after DEC-022; no miscount found, and no real run yet to confirm it | positive | implemented | observed | 8d2d42b |
 | [DEC-001](decisions/DEC-001-verify-browser-delegated.yaml) | `/.verify-browser` is a delegated command | accepted | implemented | validated | dd70afd |
 | [DEC-004](decisions/DEC-004-data-e2e-only-test-attribute.yaml) | `data-e2e` is the only test attribute | accepted | implemented | observed | dd70afd |
 | [DEC-005](decisions/DEC-005-repeat-brake-releases-on-change.yaml) | The repeat brake releases on a project change and is remembered as knowledge | accepted | implemented | observed | dd70afd |
@@ -185,6 +187,11 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-024](decisions/DEC-024-codex-sandbox-refusal-fails-named.yaml) | A codex Windows sandbox refusal fails as `sandbox_unavailable` with ordered fix steps; the runtime never lowers the sandbox | accepted | implemented | not_validated | 7351846 |
 | [DEC-025](decisions/DEC-025-verify-tests-chosen-by-main-agent-run-by-runtime.yaml) | Verify tests are chosen by the main agent and run by the runtime; the second agent only reads and traces | accepted | implemented | not_validated | 3a378c7 |
 | [DEC-026](decisions/DEC-026-benchmark-calculation-contract.yaml) | Benchmark figures follow a versioned metric registry and carry a provenance stamp; recounting is maintainer-only | accepted | implemented | not_validated | 1301a3e |
+| [DEC-027](decisions/DEC-027-benchmark-tools-for-every-user.yaml) | Any user measures their own use with the offline tools; a sanitized export may leave the machine, and a usage row belongs to one transcript | accepted | implemented | not_validated | 3cf2858 |
+| [DEC-028](decisions/DEC-028-provider-stable-releases.yaml) | Each provider names the CLI release the workflow was tested on; any other release is recorded and warned about, never blocked | accepted | implemented | not_validated | 23bf6e7 |
+| [DEC-029](decisions/DEC-029-verify-test-request-hardening.yaml) | The verify test request cannot forge the verdict, a timed-out test cannot hang the run, and the gate lets the main agent choose tests | accepted | implemented | not_validated | b1badd7 |
+| [DEC-030](decisions/DEC-030-hook-and-installer-failure-paths.yaml) | Hooks and the installer fail without losing events, mislabelling a graph, or orphaning hooks | accepted | implemented | not_validated | 0513baa |
+| [DEC-031](decisions/DEC-031-proven-selector-misses-only-when-tried.yaml) | A proven selector misses only when the browser tried it; a missing proven selector is grounded | accepted | implemented | not_validated | 2d970d1 |
 <!-- research-inventory:end -->
 
 No `H-XXX`, `EXP-XXX`, or `SYN-XXX` record is tracked: none has been run or has a result.
