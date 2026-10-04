@@ -51,7 +51,7 @@ import re
 import statistics
 import sys
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -84,9 +84,11 @@ def parse_ts(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
+    # A stamp without an offset is read as UTC, so one transcript's stamps always sort together.
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
 
 
 def prompt_text(rec: dict) -> str | None:
@@ -258,7 +260,7 @@ def main() -> int:
                 inputs.append(Path(f))
         if not found:
             continue
-        labels[name] = name if args.show_names else f"P{chr(ord('A') + len(labels))}"
+        labels[name] = name if args.show_names else f"P{metrics.project_letters(len(labels))}"
         bound = set().union(*(s["sessions"] for s in found))
         for s in found:
             s["project"] = labels[name]
@@ -299,6 +301,7 @@ def main() -> int:
     changed = [s for s in sessions if s["files"]]
     prompts_total = sum(len(s["prompts"]) for s in sessions)
     follow_total = sum(s["follow_ups"] for s in sessions)
+    starts = [s["start"] for s in sessions if s["start"]]
     report = {
         "provenance": metrics.provenance(
             "tools/maintain/measure_real_use.py",
@@ -307,8 +310,7 @@ def main() -> int:
             metric_ids=[m for m in metrics.REGISTRY if m.startswith("real_use.")],
         ),
         "version": args.version,
-        "window": [min(s["start"] for s in sessions if s["start"])[:10],
-                   max(s["start"] for s in sessions if s["start"])[:10]],
+        "window": [min(starts)[:10], max(starts)[:10]] if starts else None,
         "projects": len(labels),
         "sessions": len(sessions),
         "idle_cutoff_minutes": args.idle_minutes,
@@ -368,7 +370,9 @@ def main() -> int:
     print(json.dumps(report, indent=2, ensure_ascii=False))
     if args.export:
         try:
-            metrics.write_export(report, Path(args.export), forbidden=[os.path.basename(p) for p in projects])
+            # The projects that contributed sessions: a folder with no data cannot reach the
+            # figures, and checking every folder name refused exports over unrelated ones.
+            metrics.write_export(report, Path(args.export), forbidden=list(labels))
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 2

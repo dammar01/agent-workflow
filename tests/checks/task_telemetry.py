@@ -86,6 +86,18 @@ def _check_states() -> None:
         f"the open task claims a shared commit first; a sessionless commit is unclaimed: {tasks} unclaimed={unclaimed}",
     )
 
+    # Two sessions in one project both record the same commit (each turn saw HEAD move);
+    # the copy from the session that did not make it arrives first. It must not hide the
+    # commit from the session that did, and a claimed commit is not counted unclaimed.
+    tasks, unclaimed = derive_tasks([
+        _edit("a", "a.py"), _skill("b", "analyze"),
+        _commit("b", "c1", "a.py"), _commit("a", "c1", "a.py"),
+        _commit("b", "c2", "z.py"), _commit("a", "c2", "z.py"),
+    ])
+    owner = next(t for t in tasks if t["session_id"] == "a")
+    assert_true(owner["commit"] == "c1" and owner["sequence"][-1] == "commit" and unclaimed == 1,
+                f"session A keeps its commit when B's copy comes first; a commit no copy claimed counts once: {tasks} unclaimed={unclaimed}")
+
 
 def _check_runtime_event() -> None:
     root = Path(tempfile.mkdtemp(prefix="task-events-"))

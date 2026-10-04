@@ -314,6 +314,31 @@ def _test_research_records_follow_the_schema() -> None:
         (root / "docs" / "research-drafts" / "hypotheses" / "H-777-draft.md").write_text("# draft\n", encoding="utf-8")
         assert_true(errors_for("decisions", "DEC-900-a.yaml", {**_DEC, "evidence": ["H-777"]}) == "", "a draft ID resolves while drafts exist")
 
+        # A draft's id is read whole or not at all: `DEC-9001-x` is not DEC-900 (no false
+        # duplicate of the tracked DEC-900), `DEC-90-x` is not a DEC id; both are named.
+        draft_dir = root / "docs" / "research-drafts" / "decisions"
+        draft_dir.mkdir(parents=True)
+        malformed = [draft_dir / "DEC-9001-extra-digit.yaml", draft_dir / "DEC-90-short.yaml"]
+        for path in malformed:
+            path.write_text("id: x\n", encoding="utf-8")
+        tracked = write("decisions", "DEC-900-a-decision.yaml", _DEC)
+        try:
+            code, out = _run_tool(check_research, ["--write-inventory"])
+        finally:
+            tracked.unlink()
+            for path in malformed:
+                path.unlink()
+        assert_true(
+            code == 0 and "duplicate id" not in out
+            and all(f"{p.name}: draft file name does not start with a well-formed record id" in out for p in malformed),
+            f"a malformed draft name is reported, never guessed into an id:\n{out}",
+        )
+        assert_true(check_research._draft_id("DEC-012-x.yaml") == {"id": "DEC-012"}
+                    and check_research._draft_id("RQ-07a-x.md") == {"id": "RQ-07a"}
+                    and check_research._draft_id("DEC-0123-x.yaml") is None
+                    and check_research._draft_id("RQ-123-x.yaml") is None,
+                    "a draft id ends at - or . and has its type's digit count")
+
         # H and EXP name each other, both ways.
         hyp_path = write("hypotheses", "H-900-a-hypothesis.yaml", {**_HYP, "experiments": ["EXP-900"]})
         assert_true(errors_for("experiments", "EXP-900-an-experiment.yaml", _EXP) == "", "an EXP and the H that lists it pass together")

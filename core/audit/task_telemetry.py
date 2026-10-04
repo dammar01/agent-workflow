@@ -88,17 +88,20 @@ def derive_tasks(events: list[dict]) -> tuple[list[dict], int]:
     current: dict[str | None, dict] = {}
     # The task each session last completed: the commit recommended after its pass joins it.
     closed: dict[str | None, dict] = {}
-    seen_commits: set[str] = set()
-    unclaimed = 0
+    # A commit is recorded once per session whose turn saw HEAD move, so several copies of it
+    # can arrive. Only the copy a task claims marks it taken: a copy from another session that
+    # arrives first must not hide it from the session that made it. A commit is unclaimed when
+    # no copy of it was ever claimed, counted once.
+    claimed_commits: set[str] = set()
+    unclaimed_commits: set[str] = set()
     for event in events:
         session = event.get("session_id") or None
         at = event.get("at")
         kind = event["kind"]
         if kind == "commit":
             commit = str(event.get("commit") or "")
-            if not commit or commit in seen_commits:
+            if not commit or commit in claimed_commits:
                 continue
-            seen_commits.add(commit)
             listed = event.get("paths") or []
             paths = {str(p) for p in ([listed] if isinstance(listed, str) else listed)}
             owner = None
@@ -108,8 +111,9 @@ def derive_tasks(events: list[dict]) -> tuple[list[dict], int]:
                         owner = candidate
                         break
             if owner is None:
-                unclaimed += 1
+                unclaimed_commits.add(commit)
                 continue
+            claimed_commits.add(commit)
             owner["sequence"].append("commit")
             owner["commit"] = commit
             owner["ended_at"] = at
@@ -142,7 +146,7 @@ def derive_tasks(events: list[dict]) -> tuple[list[dict], int]:
             task["state"] = "read_only"
         else:
             task["state"] = "open"
-    return tasks, unclaimed
+    return tasks, len(unclaimed_commits - claimed_commits)
 
 
 def report(project_root) -> dict:

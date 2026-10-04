@@ -20,8 +20,9 @@ the hook takes its refresh path; source files are never touched, and the graph's
 is put back when the hook did not rewrite it.
 --wait-refresh (with --run-hook) waits for a detached refresh (DEC-012) to release
 graphify-out/.refresh.lock, and reports how long it took after the hook returned.
-Prints one JSON object of counts and timings, nothing from the project's files. Not part of
-the test suite.
+Prints one JSON object of counts and timings, nothing from the project's files: the hook
+is named by its repository path or as `~/...`, and graphify's last line has its paths
+masked. Not part of the test suite.
 
   python tools/maintain/measure_graph_hook.py --project <root>
   python tools/maintain/measure_graph_hook.py --project <root> --run-hook --run-graphify
@@ -34,6 +35,7 @@ import argparse
 import datetime as _dt
 import json
 import os
+import re
 import shutil
 import statistics
 import subprocess
@@ -129,6 +131,33 @@ def _mtime(path: Path) -> float | None:
     return path.stat().st_mtime if path.is_file() else None
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+_PATHISH = re.compile(r"\S*[\\/]\S*")
+LAST_LINE_CHARS = 200
+
+
+def hook_label(hook: Path) -> str:
+    """The hook as the output names it: inside this repository by its repository path, under
+    the home directory as `~/...` (no user name), anywhere else by its file name only."""
+    full = Path(os.path.abspath(hook))
+    for base, prefix in ((REPO_ROOT, ""), (Path.home(), "~/")):
+        try:
+            return prefix + full.relative_to(base).as_posix()
+        except ValueError:
+            continue
+    return full.name
+
+
+def sanitize_line(line: str | None, root: Path) -> str | None:
+    """graphify's last line with every path-like token replaced: it names files of the project."""
+    if line is None:
+        return None
+    for form in {str(root), root.as_posix()}:
+        line = line.replace(form, "<project>")
+    line = _PATHISH.sub("<path>", line)
+    return line[:LAST_LINE_CHARS]
+
+
 def default_hook() -> Path:
     name = "graph-refresh.ps1" if os.name == "nt" else "graph-refresh.sh"
     return Path.home() / ".claude" / "hooks" / name
@@ -155,7 +184,7 @@ def measure(root: Path, *, hook: Path, repeat: int, run_hook: bool, run_graphify
     graph = root / "graphify-out" / "graph.json"
     result: dict = {
         "measured_on": _dt.date.today().isoformat(),
-        "hook_measured": str(hook),
+        "hook_measured": hook_label(hook),
         "graph_exists": graph.is_file(),
         **project_size(root),
     }
@@ -210,7 +239,7 @@ def measure(root: Path, *, hook: Path, repeat: int, run_hook: bool, run_graphify
             # graph.json was rewritten is recorded beside the exit code (CASE-008).
             result["graphify_exit_code"] = done.returncode
             lines = [line for line in (done.stdout + "\n" + done.stderr).splitlines() if line.strip()]
-            result["graphify_last_line"] = lines[-1] if lines else None
+            result["graphify_last_line"] = sanitize_line(lines[-1], root) if lines else None
             result["graphify_rewrote_graph"] = _mtime(graph) not in (None, before)
     return result
 

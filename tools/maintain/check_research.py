@@ -399,6 +399,24 @@ def _check_reciprocal_links(records: dict[str, dict], report: Report) -> None:
                     )
 
 
+_DRAFT_NAME = re.compile(rf"^(?P<id>{_ID_SHAPE})(?=[-.])")
+
+
+def _draft_id(name: str) -> dict | None:
+    """A draft's id from its file name, or None when the name does not start with one.
+
+    The id must end at `-` or `.` (so `DEC-0123-x` is not read as DEC-012) and have its
+    type's digit count (`DEC-12-x` is not DEC-12): a malformed name is reported, never guessed.
+    """
+    match = _FILE.match(name) or _DRAFT_NAME.match(name)
+    if not match:
+        return None
+    parts = _ID.match(match["id"])
+    if not parts or not _NUM.get(parts["prefix"], _NUM_DEFAULT).match(parts["num"]):
+        return None
+    return {"id": match["id"]}
+
+
 def validate(*, strict: bool = False, git: bool = False, drafts: bool = False) -> Report:
     report = Report()
     schema = load_schema()
@@ -414,8 +432,11 @@ def validate(*, strict: bool = False, git: bool = False, drafts: bool = False) -
     draft_records: dict[str, dict] = {}
     if DRAFTS.is_dir():
         for path in _files(DRAFTS, schema):
-            name = _FILE.match(path.name) or re.match(rf"^(?P<id>{_ID_SHAPE})", path.name)
-            if name:
+            name = _draft_id(path.name)
+            if name is None:
+                report.warn(path.relative_to(REPO_ROOT).as_posix(),
+                            "draft file name does not start with a well-formed record id (PREFIX-NNN, RQ-NN); its id is not registered")
+            else:
                 draft_ids.add(name["id"])
                 if name["id"] in records:
                     report.error(path.relative_to(REPO_ROOT).as_posix(), f"duplicate id {name['id']}: also tracked as {records[name['id']]['rel']}")

@@ -60,6 +60,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from core.audit import metrics  # noqa: E402
 from core.audit.transcript import project_slug  # noqa: E402
 from tools.maintain.measure_real_use import CORRECTION, load_usage, read_transcript  # noqa: E402
+from utils import osutil  # noqa: E402
 
 CODING = ("feature", "bug", "performance", "migration", "refactor")
 # Defaults of the outcome rule (metric outcome.solved / outcome.solved_fixed); each can be set
@@ -73,9 +74,17 @@ INTENT_MAP = Path(__file__).resolve().parents[2] / "dist" / "config" / "claude" 
 TESTFILE = re.compile(r"(^|/)(tests?|__tests__|spec)/|\.(test|spec)\.[jt]sx?$|Test\.php$", re.I)
 
 
+GIT_TIMEOUT = 60
+
+
 def git(project: str, *args: str) -> str:
-    r = subprocess.run(["git", "-C", project, *args], capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
+    """Git's output, or "" when it fails or runs past GIT_TIMEOUT seconds (read as no history)."""
+    try:
+        r = subprocess.run(["git", "-C", project, *args], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=GIT_TIMEOUT,
+                           **osutil.hidden_run_kwargs())
+    except (OSError, subprocess.SubprocessError):
+        return ""
     return r.stdout if r.returncode == 0 else ""
 
 
@@ -472,7 +481,7 @@ def main() -> int:
     for t in tasks:
         names.setdefault(t["project"], None)
     order = sorted(names, key=lambda n: -sum(1 for t in tasks if t["project"] == n))
-    letters = {n: (n if args.show_names else f"Project {chr(ord('A') + i)}") for i, n in enumerate(order)}
+    letters = {n: (n if args.show_names else f"Project {metrics.project_letters(i)}") for i, n in enumerate(order)}
 
     def bucket(n):
         return "0" if n == 0 else "1-2" if n <= 2 else "3-5" if n <= 5 else "6+"
@@ -503,6 +512,7 @@ def main() -> int:
     print(json.dumps(report, indent=2, ensure_ascii=False))
     if args.export:
         try:
+            # The projects that contributed a task: only their names can reach the figures.
             metrics.write_export(report, Path(args.export), forbidden=list(names))
         except ValueError as exc:
             print(str(exc), file=sys.stderr)

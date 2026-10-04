@@ -1,10 +1,16 @@
 """The calculation contract: registry, its documentation, and the provenance stamp."""
 
+import contextlib
+import io
+import json
+import os
 import re
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from core.audit import metrics, telemetry
 from tests.checks.support import assert_true
@@ -111,33 +117,161 @@ def _test_metrics_contract() -> None:
     assert_true(owners == {"main_a": 1, "main_b": 1, "main_c": 2},
                 f"a resumed copy binding the same id does not own its rows: {owners}")
 
-    # --- an export carries no path and no project name ------------------------------------
+    # --- an export carries only identifier-shaped values, and no project name ------------
     root = Path(tempfile.mkdtemp(prefix="metrics-export-"))
     try:
         dest = root / "out.json"
         metrics.write_export({"projects": 2, "per_project": {"PA": {"sessions": 3}}}, dest, forbidden=["shop-api"])
         assert_true('"schema": 1' in dest.read_text(encoding="utf-8"), "an export is written with its schema")
-        # A real stamp (producer path, params, input hash, dates) is not mistaken for a path.
+        # A real stamp (producer, params, input hash, dates, recount text) passes: the fixed
+        # texts provenance() writes are accepted verbatim where it writes them.
         stamp = metrics.provenance("tools/maintain/measure_real_use.py", {"version": "3.8.0", "idle_minutes": 15.0},
                                    [dest], metric_ids=["real_use.session"])
-        metrics.write_export({"provenance": stamp, "window": ["2026-09-01", "2026-10-04"], "ratio": "3/4"},
+        metrics.write_export({"provenance": stamp, "window": ["2026-09-01", "2026-10-04"],
+                              "by_project": {"Project AB": {"tasks": 1}}, "error_types": {None: 2},
+                              "buckets": {"1-2": 1, "6+": 0}, "commit": "0123abc+dirty",
+                              "at": "2026-10-04T10:00:00+00:00"},
                              root / "stamped.json", forbidden=["shop-api"])
-        for bad, why in (({"note": "shop-api"}, "a project name"), ({"note": r"E:\Work\x"}, "a Windows path"),
-                         ({"note": "/home/u/p"}, "a POSIX path"), ({"note": r"\\server\share\project"}, "a UNC path"),
-                         ({"note": "//server/share/project"}, "a forward-slash UNC path"),
-                         ({"note": "/private/var/project"}, "a POSIX path outside the usual roots"),
-                         ({"note": "~/work/project"}, "a home-relative path"),
-                         ({"note": "see /etc/hosts"}, "a path inside free text"),
-                         ({"note": "/tmp"}, "a single-segment POSIX path"),
-                         ({"note": "//host"}, "a host-only UNC path"),
-                         ({"note": r"\\host\share"}, "a two-part UNC path"),
-                         ({r"C:\Users\x": 1}, "a path in a key")):
+        # Project names are whole words, case-insensitive, over values only: a projects folder
+        # named `data` or `main` no longer refuses a stamp whose producer path holds `maintain`
+        # or whose keys hold `main_heads_sha256`.
+        metrics.write_export({"provenance": stamp, "params": {"main_heads_sha256": "ab" * 32}, "note": "maintain-x"},
+                             root / "names.json", forbidden=["data", "main"])
+        bad_cases = (
+            ({"note": "shop-api"}, "a project name"), ({"note": "SHOP-API-v2"}, "a project name in other case, as words"),
+            ({"note": "main"}, "a project named main"),
+            ({"note": r"E:\Work\x"}, "a Windows path"), ({"note": "/home/u/p"}, "a POSIX path"),
+            ({"note": r"\\server\share\project"}, "a UNC path"), ({"note": "//server/share/project"}, "a forward-slash UNC path"),
+            ({"note": "~/work/project"}, "a home-relative path"), ({"note": "see /etc/hosts"}, "a path inside free text"),
+            ({"note": "/tmp"}, "a single-segment POSIX path"), ({"note": "//host"}, "a host-only UNC path"),
+            ({"note": "cwd:/home/alice/proj"}, "a path behind a label"), ({"note": "[/home/alice]"}, "a bracketed path"),
+            ({"note": "file:///home/a/x"}, "a file URL"), ({"note": "~alice/proj"}, "another user's home"),
+            ({"note": "$HOME/x"}, "a variable path"), ({"note": r"C:\Users\x"}, "a drive path"),
+            ({"note": r"abcC:\Users"}, "a drive path glued to a word"), ({"note": r"\\server\share"}, "a two-part UNC path"),
+            ({"note": "a@b.com"}, "an email address"), ({"note": "3/4"}, "a slash in a value"),
+            ({"note": "fix the login bug"}, "free text"), ({"note": "x" * 65}, "an over-long value"),
+            ({"note": {"deep": ["ok", r"C:\x"]}}, "a nested path"), ({r"C:\Users\x": 1}, "a path in a key"),
+            ({"provenance": {**stamp, "producer": "/home/alice/tool.py"}}, "a producer that is not a registry producer"),
+            ({"provenance": {**stamp, "recount": "see /home/alice"}}, "a recount text that is not RECOUNT"),
+            ({"note": b"bytes"}, "a value that is not JSON data"),
+        )
+        for bad, why in bad_cases:
             try:
-                metrics.write_export(bad, root / "bad.json", forbidden=["shop-api"])
-            except ValueError:
-                pass
+                metrics.write_export(bad, root / "bad.json", forbidden=["shop-api", "main"])
+            except ValueError as exc:
+                assert_true("alice" not in str(exc) and "server" not in str(exc) and "Users" not in str(exc),
+                            f"the refusal names the JSON path, not the value: {exc}")
             else:
                 raise AssertionError(f"an export carrying {why} is refused")
+        try:
+            metrics.write_export({"a": {"b": ["ok", "cwd:/home/alice"]}}, root / "bad.json")
+        except ValueError as exc:
+            assert_true("$.a.b[1]" in str(exc), f"the refusal names the offending JSON path: {exc}")
+        else:
+            raise AssertionError("a nested path is refused")
+        try:
+            metrics.write_export({"a": "shop-api"}, root / "bad.json", forbidden=["x-y", "shop-api"])
+        except ValueError as exc:
+            assert_true("$.a" in str(exc) and "#2" in str(exc) and "shop" not in str(exc),
+                        f"the refusal names which forbidden name collided, by position: {exc}")
+        else:
+            raise AssertionError("a project name is refused")
         assert_true(not (root / "bad.json").exists(), "a refused export writes nothing")
+
+        # Real exports from both tools pass, from projects folders named `data` and `main`.
+        _check_tool_exports(root)
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+    # --- project labels go on past 26: A..Z, AA, AB, ... ----------------------------------
+    assert_true([metrics.project_letters(i) for i in (0, 25, 26, 27, 51, 52, 701, 702)]
+                == ["A", "Z", "AA", "AB", "AZ", "BA", "ZZ", "AAA"], "labels past 26 stay letters")
+
+    # --- the input hash fails open on an unreadable input ---------------------------------
+    root = Path(tempfile.mkdtemp(prefix="metrics-unreadable-"))
+    try:
+        a, b = root / "a.jsonl", root / "b.jsonl"
+        a.write_text("one\n", encoding="utf-8")
+        b.write_text("two\n", encoding="utf-8")
+        real = Path.read_bytes
+
+        def refuse_b(self):
+            if self.name == "b.jsonl":
+                raise PermissionError("locked")
+            return real(self)
+
+        with mock.patch.object(Path, "read_bytes", refuse_b):
+            partial = metrics.inputs_digest([a, b])
+        assert_true(partial["files"] == 1 and partial["unreadable"] == 1
+                    and partial["sha256"] == metrics.inputs_digest([a])["sha256"],
+                    f"an unreadable input is skipped and marked, not raised: {partial}")
+        assert_true("unreadable" not in metrics.inputs_digest([a, b]), "a fully read set carries no unreadable mark")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    # --- the graph-hook tool names no absolute path -----------------------------------------
+    from tools.maintain import measure_graph_hook as graph_hook
+
+    assert_true(graph_hook.hook_label(Path.home() / ".claude" / "hooks" / "graph-refresh.ps1") == "~/.claude/hooks/graph-refresh.ps1"
+                and graph_hook.hook_label(graph_hook.REPO_ROOT / "dist" / "h.sh") == "dist/h.sh",
+                "the measured hook is named by its repository path or under ~, never with the user's home")
+    project = Path(tempfile.gettempdir()) / "some-project"
+    line = graph_hook.sanitize_line(f"wrote {project / 'graphify-out' / 'graph.json'} and /home/alice/x in 2s", project)
+    assert_true("alice" not in line and str(project) not in line and "in 2s" in line,
+                f"graphify's last line keeps its summary, not its paths: {line}")
+
+    # --- the tool's commit comes only from the repository whose top is the install root ---
+    repo = Path(__file__).resolve().parents[2]
+    if shutil.which("git") and (repo / ".git").exists():
+        assert_true(metrics.tool_commit(repo / "core") is None,
+                    "a root inside some other work tree stamps no commit")
+        assert_true(metrics.tool_commit(repo) is not None, "the repository's own top stamps its commit")
+
+
+def _check_tool_exports(root: Path) -> None:
+    """Run both offline tools end to end on a fixture whose project folders are named
+    `data` and `main`, and export: the real report must pass the allowlist."""
+    from core.audit.transcript import project_slug
+    from tools.maintain import measure_real_use, measure_task_outcomes
+
+    projects, transcripts = root / "projects", root / "transcripts"
+    for name in ("data", "main", "unused"):
+        (projects / name / ".workflow" / "data").mkdir(parents=True)
+    for i, name in enumerate(("data", "main")):
+        sid = f"main_{name}_{i}"
+        tdir = transcripts / project_slug(os.path.abspath(projects / name))
+        tdir.mkdir(parents=True)
+        records = [
+            {"type": "user", "isMeta": True, "timestamp": "2026-10-01T10:00:00Z",
+             "message": {"role": "user", "content": f"Workflow Main Agent \u2014 v9.9.9 [SESSION BINDING] MAIN_SESSION_ID={sid}"}},
+            {"type": "user", "timestamp": "2026-10-01T10:00:05Z", "message": {"role": "user", "content": "please fix the parser"}},
+            {"type": "assistant", "timestamp": "2026-10-01T10:01:00Z",
+             "message": {"id": "m1", "content": [{"type": "text", "text": "done"}],
+                         "usage": {"input_tokens": 10, "output_tokens": 5}}},
+            {"type": "user", "timestamp": "2026-10-01T10:02:00",  # no offset: read as UTC
+             "message": {"role": "user", "content": "that is not it, still wrong"}},
+        ]
+        (tdir / f"s{i}.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records), encoding="utf-8")
+        (projects / name / ".workflow" / "data" / "usage.jsonl").write_text(json.dumps({
+            "session_id": sid, "provider": "opencode", "prompt_id": f"p{i}", "command": "explore",
+            "ok": False, "error_type": "empty_output", "duration_seconds": 3.5,
+        }) + "\n", encoding="utf-8")
+    labels = root / "labels.json"
+    labels.write_text(json.dumps({"s0.jsonl": "bug", "s1.jsonl": "feature"}), encoding="utf-8")
+
+    def run(module, argv):
+        out = io.StringIO()
+        with mock.patch.object(sys, "argv", ["tool", *argv]), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(out):
+            code = module.main()
+        return code, out.getvalue()
+
+    common = ["--projects-root", str(projects), "--transcripts", str(transcripts), "--version", "9.9.9"]
+    code, out = run(measure_real_use, [*common, "--export", str(root / "real-use.json")])
+    assert_true(code == 0 and (root / "real-use.json").is_file(), f"measure_real_use exports its real report:\n{out}")
+    exported = json.loads((root / "real-use.json").read_text(encoding="utf-8"))
+    assert_true(exported["sessions"] == 2 and exported["projects"] == 2, f"both projects counted: {exported}")
+    code, out = run(measure_task_outcomes, [*common, "--labels", str(labels), "--export", str(root / "outcomes.json")])
+    assert_true(code == 0 and (root / "outcomes.json").is_file(), f"measure_task_outcomes exports its real report:\n{out}")
+    text = (root / "outcomes.json").read_text(encoding="utf-8")
+    assert_true(str(root) not in text and str(root).replace("\\", "/") not in text, "the export carries no fixture path")

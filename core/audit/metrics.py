@@ -16,7 +16,7 @@ private (Claude Code transcripts, usage streams, project git history), so a figu
 recounted only on the machine that holds them: any user can measure their own use with the
 same tools, and nobody can recount another user's figure. `RECOUNT` says so in every stamp.
 `write_export` writes a figure set that may leave that machine: aggregates and the stamp,
-refused when it would carry a path or a project name.
+refused when any value falls outside an allowlist of identifier shapes or holds a project name.
 
 The registry is documented in docs/evaluation/metrics.md; a test keeps the two in step.
 """
@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import subprocess
 from datetime import datetime, timezone
@@ -164,7 +165,15 @@ def tool_commit(repo_root: Path | None = None) -> str | None:
     """The producing tool's commit, with `+dirty` when its tree has uncommitted changes."""
     root = Path(repo_root) if repo_root else Path(__file__).resolve().parents[2]
     try:
-        head = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10,
+        # Only when the install root is itself the top of a work tree: an install copied into
+        # another repository (a project, a dotfiles repo) would stamp that repository's commit.
+        top = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"], capture_output=True,
+                             text=True, timeout=10, **osutil.hidden_run_kwargs())
+        if top.returncode != 0 or not top.stdout.strip():
+            return None
+        if os.path.normcase(str(Path(top.stdout.strip()).resolve())) != os.path.normcase(str(root.resolve())):
+            return None
+        head =subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10,
                               **osutil.hidden_run_kwargs())
         if head.returncode != 0:
             return None
@@ -176,19 +185,32 @@ def tool_commit(repo_root: Path | None = None) -> str | None:
 
 
 def inputs_digest(paths) -> dict:
-    """A hash over the inputs' contents, with no path in it: names would identify projects."""
+    """A hash over the inputs' contents, with no path in it: names would identify projects.
+
+    Fail-open: an input that cannot be read is left out of the hash and counted in
+    `unreadable` (present only when non-zero), so the stamp never breaks the report it is
+    attached to, and a hash taken without that input does not pass for one over all of them.
+    """
     digest = hashlib.sha256()
     count = 0
     total = 0
+    unreadable = 0
     for path in sorted(str(p) for p in paths):
         file = Path(path)
-        if not file.is_file():
+        try:
+            if not file.is_file():
+                continue
+            data = file.read_bytes()
+        except OSError:
+            unreadable += 1
             continue
-        data = file.read_bytes()
         digest.update(hashlib.sha256(data).digest())
         count += 1
         total += len(data)
-    return {"files": count, "bytes": total, "sha256": digest.hexdigest()}
+    out = {"files": count, "bytes": total, "sha256": digest.hexdigest()}
+    if unreadable:
+        out["unreadable"] = unreadable
+    return out
 
 
 def provenance(producer: str, params: dict, inputs, metric_ids=None) -> dict:
@@ -206,6 +228,16 @@ def provenance(producer: str, params: dict, inputs, metric_ids=None) -> dict:
     }
 
 
+def project_letters(index: int) -> str:
+    """The letters standing in for the index-th project (0-based): A..Z, then AA, AB, ..."""
+    out = ""
+    index += 1
+    while index:
+        index, rest = divmod(index - 1, 26)
+        out = chr(ord("A") + rest) + out
+    return out
+
+
 def session_owners(transcripts: list[dict]) -> dict[str, int]:
     """Which transcript owns each MAIN_SESSION_ID: the earliest-starting one that binds it.
 
@@ -221,46 +253,94 @@ def session_owners(transcripts: list[dict]) -> dict[str, int]:
     return owners
 
 
-# An absolute path in any OS's form: a figure set that leaves the machine carries none. Read
-# against each key and string value, not the JSON text, so escaping cannot hide one: a drive
-# (`C:\`, `C:/`), UNC (`\\server\share`, `//server`), a home (`~/`), and any POSIX path from
-# the root, one segment included (`/tmp`, `/private/var/x`). A slash inside a word (`3/4`,
-# `tools/maintain`) is not one.
-_ABSOLUTE_PATH = re.compile(
-    r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]"
-    r"|(?:^|[^\\])\\\\[^\\\s]+\\"
-    r"|(?:^|[\s\"'(=,;])//[^/\s\"']+"
-    r"|(?:^|[\s\"'(=,;])~[\\/]"
-    r"|(?:^|[\s\"'(=,;])/[^/\s\"']+"
-)
+# What a figure set that leaves the machine may carry: an allowlist of shapes, not a list of
+# what to refuse, because a blacklist of path forms always misses one (`cwd:/home/u`,
+# `file:///x`, `~u/x`, `$HOME/x`, an email address). Numbers, booleans and null pass; a string
+# passes only in an identifier shape — a metric id, a version, a commit hash with `+dirty`, an
+# ISO date or timestamp, a command, verdict or error_type name — with no separator and no
+# space. A key may also hold single spaces between such words (a label like `Project A`).
+_VALUE_SHAPE = re.compile(r"[A-Za-z0-9_.:+-]{1,64}")
+_KEY_SHAPE = re.compile(r"[A-Za-z0-9_.:+-](?:[A-Za-z0-9_.:+ -]{0,62}[A-Za-z0-9_.:+-])?")
+# The fixed texts a stamp carries outside that shape, accepted only verbatim and only where
+# provenance() puts them: they are this module's constants, not data.
+_PRODUCERS = frozenset(m["producer"] for m in REGISTRY.values())
+_FIXED = {("provenance", "recount"): frozenset({RECOUNT}), ("provenance", "producer"): _PRODUCERS}
 
 
-def _strings(value):
-    """Every key and string value inside `value`, depth first."""
+def _key_text(key) -> str:
+    """A key as JSON writes it (None -> null, True -> true)."""
+    return key if isinstance(key, str) else json.dumps(key)
+
+
+def _where(path: tuple) -> str:
+    out = "$"
+    for part in path:
+        out += f"[{part}]" if isinstance(part, int) else f".{part}"
+    return out
+
+
+def _check_shape(value, path: tuple, values: list) -> None:
+    """Refuse anything outside the allowlist, naming its JSON path and never its content.
+
+    Collects every data string (with its path) into `values` for the project-name check.
+    """
+    if value is None or isinstance(value, (bool, int, float)):
+        return
     if isinstance(value, str):
-        yield value
-    elif isinstance(value, dict):
+        if path in _FIXED and value in _FIXED[path]:
+            return
+        if not _VALUE_SHAPE.fullmatch(value):
+            raise ValueError(f"export refused: the value at {_where(path)} is not an identifier-shaped string")
+        values.append((path, value))
+        return
+    if isinstance(value, dict):
         for key, item in value.items():
-            yield str(key)
-            yield from _strings(item)
-    elif isinstance(value, (list, tuple, set)):
-        for item in value:
-            yield from _strings(item)
+            text = _key_text(key)
+            if not _KEY_SHAPE.fullmatch(text):
+                raise ValueError(f"export refused: a key under {_where(path)} is not identifier-shaped")
+            _check_shape(item, path + (text,), values)
+        return
+    if isinstance(value, (list, tuple)):
+        for i, item in enumerate(value):
+            _check_shape(item, path + (i,), values)
+        return
+    raise ValueError(f"export refused: the value at {_where(path)} is a {type(value).__name__}, not JSON data")
+
+
+def _tokens(text: str) -> list[str]:
+    return [t for t in re.split(r"[^0-9a-z]+", text.lower()) if t]
+
+
+def _holds(tokens: list[str], name: list[str]) -> bool:
+    """`name`'s tokens appear as a contiguous run in `tokens`: whole words, never a substring."""
+    n = len(name)
+    return any(tokens[i:i + n] == name for i in range(len(tokens) - n + 1))
 
 
 def write_export(report: dict, dest: Path, forbidden=()) -> Path:
     """Write a figure set meant to leave this machine, or refuse with ValueError.
 
-    `forbidden` holds the strings that would identify the user's projects (their directory
-    names); the export is refused when any of them, or any absolute path, appears in it. The
-    caller decides what goes in: aggregates and the provenance stamp, never prompt text.
+    Every key and value of `report` must fit the allowlist above; the export header
+    (`schema`, `recount`) is added after the check, by construction. `forbidden` holds the
+    names of the projects whose data went into the report; a data value holding one as whole
+    words (case-insensitive: `data` does not match `metadata`, `main` not `maintain`) is
+    refused. Keys are not read for names: they are the tool's own field names, and the
+    project labels it writes. The error names the JSON path and which forbidden name, by
+    position, collided — never the value. The caller decides what goes in: aggregates and
+    the provenance stamp, never prompt text.
     """
+    if not isinstance(report, dict):
+        raise ValueError("export refused: the report is not a JSON object")
+    values: list = []
+    _check_shape(report, (), values)
+    names = [(i, _tokens(w)) for i, w in enumerate(forbidden) if w and len(w) > 2]
+    for path, value in values:
+        tokens = _tokens(value)
+        for i, name in names:
+            if name and _holds(tokens, name):
+                raise ValueError(f"export refused: the value at {_where(path)} holds forbidden project name #{i + 1}")
     payload = {"export": {"schema": 1, "recount": RECOUNT}, **report}
     text = json.dumps(payload, indent=2, ensure_ascii=False)
-    strings = list(_strings(payload))
-    leaks = sorted({w for w in forbidden if w and len(w) > 2 and any(w in s for s in strings)})
-    if leaks or any(_ABSOLUTE_PATH.search(s) for s in strings):
-        raise ValueError(f"export refused: it would carry {len(leaks)} project name(s) or a path")
     out = Path(dest)
     out.write_text(text + "\n", encoding="utf-8")
     return out
