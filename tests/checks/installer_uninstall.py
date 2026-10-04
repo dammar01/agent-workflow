@@ -7,6 +7,8 @@ around it, the settings strip that keeps the user's hooks, and the install-time 
 shipped hook from an event the release no longer registers it on.
 """
 
+import json
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -15,9 +17,19 @@ import contextlib
 import io
 
 from installer import rollback as rollback_mod
-from installer.base import Plan, _begin_receipt, _flush_receipt, _install_text, _reset_receipt
+from installer import uninstall as uninstall_mod
+from installer.base import (
+    ManagedBlockError,
+    Plan,
+    _begin_receipt,
+    _file_sha256,
+    _flush_receipt,
+    _install_text,
+    _merge_managed,
+    _reset_receipt,
+)
 from installer.settings import _drop_relocated_hooks
-from installer.uninstall import _remove_receipted, _strip_settings, _without_block
+from installer.uninstall import _remove_receipted, _strip_settings, _uninstall_text, _without_block
 from tests.checks.support import assert_true
 
 _START = "WORKFLOW-MAIN-AGENT:START"
@@ -122,6 +134,131 @@ def _test_installer_uninstall() -> None:
             code == 0 and mode.read_text(encoding="utf-8") == '{"only_command": true}\n',
             f"--rollback restores the intent mode an uninstall removed: code={code}",
         )
+
+        _check_unpaired_markers(root)
+        _check_settings_before_hooks(root)
     finally:
         _reset_receipt()
         shutil.rmtree(root, ignore_errors=True)
+
+
+def _check_unpaired_markers(root: Path) -> None:
+    """A START without its END (or the reverse) is refused, never answered with a 2nd block."""
+    src = root / "markers-src.md"
+    src.write_text(f"{_BLOCK}\n", encoding="utf-8")
+    broken = {
+        "start only": f"# mine\n<!-- {_START} — v1 -->\nold rules\n",
+        "end only": f"# mine\nold rules\n<!-- {_END} -->\n",
+        "end first": f"<!-- {_END} -->\n# mine\n<!-- {_START} — v1 -->\n",
+    }
+    for name, text in broken.items():
+        dest = root / f"markers-{name.replace(' ', '-')}.md"
+        dest.write_text(text, encoding="utf-8")
+        _reset_receipt()
+        plan = Plan()
+        _install_text(src, dest, "claude/CLAUDE.md", plan, True, root / "backup-markers", None)
+        assert_true(
+            dest.read_text(encoding="utf-8") == text,
+            f"[{name}] a file with unpaired markers is left untouched: {dest.read_text(encoding='utf-8')!r}",
+        )
+        assert_true(
+            [verb for verb, _t, _d in plan.actions] == ["refused"]
+            and any(str(dest) in w and _START in w and _END in w for w in plan.warnings),
+            f"[{name}] the refusal names the file and both markers: {plan.actions} {plan.warnings}",
+        )
+        _reset_receipt()
+        try:
+            _merge_managed(text, _BLOCK, _START, _END)
+        except ManagedBlockError:
+            pass
+        else:
+            raise AssertionError(f"[{name}] _merge_managed must raise on unpaired markers")
+        # Uninstall does not guess where a broken block ends either.
+        plan = Plan()
+        _uninstall_text(dest, "claude/CLAUDE.md", plan, True, root / "backup-markers")
+        assert_true(
+            dest.read_text(encoding="utf-8") == text and plan.warnings,
+            f"[{name}] uninstall leaves a file with unpaired markers as is: {plan.warnings}",
+        )
+    # A well-formed block still splices in place.
+    merged, how = _merge_managed(f"# mine\n\n{_BLOCK}\n", _BLOCK.replace("workflow rules", "new"), _START, _END)
+    assert_true(how == "replaced managed block" and "new" in merged, f"paired markers still merge: {how}")
+
+
+def _check_settings_before_hooks(root: Path) -> None:
+    """settings.json is cleaned before the hook scripts go, read leniently, and when it cannot
+    be read the scripts stay (it still runs them)."""
+    home = root / "uninstall-home"
+    hooks_dir = home / ".claude" / "hooks"
+    hooks_dir.mkdir(parents=True)
+    hook = hooks_dir / "session-bind.ps1"
+    hook.write_text("# hook\n", encoding="utf-8")
+    settings = home / ".claude" / "settings.json"
+    body = {
+        "model": "mine",
+        "hooks": {"SessionStart": [{"hooks": [_cmd("session-bind"), _cmd("my-own-hook")]}]},
+    }
+    saved = {
+        name: getattr(uninstall_mod, name)
+        for name in ("HOME", "_targets", "previously_installed", "retired_hook_stems")
+    }
+    uninstall_mod.HOME = home
+    uninstall_mod._targets = lambda: [(hook, hook, "claude/hooks/session-bind.ps1")]
+    uninstall_mod.previously_installed = lambda: {
+        str(hook): {"key": "claude/hooks/session-bind.ps1", "hashes": {_file_sha256(hook)}}
+    }
+    uninstall_mod.retired_hook_stems = lambda: set()
+    try:
+        # A BOM (Notepad, PowerShell 5.1 Out-File) is still JSON: the workflow hook goes.
+        settings.write_bytes(b"\xef\xbb\xbf" + json.dumps(body).encode("utf-8"))
+        _reset_receipt()
+        _begin_receipt(root / "backup-settings" / "install_receipt.json", {"uninstall": True})
+        plan = Plan()
+        clean = uninstall_mod._uninstall_settings(plan, True, root / "backup-settings")
+        after = json.loads(settings.read_text(encoding="utf-8"))
+        assert_true(
+            clean and after["model"] == "mine"
+            and after["hooks"] == {"SessionStart": [{"hooks": [_cmd("my-own-hook")]}]},
+            f"a BOM-prefixed settings.json is cleaned, the user's keys kept: {after} {plan.warnings}",
+        )
+        _reset_receipt()
+
+        # Unreadable settings: reported, and the hook scripts it still runs are kept.
+        settings.write_text('{"hooks": ', encoding="utf-8")
+        calls: list[str] = []
+        real_settings, real_files = uninstall_mod._uninstall_settings, uninstall_mod._uninstall_files
+
+        def spy_settings(*args):
+            calls.append("settings")
+            return real_settings(*args)
+
+        def spy_files(*args, **kwargs):
+            calls.append("files")
+            return real_files(*args, **kwargs)
+
+        uninstall_mod._uninstall_settings, uninstall_mod._uninstall_files = spy_settings, spy_files
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                uninstall_mod.run_uninstall(False)
+        finally:
+            uninstall_mod._uninstall_settings, uninstall_mod._uninstall_files = real_settings, real_files
+        report = out.getvalue()
+        assert_true(calls == ["settings", "files"], f"settings are cleaned before files are removed: {calls}")
+        assert_true(
+            hook.exists() and "kept 1 hook script" in report and "not readable JSON" in report
+            and not re.search(rf"^\s*remove\s+{re.escape(str(hook))}\s*(—|$)", report, re.M),
+            f"an unreadable settings.json keeps the hook scripts and says so:\n{report}",
+        )
+
+        # Readable again: the same dry run would remove the script.
+        settings.write_text(json.dumps(body), encoding="utf-8")
+        plan = Plan()
+        uninstall_mod._uninstall_files(plan, False, root / "backup-settings", keep_hooks=False)
+        assert_true(
+            [(verb, target) for verb, target, _d in plan.actions if verb == "remove"] == [("remove", str(hook))],
+            f"with settings clean the hook script is removed: {plan.actions}",
+        )
+    finally:
+        for name, value in saved.items():
+            setattr(uninstall_mod, name, value)
+        _reset_receipt()

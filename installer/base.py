@@ -303,14 +303,46 @@ def _managed_block(text: str, start: str, end: str) -> str | None:
     return match.group(0) if match else None
 
 
+class ManagedBlockError(ValueError):
+    """The file's workflow markers do not pair up, so its block cannot be found safely."""
+
+
+def _marker_problem(text: str, start: str, end: str) -> str | None:
+    """Why the markers in `text` do not delimit exactly one block, or None when they do (or
+    when there are none).
+
+    A START left without its END — a hand edit, a merge that kept half — used to read as "no
+    block": the install appended a second one below it, and every later install replaced
+    only the new one while the orphan half stayed in the agent's prompt.
+    """
+    starts = len(re.findall(rf"<!--\s*{re.escape(start)}", text))
+    ends = len(re.findall(rf"<!--\s*{re.escape(end)}\s*-->", text))
+    if starts == ends == 0:
+        return None
+    if starts != ends:
+        return f"{starts} '{start}' marker(s) against {ends} '{end}' marker(s)"
+    if starts > 1:
+        return f"{starts} '{start}' ... '{end}' blocks, where one is expected"
+    if _managed_block(text, start, end) is None:
+        return f"'{end}' comes before '{start}'"
+    return None
+
+
 def _merge_managed(
     existing: str, incoming: str, start: str, end: str
 ) -> tuple[str, str]:
-    """Splice the incoming managed block into `existing`. Returns (result, how)."""
+    """Splice the incoming managed block into `existing`. Returns (result, how).
+
+    Raises ManagedBlockError when `existing` has markers that do not pair up: appending a
+    block beside a broken one would leave two.
+    """
     block = _managed_block(incoming, start, end)
     if block is None:
         block = incoming.strip()
 
+    problem = _marker_problem(existing, start, end)
+    if problem:
+        raise ManagedBlockError(problem)
     current = _managed_block(existing, start, end)
     if current is not None:
         return existing.replace(current, block), "replaced managed block"
@@ -378,7 +410,17 @@ def _install_text(
         start, end = MARKERS[key]
         exists = dest.exists()
         existing = _read_text_lenient(dest) if exists else ""
-        merged, how = _merge_managed(existing, incoming, start, end)
+        try:
+            merged, how = _merge_managed(existing, incoming, start, end)
+        except ManagedBlockError as exc:
+            message = (
+                f"{dest}: refused — its workflow markers do not pair up ({exc}). "
+                f"Fix the <!-- {start} --> / <!-- {end} --> lines by hand (keep one pair, or "
+                "delete both with the text between them), then install again"
+            )
+            plan.add("refused", dest, "unpaired workflow markers")
+            plan.warn(message)
+            return
         if exists and merged == existing:
             plan.add("unchanged", dest)
             return

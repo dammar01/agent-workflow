@@ -12,7 +12,7 @@ from pathlib import Path
 from core.audit import task_telemetry
 from core.audit.task_telemetry import derive_tasks
 
-from tests.checks.support import assert_true
+from tests.checks.support import assert_true, powershell_for_hooks
 
 HOOKS = Path(__file__).resolve().parents[2] / "dist" / "config" / "claude" / "hooks"
 
@@ -113,7 +113,7 @@ def _embedded_python() -> str:
 
 def _runners() -> list[tuple[str, list[str]]]:
     runners = [("sh:python", [sys.executable, "-c", _embedded_python()])]
-    shell = shutil.which("pwsh") or (shutil.which("powershell") if sys.platform == "win32" else None)
+    shell = powershell_for_hooks()
     if shell:
         runners.append(("ps1", [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(HOOKS / "task-events.ps1")]))
     bash = shutil.which("bash") if sys.platform != "win32" else None
@@ -214,7 +214,42 @@ def _check_hook_flavours() -> None:
         shutil.rmtree(base, ignore_errors=True)
 
 
+def _check_without_git() -> None:
+    """A project that is no git repository still gets its skill events.
+
+    Under Windows PowerShell 5.1 a native command's stderr is an error record, and with
+    $ErrorActionPreference='Stop' git's "fatal: not a git repository" ended the hook before
+    it wrote anything: every event of such a project was lost.
+    """
+    base = Path(tempfile.mkdtemp(prefix="task-hook-nogit-"))
+    try:
+        home = base / "home"
+        (home / ".claude").mkdir(parents=True)
+        (home / ".claude" / "session_registry.json").write_text(
+            json.dumps({"claude-1": {"main_session_id": "main_x"}}), encoding="utf-8"
+        )
+        # GIT_CEILING_DIRECTORIES keeps git from finding a repository above the temp dir.
+        env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home), "GIT_CEILING_DIRECTORIES": str(base)}
+        for name, argv in _runners():
+            project = base / name.replace(":", "-")
+            (project / ".workflow" / "data").mkdir(parents=True)
+            raw = json.dumps({
+                "session_id": "claude-1", "cwd": str(project),
+                "hook_event_name": "UserPromptSubmit", "prompt": "/.execute -y",
+            })
+            subprocess.run(argv, input=raw, text=True, env={**env, "CLAUDE_HOOK_RAW": raw}, capture_output=True, timeout=60)
+            stream = project / ".workflow" / "data" / "tasks.jsonl"
+            rows = [json.loads(line) for line in stream.read_text(encoding="utf-8").splitlines()] if stream.exists() else []
+            assert_true(
+                [(row.get("kind"), row.get("skill")) for row in rows] == [("skill", "execute")],
+                f"[{name}] a project without git still records its skill event: {rows}",
+            )
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
 def _test_task_telemetry() -> None:
     _check_states()
     _check_runtime_event()
     _check_hook_flavours()
+    _check_without_git()

@@ -24,17 +24,26 @@ from pathlib import Path
 
 from core.graph import graph_index
 from utils.osutil import hidden_run_kwargs
-from tests.checks.support import assert_true
+from tests.checks.support import assert_true, powershell_for_hooks
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HOOKS = REPO_ROOT / "dist" / "config" / "claude" / "hooks"
 _FAKE_SLEEP_S = 3
 
+# FAKE_GRAPHIFY_MODE: "ok" sleeps then writes a graph; "corrupt" sleeps then writes half a
+# graph; "early" writes a graph at once and then outlives the bound, as a graphify killed
+# after its write would.
 _FAKE_GRAPHIFY = """
 import os, sys, time
-time.sleep(float(os.environ.get("FAKE_GRAPHIFY_SLEEP", "0")))
+mode = os.environ.get("FAKE_GRAPHIFY_MODE", "ok")
+pause = float(os.environ.get("FAKE_GRAPHIFY_SLEEP", "0"))
+if mode != "early":
+    time.sleep(pause)
+body = '{"nodes": [' if mode == "corrupt" else '{"nodes": [], "links": [], "refreshed": true}'
 with open(os.path.join("graphify-out", "graph.json"), "w", encoding="utf-8") as fh:
-    fh.write('{"nodes": [], "links": [], "refreshed": true}')
+    fh.write(body)
+if mode == "early":
+    time.sleep(pause)
 sys.exit(1)
 """
 
@@ -47,7 +56,7 @@ def _embedded_python() -> str:
 
 def _runners() -> list[tuple[str, list[str]]]:
     runners: list[tuple[str, list[str]]] = [("sh:python", [sys.executable, "-c", _embedded_python()])]
-    shell = shutil.which("pwsh") or (shutil.which("powershell") if sys.platform == "win32" else None)
+    shell = powershell_for_hooks()
     if shell:
         runners.append(("ps1", [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(HOOKS / "graph-refresh.ps1")]))
     bash = shutil.which("bash") if sys.platform != "win32" else None
@@ -77,6 +86,7 @@ def _project(root: Path, *, stale: bool) -> Path:
     (project / "graphify-out").mkdir()
     (project / ".workflow" / "data").mkdir(parents=True)
     (project / "node_modules" / "dep").mkdir(parents=True)
+    (project / "Target" / "debug").mkdir(parents=True)
     graph = project / "graphify-out" / "graph.json"
     graph.write_text('{"nodes": [], "links": []}', encoding="utf-8")
     source = project / "src" / "app.py"
@@ -89,13 +99,24 @@ def _project(root: Path, *, stale: bool) -> Path:
     # Newer than the graph on purpose: a walk that entered node_modules would call the
     # graph stale here. Only pruning before descent keeps this project fresh.
     os.utime(dependency, (now,) * 2)
+    # A build directory in another case, with an extension in another case: skipped in
+    # both flavours, as Windows and macOS treat the names as one.
+    build_output = project / "Target" / "debug" / "Build.RS"
+    build_output.write_text("fn main() {}", encoding="utf-8")
+    os.utime(build_output, (now,) * 2)
     return project
 
 
-def _run_hook(command: list[str], project: Path, bin_dir: Path, message: str = "[EXECUTION RESULT] done") -> float:
+def _run_hook(
+    command: list[str], project: Path, bin_dir: Path, message: str = "[EXECUTION RESULT] done",
+    extra_env: dict | None = None,
+) -> float:
     payload = json.dumps({"last_assistant_message": message, "cwd": str(project)})
     env = {**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
            "CLAUDE_HOOK_RAW": payload, "FAKE_GRAPHIFY_SLEEP": str(_FAKE_SLEEP_S)}
+    env.pop("GRAPH_REFRESH_LIMIT_S", None)
+    env.pop("FAKE_GRAPHIFY_MODE", None)
+    env.update(extra_env or {})
     started = time.monotonic()
     # Hidden: a PowerShell started from a console-less test runner opens a window of its own.
     subprocess.run(command, input=payload, capture_output=True, text=True, env=env, timeout=60, **hidden_run_kwargs())
@@ -219,6 +240,36 @@ def _check_runner(flavour: str, command: list[str]) -> None:
         assert_true(
             [row.get("outcome") for row in rows] == ["refreshed"],
             f"[{flavour}] a lock older than the limit holds nothing; got {rows}",
+        )
+
+        # Killed at the bound after it rewrote graph.json: a timeout, never a refresh.
+        project = _project(root / "timeout", stale=True)
+        _run_hook(command, project, bin_dir, extra_env={"FAKE_GRAPHIFY_MODE": "early", "GRAPH_REFRESH_LIMIT_S": "1"})
+        assert_true(_wait_for_release(project), f"[{flavour}] the timed-out worker removes its lock")
+        rows = _rows(project)
+        assert_true(
+            [row.get("outcome") for row in rows] == ["timeout"] and rows[0].get("graph_rewritten") is True,
+            f"[{flavour}] a graphify killed at the bound stays a timeout though graph.json moved; got {rows}",
+        )
+
+        # Finished, rewrote graph.json, and left it unparseable: corrupt, not refreshed.
+        project = _project(root / "corrupt", stale=True)
+        _run_hook(command, project, bin_dir, extra_env={"FAKE_GRAPHIFY_MODE": "corrupt", "FAKE_GRAPHIFY_SLEEP": "0"})
+        assert_true(_wait_for_release(project), f"[{flavour}] the worker removes its lock after a corrupt write")
+        rows = _rows(project)
+        assert_true(
+            [row.get("outcome") for row in rows] == ["corrupt"] and rows[0].get("graph_rewritten") is True,
+            f"[{flavour}] a rewritten graph.json that does not parse is recorded as corrupt; got {rows}",
+        )
+
+        # A bad GRAPH_REFRESH_LIMIT_S keeps the default bound instead of stopping the hook.
+        project = _project(root / "badlimit", stale=True)
+        _run_hook(command, project, bin_dir, extra_env={"GRAPH_REFRESH_LIMIT_S": "soon", "FAKE_GRAPHIFY_SLEEP": "0"})
+        assert_true(_wait_for_release(project), f"[{flavour}] the worker runs under the default bound")
+        rows = _rows(project)
+        assert_true(
+            [row.get("outcome") for row in rows] == ["refreshed"],
+            f"[{flavour}] an unparseable GRAPH_REFRESH_LIMIT_S falls back to the default; got {rows}",
         )
     finally:
         shutil.rmtree(root, ignore_errors=True)

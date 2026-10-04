@@ -61,10 +61,20 @@ function Get-InsidePath([string]$Root, [string]$Path) {
     return $rel
 }
 
+function Invoke-Git([string[]]$GitArgs) {
+    # Windows PowerShell 5.1 turns a native command's stderr into an error record, and under
+    # $ErrorActionPreference='Stop' that record terminates the script even with 2>$null:
+    # "fatal: not a git repository" lost every event of a project without git. Git runs
+    # under a local 'Continue'; the caller judges it by $LASTEXITCODE alone.
+    $ErrorActionPreference = 'Continue'
+    $out = & git @GitArgs 2>$null
+    return ,@($out)
+}
+
 function Get-Head([string]$Root) {
-    $head = & git -C $Root rev-parse --verify -q HEAD 2>$null
+    try { $head = Invoke-Git @('-C', $Root, 'rev-parse', '--verify', '-q', 'HEAD') } catch { return '' }
     if ($LASTEXITCODE -ne 0) { return '' }
-    return ([string]$head).Trim()
+    return ([string]($head -join '')).Trim()
 }
 
 function Get-SnapshotPath($Payload, [string]$Root) {
@@ -92,7 +102,7 @@ function Get-Commits($Payload, [string]$Root) {
     if (-not $now -or $now -eq $before) { return @() }
     Write-Snapshot $path $now
     $range = if ($before) { "$before..$now" } else { $now }
-    $out = & git -C $Root log --reverse --first-parent -m '--format=commit:%H' --name-only --relative $range 2>$null
+    try { $out = Invoke-Git @('-C', $Root, 'log', '--reverse', '--first-parent', '-m', '--format=commit:%H', '--name-only', '--relative', $range) } catch { return @() }
     if ($LASTEXITCODE -ne 0) { return @() }
     $commits = @()
     $current = $null

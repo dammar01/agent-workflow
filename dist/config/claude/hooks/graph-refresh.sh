@@ -19,10 +19,20 @@ SOURCE_EXT = (
 )
 SKIP_DIRS = {
     "node_modules", ".git", ".venv", "venv", "__pycache__", "vendor",
-    "dist", "build", ".next", "coverage", "graphify-out", ".workflow",
+    "dist", "build", ".next", "coverage", "target", "graphify-out", ".workflow",
 }
 GRAPHIFY_LIMIT_S = 600
 LOCK_MAX_AGE_S = 900
+
+
+def limit_seconds(default=GRAPHIFY_LIMIT_S):
+    # GRAPH_REFRESH_LIMIT_S overrides the bound (tests); a value that is not a positive
+    # whole number keeps the default instead of failing the refresh.
+    try:
+        value = int(str(os.environ.get("GRAPH_REFRESH_LIMIT_S", "")).strip())
+    except ValueError:
+        return default
+    return value if value > 0 else default
 
 # The worker runs as its own python process, started in a new session so it outlives the
 # hook, with no handle shared with it. argv: root hook_ms scan_ms visited skipped token
@@ -39,7 +49,12 @@ if os.name == "nt":
     info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     info.wShowWindow = 0
     hide = {"startupinfo": info, "creationflags": 0x08000000}  # CREATE_NO_WINDOW
-outcome, exit_code, graphify_ms, rewritten = "error", None, 0, False
+try:
+    limit = int(str(os.environ.get("GRAPH_REFRESH_LIMIT_S", "")).strip())
+except ValueError:
+    limit = 0
+limit = limit if limit > 0 else 600
+outcome, exit_code, graphify_ms, rewritten, finished = "error", None, 0, False, False
 try:
     before = os.path.getmtime(graph)
     started = time.monotonic()
@@ -47,16 +62,25 @@ try:
         exit_code = subprocess.run(
             [shutil.which("graphify") or "graphify", "update"], cwd=root,
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=int(os.environ.get("GRAPH_REFRESH_LIMIT_S", "600")), **hide,
+            timeout=limit, **hide,
         ).returncode
+        finished = True
     except subprocess.TimeoutExpired:
         outcome = "timeout"
     graphify_ms = int((time.monotonic() - started) * 1000)
     rewritten = os.path.getmtime(graph) != before
     # graphify exits 1 on a large graph when only its HTML view fails, having written
     # graph.json (CASE-008): a rewritten graph is the success signal, not the exit code.
-    if rewritten:
-        outcome = "refreshed"
+    # Only from a graphify that finished: one killed at the bound may have left a graph
+    # half written, and stays a timeout. A finished rewrite that does not parse is
+    # "corrupt", never a refresh.
+    if finished and rewritten:
+        try:
+            with open(graph, encoding="utf-8") as fh:
+                json.load(fh)
+            outcome = "refreshed"
+        except Exception:
+            outcome = "corrupt"
 except Exception:
     pass
 finally:
@@ -101,6 +125,15 @@ def pid_alive(pid):
     except OSError:
         return False
     return True
+
+
+def read_lock(path):
+    # The lock as written, or None when there is none (or it cannot be read).
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError:
+        return None
 
 
 def lock_held(path):
@@ -157,24 +190,30 @@ try:
         sys.exit(0)
 
     lock_path = os.path.join(root, "graphify-out", ".refresh.lock")
-    if lock_held(lock_path):
+    seen_lock = read_lock(lock_path)
+    # A lock that changed since it was judged belongs to a hook that just took it: deleting
+    # it as stale would start a second graphify beside the first. Re-read right before the
+    # delete, and only the lock judged stale is removed.
+    if lock_held(lock_path) or (seen_lock is not None and read_lock(lock_path) != seen_lock):
         write_row(root, {"outcome": "skipped_running", "hook_ms": hook_ms()})
         sys.exit(0)
-    try:
-        os.remove(lock_path)
-    except OSError:
-        pass
+    if seen_lock is not None:
+        try:
+            os.remove(lock_path)
+        except OSError:
+            pass
 
     # Gate 2: is the graph behind the sources?
     graph_time = os.path.getmtime(graph_path)
     scan_started = time.monotonic()
     newest, visited, skipped = 0.0, 0, 0
     for dirpath, dirnames, filenames in os.walk(root):
-        kept = [d for d in dirnames if d not in SKIP_DIRS]
+        # Case-insensitive, as the .ps1 flavour matches: Vendor/ is vendor/ on Windows and macOS.
+        kept = [d for d in dirnames if d.lower() not in SKIP_DIRS]
         skipped += len(dirnames) - len(kept)
         dirnames[:] = kept
         for fn in filenames:
-            if fn.endswith(SOURCE_EXT):
+            if fn.lower().endswith(SOURCE_EXT):
                 visited += 1
                 try:
                     mt = os.path.getmtime(os.path.join(dirpath, fn))
@@ -212,7 +251,7 @@ try:
     else:
         flags["start_new_session"] = True
     env = {**os.environ}
-    env.setdefault("GRAPH_REFRESH_LIMIT_S", str(GRAPHIFY_LIMIT_S))
+    env["GRAPH_REFRESH_LIMIT_S"] = str(limit_seconds())
     worker = subprocess.Popen(
         [sys.executable, "-c", WORKER, root, str(hook_ms()), str(scan_ms), str(visited), str(skipped), token],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

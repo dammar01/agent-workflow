@@ -34,6 +34,7 @@ from installer.base import (
     _file_sha256,
     _flush_receipt,
     _managed_block,
+    _marker_problem,
     _read_text_lenient,
     _record,
     _targets,
@@ -83,7 +84,12 @@ def _uninstall_text(dest: Path, key: str, plan: Plan, apply: bool, backup_root: 
     if not dest.is_file():
         return
     start, end = MARKERS[key]
-    remaining = _without_block(_read_text_lenient(dest), start, end)
+    text = _read_text_lenient(dest)
+    problem = _marker_problem(text, start, end)
+    if problem:
+        plan.warn(f"{dest}: workflow markers do not pair up ({problem}) — left as is; remove the block by hand")
+        return
+    remaining = _without_block(text, start, end)
     if remaining is None:
         plan.add("unchanged", dest, "no workflow block")
         return
@@ -98,20 +104,35 @@ def _uninstall_text(dest: Path, key: str, plan: Plan, apply: bool, backup_root: 
         _record("merge", dest, f"uninstall/{key}", saved, pre_sha256)
 
 
-def _uninstall_files(plan: Plan, apply: bool, backup_root: Path) -> None:
+HOOKS_PREFIX = "claude/hooks/"
+
+
+def _uninstall_files(plan: Plan, apply: bool, backup_root: Path, keep_hooks: bool = False) -> None:
+    """Remove the managed files an install wrote. `keep_hooks` keeps every hook script:
+    settings.json could not be cleaned, so it still runs them, and a deleted script would
+    turn each event it is wired to into a hook error."""
     prefixes = managed_prefixes()
     known = previously_installed()
     candidates = {str(dest): key for _src, dest, key in _targets() if key.startswith(prefixes)}
     candidates.update({dest: entry["key"] for dest, entry in known.items()})
+    kept_hooks = 0
     for dest, key in sorted(candidates.items()):
         path = Path(dest)
         if not path.is_file():
+            continue
+        if keep_hooks and key.startswith(HOOKS_PREFIX):
+            kept_hooks += 1
             continue
         hashes = (known.get(dest) or {}).get("hashes") or set()
         if _file_sha256(path) in hashes:
             _remove_receipted(path, key, plan, apply, backup_root, "installed by the workflow")
         else:
             plan.warn(f"{path} looks like a workflow file but is not what an install wrote — kept")
+    if kept_hooks:
+        plan.warn(
+            f"kept {kept_hooks} hook script(s) under ~/.claude/hooks: settings.json still runs them; "
+            "remove the workflow hooks from it, then run --uninstall again"
+        )
 
 
 def _strip_settings(settings: dict, stems: set[str]) -> tuple[dict, list[str]]:
@@ -152,27 +173,33 @@ def _strip_settings(settings: dict, stems: set[str]) -> tuple[dict, list[str]]:
     return out, changes
 
 
-def _uninstall_settings(plan: Plan, apply: bool, backup_root: Path) -> None:
+def _uninstall_settings(plan: Plan, apply: bool, backup_root: Path) -> bool:
+    """Strip the workflow hooks from settings.json. False when it could not be read, which
+    leaves it still running them: the caller then keeps the hook scripts."""
     dest = HOME / ".claude" / "settings.json"
     if not dest.is_file():
-        return
+        return True
     try:
-        current = json.loads(dest.read_text(encoding="utf-8"))
+        # Lenient like the install's own read: a BOM or a cp1252 byte left by an editor is no
+        # reason to leave every workflow hook registered.
+        current = json.loads(_read_text_lenient(dest))
     except (OSError, ValueError):
         plan.warn(f"{dest} is not readable JSON — left as is; remove the workflow hooks by hand")
-        return
+        return False
     if not isinstance(current, dict):
-        return
+        plan.warn(f"{dest} is not a JSON object — left as is; remove the workflow hooks by hand")
+        return False
     stripped, changes = _strip_settings(current, shipped_hook_stems() | retired_hook_stems())
     if not changes:
         plan.add("unchanged", dest, "no workflow hooks")
-        return
+        return True
     pre_sha256 = _file_sha256(dest)
     saved = _backup(dest, backup_root, plan, apply, "uninstall/claude/settings.json")
     plan.add("merge", dest, "removed " + "; ".join(changes))
     if apply:
         dest.write_text(json.dumps(stripped, indent=2) + "\n", encoding="utf-8")
         _record("merge", dest, "uninstall/claude/settings.json", saved, pre_sha256)
+    return True
 
 
 def run_uninstall(apply: bool) -> int:
@@ -191,8 +218,10 @@ def run_uninstall(apply: bool) -> int:
     for _src, dest, key in _targets():
         if key in MARKERS:
             _uninstall_text(dest, key, plan, apply, backup_root)
-    _uninstall_files(plan, apply, backup_root)
-    _uninstall_settings(plan, apply, backup_root)
+    # Settings first: a hook script deleted while settings.json still registers it fails on
+    # every event it is wired to, so the scripts go only once nothing runs them.
+    settings_clean = _uninstall_settings(plan, apply, backup_root)
+    _uninstall_files(plan, apply, backup_root, keep_hooks=not settings_clean)
     # Receipted like everything else: a rollback that restored the files but not the mode
     # would reinstall the other intent mode, and one without the ledger could no longer tell
     # the workflow's files from the user's.

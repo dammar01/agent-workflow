@@ -42,12 +42,17 @@ $SourceExtensions = @('.py', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.php
 # Directories that are never the subject of a graph. They are skipped before the walk
 # enters them: walking vendor/ or node_modules/ and filtering afterwards cost 2 s on every
 # implementing turn whatever the source size (CASE-008).
-$SkipDirs = @('node_modules', '.git', '.venv', 'venv', '__pycache__', 'vendor', 'dist', 'build', '.next', 'coverage', 'graphify-out', '.workflow')
+$SkipDirs = @('node_modules', '.git', '.venv', 'venv', '__pycache__', 'vendor', 'dist', 'build', '.next', 'coverage', 'target', 'graphify-out', '.workflow')
 
 # How long the detached worker lets graphify run (GRAPH_REFRESH_LIMIT_S overrides it, for
 # tests), and how old a lock may be before a dead or reused pid no longer holds it.
+# A value that is not a positive whole number keeps the default: the bound is set before
+# any try, so a bad override must not stop the hook.
 $GraphifyLimitMs = 600000
-if ($env:GRAPH_REFRESH_LIMIT_S) { $GraphifyLimitMs = [int]$env:GRAPH_REFRESH_LIMIT_S * 1000 }
+$limitSeconds = 0
+if ($env:GRAPH_REFRESH_LIMIT_S -and [int]::TryParse($env:GRAPH_REFRESH_LIMIT_S.Trim(), [ref]$limitSeconds) -and $limitSeconds -gt 0) {
+    $GraphifyLimitMs = $limitSeconds * 1000
+}
 $LockMaxAgeSeconds = 900
 
 function Write-RefreshRow([string]$Root, [hashtable]$Fields) {
@@ -65,6 +70,30 @@ function Write-RefreshRow([string]$Root, [hashtable]$Fields) {
         $line = ($row | ConvertTo-Json -Compress) + "`n"
         [System.IO.File]::AppendAllText((Join-Path $dataDir 'quality.jsonl'), $line, (New-Object System.Text.UTF8Encoding($false)))
     } catch { }
+}
+
+function Read-LockText([string]$LockPath) {
+    # The lock as written, or $null when there is none (or it cannot be read).
+    try { return [System.IO.File]::ReadAllText($LockPath) } catch { return $null }
+}
+
+function Test-JsonFile([string]$Path) {
+    # Whether the file is one complete JSON document. Streamed through the framework's JSON
+    # reader rather than ConvertFrom-Json: a large graph would be built in memory just to be
+    # dropped, and this runs on every refresh.
+    try {
+        Add-Type -AssemblyName System.Runtime.Serialization
+        $stream = [System.IO.File]::OpenRead($Path)
+        try {
+            $reader = [System.Runtime.Serialization.Json.JsonReaderWriterFactory]::CreateJsonReader($stream, [System.Xml.XmlDictionaryReaderQuotas]::Max)
+            try {
+                if ($reader.MoveToContent() -ne [System.Xml.XmlNodeType]::Element) { return $false }
+                $reader.Skip()
+                while ($reader.Read()) { }
+            } finally { $reader.Close() }
+        } finally { $stream.Dispose() }
+        return $true
+    } catch { return $false }
 }
 
 function Get-LiveLockPid([string]$LockPath) {
@@ -113,7 +142,7 @@ if ($WorkerRoot) {
     $lockPath  = Join-Path $WorkerRoot 'graphify-out\.refresh.lock'
     $outFile = Join-Path ([System.IO.Path]::GetTempPath()) ("graphify-{0}.out" -f [guid]::NewGuid())
     $errFile = Join-Path ([System.IO.Path]::GetTempPath()) ("graphify-{0}.err" -f [guid]::NewGuid())
-    $outcome = 'error'; $exitCode = $null; $graphifyMs = 0; $rewritten = $false
+    $outcome = 'error'; $exitCode = $null; $graphifyMs = 0; $rewritten = $false; $finished = $false
     try {
         $before = (Get-Item -LiteralPath $graphPath).LastWriteTimeUtc
         $graphify = (Get-Command graphify -ErrorAction Stop).Source
@@ -130,6 +159,7 @@ if ($WorkerRoot) {
         $null = $proc.Handle
         if ($proc.WaitForExit($GraphifyLimitMs)) {
             $exitCode = $proc.ExitCode
+            $finished = $true
         } else {
             try { $proc.Kill() } catch { }
             $outcome = 'timeout'
@@ -138,7 +168,12 @@ if ($WorkerRoot) {
         $rewritten = (Get-Item -LiteralPath $graphPath).LastWriteTimeUtc -ne $before
         # graphify exits 1 on a large graph when only its HTML view fails, having written
         # graph.json (CASE-008): a rewritten graph is the success signal, not the exit code.
-        if ($rewritten) { $outcome = 'refreshed' }
+        # Only from a graphify that finished: one killed at the bound may have left a graph
+        # half written, and stays a timeout. A finished rewrite that does not parse is
+        # 'corrupt', never a refresh.
+        if ($finished -and $rewritten) {
+            $outcome = if (Test-JsonFile $graphPath) { 'refreshed' } else { 'corrupt' }
+        }
     } catch {
     } finally {
         Remove-Item -LiteralPath $outFile, $errFile -Force -ErrorAction SilentlyContinue
@@ -186,13 +221,17 @@ try {
     }
 
     $lockPath = Join-Path $root 'graphify-out\.refresh.lock'
-    if (Get-LiveLockPid $lockPath) {
+    $seenLock = Read-LockText $lockPath
+    # A lock that changed since it was judged belongs to a hook that just took it: deleting
+    # it as stale would start a second graphify beside the first. Re-read right before the
+    # delete, and only the lock judged stale is removed.
+    if ((Get-LiveLockPid $lockPath) -or ($null -ne $seenLock -and (Read-LockText $lockPath) -cne $seenLock)) {
         # A refresh from an earlier turn is still running; it will pick up this change or
         # the next implementing turn will.
         Write-RefreshRow $root @{ outcome = 'skipped_running'; hook_ms = [long]$hookClock.Elapsed.TotalMilliseconds }
         exit 0
     }
-    Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+    if ($null -ne $seenLock) { Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue }
 
     # --- Gate 2: is the graph actually behind the sources? --------------------------
     $graphTime = (Get-Item -LiteralPath $graphPath).LastWriteTimeUtc

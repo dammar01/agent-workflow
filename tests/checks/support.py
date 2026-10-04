@@ -15,6 +15,7 @@ extract_session_id = _OpenCodeAdapterForParsing.extract_session_id
 import check
 import main
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -106,6 +107,18 @@ class RecordingOpenCodeAdapter(OpenCodeAdapter):
 class FakeJobProcess:
     def __init__(self, pid: int = 4242) -> None:
         self.pid = pid
+
+
+def powershell_for_hooks() -> str | None:
+    """The PowerShell the shipped `.ps1` hooks run under, or None.
+
+    settings.template.json invokes `powershell`, Windows PowerShell 5.1, so on Windows that is
+    the one tested: picking `pwsh` first hid a 5.1-only failure (native stderr under
+    $ErrorActionPreference='Stop' is terminating there). Elsewhere `pwsh` is all there is.
+    """
+    if sys.platform == "win32":
+        return shutil.which("powershell") or shutil.which("pwsh")
+    return shutil.which("pwsh")
 
 
 def assert_true(condition: bool, message: str) -> None:
