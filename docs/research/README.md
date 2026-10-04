@@ -201,6 +201,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-038](decisions/DEC-038-export-names-at-any-length-and-label-keys.yaml) | An export checks project names at any length, and keys under a per-project map must be project labels | accepted | implemented | not_validated | 56c2a64 |
 | [DEC-039](decisions/DEC-039-gate-lets-skill-definitions-be-read.yaml) | The pre-flight gate lets a skill definition under ~/.claude/skills be read while a delegation is pending | accepted | implemented | not_validated | 56c2a64 |
 | [DEC-040](decisions/DEC-040-proven-selector-route-folds-identifiers.yaml) | A proven selector's route folds identifier segments to :id | accepted | implemented | not_validated | 56c2a64 |
+| [DEC-041](decisions/DEC-041-check-asks-only-the-project-providers-boundary.yaml) | install --check asks only for the project boundary of the provider the project runs | accepted | implemented | not_validated | 8dcc672 |
 <!-- research-inventory:end -->
 
 No `H-XXX`, `EXP-XXX`, or `SYN-XXX` record is tracked: none has been run or has a result.
