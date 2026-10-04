@@ -128,6 +128,9 @@ def _test_metrics_contract() -> None:
                          ({"note": "/private/var/project"}, "a POSIX path outside the usual roots"),
                          ({"note": "~/work/project"}, "a home-relative path"),
                          ({"note": "see /etc/hosts"}, "a path inside free text"),
+                         ({"note": "/tmp"}, "a single-segment POSIX path"),
+                         ({"note": "//host"}, "a host-only UNC path"),
+                         ({"note": r"\\host\share"}, "a two-part UNC path"),
                          ({r"C:\Users\x": 1}, "a path in a key")):
             try:
                 metrics.write_export(bad, root / "bad.json", forbidden=["shop-api"])

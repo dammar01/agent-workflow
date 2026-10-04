@@ -223,14 +223,15 @@ def session_owners(transcripts: list[dict]) -> dict[str, int]:
 
 # An absolute path in any OS's form: a figure set that leaves the machine carries none. Read
 # against each key and string value, not the JSON text, so escaping cannot hide one: a drive
-# (`C:\`, `C:/`), UNC (`\\server\share`, `//server/share`), a home (`~/`), and any POSIX path
-# from the root with at least two segments (`/private/var/x`, `/etc/x`).
+# (`C:\`, `C:/`), UNC (`\\server\share`, `//server`), a home (`~/`), and any POSIX path from
+# the root, one segment included (`/tmp`, `/private/var/x`). A slash inside a word (`3/4`,
+# `tools/maintain`) is not one.
 _ABSOLUTE_PATH = re.compile(
     r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]"
     r"|(?:^|[^\\])\\\\[^\\\s]+\\"
-    r"|(?:^|[\s\"'(=,;])//[^/\s]+/"
+    r"|(?:^|[\s\"'(=,;])//[^/\s\"']+"
     r"|(?:^|[\s\"'(=,;])~[\\/]"
-    r"|(?:^|[\s\"'(=,;])/[^/\s\"']+/"
+    r"|(?:^|[\s\"'(=,;])/[^/\s\"']+"
 )
 
 
