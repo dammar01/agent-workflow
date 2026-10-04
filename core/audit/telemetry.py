@@ -39,7 +39,7 @@ def load_usage(project_root) -> list[UsageRecord]:
     path = _stream_path(project_root, USAGE_STREAM_NAME)
     rows: list[UsageRecord] = []
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return rows
     for line in text.splitlines():
@@ -60,7 +60,7 @@ def load_quality(project_root) -> list[dict]:
     path = _stream_path(project_root, QUALITY_STREAM_NAME)
     rows: list[dict] = []
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return rows
     for line in text.splitlines():

@@ -155,7 +155,9 @@ def failure_signature(report: dict, scenario: dict | None) -> str | None:
     return f"v{FAILURE_SIGNATURE_VERSION}:{digest}"
 
 
-_GROUNDED = frozenset({"source", "existing_test", "runtime_probe"})
+# `proven`: a selector a passed run matched on this origin — as grounded as one the
+# codebase named, so its absence from a settled page is the application's.
+_GROUNDED = frozenset({"source", "existing_test", "runtime_probe", "proven"})
 _SELECTOR_ERRORS = frozenset({"selector_missing", "selector_ambiguous", "not_visible"})
 
 

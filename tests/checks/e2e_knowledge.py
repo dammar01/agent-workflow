@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 
 from core.evidence.e2e import knowledge
-from core.evidence.e2e.classify import build_report
+from core.evidence.e2e.classify import ORIGIN_APP, ORIGIN_UNKNOWN, build_report, classify_step, diagnose
 from tests.checks.support import assert_true
 
 BASE = "http://app.test"
@@ -196,18 +196,26 @@ def _save_scenario(candidates: list[dict]) -> dict:
     }
 
 
-def _save_report(scenario: dict, winner: int, *, status: str = "passed", source_ref: str | None = None) -> dict:
+def _save_report(scenario: dict, winner: int | None, *, status: str = "passed", source_ref: str | None = None,
+                 error_kind: str = "action_timeout", resolved: bool = True) -> dict:
+    """`winner=None`: every candidate was counted and none matched. `resolved=False`: the
+    step failed before its selector was tried (not ready, an exception), so no selection."""
     events = []
     for index, step in enumerate(scenario["steps"], start=1):
         event = {"type": "progress", "step": index, "step_id": step["id"], "action": step["action"],
                  "status": "passed", "claim_id": step.get("claim_id")}
         if step["id"] == "save":
             event["status"] = status
-            event["selection"] = {"candidate": winner, "match_counts": [0] * winner + [1], "fallback_used": winner > 0}
-            if source_ref:
+            if not resolved:
+                pass
+            elif winner is None:
+                event["selection"] = {"candidate": None, "match_counts": [0] * len(step["selector_candidates"]), "fallback_used": False}
+            else:
+                event["selection"] = {"candidate": winner, "match_counts": [0] * winner + [1], "fallback_used": winner > 0}
+            if source_ref and "selection" in event:
                 event["selection"]["source_ref"] = source_ref
             if status == "failed":
-                event["error"] = {"kind": "action_timeout"}
+                event["error"] = {"kind": error_kind}
                 event["page_stable"] = True
         events.append(event)
     events.append({"type": "result", "status": "finished"})
@@ -324,8 +332,16 @@ def _check_proven_selectors_rank_first_and_demote() -> None:
         knowledge.ingest(root, _save_report(leading, winner=0, status="failed"), leading, BASE, "sid-2b", clean_first_attempt=True)
         after = [e["consecutive_fails"] for e in knowledge.load(root) if e.get("matched") == _SAVE_E2E]
         assert_true(before == after, f"a failure after the proven selector matched does not demote it: {before} -> {after}")
-        # A second miss retires it.
-        knowledge.ingest(root, _save_report(leading, winner=1), leading, BASE, "sid-3", clean_first_attempt=True)
+        # A step that fails BEFORE its selector was tried (the page never became ready, the
+        # step raised) carries no selection: the proven selector was not tried, so not missed.
+        for kind in ("not_ready", "action_failed"):
+            knowledge.ingest(root, _save_report(leading, winner=None, status="failed", error_kind=kind, resolved=False),
+                             leading, BASE, f"sid-2c-{kind}", clean_first_attempt=True)
+            after = [e["consecutive_fails"] for e in knowledge.load(root) if e.get("matched") == _SAVE_E2E]
+            assert_true(before == after, f"a {kind} step that never tried its selectors does not demote it: {before} -> {after}")
+        # A second miss — every candidate counted, none matched — retires it.
+        knowledge.ingest(root, _save_report(leading, winner=None, status="failed", error_kind="selector_missing"),
+                         leading, BASE, "sid-3", clean_first_attempt=True)
         retired = [e for e in knowledge.load(root) if e.get("matched") == _SAVE_E2E]
         assert_true(retired and all(e.get("stale") for e in retired), f"two misses retire it: {retired}")
 
@@ -354,8 +370,27 @@ def _check_proven_selectors_rank_first_and_demote() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _check_a_missing_proven_selector_is_grounded() -> None:
+    """A `proven` selector that is gone is classed like a source-grounded one: a passed run
+    matched it on this origin, so its absence from a settled page is the application's."""
+    missing = {"action": "click", "step_id": "save", "error": {"kind": "selector_missing"}, "selector_provenance": "proven"}
+    assert_true(classify_step({**missing, "page_stable": True}) == ORIGIN_APP, "a proven selector gone from a settled page is the app's")
+    assert_true(classify_step({**missing, "page_stable": False}) == ORIGIN_UNKNOWN, "on an unsettled page it is unknown, as for source")
+    scenario = _save_scenario([{"selector": _SAVE_E2E, "selector_provenance": {"type": "proven"}}])
+    events = [
+        {"type": "progress", "step": 1, "step_id": "open", "action": "goto", "status": "passed"},
+        {"type": "progress", "step": 2, "step_id": "save", "action": "click", "status": "failed",
+         "selector_provenance": "proven", "page_stable": True, "error": {"kind": "selector_missing"},
+         "selection": {"candidate": None, "match_counts": [0], "fallback_used": False}},
+        {"type": "result", "status": "finished"},
+    ]
+    cause = diagnose(build_report(events, scenario)).get("cause")
+    assert_true(cause == "selector_not_rendered", f"diagnosed like a grounded miss, not a scenario selector: {cause}")
+
+
 def _test_e2e_knowledge() -> None:
     _check_proven_selectors_rank_first_and_demote()
+    _check_a_missing_proven_selector_is_grounded()
     root = _project()
     try:
         _check_a_run_records_what_it_proved(root)

@@ -135,17 +135,23 @@ def _matched_selector(step: dict, selection: dict) -> dict | None:
 def _proven_missed(step: dict, selection: dict, outcome: str) -> list[dict]:
     """`proven` candidates this step tried that did not match.
 
-    Every proven candidate before the one that matched, or all of them when none did. Matched
+    Every proven candidate before the one that matched, or every one counted when none did. Matched
     against the store by selector, not by the step's key: a draft that puts a proven
     selector first has a different candidate list, so its key names a different entry.
     """
     from core.evidence.e2e.spec import step_selectors
 
     candidates = step_selectors(step)
+    # Only a candidate the browser actually counted was tried. A step that failed before
+    # resolve ran (not ready, an exception) has no selection: it proved nothing either way.
+    counts = selection.get("match_counts")
+    if not isinstance(counts, list):
+        return []
     index = selection.get("candidate")
     # A step can fail after its selector matched (the click timed out, the fill was
     # refused); then only the candidates before the one that matched missed.
-    tried = candidates[:index] if isinstance(index, int) else candidates
+    pool = candidates[:index] if isinstance(index, int) else candidates
+    tried = [c for c, count in zip(pool, counts) if count is not None]
     return [c["selector"] for c in tried if c.get("provenance") == "proven"]
 
 

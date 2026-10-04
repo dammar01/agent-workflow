@@ -63,7 +63,7 @@ def record_skill(project_root, session_id: str | None, skill: str, *, verdict: s
 def load_events(project_root) -> list[dict]:
     """Every event on disk, oldest first; a torn or foreign line is skipped."""
     try:
-        text = (data_dir(Path(project_root)) / TASK_STREAM_NAME).read_text(encoding="utf-8")
+        text = (data_dir(Path(project_root)) / TASK_STREAM_NAME).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return []
     events = []

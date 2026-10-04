@@ -317,6 +317,78 @@ def _scenario(reply: str = _SPEC_REPLY) -> dict:
     return parse_spec(reply)["scenario"]
 
 
+class _MeteredAdapter(_StageAdapter):
+    """A `_StageAdapter` whose every invocation reports its own provider token counts.
+
+    Distinct numbers per call, so a row that took another call's counts — or two rows that
+    took the same one — shows up as a wrong sum rather than a coincidentally right one.
+    """
+
+    def __init__(self, replies: dict[str, list[str]]) -> None:
+        super().__init__(replies)
+        self.usage: list[dict] = []
+
+    def run(self, prompt, session, model=None, work_dir=None) -> dict:
+        result = super().run(prompt, session, model, work_dir)
+        n = len(self.calls)
+        usage = {"input_tokens": 1000 * n + 1, "output_tokens": 100 * n + 3, "reasoning_tokens": 10 * n, "cached_input_tokens": 500 * n}
+        self.usage.append(usage)
+        self.last_call_meta = {**(self.last_call_meta or {}), "provider_usage": usage}
+        return result
+
+
+def _check_browser_usage_is_one_row_per_invocation(root: Path) -> None:
+    """Audit: a draft that needed a continuation AND a repair, then a run whose review needed
+    the executor's own continuation. Every provider invocation is one usage row with its own
+    tokens and its stage; the browser's time is on the run's final row only; and the call
+    count the report and the statusline print is commands, not invocations."""
+    from core.audit import telemetry
+
+    spec_only_unfenced = _SPEC_ONLY.replace("```json\n", "").replace("\n```", "")
+    review_cut = _REVIEW_CLEAN.split("not_verified:")[0]
+    adapter = _MeteredAdapter({"e2e_spec": [_EVIDENCE_ONLY, spec_only_unfenced, _SPEC_ONLY], "verify": [review_cut, _REVIEW_CLEAN]})
+    draft, result = _flow(root, adapter, "pass", {"E2E_USER": "u"})
+    repair = draft["meta"]["e2e"].get("repair") or {}
+    assert_true(
+        _draft_info(draft).get("status") == "ready" and repair.get("attempted") and repair.get("recovered"),
+        f"fixture: the draft recovers through continuation + repair: {_draft_info(draft).get('errors')} {repair}",
+    )
+    commands = _commands(adapter)
+    assert_true(commands[:3] == ["e2e_spec"] * 3 and set(commands[3:]) == {"verify"}, f"fixture: first + continuation + repair, then review: {commands}")
+    rows = _usage_rows(root)
+    assert_true(len(rows) == len(adapter.calls), f"one usage row per provider invocation: rows={len(rows)} calls={len(adapter.calls)}")
+    draft_rows = [r for r in rows if r.get("command") == "verify-browser"]
+    run_rows = [r for r in rows if r.get("command") == "verify"]
+    assert_true(len(draft_rows) == 3 and len(run_rows) == len(adapter.calls) - 3, f"rows split by command: {[r.get('command') for r in rows]}")
+    assert_true(
+        all(r.get("e2e_stage") == "draft" for r in draft_rows) and all(r.get("e2e_stage") == "run" for r in run_rows),
+        f"every row names its stage: {[(r.get('command'), r.get('e2e_stage')) for r in rows]}",
+    )
+    for key, field in (("input_tokens", "actual_input_tokens"), ("output_tokens", "actual_output_tokens"),
+                       ("reasoning_tokens", "actual_reasoning_tokens"), ("cached_input_tokens", "actual_cached_input_tokens")):
+        reported = [u[key] for u in adapter.usage]
+        recorded = [r.get(field) for r in rows]
+        assert_true(recorded == reported, f"{field}: each row carries its own invocation's count, none doubled or lost: {recorded} vs {reported}")
+    timed = [i for i, r in enumerate(rows) if r.get("browser_seconds") is not None]
+    assert_true(timed == [len(rows) - 1], f"browser_seconds only on the run's final row: {[r.get('browser_seconds') for r in rows]}")
+    assert_true(
+        all(r.get("provider") for r in rows) and all(r.get("prompt_id") for r in rows),
+        f"every row names a provider and a prompt: {[(r.get('provider'), r.get('prompt_id')) for r in rows]}",
+    )
+    report = telemetry.report(root)
+    assert_true(report["provider_calls"] == len(adapter.calls), f"report: provider_calls is invocations: {report['provider_calls']}")
+    assert_true(report["calls"] == 2, f"report: calls is commands, draft + run: {report['calls']}")
+    assert_true(
+        report["cost"]["input_tokens"] == sum(u["input_tokens"] for u in adapter.usage)
+        and report["cost"]["output_tokens"] == sum(u["output_tokens"] for u in adapter.usage),
+        f"report: token totals equal what the provider reported: {report['cost']}",
+    )
+    # The statusline's rule (workflow-statusline: distinct prompt_id, an id-less row is its own).
+    ids = [r.get("prompt_id") for r in rows]
+    statusline_calls = len({i for i in ids if i}) + sum(1 for i in ids if not i)
+    assert_true(statusline_calls == report["calls"], f"statusline and report agree on second-agent calls: {statusline_calls} vs {report['calls']}")
+
+
 def _test_e2e_routing() -> None:
     roots: list[Path] = []
 
@@ -1409,6 +1481,8 @@ def _test_e2e_routing() -> None:
         draft = _draft(root, adapter)
         rows = _usage_rows(root)
         assert_true(not draft.get("ok") and len(rows) == len(adapter.calls) == 1, f"a failed spec stage is returned and billed once: ok={draft.get('ok')} rows={len(rows)}")
+
+        _check_browser_usage_is_one_row_per_invocation(workspace("e2e-usage-audit-"))
 
         # --- /.verify stays delegated | syntax: the browser is only ever /.verify-browser ----------
         root = workspace("e2e-syntax-", mode="syntax")

@@ -335,6 +335,32 @@ def _torn_row_is_skipped_not_fatal() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _torn_multibyte_row_is_skipped_not_fatal() -> None:
+    """A write killed mid UTF-8 character leaves bytes no decoder accepts. Strict decoding
+    raised on the whole file and took `report` down with it; the torn row is skipped."""
+    from core.audit import task_telemetry
+    from core.evidence.contracts import QUALITY_STREAM_NAME, TASK_STREAM_NAME, USAGE_STREAM_NAME
+
+    root = Path(tempfile.mkdtemp(prefix="aw-torn-utf8-"))
+    try:
+        write_usage_record(root, _usage(command="explore", prompt_id="p1", provider="opencode").to_dict())
+        write_quality_record(root, {"kind": "tests", "passed": True})
+        task_telemetry.record_skill(root, "s", "explore")
+        cut = '{"command": "verify", "note": "café'.encode("utf-8")[:-1]  # half of é
+        for name in (USAGE_STREAM_NAME, QUALITY_STREAM_NAME, TASK_STREAM_NAME):
+            path = data_dir(root) / name
+            assert_true(path.exists(), f"{name} was written before the torn row")
+            with path.open("ab") as handle:
+                handle.write(cut)
+        assert_true(len(telemetry.load_usage(root)) == 1, "the usage row before the torn one is kept")
+        assert_true(len(telemetry.load_quality(root)) == 1, "the quality row before the torn one is kept")
+        assert_true(len(task_telemetry.load_events(root)) == 1, "the task event before the torn one is kept")
+        assert_true(telemetry.report(root)["calls"] == 1, "report runs over a torn multi-byte row")
+        task_telemetry.report(root)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _provider_less_browser_runs_are_not_calls() -> None:
     """Rows written before contract v4 for a browser run that reached no provider."""
     root = Path(tempfile.mkdtemp(prefix="telemetry-ghost-"))
@@ -378,3 +404,4 @@ def _test_telemetry_metrics() -> None:
     _by_effort_splits_commands_and_skips_old_rows()
     _graph_refresh_reports_what_the_turn_paid()
     _torn_row_is_skipped_not_fatal()
+    _torn_multibyte_row_is_skipped_not_fatal()
