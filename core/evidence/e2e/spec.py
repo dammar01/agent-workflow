@@ -45,7 +45,8 @@ SELECTOR_KEYS = frozenset({"role", "name", "label", "e2e", "text", "css"})
 # repair continuation can fix the scenario rather than guess.
 RETIRED_SELECTOR_KEYS = {"testid": "e2e", "data-testid": "e2e", "data-e2e": "e2e"}
 # `proven`: a selector the browser knowledge store recorded as the one that matched in a
-# clean earlier run against this origin (DEC-016). Valid only when the store backs it.
+# clean earlier run against this origin (DEC-016), on the step's route under its `within`.
+# Valid only when the store backs it there (`proven_here`).
 PROVENANCE = frozenset({"source", "existing_test", "runtime_probe", "heuristic", "proven"})
 SEVERITIES = frozenset({"blocking", "non_blocking"})
 SIDE_EFFECTS = frozenset({"none", "creates_test_data", "modifies_test_data", "deletes_test_data"})
@@ -346,11 +347,32 @@ def selector_rank(selector: Mapping) -> int | None:
     return None
 
 
-def leads_rank(selector: Mapping, provenance: object, policy: Mapping | None) -> bool:
+def proven_here(selector: object, policy: Mapping | None, scope: Mapping | None) -> bool:
+    """Whether the knowledge store proved `selector` on this step's route under its `within`.
+
+    `scope` is `knowledge.proven_scope(route, within)` for the step. Proven is scoped by
+    page: the same selector on another route, or under another container, may name another
+    element or none, and its absence there says nothing about the application.
+    """
+    if not isinstance(scope, Mapping):
+        return False
+    for item in (policy or {}).get("proven_selectors") or []:
+        if (
+            isinstance(item, Mapping)
+            and item.get("selector") == selector
+            and item.get("route") == scope.get("route")
+            and item.get("within") == scope.get("within")
+        ):
+            return True
+    return False
+
+
+def leads_rank(selector: Mapping, provenance: object, policy: Mapping | None, scope: Mapping | None = None) -> bool:
     """Whether this candidate may sit ahead of the usual order (DEC-016).
 
     A `data-e2e` a developer placed and the draft cites, or a selector the knowledge store
-    proved on this origin. A guess — heuristic, runtime probe — never jumps the order.
+    proved on this step's route and `within` (`scope`). A guess — heuristic, runtime
+    probe — never jumps the order.
     """
     if not isinstance(provenance, Mapping):
         return False
@@ -365,7 +387,7 @@ def leads_rank(selector: Mapping, provenance: object, policy: Mapping | None) ->
         # file that is not there, or a line without the value, is a guess wearing a citation.
         return _cites_e2e((policy or {}).get("project_root"), ref.strip(), str(selector["e2e"]))
     if kind == "proven":
-        return selector in list((policy or {}).get("proven_selectors") or [])
+        return proven_here(selector, policy, scope)
     return False
 
 
@@ -412,15 +434,18 @@ def _cites_e2e(project_root: object, ref: str, value: str) -> bool:
     return False
 
 
-def _proven_errors(where: str, selector: object, provenance: object, policy: Mapping | None) -> list[str]:
-    """`proven` is a claim about the knowledge store, checked against it."""
+def _proven_errors(where: str, selector: object, provenance: object, policy: Mapping | None, scope: Mapping | None) -> list[str]:
+    """`proven` is a claim about the knowledge store, checked against it on this step's
+    route and `within`."""
     if not isinstance(provenance, Mapping) or provenance.get("type") != "proven":
         return []
-    if selector in list((policy or {}).get("proven_selectors") or []):
+    if proven_here(selector, policy, scope):
         return []
+    route = (scope or {}).get("route")
     return [
         f"{where}: selector_provenance 'proven' names no selector the browser knowledge "
-        "store proved on this origin; use the provenance the selector actually has"
+        f"store proved on route '{route}' with this step's `within`; use the provenance the "
+        "selector actually has"
     ]
 
 
@@ -599,12 +624,19 @@ def _side_effect_errors(where: str, step: Mapping, policy: Mapping) -> list[str]
     return errors
 
 
-def _step_errors(where: str, step: Mapping, policy: Mapping, claim_ids: set[str], *, cleanup: bool) -> tuple[list[str], str | None]:
+def _step_errors(
+    where: str, step: Mapping, policy: Mapping, claim_ids: set[str], *, cleanup: bool, route: str = "/"
+) -> tuple[list[str], str | None]:
     """One step's rules. Returns (errors, the claim id it asserts or None).
 
     A cleanup step shares every rule a test step has, except that it proves the cleanup, not
-    a claim, and its write is covered by the side effect of the step it cleans.
+    a claim, and its write is covered by the side effect of the step it cleans. `route` is
+    the path of the last goto before the step, where a `proven` selector must have been
+    proven.
     """
+    from core.evidence.e2e.knowledge import proven_scope
+
+    scope = proven_scope(route, step.get("within"))
     errors: list[str] = []
     asserted = None
     action = step.get("action")
@@ -654,7 +686,7 @@ def _step_errors(where: str, step: Mapping, policy: Mapping, claim_ids: set[str]
                     found = _selector_errors(at, item.get("selector"))
                     found += _provenance_errors(at, item.get("selector_provenance"))
                     if not found:
-                        found += _proven_errors(at, item["selector"], item.get("selector_provenance"), policy)
+                        found += _proven_errors(at, item["selector"], item.get("selector_provenance"), policy, scope)
                     errors.extend(found)
                     if found:
                         continue
@@ -663,7 +695,7 @@ def _step_errors(where: str, step: Mapping, policy: Mapping, claim_ids: set[str]
                     seen.append(item["selector"])
                     # Candidates that may lead are exempt only while they lead; once the
                     # usual order has started, every later candidate obeys it.
-                    if leading and leads_rank(item["selector"], item.get("selector_provenance"), policy):
+                    if leading and leads_rank(item["selector"], item.get("selector_provenance"), policy, scope):
                         continue
                     leading = False
                     ranks.append(selector_rank(item["selector"]))
@@ -676,7 +708,7 @@ def _step_errors(where: str, step: Mapping, policy: Mapping, claim_ids: set[str]
             single = _selector_errors(where, step.get("selector"))
             single += _provenance_errors(where, step.get("selector_provenance"))
             if not single:
-                single += _proven_errors(where, step["selector"], step.get("selector_provenance"), policy)
+                single += _proven_errors(where, step["selector"], step.get("selector_provenance"), policy, scope)
             errors.extend(single)
     if "within" in step:
         if action not in _ACTIONS_WITH_SELECTOR:
@@ -706,8 +738,12 @@ def _step_errors(where: str, step: Mapping, policy: Mapping, claim_ids: set[str]
     return errors, asserted
 
 
-def _cleanup_errors(scenario: Mapping, step_ids: dict[str, tuple[int, Mapping]], policy: Mapping, claim_ids: set[str], seen_ids: set[str]) -> list[str]:
-    """scenario.cleanup: executable steps, grouped by the side-effect step each one cleans."""
+def _cleanup_errors(
+    scenario: Mapping, step_ids: dict[str, tuple[int, Mapping]], policy: Mapping, claim_ids: set[str], seen_ids: set[str],
+    route: str = "/",
+) -> list[str]:
+    """scenario.cleanup: executable steps, grouped by the side-effect step each one cleans.
+    `route` is where the test steps left the page; a cleanup goto moves it on."""
     errors: list[str] = []
     cleanup = scenario.get("cleanup")
     cleaned: dict[str, list[Mapping]] = {}
@@ -720,7 +756,8 @@ def _cleanup_errors(scenario: Mapping, step_ids: dict[str, tuple[int, Mapping]],
             errors.append(f"{where}: not an object")
             continue
         errors.extend(_id_errors(where, step, seen_ids))
-        found, _ = _step_errors(where, step, policy, claim_ids, cleanup=True)
+        route = _next_route(route, step, policy)
+        found, _ = _step_errors(where, step, policy, claim_ids, cleanup=True, route=route)
         errors.extend(found)
         target = step.get("cleans")
         if target not in step_ids:
@@ -808,6 +845,16 @@ def placeholder_errors(scenario: object) -> list[str]:
     return errors
 
 
+def _next_route(route: str, step: Mapping, policy: Mapping) -> str:
+    """The route a step runs on: a goto's own path, otherwise the one before it — read the
+    way the knowledge store reads a run, so `proven` is checked where it was recorded."""
+    if step.get("action") != "goto":
+        return route
+    from core.evidence.e2e.knowledge import route_of
+
+    return route_of(step.get("url"), str(policy.get("base_url") or ""))
+
+
 def validate_scenario(scenario: object, policy: Mapping | None = None, *, covered: set[str] | frozenset = frozenset()) -> list[str]:
     """Structural and safety rules the player relies on. Empty list means runnable.
 
@@ -861,6 +908,7 @@ def validate_scenario(scenario: object, policy: Mapping | None = None, *, covere
         errors.append("steps: at least one step is required (only claims covered by a runnable existing test may go without)")
     seen_ids: set[str] = set()
     step_ids: dict[str, tuple[int, Mapping]] = {}
+    route = "/"
     for index, step in enumerate(steps):
         where = f"steps[{index}]"
         if not isinstance(step, dict):
@@ -870,11 +918,12 @@ def validate_scenario(scenario: object, policy: Mapping | None = None, *, covere
         errors.extend(id_problems)
         if not id_problems:
             step_ids[step["id"]] = (index, step)
-        found, cid = _step_errors(where, step, policy, claim_ids, cleanup=False)
+        route = _next_route(route, step, policy)
+        found, cid = _step_errors(where, step, policy, claim_ids, cleanup=False, route=route)
         errors.extend(found)
         if cid:
             asserted.add(cid)
-    errors.extend(_cleanup_errors(scenario, step_ids, policy, claim_ids, seen_ids))
+    errors.extend(_cleanup_errors(scenario, step_ids, policy, claim_ids, seen_ids, route))
     errors.extend(placeholder_errors(scenario))
     unasserted = claim_ids - asserted - set(covered)
     if unasserted and not errors:

@@ -42,17 +42,48 @@ TEXT_ARTIFACT_SUFFIXES = (".html", ".htm", ".txt", ".log", ".json", ".jsonl", ".
 # and never the value. The JWT and mixed-case forms were missing: `eyJ....` carries dots,
 # and a 16–23 character invite code slipped under the 24-character floor.
 _ID_SEGMENT = re.compile(
-    r"^(?:\d+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{16,}|[A-Za-z0-9_\-]{24,}"
+    r"^(?:\d+|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{16,}"
+    # 24+ characters: a token when it carries a digit or is one unbroken run; a kebab or
+    # snake word that long (`notification_preferences`) is still a route.
+    r"|(?=[^/]*\d)[A-Za-z0-9_\-]{24,}|[A-Za-z0-9]{24,}"
     r"|[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}"
     r"|(?=[^/]*[a-z])(?=[^/]*[A-Z])(?=[^/]*\d)[A-Za-z0-9_\-]{16,}"
     r"|.*@.*)$"
 )
+# Shorter secret shapes the pattern above lets through. A word the app routes on is one
+# word, or kebab, snake or camel case; a token is a run of characters. 16+ letters and
+# digits with no separator (`k3j4h5g6f7d8s9a0q1w2`), or 16+ characters whose letters are
+# in both cases with each case at least a quarter of the segment (`AbCdEfGhIjKlMnOp`;
+# `userSettingsPage` is a name and stays).
+_TOKEN_RUN = re.compile(r"^[A-Za-z0-9]{16,}$")
+_TOKEN_CHARS = re.compile(r"^[A-Za-z0-9_\-]{16,}$")
+
+
+def _secret_shaped(segment: str) -> bool:
+    if _ID_SEGMENT.match(segment):
+        return True
+    if _TOKEN_RUN.match(segment) and any(c.isdigit() for c in segment) and any(c.isalpha() for c in segment):
+        return True
+    if not _TOKEN_CHARS.match(segment):
+        return False
+    upper = sum(c.isupper() for c in segment)
+    lower = sum(c.islower() for c in segment)
+    return min(upper, lower) * 4 >= len(segment)
+
+
+def _segment(segment: str) -> str:
+    # `;jsessionid=...` and other path parameters are dropped: a session id rides there.
+    segment = segment.split(";", 1)[0]
+    return ":id" if segment and _secret_shaped(unquote(segment)) else segment
+
+
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 def sanitize_endpoint(url: str) -> str:
     """`scheme://host[:port]/route` for the request ledger: query, fragment and credentials in
-    the authority dropped, identifier-shaped path segments replaced by `:id`."""
+    the authority dropped, `;` path parameters dropped, identifier- and token-shaped path
+    segments replaced by `:id`."""
     try:
         parts = urlsplit(str(url))
         scheme = parts.scheme.lower()
@@ -63,7 +94,7 @@ def sanitize_endpoint(url: str) -> str:
     if ":" in host:
         host = f"[{host}]"
     netloc = host if port in (None, _DEFAULT_PORTS.get(scheme)) else f"{host}:{port}"
-    segments = [":id" if segment and _ID_SEGMENT.match(unquote(segment)) else segment for segment in (parts.path or "/").split("/")]
+    segments = [_segment(segment) for segment in (parts.path or "/").split("/")]
     return f"{scheme}://{netloc}{'/'.join(segments) or '/'}"
 
 

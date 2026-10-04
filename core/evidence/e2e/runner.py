@@ -1155,12 +1155,13 @@ def run(
             "skipped": len(tag_entries) - len(e2e_tagging.ready(tag_entries)),
         }
     # ---- knowledge: what this run proved, for the next draft -------------------------
-    # From the placeholder scenario, never the resolved one. A pass that needed a retry is
-    # not recorded as proof; failures always count against what the store believed.
+    # From the placeholder scenario, never the resolved one. Only a run that passed on its
+    # first attempt is proof: not a pass that needed a retry, nor the passing steps of a
+    # run that failed. Failures always count against what the store believed.
     try:
         e2e_meta["knowledge"] = e2e_knowledge.ingest(
             project_root, report, scenario, str(config.get("base_url") or ""), session_id,
-            clean_first_attempt=len(attempts) == 1,
+            clean_first_attempt=len(attempts) == 1 and report["browser_verdict"] == "pass",
         )
     except Exception as exc:  # observing the run must never be able to fail it
         e2e_meta["knowledge"] = {"error": f"{type(exc).__name__}: {exc}"}

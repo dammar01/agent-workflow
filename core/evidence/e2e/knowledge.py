@@ -104,11 +104,23 @@ def origin_of(base_url: str) -> str:
     return f"{parts.scheme.lower()}://{parts.netloc.lower()}" if parts.scheme and parts.netloc else ""
 
 
-def _route(url: object, base_url: str) -> str:
+def route_of(url: object, base_url: str) -> str:
+    """The path a goto reaches: the route every step after it runs on. Shared with the spec
+    validator, so `proven` is checked on the same route it was recorded on."""
     try:
         return urlsplit(urljoin(base_url or "http://localhost/", str(url or "/"))).path or "/"
     except ValueError:
         return "/"
+
+
+_route = route_of
+
+
+def proven_scope(route: str, within: object) -> dict:
+    """Where a proven selector holds: the route and the `within` it matched under. The same
+    selector on another page, or under another container, may name a different element or
+    none, so it is neither offered as proven nor demoted there."""
+    return {"route": route, "within": within if isinstance(within, dict) and within else None}
 
 
 def _entry_id(kind: str, origin: str, key: str) -> str:
@@ -201,11 +213,18 @@ def observations(report: dict, scenario: dict, base_url: str) -> list[dict]:
             key = json.dumps([route, action, step.get("within"), step.get("selector") or step.get("selector_candidates")], sort_keys=True)
             body = {"step": _step_view(step), "source_ref": selection.get("source_ref")}
             # Which candidate matched, from the placeholder scenario (never the resolved
-            # one): what a later draft may cite as `proven` and rank first (DEC-016).
-            matched = _matched_selector(step, selection) if outcome == "pass" else None
-            if matched is not None:
+            # one): what a later draft may cite as `proven` and rank first (DEC-016), on
+            # this route and under this `within` only.
+            matched = _matched_selector(step, selection)
+            scope = proven_scope(route, step.get("within"))
+            if matched is not None and outcome == "pass":
                 body["matched"] = matched
-            row_out = {"kind": "selector", "key": key, "route": route, "outcome": outcome, "body": body}
+                body["proven_scope"] = scope
+            row_out = {"kind": "selector", "key": key, "route": route, "scope": scope, "outcome": outcome, "body": body}
+            if matched is not None and outcome == "fail":
+                # It failed after its selector matched (the click timed out, the fill was
+                # refused): the selector found its element, so the failure is not its own.
+                row_out["selector_matched"] = True
             missed = _proven_missed(step, selection, outcome)
             if missed:
                 row_out["proven_missed"] = missed
@@ -255,7 +274,9 @@ def ingest(project_root: Path, report: dict, scenario: dict, base_url: str, sess
 
     A pass is recorded only when the run passed on its first attempt: a pass reached by a
     retry is the flaky result this package refuses to call clean. Failures always count —
-    a failure against a recorded entry is information whatever the run's verdict.
+    a failure against a recorded entry is information whatever the run's verdict — but an
+    entry is weakened at most once per run, however many of its steps missed: DEC-016's
+    "one miss demotes, two retire" counts runs, not steps.
     """
     origin = origin_of(base_url)
     summary = {"added": 0, "confirmed": 0, "weakened": 0, "retired": 0}
@@ -267,16 +288,22 @@ def ingest(project_root: Path, report: dict, scenario: dict, base_url: str, sess
     now = now_iso()
     with _Lock(project_root):
         entries = {entry["id"]: entry for entry in load(project_root)}
+        # One set for the whole run: two steps that miss the same proven selector are one
+        # miss of it, not two, or a single run would retire what DEC-016 retires after two.
+        weakened_here: set[str] = set()
         for row in rows:
-            # A proven selector that missed demotes every entry it was proven by, whatever
-            # the key of the step that tried it (DEC-016: one miss demotes, two retire).
-            weakened_here: set[str] = set()
+            # A proven selector that missed demotes every entry it was proven by on the same
+            # route under the same `within`, whatever the key of the step that tried it
+            # (DEC-016: one miss demotes, two retire). An entry recorded before scopes were
+            # stored has no `proven_scope`: it was never offered as proven, so no proven
+            # miss is its.
             for missed in row.get("proven_missed") or []:
                 for proven_entry in entries.values():
                     if (
                         proven_entry.get("kind") == "selector"
                         and proven_entry.get("origin") == origin
                         and proven_entry.get("matched") == missed
+                        and proven_entry.get("proven_scope") == row.get("scope")
                         and not proven_entry.get("stale")
                         and proven_entry["id"] not in weakened_here
                     ):
@@ -290,9 +317,11 @@ def ingest(project_root: Path, report: dict, scenario: dict, base_url: str, sess
             entry_id = _entry_id(row["kind"], origin, row["key"])
             entry = entries.get(entry_id)
             if row["outcome"] == "fail":
-                # Already counted above when the step's own entry is the one it proved.
-                if entry is None or entry.get("stale") or entry_id in weakened_here:
+                # Already weakened this run, above or by an earlier step. A step whose
+                # selector matched before it failed is no miss of that selector (DEC-031).
+                if entry is None or entry.get("stale") or entry_id in weakened_here or row.get("selector_matched"):
                     continue
+                weakened_here.add(entry_id)
                 entry["fail_count"] = int(entry.get("fail_count") or 0) + 1
                 entry["consecutive_fails"] = int(entry.get("consecutive_fails") or 0) + 1
                 summary["weakened"] += 1
@@ -474,11 +503,14 @@ def relevant(project_root: Path, base_url: str) -> list[dict]:
 
 
 def proven_selectors(project_root: Path, base_url: str) -> list[dict]:
-    """Selectors a draft may cite as `proven` and rank first on this origin (DEC-016).
+    """Selectors a draft may cite as `proven` and rank first (DEC-016), each as
+    `{selector, route, within}`: proven on that route under that `within`, nowhere else.
 
     The matched candidate of a live selector entry that has not missed since it last
     passed: one miss demotes it to the usual order (it stays a hint), two retire it
     (`STALE_AFTER_FAILS`), and `prune` drops an entry whose anchored source line is gone.
+    An entry recorded before scopes were stored (no `proven_scope`) stays a hint, and is
+    offered again once a clean run re-proves it on its route.
     The application fingerprint is deliberately not consulted: it changes on every commit,
     and would retire every proven selector with it.
     """
@@ -491,6 +523,7 @@ def proven_selectors(project_root: Path, base_url: str) -> list[dict]:
     cache: dict = {}
     for entry in load(project_root):
         matched = entry.get("matched")
+        scope = entry.get("proven_scope")
         if not (
             entry.get("kind") == "selector"
             and entry.get("origin") == origin
@@ -498,9 +531,13 @@ def proven_selectors(project_root: Path, base_url: str) -> list[dict]:
             and not int(entry.get("consecutive_fails") or 0)
             and isinstance(matched, dict)
             and matched
+            and isinstance(scope, dict)
+            and isinstance(scope.get("route"), str)
             and not _uses_retired_selector(entry)
-            and matched not in proven
         ):
+            continue
+        offer = {"selector": matched, "route": scope["route"], "within": scope.get("within")}
+        if offer in proven:
             continue
         # Checked here rather than left to `prune`: that one runs on `--command clean`, and
         # a selector whose anchored line is gone must not lead the very next draft.
@@ -508,7 +545,7 @@ def proven_selectors(project_root: Path, base_url: str) -> list[dict]:
             project_root, entry.get("file"), entry.get("line"), entry.get("anchor_hash"), cache
         ) is None:
             continue
-        proven.append(matched)
+        proven.append(offer)
     return proven
 
 
@@ -523,8 +560,10 @@ def write_sidecar(project_root: Path, session_id: str, base_url: str) -> int:
             "Hints from earlier browser runs against this origin. Re-derive every selector "
             "from the code before using it; an entry whose file:line no longer matches is stale. "
             "A selector listed under `proven` matched in a clean earlier run and has not "
-            "missed since: cite it with selector_provenance {\"type\": \"proven\"} and it may "
-            "lead the candidate list, ahead of role and label."
+            "missed since. On a step whose route (the path of the last goto) and `within` equal "
+            "the listed ones, cite it with selector_provenance {\"type\": \"proven\"} and it may "
+            "lead the candidate list, ahead of role and label; on any other route or `within` "
+            "it is not proven."
         ),
         "entries": entries,
         "proven": proven_selectors(project_root, base_url),

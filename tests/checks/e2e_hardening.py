@@ -92,6 +92,19 @@ def _check_tokens_leave_the_ledger() -> None:
         ("http://app.test/invite/Ab3dE5fG7hJ9kL1mN2", "http://app.test/invite/:id"),
         ("http://app.test/user-settings-page", "http://app.test/user-settings-page"),
         ("http://app.test/api-v2-endpoints-list", "http://app.test/api-v2-endpoints-list"),
+        # Shorter token shapes: letters and digits, or letters in both cases, in one run.
+        ("http://app.test/reset/k3j4h5g6f7d8s9a0q1w2", "http://app.test/reset/:id"),
+        ("http://app.test/t/AbCdEfGhIjKlMnOp", "http://app.test/t/:id"),
+        # A path parameter carries a session id; it is dropped, the route kept.
+        ("http://app.test/api;jsessionid=XYZ123abc", "http://app.test/api"),
+        ("http://app.test/cart;jsessionid=XYZ123abc/items/7", "http://app.test/cart/items/:id"),
+        # Words survive: plain, kebab, snake, camelCase.
+        ("http://app.test/orders", "http://app.test/orders"),
+        ("http://app.test/reset-password", "http://app.test/reset-password"),
+        ("http://app.test/dashboard", "http://app.test/dashboard"),
+        ("http://app.test/notification_preferences", "http://app.test/notification_preferences"),
+        ("http://app.test/userSettingsPage", "http://app.test/userSettingsPage"),
+        ("http://app.test/administrationpanel", "http://app.test/administrationpanel"),
     ):
         assert_true(sanitize_endpoint(url) == expected, f"{url} -> {sanitize_endpoint(url)}, expected {expected}")
 
