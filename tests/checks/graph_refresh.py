@@ -244,11 +244,19 @@ def _check_runner(flavour: str, command: list[str]) -> None:
         # the worker beats the lock while graphify runs, naming graphify's pid.
         project = _project(root / "nolimit", stale=True)
         _run_hook(command, project, bin_dir, extra_env={"GRAPH_REFRESH_LIMIT_S": "1", "GRAPH_REFRESH_BEAT_S": "0.5"})
-        time.sleep(_FAKE_SLEEP_S / 2 + 0.5)
-        try:
-            beating = json.loads((project / "graphify-out" / ".refresh.lock").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            beating = {}
+        # Polled, not read once: on Windows a read that lands while the worker swaps the lock
+        # in (File.Replace) fails with a sharing violation, which the real reader treats as a
+        # held lock; one unlucky read here failed the check about 1 run in 4.
+        beating: dict = {}
+        deadline = time.monotonic() + _FAKE_SLEEP_S + 1
+        while time.monotonic() < deadline:
+            try:
+                beating = json.loads((project / "graphify-out" / ".refresh.lock").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                beating = {}
+            if isinstance(beating.get("beat"), int) and beating["beat"] > beating.get("started", 0) and isinstance(beating.get("graphify_pid"), int):
+                break
+            time.sleep(0.1)
         assert_true(
             isinstance(beating.get("beat"), int) and beating["beat"] > beating.get("started", 0)
             and isinstance(beating.get("graphify_pid"), int),
