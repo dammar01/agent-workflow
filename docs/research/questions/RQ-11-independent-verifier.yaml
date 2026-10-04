@@ -7,7 +7,7 @@ what_exists: |
   Delegated verify uses the configured secondary agent, which is the one that explored unless
   the provider is switched; the runtime checks only the verdict's shape; `syntax` mode proves
   only that files parse.
-records: [CASE-009, DEC-018, CASE-014, DEC-022]
+records: [CASE-009, DEC-018, CASE-014, DEC-022, DEC-025]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.
