@@ -49,9 +49,12 @@ evidence_notes: |
   allowlist. `tests/checks/intent_gate.py`: under a verify marker the allowed calls pass, and a
   piped or chained `git diff`, `-p`, `--output`, `git show`, a source read, another session's
   request and a Grep stay blocked, in both hook flavours (`.ps1` under Windows PowerShell 5.1).
+  The delegated verify of the release found the runner allowlist matching the runner path
+  anywhere in a Bash command (a pattern older than this decision); it now anchors the runner
+  as the command itself.
 implementation:
   version: 3.8.0
-  commits: [b1badd77a6481049b39efb7127442ed6c6dedc26]
+  commits: [b1badd77a6481049b39efb7127442ed6c6dedc26, b4d7ad6f24261f676005ee3c0c84dc4d46c41580]
   components:
     - core/evidence/verify_tests.py (one-line text, run_bounded, consume after merge, bool timeout, configured)
     - utils/osutil.py (run_bounded)

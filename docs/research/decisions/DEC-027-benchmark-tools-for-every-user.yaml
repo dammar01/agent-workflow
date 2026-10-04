@@ -50,9 +50,11 @@ evidence_notes: |
   is refused and writes nothing. On the maintainer's machine 354 session ids were bound in
   Claude Code transcripts and none in more than one, so `@2` equals `@1` on all data recorded
   up to 2026-10-04.
+  The export guard was widened after the delegated verify of the release (UNC, home and any
+  POSIX root path; every key and string value is checked).
 implementation:
   version: 3.8.0
-  commits: [3cf285842e24388be2221268db886cf624a97e9e]
+  commits: [3cf285842e24388be2221268db886cf624a97e9e, b4d7ad6f24261f676005ee3c0c84dc4d46c41580]
   components:
     - core/audit/metrics.py (RECOUNT, session_owners, write_export, metric versions)
     - tools/maintain/measure_real_use.py, tools/maintain/measure_task_outcomes.py (--export, row ownership)
