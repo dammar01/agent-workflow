@@ -194,6 +194,15 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     # --check report OK while the boundary was missing or had been edited away — the exact
     # state a check exists to catch.
     project_scope_note = None
+    # Only the boundary of the provider the project runs. init installs that one alone
+    # (core.runtime.upgrade._install_project_boundary), so requiring opencode's file in a
+    # codex project reported a drift no command could repair. A project that names no
+    # provider resolves to the default, which keeps the check fail-closed.
+    project_provider = None
+    if project_root:
+        from adapters.contract.registry import selected_provider
+
+        project_provider = selected_provider(project_root)
     for provider, bundle, global_src, project_src in provider_checks:
         if global_src.exists():
             installed_key = f"{provider}/{bundle['global_config'][1]}"
@@ -207,7 +216,12 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
         if not project_src.exists():
             continue
         project_key = f"{provider}/{bundle['project_config'][0]}"
-        if project_root:
+        if project_root and provider != project_provider:
+            project_scope_note = (
+                f"the project runs {project_provider}, so the {provider} boundary "
+                f"(<project_root>/{bundle['project_config'][1]}) was not checked"
+            )
+        elif project_root:
             project_dest = project_root / bundle["project_config"][1]
             if not project_dest.exists():
                 installed_missing.append(project_key)

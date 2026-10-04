@@ -15,6 +15,22 @@ from tools.e2e.e2e_support import (
 )
 
 
+def _seed_project(project: Path, provider: str) -> None:
+    """Give `project` its own second_agent.json from the shipped example before init.
+
+    init never overwrites an existing one, so this pins the provider the checks expect
+    instead of whatever this machine's config/second_agent.seed.json selected.
+    """
+    config = json.loads(
+        (REPO_ROOT / "config" / "second_agent.example.json").read_text(encoding="utf-8")
+    )
+    config["provider"] = provider
+    (project / ".workflow").mkdir(parents=True, exist_ok=True)
+    (project / ".workflow" / "second_agent.json").write_text(
+        json.dumps(config, indent=2) + "\n", encoding="utf-8"
+    )
+
+
 def installer_checks(report: Report) -> None:
     """Install into a throwaway HOME. Installing onto the machine that produced dist/
     only ever proves idempotency — it never exercises the create path a new user hits.
@@ -429,6 +445,10 @@ def installer_checks(report: Report) -> None:
         project = Path(tempfile.mkdtemp(prefix="e2e-install-project-"))
         try:
             (project / ".git").mkdir()
+            # The machine's config/second_agent.seed.json would otherwise pick this
+            # project's provider: init runs as a subprocess, out of reach of the suite's
+            # in-process seed swap, and the fake home does not cover a file in the repo.
+            _seed_project(project, "opencode")
             # init owns scaffolding now; the installer finds the workspace by cwd instead
             # of taking a --init-project flag.
             project_init = subprocess.run(
@@ -525,6 +545,59 @@ def installer_checks(report: Report) -> None:
                 "project-scoped install passes check",
                 project_check.returncode == 0,
                 f"rc={project_check.returncode}",
+            )
+            # A codex workspace gets no opencode boundary from init, so --check must not
+            # ask for one: that drift had no command that could repair it.
+            codex_project = project / "codex-workspace"
+            (codex_project / ".git").mkdir(parents=True)
+            _seed_project(codex_project, "codex")
+            codex_init = subprocess.run(
+                [sys.executable, str(REPO_ROOT / "main.py"), "--command", "init",
+                 "--work-dir", str(codex_project)],
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+                cwd=str(fake_home),
+            )
+            codex_check = subprocess.run(
+                [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+                cwd=str(codex_project),
+            )
+            report.check(
+                "check skips the opencode boundary in a codex project",
+                codex_init.returncode == 0
+                and not (codex_project / "opencode.json").exists()
+                and codex_check.returncode == 0
+                and "project runs codex" in codex_check.stdout,
+                f"init rc={codex_init.returncode} check rc={codex_check.returncode}",
+            )
+            # And it stays fail-closed where the boundary belongs: an opencode project
+            # whose opencode.json is gone is still MISSING.
+            (project / "opencode.json").unlink()
+            opencode_missing = subprocess.run(
+                [sys.executable, str(REPO_ROOT / "install.py"), "--check"],
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
+                cwd=str(project),
+            )
+            report.check(
+                "check still requires the boundary in an opencode project",
+                opencode_missing.returncode == 1
+                and "opencode/opencode.project.json" in opencode_missing.stdout,
+                f"rc={opencode_missing.returncode}",
             )
         finally:
             shutil.rmtree(project, ignore_errors=True)

@@ -386,7 +386,11 @@ satu file, bukan dua varian file, supaya perbedaan keduanya terlihat saat review
 
 `--check` menentukan scope dari cwd: dijalankan di dalam project yang punya `.workflow/`, ia
 ikut memeriksa boundary project (`<project_root>/opencode.json`). Di luar workspace, scope
-itu dilaporkan `SKIPPED` — bukan didiamkan lalu dilaporkan READY.
+itu dilaporkan `SKIPPED` — bukan didiamkan lalu dilaporkan READY. Boundary yang diperiksa
+hanya milik provider yang dijalankan project (`provider` di `.workflow/second_agent.json`),
+sama dengan yang dipasang `init`: project codex tak diminta `opencode.json` dan dilaporkan
+`project scope: SKIPPED — the project runs codex ...`. Project yang tak menyebut provider
+jatuh ke default (opencode), jadi boundary-nya tetap diperiksa.
 
 ### Extractor (sisi maintainer)
 
