@@ -63,6 +63,10 @@ validation:
     The suites above pass on Windows. pwsh 7 was not available to run; the parser API is the
     same since PowerShell 3, which is an assumption until a run on pwsh. The bash wrapper of
     the `.sh` flavour was not exercised on Windows.
+    Correction (2026-10-04): the write block is wider than the decision text says. Both hooks
+    refuse a write to `<root>/.workflow/{run,check,inspect}` with any extension
+    (`(run|check|inspect)(\..*)?`), not only `.ps1`/`.sh`, as shipped in the commit named
+    below; the exact `.{ps1,sh}` shape applies to the runner call.
 trade_offs:
   better:
     - The known bypasses are refused by shape, not by a list of characters.

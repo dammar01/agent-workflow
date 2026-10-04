@@ -198,6 +198,9 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-035](decisions/DEC-035-proven-selectors-scoped-by-route.yaml) | Proven selectors are scoped by route and within, weakened once per run, and recorded only from runs that passed | accepted | implemented | not_validated | 0c387f9 |
 | [DEC-036](decisions/DEC-036-export-allowlist-and-commit-claims.yaml) | A shared export passes an allowlist of value shapes, and a commit is taken only by the task that claims it | accepted | implemented | not_validated | 93a01d2 |
 | [DEC-037](decisions/DEC-037-hook-ownership-by-path.yaml) | The installer owns a hook by the folder its script sits in, and graph-refresh keeps its lock honest | accepted | implemented | not_validated | 687a702 |
+| [DEC-038](decisions/DEC-038-export-names-at-any-length-and-label-keys.yaml) | An export checks project names at any length, and keys under a per-project map must be project labels | accepted | implemented | not_validated | 56c2a64 |
+| [DEC-039](decisions/DEC-039-gate-lets-skill-definitions-be-read.yaml) | The pre-flight gate lets a skill definition under ~/.claude/skills be read while a delegation is pending | accepted | implemented | not_validated | 56c2a64 |
+| [DEC-040](decisions/DEC-040-proven-selector-route-folds-identifiers.yaml) | A proven selector's route folds identifier segments to :id | accepted | implemented | not_validated | 56c2a64 |
 <!-- research-inventory:end -->
 
 No `H-XXX`, `EXP-XXX`, or `SYN-XXX` record is tracked: none has been run or has a result.

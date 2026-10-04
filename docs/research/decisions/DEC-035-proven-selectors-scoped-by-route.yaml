@@ -54,6 +54,10 @@ disposition:
 validation:
   summary: |
     The e2e suites pass with the fake player; the real-Chromium smoke was not run.
+    Correction (2026-10-04): the generic real-Chromium smoke (`e2e-smoke`) was run for the
+    3.8.0 release and passed, as its release note says. It drives the runner with a direct run
+    request and does not ingest knowledge or look up proven selectors, so it is no evidence
+    for this decision; a selector-knowledge run in a real browser is still missing.
 trade_offs:
   better:
     - A good selector needs two missing runs to retire, and an app verdict needs a selector proven on that page.
