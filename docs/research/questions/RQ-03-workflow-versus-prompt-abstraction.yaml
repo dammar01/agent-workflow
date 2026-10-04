@@ -5,7 +5,7 @@ date: 2026-09-29
 status: unanswered
 what_exists: |
   Benchmark has no prompt-strategy factor.
-records: []
+records: [DEC-023]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.

@@ -158,6 +158,9 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [CASE-010](real-cases/CASE-010-verify-latency-spread-and-graph-lookup-cost.yaml) | Verify latency varies by up to 3x its median within a project, and the graph lookup grows with node count to 9 s | mixed | implemented | observed | — |
 | [CASE-011](real-cases/CASE-011-real-use-baseline-of-3-7-3.yaml) | Real-use baseline of 3.7.3 — prompts, corrections, changes, and time per session | inconclusive | implemented | observed | 414d073 |
 | [CASE-012](real-cases/CASE-012-real-use-task-outcomes-on-nine-projects.yaml) | Real-use task outcomes on nine projects — what reached main, what needed a fix, and what it cost | mixed | implemented | observed | — |
+| [CASE-013](real-cases/CASE-013-runtime-intent-gate-never-armed.yaml) | The runtime half of the pre-flight gate never armed — its hook read a prompt field Claude Code does not send | negative | implemented | observed | 8d2d42b |
+| [CASE-014](real-cases/CASE-014-provider-less-browser-runs-counted-as-verifies.yaml) | Browser runs that never reached a provider were recorded as verify usage rows — 197 of 836 in the CASE-009 window | negative | implemented | observed | — |
+| [CASE-015](real-cases/CASE-015-codex-windows-sandbox-fails-on-thread-resume.yaml) | Codex on Windows failed a resumed verify at its elevated sandbox, and the runtime called it `unknown` | negative | implemented | observed | 8d2d42b |
 | [DEC-001](decisions/DEC-001-verify-browser-delegated.yaml) | `/.verify-browser` is a delegated command | accepted | implemented | validated | dd70afd |
 | [DEC-004](decisions/DEC-004-data-e2e-only-test-attribute.yaml) | `data-e2e` is the only test attribute | accepted | implemented | observed | dd70afd |
 | [DEC-005](decisions/DEC-005-repeat-brake-releases-on-change.yaml) | The repeat brake releases on a project change and is remembered as knowledge | accepted | implemented | observed | dd70afd |
@@ -176,6 +179,9 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-018](decisions/DEC-018-verify-none-sentinel-grammar.yaml) | A verify section that says nothing was found is read as empty in the spellings agents write, and the re-prompt names `- none` | accepted | implemented | not_validated | cb7ee4e, 23250f1 |
 | [DEC-019](decisions/DEC-019-binary-questions-and-measured-validation.yaml) | Research questions are answered or unanswered, and a validated decision is used, consistent, decided, and measured | accepted | implemented | not_validated | 72c2ac7 |
 | [DEC-020](decisions/DEC-020-task-closed-by-derived-pass.yaml) | A task is closed by a verify the runtime derives as pass; a commit is recommended, not required | accepted | implemented | not_validated | 72c2ac7 |
+| [DEC-021](decisions/DEC-021-task-events-at-turn-boundaries.yaml) | Task events are read at turn boundaries — skills from the prompt, commits from HEAD — not from every Read and Bash call | accepted | implemented | not_validated | 8d2d42b |
+| [DEC-022](decisions/DEC-022-browser-runs-without-a-provider-write-no-usage-row.yaml) | A browser run that reached no provider writes no usage row; browser rows name their stage and the browser's own time | accepted | implemented | not_validated | 8d2d42b |
+| [DEC-023](decisions/DEC-023-bundle-scoped-to-its-commands.yaml) | The installed bundle stays out of the user's own configuration — command-only scope, provider-call scope, block-only writes, uninstall | accepted | implemented | not_validated | 8d2d42b |
 <!-- research-inventory:end -->
 
 No `H-XXX`, `EXP-XXX`, or `SYN-XXX` record is tracked: none has been run or has a result.
