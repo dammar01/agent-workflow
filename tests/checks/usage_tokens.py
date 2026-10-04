@@ -776,6 +776,89 @@ def _a_continuation_that_never_spawned_does_not_double_the_first_call() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _every_row_that_reached_a_provider_names_its_release() -> None:
+    """The release a call ran on, and whether it was the tested one, on single AND
+    continuation rows (DEC-028). The stamp used to land only on the per-invocation snapshot:
+    a single call's row spread the adapter's unstamped attribute, and a continuation's rows
+    copied only the thread flags out of the snapshot — so opencode rows carried no version
+    and codex rows no status."""
+    from core.provider import versions
+    from utils import osutil
+
+    class Versioned:
+        adapter = "opencode"
+        command = "opencode"  # the route rebinds it to the provider's command anyway
+        timeout_seconds = 0
+        no_timeout = True
+        last_call_meta = None
+
+        def __init__(self, answers: int) -> None:
+            self.answers = answers
+            self.calls = 0
+
+        def run(self, prompt, session, model=None, work_dir=None):
+            self.calls += 1
+            self.last_call_meta = {"returncode": 0, "duration_seconds": 1.0}
+            complete = self.calls >= self.answers
+            content = (
+                "[EVIDENCE]\nfindings:\n- entry point at app/main.py\n[DIGEST]\n"
+                "summary: done.\nconfidence: high"
+                if complete
+                else "[EVIDENCE]\nfindings:\n- something"
+            )
+            return {"ok": True, "content": content, "meta": {"provider_session_id": "ses_rel"}}
+
+    # Seeded in the process cache, so no real CLI is asked; restored after.
+    exe = osutil.resolve_exe("opencode")
+    saved = versions._CACHE.get(exe, KeyError)
+    versions._CACHE[exe] = "opencode 0.0.1"
+    try:
+        _rows_name_their_release(Versioned)
+    finally:
+        if saved is KeyError:
+            versions._CACHE.pop(exe, None)
+        else:
+            versions._CACHE[exe] = saved
+
+
+def _rows_name_their_release(Versioned) -> None:
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    from core.provider.executor import Executor
+    from core.runtime.state import ensure_workflow_workspace
+
+    for answers, label in ((1, "single"), (2, "continuation")):
+        root = Path(tempfile.mkdtemp(prefix="aw-usage-release-"))
+        try:
+            ensure_workflow_workspace(root, str(Path("main.py").resolve()))
+            adapter = Versioned(answers)
+            Executor(adapter=adapter).execute(
+                "analyze",
+                "where is the entry point",
+                {"session_id": f"sid-{label}", "provider_session_id": "ses_rel"},
+                str(root),
+            )
+            rows = _rows(root)
+            assert_true(
+                adapter.calls == answers and len(rows) == answers,
+                f"{label}: {answers} provider call(s), one row each; got {adapter.calls} "
+                f"call(s) and {len(rows)} row(s)",
+            )
+            assert_true(
+                all(
+                    row.get("provider_version") == "opencode 0.0.1"
+                    and row.get("provider_version_status") == "untested"
+                    for row in rows
+                ),
+                f"{label}: every row names the release and its status: "
+                f"{[(r.get('provider_version'), r.get('provider_version_status')) for r in rows]}",
+            )
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+
 def _test_usage_token_accounting() -> None:
     _normalisation_reads_the_shapes_providers_send()
     _merging_adds_turns_but_never_fields()
@@ -789,3 +872,4 @@ def _test_usage_token_accounting() -> None:
     _the_common_single_call_path_records_who_reported_it()
     _a_failed_call_records_what_it_burned()
     _a_continuation_that_never_spawned_does_not_double_the_first_call()
+    _every_row_that_reached_a_provider_names_its_release()

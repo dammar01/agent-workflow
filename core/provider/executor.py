@@ -165,6 +165,52 @@ def _scope_width(project_root, session_id: str | None) -> dict | None:
         return None
 
 
+def _apply_runtime_tests(project_root, session_id: str, result: dict, on_progress=None) -> dict:
+    """`verify_tests.apply`, which must not throw away the review it runs after.
+
+    It runs once the paid provider call has returned. An exception escaping it lost that
+    review, and since the request is consumed only on success, every retry crashed the same
+    way. Anything unexpected now returns the review with a runtime gap instead — never a
+    pass: the `tests:` prefix makes it a `runtime_gap`, which exits nonzero.
+    """
+    from core.evidence import verify_tests
+    from core.evidence.contract import RUNTIME_GAP_PREFIX
+
+    original = dict(result)
+    original_meta = dict(result.get("meta") or {})
+    try:
+        return verify_tests.apply(project_root, session_id, result, on_progress=on_progress)
+    except Exception as exc:  # noqa: BLE001 — reported in the result, fail-closed
+        kind = type(exc).__name__
+        gap = f"{RUNTIME_GAP_PREFIX} runtime tests crashed: {kind}; no test result was recorded"
+        try:
+            content = verify_tests.merge_gap(original.get("content") or "", gap)
+        except Exception:
+            content = (original.get("content") or "") + f"\n\nnot_verified:\n- {gap}\n"
+        # Consumed like a request that ran: a later verify must not rerun it silently.
+        try:
+            verify_tests._consume(project_root, session_id)
+        except Exception:
+            pass
+        original["content"] = content
+        original["meta"] = {
+            **original_meta,
+            "runtime_tests": {"requested": None, "error": kind, "outcomes": [], "seconds": 0},
+        }
+        return original
+
+
+def _redacted_text(value) -> str | None:
+    """`value` through redaction when it is a string, else None. Never raises."""
+    if not isinstance(value, str):
+        return None
+    try:
+        cleaned = redact_value(value)[0]
+    except Exception:
+        return None
+    return cleaned if isinstance(cleaned, str) else None
+
+
 def _apply_provider_usage(meta: dict, usage) -> None:
     """Stamp provider-reported counts onto a call meta, or leave it estimated.
 
@@ -458,7 +504,9 @@ class Executor:
 
         Every provider, not only codex: a release that changes behavior breaks the workflow
         from the provider's side (CASE-015), and the usage row is the trail a report reads.
-        The version is read once per process (core/provider/versions.py).
+        The version is read once per binary and cached on disk across runs
+        (core/provider/versions.py). Both usage paths carry the stamp: the snapshot of each
+        invocation, and the single-invocation call meta built from the adapter's attribute.
         """
         from core.provider import versions
 
@@ -552,6 +600,15 @@ class Executor:
                 "thread_changed": (
                     adapter_meta.get("thread_changed")
                     if isinstance(adapter_meta.get("thread_changed"), bool)
+                    else None
+                ),
+                # The release this invocation ran on, from its own stamped snapshot. A
+                # string read from a CLI's output, so it goes through redaction like the
+                # aggregate did; the status is one of three fixed words.
+                "provider_version": _redacted_text(adapter_meta.get("provider_version")),
+                "provider_version_status": (
+                    adapter_meta.get("provider_version_status")
+                    if adapter_meta.get("provider_version_status") in ("stable", "untested", "unreadable")
                     else None
                 ),
             }
@@ -1028,6 +1085,15 @@ class Executor:
                     # write `token_source: estimated` over a call that was actually counted,
                     # which is a silent downgrade: the row still looks like a row.
                     _adapter_meta = self._call_metas[-1].get("adapter_meta") or {}
+                # The snapshot carries the version stamp; the live attribute does not, and a
+                # single-invocation command is described by this row alone. Stamped on a copy,
+                # never on the adapter's own dict, and never at the cost of the row.
+                _adapter_meta = dict(_adapter_meta)
+                if self._reached_a_provider(_adapter_meta):
+                    try:
+                        self._stamp_provider_version(_adapter_meta)
+                    except Exception:
+                        pass
                 adapter_meta, meta_redactions = redact_value(
                     _without_raw_args(_adapter_meta)
                 )
@@ -1633,9 +1699,7 @@ class Executor:
         if normalized_command == "verify":
             # The tests main_agent chose for this change, run here and written into the
             # review's [VERIFICATION] block, which the second agent never saw them in.
-            from core.evidence import verify_tests
-
-            result = verify_tests.apply(project_root, session_id, result)
+            result = _apply_runtime_tests(project_root, session_id, result, on_progress)
         prompt_id = (self._last_call_meta or {}).get("prompt_id")
 
         digest = extract_digest(result.get("content") or "")

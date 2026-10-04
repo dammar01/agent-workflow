@@ -668,6 +668,16 @@ class _NoneSentinel:
 
 
 _NONE_ITEM = _NoneSentinel()
+
+# Lines the runtime itself writes into a [VERIFICATION] block (core/evidence/verify_tests.py),
+# spelled here because this validator is what has to tell them from the agent's own.
+# The "no test requested" line stays visible in `checks_run` but is not a check anyone ran:
+# counting it turned an agent's `checks_run: - none` into a pass with nothing executed.
+# A `not_verified` line with the `tests:` prefix is a gap the runtime found in the test
+# request, not one the agent declared, and it never earns the gap-only exit 0.
+RUNTIME_NO_TEST_ITEM = "runtime: no test requested"
+RUNTIME_GAP_PREFIX = "tests:"
+
 _VERIFY_TAG_VALUES = {
     "severity": {"critical", "high", "medium", "low"},
     "origin": {"introduced", "regression", "pre_existing", "unknown"},
@@ -786,8 +796,14 @@ def validate_verification_contract(content: str) -> dict:
         name: _section_items(verification_body, name)
         for name in _VERIFY_SECTION_NAMES
     }
-    checks = _meaningful_items(sections["checks_run"])
+    checks = [
+        item
+        for item in _meaningful_items(sections["checks_run"])
+        if not item.lower().startswith(RUNTIME_NO_TEST_ITEM)
+    ]
     gaps = _meaningful_items(sections["not_verified"])
+    runtime_gaps = [item for item in gaps if item.lower().startswith(RUNTIME_GAP_PREFIX)]
+    declared_gaps = [item for item in gaps if item not in runtime_gaps]
 
     for section_name, items in sections.items():
         if section_name != "checks_run" and not items:
@@ -870,11 +886,21 @@ def validate_verification_contract(content: str) -> dict:
         warnings.append(
             {"kind": "checks_missing", "detail": "checks_run contains no executed check"}
         )
-    if gaps:
+    if declared_gaps:
         warnings.append(
             {
                 "kind": "verification_gap",
-                "detail": f"not_verified contains {len(gaps)} unchecked area(s)",
+                "detail": f"not_verified contains {len(declared_gaps)} unchecked area(s)",
+            }
+        )
+    if runtime_gaps:
+        warnings.append(
+            {
+                "kind": "runtime_gap",
+                "detail": (
+                    f"not_verified contains {len(runtime_gaps)} gap(s) the runtime found in "
+                    "the test request (missing, unusable, or a command it refused)"
+                ),
             }
         )
 
@@ -898,7 +924,9 @@ def validate_verification_contract(content: str) -> dict:
 # The only warning an agent earns by being honest: `not_verified` is a field the prompt
 # asks it to fill, and filling it fires `verification_gap`. The verdict still refuses to
 # call that a pass — nothing here relaxes what `pass` means — but the exit status stops
-# reading a declared gap as a failed run.
+# reading a declared gap as a failed run. `runtime_gap` is deliberately not here: a test
+# request that was missing, unusable or refused is the runtime's finding, not an agent's
+# honesty, and a verify whose tests never ran is not a clean exit.
 _GAP_ONLY_KINDS = frozenset({"verification_gap"})
 
 

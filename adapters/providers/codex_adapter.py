@@ -451,7 +451,9 @@ class CodexAdapter:
                     ),
                     meta=meta,
                 )
-            if _matches(tail, _SANDBOX_SIGNS):
+            # stderr only: stdout is the agent's JSONL, tool output included, so a file it
+            # read that mentions a sandbox failure turned an unrelated exit into this one.
+            if _matches(_error_tail(outcome["stderr"]), _SANDBOX_SIGNS):
                 return make_error(
                     "sandbox_unavailable",
                     content or "codex's Windows sandbox could not start the session",

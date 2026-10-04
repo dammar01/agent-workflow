@@ -11,13 +11,20 @@ request file before calling verify:
 
 `commands: []` with a reason says no test covers the change. The runtime runs a command only
 when it starts with a prefix the project lists in `commands.verify_test_commands`, with no
-shell (no `&&`, pipes, redirects or substitution), one at a time, each under
-`commands.verify_test_timeout_seconds`. Results are written into the [VERIFICATION] block
-the second agent returned, which never sees them: `checks_run` gets one runtime line per
-command; a failing, timed-out or unrunnable command is a blocking finding (origin `unknown`,
-so it fails closed); a refused command or a missing request is a `not_verified` gap. The
-verdict is then derived from the block as usual, so `pass` needs green tests and a review
-with no blocking finding.
+shell (no `&&`, pipes, redirects, substitution or control characters), one at a time,
+each under `commands.verify_test_timeout_seconds`. Results are written into the
+[VERIFICATION] block the second agent returned, which never sees them: `checks_run` gets one
+runtime line per command; a failing, timed-out or unrunnable command is a blocking finding
+(origin `unknown`, so it fails closed); a refused command or a missing or unusable request
+is a `not_verified` gap under the `tests:` prefix, which the validator reads as a
+`runtime_gap` — never the gap-only exit 0 an agent's own declared gap earns. The verdict is
+then derived from the block as usual, so `pass` needs green tests and a review with no
+blocking finding. `commands: []` adds a visible `checks_run` line that is not counted as an
+executed check: the verdict then rests on the checks the review itself ran.
+
+The tests run after the provider has finished, when nothing else beats the job's heartbeat:
+`apply` takes the delegated call's progress callback and beats it (phase `runtime_tests`)
+before each command and every `HEARTBEAT_SECONDS` while one runs.
 
 The request is consumed: it is renamed to `tests.used.json` once its results are written
 into the verify result, so a later verify never reruns an old choice silently.
@@ -32,6 +39,7 @@ import shlex
 import time
 from pathlib import Path
 
+from core.evidence.contract import RUNTIME_GAP_PREFIX, RUNTIME_NO_TEST_ITEM
 from core.workspace.workspace_paths import read_json_file, workflow_paths
 from utils import osutil
 from utils.redact import redact
@@ -40,6 +48,13 @@ MAX_COMMANDS = 5
 DEFAULT_TIMEOUT_SECONDS = 900
 OUTPUT_TAIL_CHARS = 1200
 _SHELL_SYNTAX = re.compile(r"[&|;<>`\n\r]|\$\(")
+# NUL and the other C0 controls. Popen refuses an embedded NUL with ValueError — after the
+# paid provider call, and with the request left in place so every retry crashed the same
+# way — and the rest have no business in a test command line either.
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")  # a tab is only whitespace
+# How often a running test command beats the job's heartbeat. Well under the idle-stall
+# threshold (config/settings.py), so a long suite never reads as a stalled worker.
+HEARTBEAT_SECONDS = 20.0
 
 
 def request_path(project_root, session_id: str) -> Path:
@@ -68,8 +83,9 @@ def configured(project_root) -> bool:
 
 def _one_line(value) -> str:
     """`value` on one line. Request text lands inside the [VERIFICATION] block, whose
-    sections are found by header line: a newline in it could forge a section."""
-    return " ".join(str(value).split())
+    sections are found by header line: a newline in it could forge a section. Other control
+    characters (a refused command may carry a NUL) are shown as `?`."""
+    return " ".join(_CONTROL_CHARS.sub("?", str(value)).split())
 
 
 def _split(command: str) -> list[str]:
@@ -111,14 +127,28 @@ def _allowed(tokens: list[str], prefixes: list[list[str]]) -> bool:
     return any(tokens[: len(prefix)] == prefix for prefix in prefixes)
 
 
-def run_tests(project_root, request: dict) -> list[dict]:
+def _beat(on_progress, started: float, **fields) -> None:
+    """One liveness beat in the shape the adapters send. A broken callback must not fail
+    the tests it is reporting on."""
+    if on_progress is None:
+        return
+    try:
+        on_progress(
+            {"phase": "runtime_tests", "elapsed_seconds": round(time.monotonic() - started, 1), **fields}
+        )
+    except Exception:
+        pass
+
+
+def run_tests(project_root, request: dict, on_progress=None) -> list[dict]:
     """One outcome per requested command: passed | failed | timeout | error | refused."""
     prefixes, timeout = _policy(project_root)
     outcomes: list[dict] = []
     commands = request.get("commands")
     if not isinstance(commands, list):
         return [{"command": "", "status": "refused", "detail": "`commands` must be a list"}]
-    for raw in commands[:MAX_COMMANDS]:
+    run_started = time.monotonic()
+    for index, raw in enumerate(commands[:MAX_COMMANDS]):
         command = str(raw).strip()
         tokens = _split(command)
         if not command or not tokens:
@@ -126,6 +156,9 @@ def run_tests(project_root, request: dict) -> list[dict]:
             continue
         if _SHELL_SYNTAX.search(command):
             outcomes.append({"command": command, "status": "refused", "detail": "shell syntax is not run"})
+            continue
+        if _CONTROL_CHARS.search(command):
+            outcomes.append({"command": command, "status": "refused", "detail": "control characters are not run"})
             continue
         if not _allowed(tokens, prefixes):
             outcomes.append({
@@ -135,10 +168,16 @@ def run_tests(project_root, request: dict) -> list[dict]:
             })
             continue
         started = time.monotonic()
+        progress = {"command_index": index, "commands": min(len(commands), MAX_COMMANDS)}
+        _beat(on_progress, run_started, **progress)
         try:
             # Bounded and tree-killed: a runner whose worker outlives it must not hang verify.
             code, stdout, stderr = osutil.run_bounded(
-                [osutil.resolve_exe(tokens[0]), *tokens[1:]], timeout, cwd=str(project_root)
+                [osutil.resolve_exe(tokens[0]), *tokens[1:]],
+                timeout,
+                cwd=str(project_root),
+                on_tick=lambda _elapsed: _beat(on_progress, run_started, **progress),
+                tick_seconds=HEARTBEAT_SECONDS,
             )
             if code is None:
                 outcome = {"command": command, "status": "timeout", "detail": f"over {timeout} s"}
@@ -146,7 +185,7 @@ def run_tests(project_root, request: dict) -> list[dict]:
                 status = "passed" if code == 0 else "failed"
                 tail = (stdout + "\n" + stderr).strip()[-OUTPUT_TAIL_CHARS:]
                 outcome = {"command": command, "status": status, "exit_code": code, "tail": tail}
-        except OSError as exc:
+        except (OSError, ValueError) as exc:  # ValueError: an argument Popen will not pass
             outcome = {"command": command, "status": "error", "detail": str(exc)[:200]}
         outcome["seconds"] = round(time.monotonic() - started, 1)
         if outcome.get("tail"):
@@ -162,15 +201,16 @@ def _findings(request: dict | None, outcomes: list[dict]) -> dict[str, list[str]
     add: dict[str, list[str]] = {"blocking_findings": [], "checks_run": [], "not_verified": []}
     if request is None:
         add["not_verified"].append(
-            "tests: main_agent wrote no test request for this verify (verify/tests.json); no test ran"
+            f"{RUNTIME_GAP_PREFIX} main_agent wrote no test request for this verify (verify/tests.json); no test ran"
         )
         return add
     if request.get("invalid"):
-        add["not_verified"].append(f"tests: the test request was not usable ({request['invalid']}); no test ran")
+        add["not_verified"].append(f"{RUNTIME_GAP_PREFIX} the test request was not usable ({request['invalid']}); no test ran")
         return add
     reason = _one_line(request.get("reason") or "") or "no reason given"
     if not outcomes:
-        add["checks_run"].append(f"runtime: no test requested — {reason}")
+        # Visible, but not counted as a check by the validator: the review's own checks decide.
+        add["checks_run"].append(f"{RUNTIME_NO_TEST_ITEM} — {reason}")
         return add
     for outcome in outcomes:
         command = _one_line(outcome["command"])
@@ -178,7 +218,7 @@ def _findings(request: dict | None, outcomes: list[dict]) -> dict[str, list[str]
         if status == "passed":
             add["checks_run"].append(f"runtime: `{command}` passed in {outcome['seconds']} s")
         elif status == "refused":
-            add["not_verified"].append(f"tests: `{command}` was not run — {_one_line(outcome['detail'])}")
+            add["not_verified"].append(f"{RUNTIME_GAP_PREFIX} `{command}` was not run — {_one_line(outcome['detail'])}")
         else:
             detail = _one_line(
                 f"exited {outcome['exit_code']}" if status == "failed" else outcome.get("detail") or status
@@ -225,7 +265,17 @@ def _insert(lines: list[str], section: str, items: list[str]) -> list[str]:
 
 def merge(content: str, request: dict | None, outcomes: list[dict]) -> str:
     """`content` with the runtime's test results written into its [VERIFICATION] block."""
-    add = _findings(request, outcomes)
+    return _merge_lines(content, _findings(request, outcomes))
+
+
+def merge_gap(content: str, line: str) -> str:
+    """`content` with one runtime gap added under not_verified (the executor's crash path)."""
+    return _merge_lines(
+        content, {"blocking_findings": [], "checks_run": [], "not_verified": [_one_line(line)]}
+    )
+
+
+def _merge_lines(content: str, add: dict[str, list[str]]) -> str:
     marker = "[VERIFICATION]"
     before, sep, body = (content or "").partition(marker)
     if not sep:
@@ -245,10 +295,18 @@ def merge(content: str, request: dict | None, outcomes: list[dict]) -> str:
     return before + sep + merged + (digest_sep + tail if digest_sep else "")
 
 
-def apply(project_root, session_id: str, result: dict) -> dict:
-    """Run the requested tests and write their results into a delegated verify result."""
+def apply(project_root, session_id: str, result: dict, on_progress=None) -> dict:
+    """Run the requested tests and write their results into a delegated verify result.
+
+    `on_progress` is the delegated call's progress callback: the provider has finished, so
+    these beats are the only thing keeping the job from reading as stalled while tests run.
+    """
     request = read_request(project_root, session_id)
-    outcomes = run_tests(project_root, request) if request and not request.get("invalid") else []
+    outcomes = (
+        run_tests(project_root, request, on_progress)
+        if request and not request.get("invalid")
+        else []
+    )
     result["content"] = merge(result.get("content") or "", request, outcomes)
     # Consumed only now that its results are in the result. Renaming on read lost the
     # request when the worker died while the tests ran: the recovered run of the same job

@@ -214,8 +214,104 @@ def terminate_tree(proc: "subprocess.Popen | None", pid: int | None = None) -> d
     return {"method": method, "ok": ok}
 
 
+class _WinJob:
+    """A Windows job object holding a child and everything it spawns afterwards.
+
+    `taskkill /T` walks the tree from a live parent; once the direct child has exited, its
+    orphans are out of reach by pid. The job still holds them. Best-effort and fail-open:
+    any failure leaves `handle` None and the caller falls back to taskkill. A descendant
+    spawned in the instant between Popen and the assignment is not in the job.
+    """
+
+    def __init__(self, proc: "subprocess.Popen"):
+        self.handle = None
+        if not IS_WINDOWS:
+            return
+        try:
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            kernel32.CreateJobObjectW.restype = ctypes.c_void_p
+            handle = kernel32.CreateJobObjectW(None, None)
+            if not handle:
+                return
+            if not kernel32.AssignProcessToJobObject(ctypes.c_void_p(handle), ctypes.c_void_p(int(proc._handle))):
+                kernel32.CloseHandle(ctypes.c_void_p(handle))
+                return
+            self.handle = handle
+        except Exception:
+            self.handle = None
+
+    def terminate(self) -> bool:
+        if not self.handle:
+            return False
+        try:
+            import ctypes
+
+            return bool(ctypes.windll.kernel32.TerminateJobObject(ctypes.c_void_p(self.handle), 1))
+        except Exception:
+            return False
+
+    def close(self) -> None:
+        if not self.handle:
+            return
+        try:
+            import ctypes
+
+            ctypes.windll.kernel32.CloseHandle(ctypes.c_void_p(self.handle))
+        except Exception:
+            pass
+        self.handle = None
+
+
+def _kill_leftovers(proc: "subprocess.Popen", job: _WinJob) -> None:
+    """Kill what is left of an EXITED child's tree: descendants still holding its pipes."""
+    if IS_WINDOWS:
+        job.terminate()
+        return
+    import signal
+
+    try:  # the child led its own group (start_new_session); the group outlives the leader
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+
+
+def _pipe_reader(stream, chunks: list[bytes]):
+    """Drain `stream` into `chunks` on a daemon thread, so a full pipe never blocks the
+    child and a pipe held open by an orphan never blocks the caller. Bytes, read as they
+    arrive (`read1`), so output already written is kept even when the reader is given up."""
+    import threading
+
+    def read() -> None:
+        try:
+            for chunk in iter(lambda: stream.read1(65536), b""):
+                chunks.append(chunk)
+        except Exception:
+            pass
+
+    thread = threading.Thread(target=read, daemon=True)
+    thread.start()
+    return thread
+
+
+def _join_readers(readers: list, seconds: float) -> bool:
+    """Wait at most `seconds` in total for the pipe readers; True when both reached EOF."""
+    import time
+
+    deadline = time.monotonic() + max(0.0, seconds)
+    for thread in readers:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    return not any(thread.is_alive() for thread in readers)
+
+
 def run_bounded(
-    args: list[str], timeout: float, cwd: str | None = None, drain_seconds: float = 5
+    args: list[str],
+    timeout: float,
+    cwd: str | None = None,
+    drain_seconds: float = 5,
+    on_tick=None,
+    tick_seconds: float = 20.0,
 ) -> tuple[int | None, str, str]:
     """Run `args` to completion or `timeout`; (returncode, stdout, stderr). None = timed out.
 
@@ -224,31 +320,74 @@ def run_bounded(
     runner's worker, a `.cmd` shim's node) hangs the caller on Windows. Here the child runs in
     its own process group, the whole tree is killed on timeout, and the output already
     written is collected for at most `drain_seconds` before giving up on it.
+
+    The direct child's exit is what ends the run, not EOF on its pipes. A runner that exits
+    0 but leaves a dev server or watcher holding stdout used to wait out the whole timeout
+    and come back as a timeout (a false fail), leaking the orphan. Now, once the child has
+    exited, the pipes get `drain_seconds`; whatever still holds them is killed — its process
+    group on POSIX, its job object on Windows — and the child's real returncode is returned.
+
+    `on_tick(elapsed_seconds)`, when given, is called about every `tick_seconds` while the
+    child runs, so a caller can keep a heartbeat alive; an exception from it is ignored.
     """
+    import time
+
     proc = subprocess.Popen(
         args,
         cwd=cwd,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
         **hidden_run_kwargs(),
     )
+    job = _WinJob(proc)
+    out_chunks: list[bytes] = []
+    err_chunks: list[bytes] = []
+
+    def text(chunks: list[bytes]) -> str:  # what text=True gave: utf-8, universal newlines
+        decoded = b"".join(list(chunks)).decode("utf-8", errors="replace")
+        return decoded.replace("\r\n", "\n").replace("\r", "\n")
+
     try:
-        out, err = proc.communicate(timeout=timeout)
-        return proc.returncode, out or "", err or ""
-    except subprocess.TimeoutExpired:
-        terminate_tree(proc)
-        try:
-            out, err = proc.communicate(timeout=drain_seconds)
-        except Exception:  # a descendant outside the tree still holds a pipe: give up on it
-            out, err = "", ""
-        return None, out or "", err or ""
+        readers = [_pipe_reader(proc.stdout, out_chunks), _pipe_reader(proc.stderr, err_chunks)]
+        started = time.monotonic()
+        deadline = started + timeout
+        next_tick = started + tick_seconds
+        timed_out = False
+        while True:
+            now = time.monotonic()
+            if now >= deadline:
+                timed_out = True
+                break
+            wake = min(deadline, next_tick) if on_tick is not None else deadline
+            try:
+                proc.wait(timeout=max(0.01, wake - now))
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            if on_tick is not None and time.monotonic() >= next_tick:
+                try:
+                    on_tick(round(time.monotonic() - started, 1))
+                except Exception:
+                    pass
+                next_tick += tick_seconds
+        if timed_out:
+            job.terminate()
+            terminate_tree(proc)
+            _join_readers(readers, drain_seconds)
+            return None, text(out_chunks), text(err_chunks)
+        if not _join_readers(readers, drain_seconds):
+            # Exited, but something it started still holds a pipe: kill it, then give the
+            # readers a moment to see EOF. One outside the tree keeps its pipe; given up on.
+            _kill_leftovers(proc, job)
+            _join_readers(readers, drain_seconds)
+        return proc.returncode, text(out_chunks), text(err_chunks)
     except BaseException:
+        job.terminate()
         terminate_tree(proc)
         raise
+    finally:
+        job.close()
 
 
 def process_alive(pid: int | None) -> bool:

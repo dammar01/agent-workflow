@@ -1003,6 +1003,65 @@ def _test_agy_provider() -> None:
         shutil.rmtree(agy_root, ignore_errors=True)
 
 
+def _check_version_cache(versions_module) -> None:
+    """`<cli> --version` costs a spawn per delegated run (about 1.2 s for opencode's shim),
+    so a reading is kept on disk, keyed by the executable's path, mtime and size."""
+    work = Path(tempfile.mkdtemp(prefix="agent-workflow-versions-"))
+    exe = work / "fakecli.exe"
+    exe.write_bytes(b"v1")
+    saved_path, saved_run = versions_module.CACHE_PATH, versions_module.osutil.run_bounded
+    saved_cache = dict(versions_module._CACHE)
+    answers: list = []
+    calls: list = []
+
+    def fake_run(args, timeout, **_kwargs):
+        calls.append(args)
+        return answers.pop(0)
+
+    def read() -> str | None:
+        versions_module._CACHE.clear()  # a new process: only the disk remembers
+        return versions_module.read_version(str(exe))
+
+    versions_module.CACHE_PATH = work / "cache" / "provider-versions.json"
+    versions_module.osutil.run_bounded = fake_run
+    try:
+        # A banner before the version line: the first line WITH a version is the reading.
+        answers.append((0, "warning: update available\nfakecli version 1.2.3\n", ""))
+        assert_true(read() == "fakecli version 1.2.3" and len(calls) == 1, f"first read spawns: {calls}")
+        assert_true(read() == "fakecli version 1.2.3" and len(calls) == 1, "a cache hit spawns nothing")
+
+        exe.write_bytes(b"v2, a different size")
+        answers.append((0, "", "fakecli 2.0.0\n"))  # and a CLI that answers on stderr
+        assert_true(read() == "fakecli 2.0.0" and len(calls) == 2, "a rewritten binary is read again")
+
+        exe.write_bytes(b"v3: no --version flag")
+        answers.append((2, "", "error: unknown option --version"))
+        assert_true(read() is None and len(calls) == 3, "no readable version is None")
+        assert_true(read() is None and len(calls) == 3, "and that None is cached, not retried every run")
+
+        exe.write_bytes(b"v4 that hangs")
+        answers.extend([(None, "", ""), (0, "fakecli 4.0.0", "")])
+        assert_true(read() is None and len(calls) == 4, "a timeout reads as None")
+        assert_true(read() == "fakecli 4.0.0" and len(calls) == 5, "but is not remembered across runs")
+
+        stale = versions_module._cache_key(str(exe))
+        assert_true(stale is not None, "an existing executable has a cache key")
+        os.utime(exe, ns=(0, 0))
+        answers.append((0, "fakecli 4.0.1", ""))
+        assert_true(read() == "fakecli 4.0.1" and len(calls) == 6, "an mtime change alone invalidates")
+
+        versions_module.CACHE_PATH = work / "cache-file-is-a-dir"
+        versions_module.CACHE_PATH.mkdir()
+        answers.append((0, "fakecli 4.0.1", ""))
+        assert_true(read() == "fakecli 4.0.1", "an unusable cache only means the version is read again")
+    finally:
+        versions_module.CACHE_PATH = saved_path
+        versions_module.osutil.run_bounded = saved_run
+        versions_module._CACHE.clear()
+        versions_module._CACHE.update(saved_cache)
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def _assert_codex_provider() -> None:
     """Codex: the second real provider, and the proof the seam holds for shipped code.
 
@@ -1254,6 +1313,31 @@ def _assert_codex_provider() -> None:
         and sandboxed.last_call_meta.get("provider_version") == "codex-cli 9.9.9",
         "the codex release travels with the failure, to the usage row too",
     )
+
+    # stdout is the agent's JSONL, tool output included: a file it read that mentions a
+    # sandbox failure must not turn an unrelated exit into `sandbox_unavailable`.
+    class _SandboxWordsInStdoutCodex(_NoSessionCodex):
+        def _popen_capture(self, args, prompt, cwd, timeout, phase, on_session):
+            outcome = super()._popen_capture(args, prompt, cwd, timeout, phase, on_session)
+            return {
+                **outcome,
+                "returncode": 1,
+                "stdout": (
+                    '{"type":"item.completed","item":{"type":"command_execution",'
+                    '"aggregated_output":"docs: fs sandbox helper failed; windows sandbox failed"}}'
+                ),
+                "stderr": "ERROR codex_core: turn aborted",
+            }
+
+    unrelated = _SandboxWordsInStdoutCodex(command="codex").run(
+        "task", {"provider_session_id": "019fe9cb-5a19-7303-b571-38d04f2d395a"}, None, None
+    )
+    assert_true(
+        not unrelated["ok"] and unrelated["meta"]["error_type"] != "sandbox_unavailable",
+        f"sandbox words only in the agent's stdout are not a sandbox refusal: {unrelated['meta'].get('error_type')}",
+    )
+
+    _check_version_cache(versions_module)
 
     # Provider releases against the bundle's stable_version (core/provider/versions.py):
     # advisory statuses, the same rule for every provider.
