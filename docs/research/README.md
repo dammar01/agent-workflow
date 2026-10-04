@@ -182,6 +182,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-021](decisions/DEC-021-task-events-at-turn-boundaries.yaml) | Task events are read at turn boundaries — skills from the prompt, commits from HEAD — not from every Read and Bash call | accepted | implemented | not_validated | 8d2d42b |
 | [DEC-022](decisions/DEC-022-browser-runs-without-a-provider-write-no-usage-row.yaml) | A browser run that reached no provider writes no usage row; browser rows name their stage and the browser's own time | accepted | implemented | not_validated | 8d2d42b |
 | [DEC-023](decisions/DEC-023-bundle-scoped-to-its-commands.yaml) | The installed bundle stays out of the user's own configuration — command-only scope, provider-call scope, block-only writes, uninstall | accepted | implemented | not_validated | 8d2d42b |
+| [DEC-024](decisions/DEC-024-codex-sandbox-refusal-fails-named.yaml) | A codex Windows sandbox refusal fails as `sandbox_unavailable` with ordered fix steps; the runtime never lowers the sandbox | accepted | implemented | not_validated | 7351846 |
 <!-- research-inventory:end -->
 
 No `H-XXX`, `EXP-XXX`, or `SYN-XXX` record is tracked: none has been run or has a result.
