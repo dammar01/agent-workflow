@@ -161,6 +161,9 @@ if ($WorkerRoot) {
             $exitCode = $proc.ExitCode
             $finished = $true
         } else {
+            # The whole tree, not graphify alone: a wrapper's child that survived would keep
+            # writing graph.json after the lock that warns readers is gone.
+            try { & taskkill.exe /PID $proc.Id /T /F *> $null } catch { }
             try { $proc.Kill() } catch { }
             $outcome = 'timeout'
         }

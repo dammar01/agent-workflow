@@ -44,6 +44,9 @@ with open(os.path.join("graphify-out", "graph.json"), "w", encoding="utf-8") as 
     fh.write(body)
 if mode == "early":
     time.sleep(pause)
+    # Reached only by a graphify that outlived its kill: the wrapper died, this child did not.
+    with open(os.path.join("graphify-out", "survived.txt"), "w", encoding="utf-8") as fh:
+        fh.write("alive")
 sys.exit(1)
 """
 
@@ -250,6 +253,13 @@ def _check_runner(flavour: str, command: list[str]) -> None:
         assert_true(
             [row.get("outcome") for row in rows] == ["timeout"] and rows[0].get("graph_rewritten") is True,
             f"[{flavour}] a graphify killed at the bound stays a timeout though graph.json moved; got {rows}",
+        )
+        # The kill takes the whole tree: graphify runs behind a wrapper (graphify.cmd, a shell
+        # shim), and a surviving child would keep writing after the lock is gone.
+        time.sleep(_FAKE_SLEEP_S + 2)
+        assert_true(
+            not (project / "graphify-out" / "survived.txt").exists(),
+            f"[{flavour}] a timed-out graphify's child is killed with its wrapper",
         )
 
         # Finished, rewrote graph.json, and left it unparseable: corrupt, not refreshed.

@@ -77,7 +77,9 @@ def load(project_root: Path) -> list[dict]:
     if not path.exists():
         return []
     entries: list[dict] = []
-    for raw in path.read_text(encoding="utf-8").splitlines():
+    # Replacement, not strict: a line cut in the middle of a multi-byte character becomes
+    # unparseable JSON and is skipped like any torn line, instead of failing every read.
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             entry = json.loads(raw)
         except ValueError:

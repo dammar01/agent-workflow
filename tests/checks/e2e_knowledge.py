@@ -88,6 +88,14 @@ def _check_a_run_records_what_it_proved(root: Path) -> None:
     stored = json.dumps(knowledge.load(root))
     assert_true("${E2E_PASS}" in stored and "typed test data" not in stored,
                 "placeholders are kept; a literal typed value is not application knowledge and is dropped")
+    # A row cut in the middle of a multi-byte character is skipped, never fatal to the store.
+    store = knowledge._store_path(root)
+    before = len(knowledge.load(root))
+    with open(store, "ab") as fh:
+        fh.write('{"id": "torn", "name": "Simpan é'.encode("utf-8")[:-1])
+    assert_true(len(knowledge.load(root)) == before, "a torn multi-byte row is skipped, the rest of the store stays readable")
+    with open(store, "ab") as fh:
+        fh.write(b"\n")
     submit = next(e for e in kinds["selector"] if e.get("step", {}).get("selector") == {"role": "button", "name": "Masuk"})
     assert_true(submit.get("file") == "src/Login.vue" and submit.get("line") == 3 and submit.get("anchor_hash"),
                 f"a selector the codebase named is anchored to its line: {submit}")

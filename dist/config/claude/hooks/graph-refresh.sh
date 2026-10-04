@@ -58,15 +58,34 @@ outcome, exit_code, graphify_ms, rewritten, finished = "error", None, 0, False, 
 try:
     before = os.path.getmtime(graph)
     started = time.monotonic()
+    # Its own process group, so a timeout kills graphify and everything it started: a
+    # wrapper (graphify.cmd, a venv shim) whose child survived would keep writing graph.json
+    # after the lock that warns readers is gone.
+    group = {"start_new_session": True} if os.name != "nt" else {}
+    proc = subprocess.Popen(
+        [shutil.which("graphify") or "graphify", "update"], cwd=root,
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        **group, **hide,
+    )
     try:
-        exit_code = subprocess.run(
-            [shutil.which("graphify") or "graphify", "update"], cwd=root,
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=limit, **hide,
-        ).returncode
+        exit_code = proc.wait(timeout=limit)
         finished = True
     except subprocess.TimeoutExpired:
         outcome = "timeout"
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30, **hide)
+            else:
+                import signal
+                os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:
+            pass
+        try:
+            proc.kill()
+            proc.wait(timeout=10)
+        except Exception:
+            pass
     graphify_ms = int((time.monotonic() - started) * 1000)
     rewritten = os.path.getmtime(graph) != before
     # graphify exits 1 on a large graph when only its HTML view fails, having written
