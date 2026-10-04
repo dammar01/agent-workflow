@@ -52,8 +52,10 @@ the bytes it would have to check.
 
 One prompt contract is enforced **partly outside Python**: the pre-flight gate for
 delegated commands. It is prompt-level in `CLAUDE.md`, and in auto-intent mode the
-`intent-gate-set` / `intent-gate-check` hooks in Claude Code block gather tools until
-`.workflow/run` dispatches. That enforcement lives in the agent host, not in this runtime,
+`intent-gate-set` / `intent-gate-check` hooks in Claude Code block gather tools (including
+the `PowerShell` tool, and writes to the runner scripts) until `.workflow/run` dispatches;
+a Bash or PowerShell call passes only when it parses as one plain call to
+`<root>/.workflow/{run,check,inspect}` with constant arguments. That enforcement lives in the agent host, not in this runtime,
 and it fails open. The full prompt-layer list, with what each contract requires, is in
 [reference.md, "Kontrak lapisan prompt"](reference.md#kontrak-lapisan-prompt).
 
@@ -547,8 +549,9 @@ fenced JSON scenario), `spec_uncertainties`. Validation runs in both phases, bef
   event: id, `phase` (`steps` | `cleanup`), `step_id` when it was sent inside that step's
   window (readiness wait plus action), otherwise `attribution: uncertain` with `after_step`
   — never pinned to the nearest step — method, `endpoint` sanitised (scheme, host, port,
-  path; query, fragment and credentials dropped; numeric, UUID, long-hex, long-token, JWT,
-  mixed-case-with-digits token and `@` segments become `:id`), resource type, `read_only`,
+  path; query, fragment and credentials dropped; `;` path parameters dropped; numeric, UUID, long-hex, long-token, JWT,
+  mixed-case-with-digits token, 16+ alphanumeric run without separator, 16+ balanced
+  mixed-case and `@` segments become `:id`), resource type, `read_only`,
   `blocked`, `planned` (the step's `request` matched; `false` for an extra write; `null` when
   unattributed or a confirmed read), `status` from the
   response event, `failure`, `duration_ms` from request to `requestfinished` /
@@ -582,7 +585,8 @@ fenced JSON scenario), `spec_uncertainties`. Validation runs in both phases, bef
   (read like the tagging pass reads a line; checked at validation; without a project root
   it may not lead), and a
   `proven` selector — one the browser knowledge store
-  lists for this origin (`knowledge.proven_selectors`). `proven` is checked against the
+  lists for this origin, route and `within` (`knowledge.proven_selectors` returns
+  `{selector, route, within}`; elsewhere the selector is an ordinary candidate). `proven` is checked against the
   store at validation; one it does not back is `spec_invalid`. Once the usual order starts,
   every later candidate obeys it, so a role-first list stays valid;
   the player tries only those candidates, needs exactly one match, and reports the
@@ -609,7 +613,8 @@ group; a planned step with no event (the player was killed or ran out of time) i
 `trail` (per step: selection, readiness, request ids, result), and the evidence block shows
 all three. Cleanup never changes the test's `browser_verdict`: a `failed` or `not_run`
 cleanup turns an otherwise passing verification into `INCOMPLETE` (exit non-zero, never
-the gap-only exit 0) with the group in `not_verified`; a `fail` stays `fail`; a declared
+the gap-only exit 0, which covers only `verification_gap`, gaps the agent declared; a
+`runtime_gap`, written by the runtime with a `tests:` prefix, exits 2) with the group in `not_verified`; a `fail` stays `fail`; a declared
 `no_cleanup_reason` is a note.
 
 Verdict combination is fail-closed: browser `fail` → `fail` whatever the reviewer says
@@ -669,16 +674,19 @@ assertion after `${E2E_PASS}`), `auth.logout` (an action followed by an `expect_
 that page), `navigation`, `page_ready` and `selector` (matched exactly one element), plus the
 `repeat_failure` and `failure_hint` entries above —
 built from the placeholder scenario, with a non-placeholder `fill` value dropped. Only proof
-counts: a passed, non-writing step in a run that passed on its FIRST attempt. A failed step
-weakens the matching entry; `STALE_AFTER_FAILS` (2) in a row retire it. A selector entry
+counts: a passed, non-writing step in a run that passed on its FIRST attempt (exactly one
+attempt, `browser_verdict: pass`). A failed step weakens the matching entry, at most once per
+run, and not when its selector matched before the action failed; `STALE_AFTER_FAILS` (2) in a row retire it. A selector entry
 also records `matched`, the candidate that matched; it is `proven` while the entry is live
 and has not missed since it last passed, and, when anchored, while its source line still
 exists (checked when proven selectors are read, not only by `clean`). A `proven` candidate
 that was tried and did not match — nothing matched, or a later candidate won; a step that
 fails after it matched is not a miss, and neither is a step that failed before its selectors
 were tried (not ready, an exception: no `selection.match_counts`); only candidates the browser
-counted can miss — weakens every entry it was proven by, whatever the
-step's key, so one miss demotes it to the usual order and two retire it. The application
+counted can miss — weakens every entry with the same origin, route, `within` and matched selector, whatever the
+step's key, at most once per run, so one missing run demotes it to the usual order and two
+retire it. A clean pass stores `proven_scope: {route, within}` beside `matched`; rows written
+before that are hints, not proven, until re-proven on their route. The application
 fingerprint is not consulted for this: it changes on every commit. A selector with a
 `source_ref` is anchored like a fact; `--command clean` relocates a moved anchor and drops
 retired entries and vanished anchors. A draft gets the live entries for its origin (bounded
@@ -885,8 +893,10 @@ Contract version 4 adds two fields and drops one kind of row:
   verify-browser`) or `run` (the review, `command: verify`). `None` on every other row.
 - `browser_seconds` — on the final row of a `run`: the summed `duration_seconds` of stage 2
   (the player) and `existing_tests`. `duration_seconds` stays the provider's own time.
-- `provider_version` — the provider CLI's version line (`<cli> --version`, read once per
-  process for every provider); `None` when it did not answer.
+- `provider_version` — the provider CLI's version line (`<cli> --version`, first semver line
+  of stdout then stderr, cached per user by executable path, mtime and size for 24 h); on
+  every row that reached a provider, single call or continuation; `None` when it did not
+  answer.
 - `provider_version_status` — `stable` when that release is the bundle's `stable_version`,
   `untested` for any other release, `unreadable` when no version was read
   (`core/provider/versions.py`; reference "Provider releases").
@@ -938,8 +948,8 @@ first event opens a task; an `edit` clears a verdict seen before it; a verify wh
 `derived` is `pass`, on a task that edited something, closes it as `completed` (DEC-020).
 A commit closes nothing: one whose `paths` include a file the open task edited joins that
 task's sequence, otherwise one that includes a file of the task the session last completed
-joins that one; a commit hash is counted once; a commit neither claims is
-`unclaimed_commits`. A task still open at the end is `open`, or `read_only` (no edits);
+joins that one; a commit hash is taken once it is claimed (a copy another session logged first does not hide
+it from its own session); a distinct commit no copy claims is `unclaimed_commits`. A task still open at the end is `open`, or `read_only` (no edits);
 events without a session are `unknown`. Events written before DEC-020 carry no `derived`,
 so their tasks stay `open`.
 

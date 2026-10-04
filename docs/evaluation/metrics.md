@@ -14,7 +14,11 @@ The calculation contract for every benchmark figure this project reports. The re
 - **Recount:** on the machine holding the inputs only: inputs are private transcripts, usage streams and git history; the method is public, the data is not.
 - **Measuring your own use.** Any user can run the offline tools over their own projects; the
   figures are theirs. `--export <file>` writes a copy that may be shared (aggregates and the
-  provenance stamp), refused if it would carry a path or a project name. How to run them:
+  provenance stamp). It is checked against an allowlist: values are numbers, booleans, null
+  or identifier-shaped strings (`[A-Za-z0-9_.:+-]`, at most 64), keys likewise plus single
+  spaces, and the fixed `recount`/`producer` texts only where the stamp writes them; anything
+  else is refused naming its JSON path, never its value. A contributing project's name found
+  as whole words in a value is refused too. How to run them:
   [Measure your own use](../team-guide/measure-your-use.md).
 - The statistics differ between producers on purpose: unifying them would change figures
   already recorded (CASE-011, CASE-012). Each metric names its convention below.

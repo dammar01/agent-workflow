@@ -8,7 +8,7 @@ what_exists: |
   non-safe requests (endpoint, method, resource type, status, failure, duration). Since
   DEC-014 it also records ordered request metadata for every request, with type counts and
   sizes, compared across runs, never bodies or headers. Not yet measured on a real project.
-records: [DEC-014, DEC-031]
+records: [DEC-014, DEC-031, DEC-035]
 notes: |
   Optimization goals named by the maintainer: slow loads, heavy assets, excessive or repeated
   API calls, caching that does not work, and the flow and order of requests.

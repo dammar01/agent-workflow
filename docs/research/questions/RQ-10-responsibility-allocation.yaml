@@ -6,7 +6,7 @@ status: unanswered
 what_exists: |
   An allocation exists (explore, decompose, decide, execute, verify, remember) but has not
   been evaluated.
-records: [CASE-013, DEC-023]
+records: [CASE-013, DEC-023, DEC-032]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.

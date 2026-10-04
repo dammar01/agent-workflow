@@ -192,6 +192,12 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-029](decisions/DEC-029-verify-test-request-hardening.yaml) | The verify test request cannot forge the verdict, a timed-out test cannot hang the run, and the gate lets the main agent choose tests | accepted | implemented | not_validated | b1badd7, b4d7ad6 |
 | [DEC-030](decisions/DEC-030-hook-and-installer-failure-paths.yaml) | Hooks and the installer fail without losing events, mislabelling a graph, or orphaning hooks | accepted | implemented | not_validated | 0513baa |
 | [DEC-031](decisions/DEC-031-proven-selector-misses-only-when-tried.yaml) | A proven selector misses only when the browser tried it; a missing proven selector is grounded | accepted | implemented | not_validated | 2d970d1 |
+| [DEC-032](decisions/DEC-032-gate-parses-runner-calls.yaml) | The pre-flight gate parses runner calls, covers the PowerShell tool, and refuses writes to the runner scripts | accepted | implemented | not_validated | 3e50003 |
+| [DEC-033](decisions/DEC-033-verify-runtime-gaps-are-the-runtimes.yaml) | A runtime test gap exits nonzero, a no-test request is not a check, and runtime tests keep the job alive | accepted | implemented | not_validated | 77a6f86 |
+| [DEC-034](decisions/DEC-034-provider-release-on-every-row.yaml) | Every usage row names its provider release, the version is cached per user, and codex sandbox refusals are read from stderr | accepted | implemented | not_validated | 77a6f86 |
+| [DEC-035](decisions/DEC-035-proven-selectors-scoped-by-route.yaml) | Proven selectors are scoped by route and within, weakened once per run, and recorded only from runs that passed | accepted | implemented | not_validated | 0c387f9 |
+| [DEC-036](decisions/DEC-036-export-allowlist-and-commit-claims.yaml) | A shared export passes an allowlist of value shapes, and a commit is taken only by the task that claims it | accepted | implemented | not_validated | 93a01d2 |
+| [DEC-037](decisions/DEC-037-hook-ownership-by-path.yaml) | The installer owns a hook by the folder its script sits in, and graph-refresh keeps its lock honest | accepted | implemented | not_validated | 687a702 |
 <!-- research-inventory:end -->
 
 No `H-XXX`, `EXP-XXX`, or `SYN-XXX` record is tracked: none has been run or has a result.
