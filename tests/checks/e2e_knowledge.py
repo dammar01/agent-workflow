@@ -657,7 +657,25 @@ def _check_a_missing_proven_selector_is_grounded() -> None:
     assert_true(cause == "selector_not_rendered", f"diagnosed like a grounded miss, not a scenario selector: {cause}")
 
 
+def _check_side_effect_none_is_not_a_write() -> None:
+    """DEC-044: `side_effect: "none"` is the spec's word for no write. Read as truthy it
+    made every step of a draft that spells it out a write, and no selector was recorded."""
+    candidates = [{"selector": _SAVE_ROLE, "selector_provenance": {"type": "heuristic"}}]
+    for effect, recorded in ((None, True), ("none", True), ("creates_test_data", False)):
+        scenario = _two_saves(candidates)
+        if effect is not None:
+            for step in scenario["steps"]:
+                step["side_effect"] = effect
+        report = _steps_report(scenario, {"save": ("passed", _FIRST_WON), "save-again": ("passed", _FIRST_WON)})
+        kinds = [row["kind"] for row in knowledge.observations(report, scenario, BASE)]
+        assert_true(
+            ("selector" in kinds) is recorded,
+            f"side_effect={effect!r}: a passed click {'is' if recorded else 'is not'} a selector observation; got {kinds}",
+        )
+
+
 def _test_e2e_knowledge() -> None:
+    _check_side_effect_none_is_not_a_write()
     _check_proven_selectors_rank_first_and_demote()
     _check_one_run_weakens_an_entry_once()
     _check_a_failure_after_the_match_is_not_a_miss()

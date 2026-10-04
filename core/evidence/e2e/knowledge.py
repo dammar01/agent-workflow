@@ -208,7 +208,10 @@ def observations(report: dict, scenario: dict, base_url: str) -> list[dict]:
         if row is None or row.get("status") not in ("passed", "failed"):
             continue
         outcome = "pass" if row["status"] == "passed" else "fail"
-        writes = bool(step.get("side_effect") or step.get("request"))
+        # `side_effect: "none"` is the spec's word for no write (spec.SIDE_EFFECTS); read as
+        # truthy it made every step a draft labelled explicitly a write, and no selector
+        # was ever recorded from it (DEC-044).
+        writes = step.get("side_effect") not in (None, "none") or bool(step.get("request"))
         action = step.get("action")
         if action == "goto":
             route = _route(step.get("url"), base_url)
