@@ -1237,8 +1237,9 @@ def _assert_codex_provider() -> None:
             }
 
     import adapters.providers.codex_adapter as codex_module
+    from core.provider import versions as versions_module
 
-    codex_module._VERSION_CACHE[codex_module.osutil.resolve_exe("codex")] = "codex-cli 9.9.9"
+    versions_module._CACHE[codex_module.osutil.resolve_exe("codex")] = "codex-cli 9.9.9"
     sandboxed = _SandboxCodex(command="codex")
     refused = sandboxed.run("task", {"provider_session_id": "019fe9cb-5a19-7303-b571-38d04f2d395a"}, None, None)
     assert_true(
@@ -1253,6 +1254,37 @@ def _assert_codex_provider() -> None:
         and sandboxed.last_call_meta.get("provider_version") == "codex-cli 9.9.9",
         "the codex release travels with the failure, to the usage row too",
     )
+
+    # Provider releases against the bundle's stable_version (core/provider/versions.py):
+    # advisory statuses, the same rule for every provider.
+    from config.providers import PROVIDER_BUNDLES, provider_stable_version
+
+    for name in PROVIDER_BUNDLES:
+        stable = provider_stable_version(name)
+        assert_true(bool(versions_module.release(stable)), f"{name} names a stable release: {stable}")
+        assert_true(versions_module.status(name, f"{name}-cli {stable}") == "stable", f"{name}: its stable release is stable")
+        assert_true(versions_module.status(name, "99.0.0") == "untested", f"{name}: another release is untested")
+        assert_true(versions_module.status(name, None) == "unreadable", f"{name}: no answer is unreadable")
+    assert_true(versions_module.release("codex-cli 0.162.0-alpha.9") == "0.162.0-alpha.9",
+                "a pre-release keeps its suffix, so it never reads as the stable release")
+    # Every provider's invocation is stamped, not only codex's: the usage row is the trail.
+    from types import SimpleNamespace
+
+    from core.provider.executor import Executor
+
+    versions_module._CACHE[codex_module.osutil.resolve_exe("opencode-fake-cli")] = "1.0.0"
+    stamped = {}
+    Executor._stamp_provider_version(
+        SimpleNamespace(adapter=SimpleNamespace(adapter="opencode", command="opencode-fake-cli")), stamped
+    )
+    assert_true(
+        stamped == {"provider_version": "1.0.0", "provider_version_status": "untested"},
+        f"an opencode call records its release and that it was not the tested one: {stamped}",
+    )
+    kept = {"provider_version": "codex-cli 9.9.9"}
+    Executor._stamp_provider_version(SimpleNamespace(adapter=SimpleNamespace(adapter="codex", command="codex")), kept)
+    assert_true(kept["provider_version_status"] == "untested" and kept["provider_version"] == "codex-cli 9.9.9",
+                "an adapter's own reading is kept; only the status is added")
 
     # The seam itself: defaults must follow the SELECTED provider. Before this, a config
     # naming codex came back holding opencode's binary and opencode's `plan` persona, and

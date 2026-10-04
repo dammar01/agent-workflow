@@ -527,17 +527,31 @@ def run_doctor(
             )
         elif active:
             checks["second_agent_read_boundary"] = {"provider": active, "status": "enforceable"}
-        if active == "codex":
-            # Which codex release this project runs. Its Windows sandbox has broken between
-            # releases (CASE-015); the version is what a fix report has to name.
-            from adapters.providers.codex_adapter import codex_version
+        if active:
+            # Which provider CLI release this project runs, against the release this workflow
+            # version was tested on. codex's Windows sandbox broke between releases (CASE-015);
+            # an untested release is a warning, never an issue (core/provider/versions.py).
+            from config.providers import PROVIDER_BUNDLES
+            from core.provider import versions
 
-            command = (resolved.get("config") or {}).get("provider_command") or "codex"
-            version = codex_version(str(command))
-            checks["provider_version"] = {"provider": active, "version": version or "unreadable"}
-            if version is None:
+            command = (resolved.get("config") or {}).get("provider_command") or (
+                PROVIDER_BUNDLES.get(active, {}).get("default_command") or active
+            )
+            found = versions.describe(active, str(command))
+            checks["provider_version"] = {
+                "provider": active, "version": found["version"] or "unreadable",
+                "status": found["status"], "stable": found["stable"],
+            }
+            if found["version"] is None:
                 recommended_fixes.append(
-                    f"`{command} --version` did not answer; check that the codex CLI on PATH runs"
+                    f"`{command} --version` did not answer; check that the {active} CLI on PATH runs"
+                )
+            elif found["status"] == "untested" and found["stable"]:
+                recommended_fixes.append(
+                    f"WARNING: {active} {versions.release(found['version'])} is not the release this "
+                    f"workflow version was tested on ({found['stable']}). It still runs; if delegated "
+                    f"calls fail, pin {active} back to {found['stable']} (see docs/reference.md, "
+                    "\"Provider releases\")"
                 )
 
         project_file = paths["workflow_dir"] / PROVIDER_CONFIG_NAME

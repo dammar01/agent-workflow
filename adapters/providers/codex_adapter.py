@@ -161,34 +161,16 @@ _SANDBOX_NEXT_ACTION = (
 
 _ERROR_TAIL_CHARS = 1600
 
-_VERSION_CACHE: dict[str, str | None] = {}
-
-
 def codex_version(command: str | None) -> str | None:
     """`codex --version`, read once per binary per process; None when it cannot be read.
 
     Recorded on every call so a failure can be tied to the release that produced it: codex
     behavior on Windows changes between releases (CASE-015), and the trail held no version.
+    The reader is shared with the other providers (core/provider/versions.py).
     """
-    exe = osutil.resolve_exe(command or "codex")
-    if exe not in _VERSION_CACHE:
-        version = None
-        try:
-            out = subprocess.run(
-                [exe, "--version"],
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                timeout=15,
-                **osutil.hidden_run_kwargs(),
-            )
-            lines = (out.stdout or "").strip().splitlines()
-            if out.returncode == 0 and lines:
-                version = lines[0].strip()[:80] or None
-        except Exception:
-            version = None
-        _VERSION_CACHE[exe] = version
-    return _VERSION_CACHE[exe]
+    from core.provider.versions import read_version
+
+    return read_version(command or "codex")
 
 
 def _error_tail(*texts: str) -> str:

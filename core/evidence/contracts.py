@@ -326,9 +326,12 @@ class UsageRecord:
     # project ran — which `duration_seconds` (the provider's time) never includes. On the
     # command's final row only, so a sum over rows counts it once.
     browser_seconds: float | None = None
-    # The provider CLI's own version string as the adapter read it (codex), or None. Ties a
-    # failure to the release that produced it (CASE-015).
+    # The provider CLI's own version string (`<cli> --version`), or None. Ties a failure to
+    # the release that produced it (CASE-015).
     provider_version: str | None = None
+    # `stable` when that release is the bundle's `stable_version`, `untested` when it is
+    # another, `unreadable` when the CLI did not answer (core/provider/versions.py).
+    provider_version_status: str | None = None
     # /.verify only, on the command's final row: whether main_agent wrote a test request,
     # how many requested commands the runtime ran and how many of those did not pass, and
     # their summed wall time — none of it inside `duration_seconds`.
@@ -494,6 +497,10 @@ def usage_from_result(
         browser_seconds=browser_seconds,
         provider_version=(
             call.get("provider_version") if isinstance(call.get("provider_version"), str) else None
+        ),
+        provider_version_status=(
+            call.get("provider_version_status")
+            if isinstance(call.get("provider_version_status"), str) else None
         ),
         **_runtime_tests_fields(meta.get("runtime_tests")),
     )

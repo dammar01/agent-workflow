@@ -55,6 +55,11 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # opencode's binary and opencode's `plan` persona, silently.
         "default_command": "opencode",
         "command_env": "OPENCODE_COMMAND",
+        # The provider CLI release this workflow version was tested against (`<cli> --version`).
+        # Advisory: a different release still runs, and doctor and every call's meta mark it
+        # `untested` (core/provider/versions.py). Provider releases have broken the workflow
+        # before (CASE-015); this is the release to pin back to when one does.
+        "stable_version": "1.18.34",
         # `plan` is opencode's own read-only primary; the workflow adds no second primary.
         "default_agent": "plan",
         "agent_env": "AI_PROXY_OPENCODE_AGENT",
@@ -128,6 +133,11 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         "config_candidates": ("config.toml",),
         "default_command": "codex",
         "command_env": "CODEX_COMMAND",
+        # The provider CLI release this workflow version was tested against (`<cli> --version`).
+        # Advisory: a different release still runs, and doctor and every call's meta mark it
+        # `untested` (core/provider/versions.py). Provider releases have broken the workflow
+        # before (CASE-015); this is the release to pin back to when one does.
+        "stable_version": "0.154.0",
         # Codex selects no named persona; `exec` runs the model directly.
         "default_agent": None,
         "agent_env": None,
@@ -181,6 +191,11 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         "config_candidates": (),
         "default_command": "agy",
         "command_env": "AGY_COMMAND",
+        # The provider CLI release this workflow version was tested against (`<cli> --version`).
+        # Advisory: a different release still runs, and doctor and every call's meta mark it
+        # `untested` (core/provider/versions.py). Provider releases have broken the workflow
+        # before (CASE-015); this is the release to pin back to when one does.
+        "stable_version": "1.1.13",
         # `--agent` exists and lists nothing; selecting a persona that does not exist
         # would fail the call for no gain.
         "default_agent": None,
@@ -394,6 +409,11 @@ def bundle_for(provider: str) -> dict:
             f"no dist bundle declared for provider '{provider}'; "
             f"known: {', '.join(sorted(PROVIDER_BUNDLES))}"
         ) from None
+
+
+def provider_stable_version(provider: str) -> str | None:
+    """The provider CLI release this workflow version was tested against, or None."""
+    return PROVIDER_BUNDLES.get(provider, {}).get("stable_version")
 
 
 def bundled_providers() -> tuple[str, ...]:

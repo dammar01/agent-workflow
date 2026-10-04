@@ -453,6 +453,23 @@ class Executor:
         """
         return "returncode" in adapter_meta or bool(adapter_meta.get("timed_out"))
 
+    def _stamp_provider_version(self, adapter_meta: dict) -> None:
+        """Name the provider CLI release this invocation ran on, and whether it was tested.
+
+        Every provider, not only codex: a release that changes behavior breaks the workflow
+        from the provider's side (CASE-015), and the usage row is the trail a report reads.
+        The version is read once per process (core/provider/versions.py).
+        """
+        from core.provider import versions
+
+        name = getattr(self.adapter, "adapter", None)
+        command = getattr(self.adapter, "command", None)
+        if not isinstance(name, str) or not isinstance(command, str):
+            return
+        if not isinstance(adapter_meta.get("provider_version"), str):
+            adapter_meta["provider_version"] = versions.read_version(command)
+        adapter_meta["provider_version_status"] = versions.status(name, adapter_meta.get("provider_version"))
+
     def _snapshot_invocation(self, prompt: str, result: dict) -> None:
         """Copy out what THIS provider invocation measured, before the next one lands.
 
@@ -473,6 +490,7 @@ class Executor:
             adapter_meta = dict(getattr(self.adapter, "last_call_meta", None) or {})
             if not self._reached_a_provider(adapter_meta):
                 return
+            self._stamp_provider_version(adapter_meta)
             content = result.get("content") if isinstance(result, dict) else None
             self._call_metas.append(
                 {
