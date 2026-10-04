@@ -39,11 +39,28 @@ implementation:
     - core/evidence/e2e/knowledge.py (what observations count as a write)
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
     The knowledge suite passes, and fails on the previous code. No real run has recorded a
     selector since the change.
+
+    2026-10-04, real use on the maintainer's private web project after the fix: the same
+    login-then-home scenario passed 6 of 6 on one attempt and recorded its four selectors with
+    `proven_scope` (`added: 3, confirmed: 4`); a new draft was offered those four as proven, and
+    its run passed again and confirmed them (`confirmed: 7`, each selector's pass count up by
+    one). Before the fix the same scenario recorded none. No run is marked clean: the runtime
+    verdict was `incomplete`, because the review listed the scope the task excluded under
+    not_verified, and the maintainer has not confirmed the runs. Observed, not validated.
+  runs:
+    - date: 2026-10-04
+      job_id: "job_20261004_170324_538395"
+      description: "Browser pass; four selectors recorded with proven_scope."
+      clean: false
+    - date: 2026-10-04
+      job_id: "job_20261004_170458_073847"
+      description: "New draft offered the four as proven; browser pass confirmed them."
+      clean: false
 trade_offs:
   better:
     - Drafts that declare no write explicitly feed selector knowledge again.

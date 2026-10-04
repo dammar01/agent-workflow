@@ -50,7 +50,7 @@ implementation:
     - core/prompt/prompt_builder.py, dist/config/claude/skills/verify-browser.md (proven scope in the draft rules)
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
     The e2e suites pass with the fake player; the real-Chromium smoke was not run.
@@ -58,6 +58,25 @@ validation:
     3.8.0 release and passed, as its release note says. It drives the runner with a direct run
     request and does not ingest knowledge or look up proven selectors, so it is no evidence
     for this decision; a selector-knowledge run in a real browser is still missing.
+
+    2026-10-04, real use on the maintainer's private web project (after DEC-044, without which
+    no selector was recorded from current drafts): a single-attempt browser pass stored
+    `proven_scope {route, within}` on four selectors, and the next draft was offered exactly
+    those four with their scope. The drafter used the same selectors first but labelled them
+    `source`, so validation of a `proven` citation and the demotion path were not exercised.
+    The route in the scope is the last `goto`, not the page a click led to: a selector on the
+    page reached after login is scoped to `/login`; validation reads the route the same way, so
+    the two agree. No run is marked clean (runtime verdict `incomplete`, maintainer not asked).
+    Observed, not validated.
+  runs:
+    - date: 2026-10-04
+      job_id: "job_20261004_170324_538395"
+      description: "Single-attempt browser pass stored proven_scope on four selectors."
+      clean: false
+    - date: 2026-10-04
+      job_id: "job_20261004_170458_073847"
+      description: "Next draft offered the four scoped selectors; cited them as source, not proven."
+      clean: false
 trade_offs:
   better:
     - A good selector needs two missing runs to retire, and an app verdict needs a selector proven on that page.

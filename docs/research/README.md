@@ -195,7 +195,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-032](decisions/DEC-032-gate-parses-runner-calls.yaml) | The pre-flight gate parses runner calls, covers the PowerShell tool, and refuses writes to the runner scripts | accepted | implemented | observed | 3e50003 |
 | [DEC-033](decisions/DEC-033-verify-runtime-gaps-are-the-runtimes.yaml) | A runtime test gap exits nonzero, a no-test request is not a check, and runtime tests keep the job alive | accepted | implemented | observed | 77a6f86 |
 | [DEC-034](decisions/DEC-034-provider-release-on-every-row.yaml) | Every usage row names its provider release, the version is cached per user, and codex sandbox refusals are read from stderr | accepted | implemented | observed | 77a6f86 |
-| [DEC-035](decisions/DEC-035-proven-selectors-scoped-by-route.yaml) | Proven selectors are scoped by route and within, weakened once per run, and recorded only from runs that passed | accepted | implemented | not_validated | 0c387f9 |
+| [DEC-035](decisions/DEC-035-proven-selectors-scoped-by-route.yaml) | Proven selectors are scoped by route and within, weakened once per run, and recorded only from runs that passed | accepted | implemented | observed | 0c387f9 |
 | [DEC-036](decisions/DEC-036-export-allowlist-and-commit-claims.yaml) | A shared export passes an allowlist of value shapes, and a commit is taken only by the task that claims it | accepted | implemented | not_validated | 93a01d2 |
 | [DEC-037](decisions/DEC-037-hook-ownership-by-path.yaml) | The installer owns a hook by the folder its script sits in, and graph-refresh keeps its lock honest | accepted | implemented | not_validated | 687a702 |
 | [DEC-038](decisions/DEC-038-export-names-at-any-length-and-label-keys.yaml) | An export checks project names at any length, and keys under a per-project map must be project labels | accepted | implemented | not_validated | 56c2a64 |
@@ -204,7 +204,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-041](decisions/DEC-041-check-asks-only-the-project-providers-boundary.yaml) | install --check asks only for the project boundary of the provider the project runs | accepted | implemented | observed | 8dcc672 |
 | [DEC-042](decisions/DEC-042-graphify-runs-unbounded-under-a-beating-lock.yaml) | graphify runs without a time limit, and the refresh lock is held while its worker beats | accepted | implemented | not_validated | f23fe24 |
 | [DEC-043](decisions/DEC-043-gate-lets-a-precision-read-through.yaml) | The pre-flight gate lets two small project reads through per delegation | accepted | implemented | not_validated | a06846a |
-| [DEC-044](decisions/DEC-044-side-effect-none-is-not-a-write.yaml) | Browser knowledge reads side_effect "none" as no write, so explicit drafts record selectors | accepted | implemented | not_validated | e9c63d7 |
+| [DEC-044](decisions/DEC-044-side-effect-none-is-not-a-write.yaml) | Browser knowledge reads side_effect "none" as no write, so explicit drafts record selectors | accepted | implemented | observed | e9c63d7 |
 <!-- research-inventory:end -->
 
 No `H-XXX`, `EXP-XXX`, or `SYN-XXX` record is tracked: none has been run or has a result.
