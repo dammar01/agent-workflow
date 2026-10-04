@@ -7,7 +7,7 @@ what_exists: |
   Fact store (recurrence and durable facts), anchored evidence reuse, graph leads, promoted
   knowledge; facts and promoted knowledge are injected into exploration and reasoning prompts,
   but there is no outcome to update loop and the effect is not measured.
-records: [CASE-009, DEC-016, DEC-035, DEC-040]
+records: [CASE-009, DEC-016, DEC-035, DEC-040, DEC-044]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.

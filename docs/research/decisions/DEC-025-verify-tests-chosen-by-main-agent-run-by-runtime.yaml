@@ -54,11 +54,27 @@ implementation:
     - core/evidence/contracts.py (tests_requested, tests_run, tests_failed, tests_seconds)
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
     The verify-runtime-tests suite and the full suite pass. No real verify has run under the new
     split yet, and no project has an allowlist configured.
+
+    2026-10-04, real use on this repository, with `commands.verify_test_commands` set: the
+    main agent chose `tests.json` and the runtime ran it. Two choices named a suite the runner
+    does not accept (a positional name, then the wrong spelling); each run reported the failed
+    command as a blocking finding and exited 2 instead of passing on the review alone. The
+    third choice ran and passed, and the verdict was DONE. No run is marked clean: the maintainer has not yet confirmed it. Observed, not validated: one change,
+    one session.
+  runs:
+    - date: 2026-10-04
+      job_id: "job_20261004_134633_533641"
+      description: "Chosen test command rejected by the runner (bad argument); blocking finding, exit 2."
+      clean: false
+    - date: 2026-10-04
+      job_id: "job_20261004_134951_807070"
+      description: "Corrected test choice ran and passed; verdict DONE."
+      clean: false
 trade_offs:
   better:
     - The same verify behavior on every provider, and no whole-suite runs inside a review.

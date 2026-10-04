@@ -46,10 +46,21 @@ implementation:
     - adapters/providers/codex_adapter.py (sandbox from stderr)
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
     The suites above pass. No real-use usage stream has been read back since the change.
+
+    2026-10-04, the usage stream of this repository read back: every delegated row written after
+    this decision's commit (13 rows: verify, analyze, explore, plan) carries `provider_version`
+    and `provider_version_status: stable`; the rows without a status all predate the commit,
+    the gap this record describes. Rows from a second project the same day carry both fields
+    too. No run is marked clean: the maintainer has not yet confirmed it. Observed, not validated: one provider (codex) and one release.
+  runs:
+    - date: 2026-10-04
+      job_id: "job_20261004_135445_347290"
+      description: "Analyze row with provider_version and status stable after the change."
+      clean: false
 trade_offs:
   better:
     - Usage rows can attribute failures to a provider release.

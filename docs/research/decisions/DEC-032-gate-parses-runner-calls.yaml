@@ -57,7 +57,7 @@ implementation:
     - dist/config/claude/CLAUDE.md, core/prompt/prompt_builder.py (gate description)
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
     The suites above pass on Windows. pwsh 7 was not available to run; the parser API is the
@@ -67,6 +67,18 @@ validation:
     refuse a write to `<root>/.workflow/{run,check,inspect}` with any extension
     (`(run|check|inspect)(\..*)?`), not only `.ps1`/`.sh`, as shipped in the commit named
     below; the exact `.{ps1,sh}` shape applies to the runner call.
+
+    2026-10-04, real use on the maintainer's private web project: under a pending `plan` marker
+    the runner call through the PowerShell tool passed and dispatched, and a Read of a project
+    component before dispatch was refused; the agent then delegated and the plan completed.
+    The gate suites also passed on Linux under pwsh 7.4, which the summary above lists as not
+    run. No run is marked clean: the maintainer has not yet confirmed it. Observed, not validated: the refused Read was one the prompt allowed, which DEC-043
+    addresses.
+  runs:
+    - date: 2026-10-04
+      job_id: "job_20261004_162128_832930"
+      description: "Plan dispatched through the runner after the gate refused a direct Read of a project file."
+      clean: false
 trade_offs:
   better:
     - The known bypasses are refused by shape, not by a list of characters.

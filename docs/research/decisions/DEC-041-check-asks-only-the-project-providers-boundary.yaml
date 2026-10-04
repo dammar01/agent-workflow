@@ -52,11 +52,16 @@ implementation:
     - docs/reference.md (--check scope)
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
     The e2e installer checks pass on Windows with a codex machine seed. No real codex workspace
     has been checked since the change.
+
+    2026-10-04, real use on this repository, a codex workspace: `install.py --apply` then
+    `--check` reported `project scope: SKIPPED — the project runs codex` and status READY,
+    where the previous check would have reported the opencode boundary missing. Observed, not
+    validated: one workspace, one provider switch direction.
 trade_offs:
   better:
     - A codex workspace can reach a clean `--check`; DRIFTED again means something an install would fix.

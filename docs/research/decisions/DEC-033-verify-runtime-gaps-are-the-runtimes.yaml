@@ -52,11 +52,25 @@ implementation:
     - utils/osutil.py (run_bounded ends on exit; Windows job object)
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
     The suites above pass on Windows. No delegated verify with runtime tests has run in real
     use since this change.
+
+    2026-10-04, real use on this repository: a delegated verify whose runtime test command
+    failed reported it as a blocking finding and the CLI exited 2, twice, though the review
+    itself found the change correct; the run with a valid command passed with exit 0.
+    No run is marked clean: the maintainer has not yet confirmed it. Observed, not validated: no `runtime_gap` of the no-request kind occurred.
+  runs:
+    - date: 2026-10-04
+      job_id: "job_20261004_134633_533641"
+      description: "Runtime test failed; verdict NEEDS FIX, exit 2."
+      clean: false
+    - date: 2026-10-04
+      job_id: "job_20261004_134951_807070"
+      description: "Runtime test passed; verdict DONE, exit 0."
+      clean: false
 trade_offs:
   better:
     - A verify with nothing checked cannot report pass, and a forgotten test request is visible in the exit code.
