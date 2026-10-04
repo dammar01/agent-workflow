@@ -13,6 +13,8 @@
 # of this session's verify/tests.json, and a Write of that tests.json.
 # Under any pending marker a Read of a skill definition passes: an existing .md whose real
 # path lies inside ~/.claude/skills. The skill says how to dispatch; it is not evidence.
+# So does a precision read (DEC-043): a project file outside .workflow, at most 200 lines
+# (`limit`, or a file that short), two per marker, counted in runtime/delegated.reads.
 # Escapes: WORKFLOW_LOCAL_MODE=1 / local_mode.flag. Marker/session absent -> allow (fail-open).
 # exit 2 = block ; every other path exits 0. Exit code flows from python3 (no trailing exit).
 RAW="$(cat)"
@@ -130,6 +132,65 @@ def skill_read(candidate, home):
         return os.path.normcase(full).startswith(os.path.normcase(skills) + os.sep)
     except Exception:
         return False
+
+
+# A precision read (DEC-043): the small slice the main agent may read itself to attribute a
+# claim to file:line, as CLAUDE.md allows. Bounded by span and by count so it cannot become
+# the bulk gather the gate exists to route to second_agent. Same numbers as the .ps1 flavour.
+PRECISION_READ_LINES = 200
+PRECISION_READS_PER_MARKER = 2
+PRECISION_FILE_BYTES = 1_000_000
+
+
+def precision_span_ok(full, limit):
+    # A `limit` of 1..PRECISION_READ_LINES, or no limit on a file that short. A file too
+    # large to count cheaply is not small.
+    if limit is not None:
+        return isinstance(limit, int) and not isinstance(limit, bool) and 0 < limit <= PRECISION_READ_LINES
+    if os.path.getsize(full) > PRECISION_FILE_BYTES:
+        return False
+    with open(full, "rb") as fh:
+        data = fh.read()
+    lines = data.count(b"\n") + (0 if not data or data.endswith(b"\n") else 1)
+    return lines <= PRECISION_READ_LINES
+
+
+def precision_read(ti, root, runtime_dir, marker_key):
+    # (allowed, quota_used). Allowed when the Read names an existing file inside the project
+    # (never .workflow), its span is small, and fewer than PRECISION_READS_PER_MARKER such
+    # reads went through under this marker. The count lives beside the marker, keyed to its
+    # set_at, so a new marker starts from zero without anyone deleting the count.
+    target = str(ti.get("file_path") or "")
+    if not target.strip():
+        return False, False
+    try:
+        if not os.path.isabs(target):
+            target = os.path.join(root, target)
+        base = os.path.normcase(os.path.realpath(root)).rstrip("\\/")
+        full = os.path.realpath(target)
+        norm = os.path.normcase(full)
+        if not norm.startswith(base + os.sep) or not os.path.isfile(full):
+            return False, False
+        if norm == os.path.join(base, ".workflow") or norm.startswith(os.path.join(base, ".workflow") + os.sep):
+            return False, False
+        if not precision_span_ok(full, ti.get("limit")):
+            return False, False
+        counter = os.path.join(runtime_dir, "delegated.reads")
+        count = 0
+        try:
+            with open(counter, encoding="utf-8") as fh:
+                state = json.load(fh)
+            if state.get("marker") == marker_key:
+                count = int(state.get("count") or 0)
+        except Exception:
+            count = 0
+        if count >= PRECISION_READS_PER_MARKER:
+            return False, True
+        with open(counter, "w", encoding="utf-8") as fh:
+            json.dump({"marker": marker_key, "count": count + 1}, fh)
+        return True, False
+    except Exception:
+        return False, False
 
 
 def msys_path(path):
@@ -306,9 +367,12 @@ try:
         sys.exit(0)
 
     cmd = "?"
+    marker_key = None
     try:
         with open(marker, "r", encoding="utf-8") as f:
-            cmd = str(json.load(f).get("command") or "?")
+            marker_obj = json.load(f)
+        cmd = str(marker_obj.get("command") or "?")
+        marker_key = marker_obj.get("set_at")
     except Exception as exc:
         cmd = "?"
         hook_warning("marker_unreadable", exc)
@@ -372,6 +436,14 @@ try:
         if tool_name == "Read" and same_path(target, os.path.join(root, ".workflow", "config.json"), root):
             sys.exit(0)
 
+    # Any command: a precision read, small and counted. A marker without set_at cannot key a
+    # count, so it gets none.
+    quota_used = False
+    if tool_name == "Read" and marker_key:
+        allowed, quota_used = precision_read(ti, root, runtime_dir, str(marker_key))
+        if allowed:
+            sys.exit(0)
+
     what = (
         "a shell read (cat/rg/grep/git show) -- reading the codebase is second_agent's job"
         if tool_name in ("Bash", "PowerShell")
@@ -380,10 +452,17 @@ try:
     reason = (
         "[PRE-FLIGHT GATE] intent=DELEGATED (%s) but .workflow/run has NOT run this turn.\n"
         "Tool '%s' is %s -- FORBIDDEN before delegation (Division of Labor: gather = second_agent).\n"
+        "%s"
         "Do this instead: .workflow/run.sh %s \"<task>\" \"%s\"\n"
         "That routes evidence to second_agent AND clears this gate.\n"
         "False positive? Escapes: export WORKFLOW_LOCAL_MODE=1, create %s, or delete %s."
-    ) % (cmd, tool_name, what, cmd, main_id, local_flag, marker)
+    ) % (
+        cmd, tool_name, what,
+        ("The %d precision reads this delegation allows are used.\n" % PRECISION_READS_PER_MARKER) if quota_used
+        else ("A precision read passes: a project file, at most %d lines (`limit`, or a file that short), %d per delegation.\n"
+              % (PRECISION_READ_LINES, PRECISION_READS_PER_MARKER)) if tool_name == "Read" else "",
+        cmd, main_id, local_flag, marker,
+    )
     sys.stderr.write(reason + "\n")
     sys.exit(2)
 except SystemExit:

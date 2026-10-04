@@ -40,6 +40,7 @@ def _test_intent_gate_reads_the_prompt_field() -> None:
     _check_prompt_field()
     _check_verify_lane()
     _check_skill_read_lane()
+    _check_precision_read_lane()
 
 
 def _check_prompt_field() -> None:
@@ -237,6 +238,48 @@ def _check_skill_read_lane() -> None:
             gate.close()
 
 
+def _check_precision_read_lane() -> None:
+    """DEC-043: under any marker the main agent may read a small slice itself, as CLAUDE.md
+    allows for file:line attribution: a project file outside .workflow, at most 200 lines
+    (`limit`, or a file that short), two per marker. A third, a longer span, a whole large
+    file, a file outside the project, and Grep stay blocked; a new marker starts a new count.
+    """
+    for label, command in _check_runners():
+        gate = _ArmedGate(label, command)
+        try:
+            src = gate.project / "src"
+            src.mkdir()
+            big = src / "big.tsx"
+            big.write_text("\n".join(f"line {n}" for n in range(500)) + "\n", encoding="utf-8")
+            small = src / "small.py"
+            small.write_text("\n".join(f"x{n} = {n}" for n in range(200)) + "\n", encoding="utf-8")
+            (gate.project / ".workflow" / "config.json").write_text("{}", encoding="utf-8")
+            outside = gate.base / "outside.py"
+            outside.write_text("x = 1\n", encoding="utf-8")
+
+            gate.arm("plan", set_at="2026-10-04T00:00:00+00:00")
+            for tool_input, why in (
+                ({"file_path": str(big), "offset": 1, "limit": 201}, "a span over 200 lines"),
+                ({"file_path": str(big)}, "a whole file over 200 lines"),
+                ({"file_path": str(outside), "limit": 10}, "a file outside the project"),
+                ({"file_path": str(gate.project / ".workflow" / "config.json"), "limit": 5}, "a .workflow file"),
+                ({"file_path": str(src / "missing.py"), "limit": 5}, "a file that does not exist"),
+                ({"file_path": str(big), "limit": "50"}, "a limit that is not a number"),
+            ):
+                gate.expect("Read", tool_input, 2, f"{why} is not a precision read")
+            gate.expect("Read", {"file_path": str(big), "offset": 100, "limit": 200}, 0, "a 200-line slice of a large file passes")
+            gate.expect("Read", {"file_path": str(small)}, 0, "a 200-line file read whole passes")
+            gate.expect("Read", {"file_path": str(big), "offset": 1, "limit": 10}, 2, "a third precision read is over the quota")
+            gate.expect("Grep", {"pattern": "line", "path": str(src)}, 2, "Grep stays blocked")
+
+            gate.arm("plan", set_at="2026-10-04T00:05:00+00:00")
+            gate.expect("Read", {"file_path": os.path.join("src", "small.py"), "limit": 20}, 0, "a new marker starts a new count; a relative path resolves to the project")
+            gate.arm("plan")
+            gate.expect("Read", {"file_path": str(small), "limit": 20}, 2, "a marker without set_at keys no count, so no precision read")
+        finally:
+            gate.close()
+
+
 class _ArmedGate:
     """A throwaway home + project with the gate armed, and one hook flavour to ask."""
 
@@ -255,8 +298,13 @@ class _ArmedGate:
         self.env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home)}
         self.env.pop("WORKFLOW_LOCAL_MODE", None)
 
-    def arm(self, intent: str = "plan") -> None:
-        (self.runtime / "delegated.marker").write_text(json.dumps({"command": intent}), encoding="utf-8")
+    def arm(self, intent: str = "plan", set_at: str | None = None) -> None:
+        """Without `set_at` the marker keys no precision-read count, so that lane stays shut
+        and the other lanes are tested alone; intent-gate-set always writes one."""
+        marker = {"command": intent}
+        if set_at is not None:
+            marker["set_at"] = set_at
+        (self.runtime / "delegated.marker").write_text(json.dumps(marker), encoding="utf-8")
 
     def disarm(self) -> None:
         (self.runtime / "delegated.marker").unlink(missing_ok=True)

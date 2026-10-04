@@ -191,6 +191,63 @@ function Test-SkillRead([string]$Candidate) {
     } catch { return $false }
 }
 
+# A precision read (DEC-043): the small slice the main agent may read itself to attribute a
+# claim to file:line, as CLAUDE.md allows. Bounded by span and by count so it cannot become
+# the bulk gather the gate exists to route to second_agent. Same numbers as the .sh flavour.
+$PrecisionReadLines = 200
+$PrecisionReadsPerMarker = 2
+$PrecisionFileBytes = 1000000
+
+function Test-PrecisionSpan([string]$Full, $Limit) {
+    # A `limit` of 1..$PrecisionReadLines, or no limit on a file that short. A file too large
+    # to count cheaply is not small.
+    if ($null -ne $Limit) {
+        return (($Limit -is [int] -or $Limit -is [long]) -and $Limit -gt 0 -and $Limit -le $PrecisionReadLines)
+    }
+    if ((Get-Item -LiteralPath $Full -Force).Length -gt $PrecisionFileBytes) { return $false }
+    $bytes = [System.IO.File]::ReadAllBytes($Full)
+    $lines = 0
+    foreach ($b in $bytes) { if ($b -eq 10) { $lines++ } }
+    if ($bytes.Length -gt 0 -and $bytes[$bytes.Length - 1] -ne 10) { $lines++ }
+    return ($lines -le $PrecisionReadLines)
+}
+
+function Test-PrecisionRead($ToolInput, [string]$Root, [string]$RuntimeDir, [string]$MarkerKey) {
+    # @(allowed, quotaUsed). Allowed when the Read names an existing file inside the project
+    # (never .workflow), its span is small, and fewer than $PrecisionReadsPerMarker such reads
+    # went through under this marker. The count lives beside the marker, keyed to its set_at,
+    # so a new marker starts from zero without anyone deleting the count. Same rule as
+    # precision_read in the .sh flavour.
+    $target = [string]$ToolInput.file_path
+    if ([string]::IsNullOrWhiteSpace($target)) { return @($false, $false) }
+    try {
+        if (-not [System.IO.Path]::IsPathRooted($target)) { $target = Join-Path $Root $target }
+        $base = (Get-RealPath $Root)
+        $full = (Get-RealPath $target)
+        if ($null -eq $base -or $null -eq $full) { return @($false, $false) }
+        $sep = [string][System.IO.Path]::DirectorySeparatorChar
+        $base = $base.TrimEnd('\', '/')
+        $cmp = [System.StringComparison]::OrdinalIgnoreCase
+        if (-not $full.StartsWith($base + $sep, $cmp)) { return @($false, $false) }
+        if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { return @($false, $false) }
+        $wf = $base + $sep + '.workflow'
+        if ($full.Equals($wf, $cmp) -or $full.StartsWith($wf + $sep, $cmp)) { return @($false, $false) }
+        $limit = $null
+        if ($ToolInput.PSObject.Properties['limit']) { $limit = $ToolInput.limit }
+        if (-not (Test-PrecisionSpan $full $limit)) { return @($false, $false) }
+        $counter = Join-Path $RuntimeDir 'delegated.reads'
+        $count = 0
+        try {
+            $state = [System.IO.File]::ReadAllText($counter) | ConvertFrom-Json -ErrorAction Stop
+            if ([string]$state.marker -ceq $MarkerKey) { $count = [int]$state.count }
+        } catch { $count = 0 }
+        if ($count -ge $PrecisionReadsPerMarker) { return @($false, $true) }
+        $body = (@{ marker = $MarkerKey; count = $count + 1 } | ConvertTo-Json -Compress)
+        [System.IO.File]::WriteAllText($counter, $body, (New-Object System.Text.UTF8Encoding($false)))
+        return @($true, $false)
+    } catch { return @($false, $false) }
+}
+
 function ConvertFrom-MsysPath([string]$Path) {
     # Git Bash spells E:\x as /e/x (or /cygdrive/e/x); read it the way that shell does.
     if ([System.IO.Path]::DirectorySeparatorChar -eq '\' -and $Path -match '^/(?:cygdrive/)?([A-Za-z])(/.*)?$') {
@@ -333,8 +390,14 @@ try {
     if (-not (Test-Path -LiteralPath $marker)) { exit 0 }
 
     $cmd = "?"
-    try { $cmd = ([string]((Get-Content -LiteralPath $marker -Raw -Encoding UTF8 | ConvertFrom-Json).command)) }
-    catch { Write-HookWarning 'marker_unreadable' $_.Exception.Message }
+    $markerKey = $null
+    try {
+        $markerObj = Get-Content -LiteralPath $marker -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        $cmd = [string]$markerObj.command
+        if ([string]::IsNullOrWhiteSpace($cmd)) { $cmd = "?" }
+        if ($markerObj.PSObject.Properties['set_at']) { $markerKey = [string]$markerObj.PSObject.Properties['set_at'].Value }
+    }
+    catch { $cmd = "?"; Write-HookWarning 'marker_unreadable' $_.Exception.Message }
 
     # File writes: only the runner scripts are refused. Rewriting run.sh and then running it
     # would make the runner allowlist below an arbitrary command.
@@ -388,13 +451,25 @@ False positive? Escapes: set `$env:WORKFLOW_LOCAL_MODE=1, create $localFlag, or 
         if ($toolName -eq 'Read' -and (Test-SamePath $target (Join-Path $root '.workflow\config.json') $root)) { exit 0 }
     }
 
+    # Any command: a precision read, small and counted. A marker without set_at cannot key a
+    # count, so it gets none.
+    $quotaUsed = $false
+    if ($toolName -eq 'Read' -and -not [string]::IsNullOrWhiteSpace($markerKey)) {
+        $precision = Test-PrecisionRead $payload.tool_input $root $runtimeDir $markerKey
+        if ($precision[0]) { exit 0 }
+        $quotaUsed = [bool]$precision[1]
+    }
+
     # pending DELEGATED + gather tool -> HARD block
 
     $what = if (@('Bash', 'PowerShell') -contains $toolName) { "a shell read (cat/rg/grep/git show) -- reading the codebase is second_agent's job" } else { "a bulk-gather tool" }
+    $hint = ''
+    if ($quotaUsed) { $hint = "The $PrecisionReadsPerMarker precision reads this delegation allows are used.`n" }
+    elseif ($toolName -eq 'Read') { $hint = "A precision read passes: a project file, at most $PrecisionReadLines lines (``limit``, or a file that short), $PrecisionReadsPerMarker per delegation.`n" }
     $reason = @"
 [PRE-FLIGHT GATE] intent=DELEGATED ($cmd) but .workflow/run has NOT run this turn.
 Tool '$toolName' is $what -- FORBIDDEN before delegation (Division of Labor: gather = second_agent).
-Do this instead: .workflow/run.ps1 $cmd "<task>" "$mainId"
+$($hint)Do this instead: .workflow/run.ps1 $cmd "<task>" "$mainId"
 That routes evidence to second_agent AND clears this gate.
 False positive? Escapes: set `$env:WORKFLOW_LOCAL_MODE=1, create $localFlag, or delete $marker.
 "@

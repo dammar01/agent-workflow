@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "f014b2ecdbb181cde9f5301006cc081ed254bb9ef12f7d9188e0cf285ecf2d68",
-      "bytes": 28637,
+      "sha256": "cc15f43c8c70e58092b73ef0d41b798b50d597023d7307c88cb313c41b59ea80",
+      "bytes": 29011,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -308,15 +308,15 @@
     },
     {
       "path": "claude/hooks/intent-gate-check.ps1",
-      "sha256": "58315b5d694c75ba32c46a01174655eead77764b26155266e392e4837a831d9f",
-      "bytes": 22275,
+      "sha256": "a518665098a6439a9fff11baa4912bec986dffa89013a8fae1e3e10d9d55c5ba",
+      "bytes": 26552,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/intent-gate-check.sh",
-      "sha256": "7da6aa8c0d0149f48f59b84a7b0e543a7d4594061db751e6021de16d10b6b5d2",
-      "bytes": 16885,
+      "sha256": "961334e1f9624290a6bd5385cda0d2f68b4387d229b3876046a26c4d78a62f57",
+      "bytes": 20505,
       "merge": "replace",
       "component": "runtime"
     },

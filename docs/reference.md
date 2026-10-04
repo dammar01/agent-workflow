@@ -377,6 +377,17 @@ sesudah prompt yang memanggilnya mempersenjatai gate, sehingga instruksi cara di
 sampai sesudah dispatch (DEC-039). Grep/Glob atas folder itu, file selain `.md`, dan path
 relatif tetap diblokir.
 
+Untuk semua `command` di marker, **Read presisi** juga lolos (DEC-043): file yang ada di dalam
+project root (path relatif di-resolve terhadap root, symlink diikuti), bukan di bawah
+`.workflow/`, dengan bentang paling banyak 200 baris — `limit` berupa angka 1–200, atau tanpa
+`limit` pada file yang memang ≤ 200 baris (file > 1 MB tak dihitung, jadi tak lolos). Paling
+banyak 2 per marker; hitungannya di `runtime/delegated.reads`, dikunci ke `set_at` marker,
+sehingga marker baru mulai dari nol. Ini angka yang ditegakkan untuk pengecualian "slice
+kecil, satu/dua anchor" di aturan Pre-flight gate `CLAUDE.md`: atribusi file:line oleh main
+agent sendiri, bukan pengumpulan bukti. Read ke-3, bentang > 200 baris, file besar tanpa
+`limit`, file di luar root, Grep, Glob, MCP, dan shell tetap diblokir, dan pesan blokirnya
+menyebut aturan ini. Marker tanpa `set_at` (bukan tulisan `intent-gate-set`) tak membuka lane ini.
+
 `dist/config/claude/CLAUDE.md` sengaja memuat **kedua** stanza mode — `COMMAND-ONLY` dan
 `AUTO-INTENT`, masing-masing dibungkus marker `<!-- <MODE>:START -->` / `<!-- <MODE>:END -->`.
 File itu sumber sebelum dipotong, bukan hasil instalasi. Saat `--apply`, installer
