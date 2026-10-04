@@ -2,20 +2,20 @@
 
 ## One-time setup (each team member)
 
-Follow [Install in the README](../../README.md#install); [installation.md](installation.md)
-covers choosing a mode, upgrading and uninstalling. In short:
+Follow the [installation guide](../installation.md); it also covers upgrading and
+uninstalling, and [installation.md](installation.md) helps you choose a mode. In short:
 
 1. Clone the repository to a permanent location.
 2. Run the global install once per machine. Do not skip it: it installs the Claude Code
    skills and hooks **and** the permission block for the secondary agent. How much that
    block actually enforces depends on the provider: with `opencode` writes are prevented;
    with `codex` the boundary is unproven; with `agy` changes are only detected afterwards.
-3. Run `init` once per project, on your own machine. The generated `.workflow/` contains
+3. Run `/.init` once per project, on your own machine (`/.upgrade` when the project already
+   has a `.workflow/`). The generated `.workflow/` contains
    absolute paths from your machine, so it is never committed or shared.
-4. Run `doctor` and check that it reports `READY`.
+4. Run `/.doctor` and check that it reports `READY`.
 
-Which secondary agent to choose, and what each one enforces: [Security in the
-README](../../README.md#security). If unsure, use `opencode`.
+Which secondary agent to choose, and what each one enforces: [security](../security.md). If unsure, use `opencode`.
 
 ## Day to day
 

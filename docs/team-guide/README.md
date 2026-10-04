@@ -7,8 +7,8 @@ and when to use it, not how it works inside; for exact behavior, follow the link
 Read in this order:
 
 1. [getting-started.md](getting-started.md) — set it up and make your first request.
-2. [installation.md](installation.md) — installing, choosing a mode (always on or only when
-   called), upgrading, rolling back, uninstalling.
+2. [installation.md](installation.md) — choosing a mode (always on or only when called); the
+   steps are in the [installation guide](../installation.md).
 3. [whats-included.md](whats-included.md) — every command and hook, and when to reach for it.
 4. [when-to-use.md](when-to-use.md) — the workflow or the agent directly? Benefits and costs.
 5. [task-framing.md](task-framing.md) — how to phrase a request so the workflow can help.

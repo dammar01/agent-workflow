@@ -40,7 +40,7 @@ gathers repository evidence.
 ```
 
 "Read-only" is the secondary agent's role in the contract. How much of it is enforced
-depends on the provider: see [Security in the README](../../README.md#security) and
+depends on the provider: see [Security](../security.md) and
 [limitations](../limitations.md).
 
 ## Delegated path (explore, plan, analyze, verify)

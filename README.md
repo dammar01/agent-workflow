@@ -9,8 +9,10 @@ agent, while reasoning and implementation stay with your primary coding agent.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](#requirements)
+[![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)](docs/installation.md#requirements)
 [![Version](https://img.shields.io/badge/version-3.8.0-informational.svg)](CHANGELOG.md)
+
+**[Installation guide](docs/installation.md)** · [Security](docs/security.md) · [Team guide](docs/team-guide/README.md) · [Reference](docs/reference.md)
 
 <br>
 
@@ -20,7 +22,7 @@ agent, while reasoning and implementation stay with your primary coding agent.
 
 <sub>The primary agent reasons and writes the code; the developer answers open questions and
 approves implementation. "Read-only" is the secondary agent's role, and how strictly it is
-enforced depends on the provider (see [Security](#security)). Text version, full verified
+enforced depends on the provider (see [Security](docs/security.md)). Text version, full verified
 flow, side paths, and storage: [docs/architecture](docs/architecture/README.md).</sub>
 
 ---
@@ -61,7 +63,7 @@ agent can be incomplete or wrong even when its output looks plausible.
 
 The design keeps code-writing with the primary agent. The secondary agent's role is
 read-only; the degree to which each provider **enforces** that differs, and the runtime
-states it rather than assuming it. See [Security](#security).
+states it rather than assuming it. See [Security](docs/security.md).
 
 The principle: let the model do the semantic reasoning, and let deterministic software
 enforce state, contracts, policy, provenance, and execution control.
@@ -70,94 +72,51 @@ enforce state, contracts, policy, provenance, and execution control.
 
 ## When it is useful
 
-The benefit grows with the **breadth** of a task — many files, many touch points.
+Measured on the maintainer's real use: 97 coding tasks from 167 Claude Code sessions on nine
+private projects (Laravel, Next.js and Python codebases), over the two most used stable
+releases. A task is solved when the code its session left behind entered `main`, and clean when the
+developer did not change that code again within 24 hours.
 
-| Situation | Example question | Command |
+| Delegated calls per task | Tasks | Solved | Clean | Prompts (median) | Active time (median) | Main-agent final context | Context kept out of the main agent |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | 15 | 8 (53%) | 8 | 5 | 19 min | 108k | 0 |
+| 1–2 | 20 | 14 (70%) | 12 | 6 | 33 min | 152k | 170k |
+| 3–5 | 28 | 23 (82%) | 15 | 9 | 53 min | 201k | 671k |
+| 6+ | 34 | 23 (68%) | 12 | 16.5 | 101 min | 354k | 1.4M |
+| **All** | **97** | **68 (70%)** | **47 (48%)** | **9** | **53 min** | **210k** | **574k** |
+
+Features were solved in 46 of 68 tasks and bugs in 19 of 26. Larger tasks drew more calls,
+so the table shows where delegation was used, not what it caused; it is one developer, with
+no run without the workflow to compare against, and acceptance on `main` is not a correctness
+check. Per release, per project, prompt kinds and method:
+[real-use benchmark](docs/evaluation/real-use-benchmark.md).
+
+What those tasks looked like, from the same sessions (translated, names removed):
+
+| Situation | What was asked | Command |
 | --- | --- | --- |
-| Unfamiliar codebase | "Where is the authentication logic?" | `explore` |
-| Root-cause investigation | "Why is this endpoint slow?" | `analyze` |
-| Cross-module change | "I want to add feature X — what are the steps?" | `plan` |
-| Blast radius | "What does the current working tree touch?" | `sweep` |
-| Post-change verification | "Is the change that was just made correct?" | `verify` |
+| A feature in an unfamiliar area | "Explore the cash-advance input feature: map its files and code, the permissions it uses, and any explicit or special rules." | `explore` |
+| A feature end to end | "Map the project-template feature: a template is created, applied to a project, and then…" | `explore` |
+| A question about a mechanism | "When the audit delta runs, are the commits it checks based on the anchor hash of the last audited commit?" | `analyze` |
+| Reviewing work in progress | "Analyze the changes made in my worktree on this project." | `analyze` |
+| Merging two features | "Make a plan to merge this meetings page with the meetings feature on the Notes page." | `plan` |
+| A cost or speed problem | "Each step uses many tokens and is slow; plan how to lower token use without reducing detection quality." | `plan` |
+| After an implementation | `/.verify`, straight after `/.execute -y` | `verify` |
+| A UI change | "Test it end to end in the browser, several rounds over every category area that changed." | `verify-browser` |
+| Before a commit | `/.sweep` | `sweep` |
 
-It is less attractive when the change is already localized, the relevant file is known,
-the task is very small, or you need an instant answer: a delegated call takes from under a
-minute to several minutes for broad analysis or planning, because the secondary agent
-actually reads the code. These are usage heuristics, not measured thresholds; the
+It is less attractive when the change is already localized, the relevant file is known, or
+you need an instant answer: a delegated call takes from under a minute to several minutes,
+because the secondary agent actually reads the code. The
 [team guide](docs/team-guide/when-to-use.md) covers choosing per task and how to phrase
-requests so the workflow can help.
+requests.
 
 ---
 
-## Install
+## Quick start
 
-Steps 1–2 run once per machine; steps 3–4 once per project.
-
-### 1. Clone
-
-```bash
-git clone https://github.com/dammar01/agent-workflow.git
-cd agent-workflow
-```
-
-Keep this directory somewhere permanent — the runtime records its absolute path.
-
-### 2. Install the global configuration
-
-```bash
-python install.py --apply --set-env
-```
-
-Installs the Claude Code skills and hooks, the **permission block for the delegated agent**
-(write/edit denials and the shell allowlist), and persists `AGENT_PATH`. Drop `--apply` for
-a dry run; drop `--set-env` to set the variable yourself; pass `--provider`/`--model` to
-skip the interactive choice. Reopen the terminal so `AGENT_PATH` takes effect.
-
-> **Skipping this step leaves the delegated agent running without write restrictions.**
-> The restrictions it installs are fully enforced only for `opencode`; see [Security](#security).
-
-**Pick how the workflow switches on.** The installer only adds its own marked block to your
-`~/.claude/CLAUDE.md` and each provider's `AGENTS.md`; your text outside it is never changed.
-
-| You want | Install with |
-| --- | --- |
-| The workflow as the default way of working: plain requests are routed to commands | `python install.py --apply --set-env --auto-intent` |
-| Your own setup untouched until you type a `/.<command>` | `python install.py --apply --set-env --only-command` |
-
-The choice is remembered for later upgrades. `python install.py --uninstall` removes the
-workflow's block, hooks and files again (`--rollback` undoes an install or an uninstall).
-Every flag: [reference](docs/reference.md#detail-installer). Step by step, with good practice:
-[installation guide](docs/team-guide/installation.md).
-
-### 3. Enable it in your project
-
-```bash
-python "$AGENT_PATH" --command init --work-dir /path/to/your-project --pretty
-```
-
-```powershell
-python $env:AGENT_PATH --command init --work-dir "C:/path/to/your-project" --pretty
-```
-
-This creates `.workflow/` in the project — your config overrides, provider selection,
-entry-point scripts (`run`, `inspect`, `check`), live progress in `current/`, and internal
-data (sessions, evidence, facts, usage, audit) in `data/` — plus an `opencode.json` that
-denies secret-file reads. `.workflow/` is added to `.gitignore` automatically.
-
-> **Do not commit `.workflow/`.** The generated scripts bake in absolute paths from the
-> machine where `init` ran. Each team member runs this step themselves.
-
-### 4. Verify
-
-```bash
-cd /path/to/your-project
-.workflow/run.sh doctor          # Windows: .workflow\run.ps1 doctor
-```
-
-`doctor` must report **`READY`**. `NOT_READY` means an entry point is broken — read
-`recommended_fixes`. `python install.py --check` audits the global bundle for drift.
-
-### Quick start
+Install first: [installation guide](docs/installation.md). Then, in a project, run `/.init`
+(or `/.upgrade` when it already has a `.workflow/`) and `/.doctor`.
 
 Ask in natural language; the primary agent routes it:
 
@@ -193,44 +152,13 @@ Implementation itself (`/.execute` in Claude Code) is a primary-agent skill, not
 command. Asynchronous job commands and the remaining local commands are in the
 [full reference](docs/reference.md#command).
 
-| Symptom | Likely cause | Action |
-| --- | --- | --- |
-| `doctor` reports `NOT_READY` / `run_script_drift` | Tool updated, workspace scripts not | `.workflow/run.sh upgrade` |
-| Provider not found | The agent CLI is not on `PATH` | Install it, then re-check `--version` |
-| Commands fail after moving the repository | Baked absolute paths are stale | Run `upgrade` from the new location |
+Setup problems and their fixes: [installation guide](docs/installation.md#when-something-is-wrong).
 
 ---
 
 ## Security
 
-The secondary agent reads your source code. How strictly it is confined depends on the
-provider you select.
-
-| | `opencode` | `codex` | `agy` |
-| --- | --- | --- | --- |
-| Write/edit denied by config | **Yes** | Not enforceable | No |
-| Secret-file reads denied | **Yes** | Declared, not enforced | No |
-| Shell commands restricted | **Yes**, read-only git allowlist | No | No |
-| Workspace mutation handling | Prevented | Prevented for writes | Detected after the fact |
-
-1. **The write boundary lives in the global configuration** installed by step 2. The
-   project-local `opencode.json` covers secret-file *reads* only.
-2. **`codex` passes filesystem permission flags on every call, but their runtime effect is
-   unverified** against the current CLI. Treat the boundary as unproven.
-3. **`agy` runs with permissions skipped**, guarded by detection rather than prevention: it
-   diffs `git status` around each call, so `.gitignore`d files — including `.env` — are
-   invisible to it.
-
-For projects holding secrets the secondary agent must not read, use `opencode`.
-
-## Requirements
-
-| Requirement | Required | Notes |
-| --- | --- | --- |
-| **Python 3.10+** | Yes | The runtime needs no third-party packages. Optional browser verification uses Playwright (`requirements-e2e.txt`) |
-| **A secondary-agent CLI** | Yes | `opencode` (recommended), `codex`, or `agy`, on `PATH` |
-| **git** | Recommended | Used by `sweep`, `syntax` verify mode, and the workspace guard |
-| **Claude Code** | Recommended | The primary integration target |
+What each secondary-agent provider can read and change: [docs/security.md](docs/security.md).
 
 ---
 
@@ -251,30 +179,6 @@ controlled benchmark and the maintainer's usage telemetry are kept apart in
 [docs/evaluation/](docs/evaluation/), and telemetry is read as evidence for specific
 conditions, not as a performance claim.
 
-### Real use at a glance
-
-97 real coding tasks from 167 Claude Code sessions on nine private projects (Laravel, Next.js
-and Python codebases), over the two most used stable releases. A task counts as solved when
-the code its session left behind entered the `main` branch, and as clean when the developer
-did not change that code again within 24 hours.
-
-| Metric | Value |
-| --- | --- |
-| Solved (entered `main`) | **68 of 97 (70%)** |
-| Solved clean (no fix within 24 h) | **47 of 97 (48%)** |
-| Solved, then fixed within 24 h | 21 |
-| Partial / not in `main` / no change | 13 / 9 / 7 |
-| Features / bugs solved | 46 of 68 (68%) / 19 of 26 (73%) |
-| Prompts per task (median) | 9 — of which ~1.5 fixes or corrections |
-| Active developer time per task (median) | 53 min |
-| Tasks that delegated to the second agent | 82 of 97 (median 4 calls) |
-| Main-agent context at the end of a task (median) | 210k tokens |
-| Tokens kept from entering the main agent by delegation (median) | 574k per task (2.4× the main agent's final context) |
-
-One developer, no comparison run without the workflow, and acceptance on `main` is not a
-correctness check: read it as what happened in practice, not as what the workflow causes.
-Per release, per project, prompt kinds, and method: [real-use benchmark](docs/evaluation/real-use-benchmark.md).
-
 ---
 
 ## Documentation
@@ -284,6 +188,8 @@ the reference says **exactly what the runtime does** — see [docs/](docs/README
 
 | Document | Contents |
 | --- | --- |
+| [docs/installation.md](docs/installation.md) | Requirements, install, per-project setup, updating, uninstalling |
+| [docs/security.md](docs/security.md) | What each secondary-agent provider is allowed to read and change |
 | [docs/team-guide](docs/team-guide/README.md) | For developers: getting started, when to use it, task framing, examples, troubleshooting |
 | [docs/architecture](docs/architecture/README.md) | Verified request flow, components, and storage |
 | [docs/reference.md](docs/reference.md) | Complete technical reference: configuration, jobs, fact store, evidence reuse, verify modes, sessions, tests, CI *(Bahasa Indonesia)* |

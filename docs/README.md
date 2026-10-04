@@ -9,6 +9,10 @@ question, and each has one job.
 | **Research** | Why was it built this way? What evidence and hypotheses stand behind it? | Maintainers, researchers, reviewers of design decisions | [research/](research/README.md) |
 | **Reference** | Exactly what does the runtime do? | Anyone who needs precise behavior: commands, config keys, contracts, storage | [reference.md](reference.md), [runtime-contracts.md](runtime-contracts.md), [architecture/](architecture/README.md) |
 
+Getting it on a machine: [installation.md](installation.md) (requirements, install,
+per-project setup, updating, uninstalling; it carries the exact commands so a new user finds
+them in one place) and [security.md](security.md) (what each provider can read and change).
+
 Supporting documents: [limitations.md](limitations.md), [evaluation/](evaluation/README.md)
 (benchmark and observed usage), and the release history: the index in
 [CHANGELOG.md](../CHANGELOG.md), per-version notes in [releases/](releases/).

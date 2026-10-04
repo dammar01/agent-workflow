@@ -4,7 +4,7 @@ Moved from `docs/reference.md` ("Batasan yang diketahui"), where the old anchor 
 points here. The list below is kept in its original language (Bahasa Indonesia).
 
 Provider-specific security boundaries (write prevention, secret-file reads, shell
-restriction) are summarized in the [README Security section](../README.md#security) and
+restriction) are summarized in the [security page](security.md) and
 detailed in [`reference.md`](reference.md).
 
 ## Batasan yang diketahui
