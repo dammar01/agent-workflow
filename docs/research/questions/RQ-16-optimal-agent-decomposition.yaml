@@ -1,0 +1,24 @@
+schema_version: 3
+id: RQ-16
+question: "What degree of agent decomposition is optimal for a task under constraints of token usage, latency, human intervention, and coordination overhead?"
+date: 2026-10-05
+status: unanswered
+what_exists: |
+  The runtime records, per delegated call, the tokens the provider reports, the call's
+  duration, and its continuation rows in `.workflow/data/usage.jsonl`; task telemetry groups
+  calls into tasks, and `tools/maintain/measure_real_use.py` / `measure_task_outcomes.py`
+  count prompts, corrections and tasks that landed (CASE-011, CASE-012, metrics in
+  `docs/evaluation/metrics.md`). Those cover T, L and part of H and N for the workflow as it
+  runs today. Nothing varies the decomposition level on purpose: there is no arm with a
+  different number of delegated executions for the same task, coordination cost K is not
+  separated from agent computation, and quality is not measured against a target per task.
+records: []
+notes: |
+  The primary question of the research charter (docs/research/CHARTER.md, RQ1), adopted
+  2026-10-05. The charter's cost vector is R = (N, T, L, H, K); the question asks for the
+  cheapest R that still meets a quality target, which is task-dependent by assumption.
+
+  Draft records: H-016 (diminishing marginal return of decomposition, the charter's H1).
+  Related tracked questions: RQ-17 (how quality changes with N), RQ-01 (token and context
+  allocation), RQ-02 (human intervention and coordination), RQ-13 (latency). Related
+  literature: LIT-001, which argues the capability side of composition under a shared budget.

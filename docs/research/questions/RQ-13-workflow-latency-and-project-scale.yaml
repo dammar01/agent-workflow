@@ -33,3 +33,8 @@ notes: |
   `clean` remove the guards of dead sessions (tracked, commit 2dd7d7e). From commit 2dd7d7e
   verify-browser rows also record whether a refresh ran beside them (`graph_status`
   `refreshing`/`available`/`absent`).
+
+  Research charter (docs/research/CHARTER.md, adopted 2026-10-05): the latency L of the
+  charter's cost vector, and the runtime part of its RQ4 coordination overhead
+  (continuations, verification, hooks), are measured under this question. The charter's
+  primary question is RQ-16.

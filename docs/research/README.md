@@ -10,8 +10,24 @@ open-source project.
 How significant changes must be recorded: [CONTRACT.md](CONTRACT.md). The record format:
 [schema.yaml](schema.yaml), checked by `tools/maintain/check_research.py`.
 How the project treats evidence and AI-assisted reasoning: [methodology.md](methodology.md).
+The research boundary, adopted 2026-10-05: [CHARTER.md](CHARTER.md).
 
 ## Current thesis and positioning
+
+Since 2026-10-05 the research direction is set by the [charter](CHARTER.md): agent delegation
+is studied as a **resource allocation** problem. Its working thesis, a hypothesis until a
+controlled experiment tests it (draft H-016):
+
+> Agent decomposition is not inherently beneficial. Its value depends on the marginal task
+> improvement obtained relative to the additional token, latency, human, and coordination
+> costs introduced by the decomposition.
+
+Its primary question is RQ-16 (the degree of decomposition that is optimal for a task under
+those costs), with RQ-17 (how outcome changes with the number of delegated executions); the
+existing RQ-01, RQ-02 and RQ-13 carry its token, context, human and latency questions.
+LIT-001, a harness of harnesses that composes many specialized agents across domains, is kept
+as the reference for that broader abstraction; this project does not follow it and stays with
+the charter's questions and hypothesis. Feature parity with it is not a goal. The positioning below is the architecture that the charter's experiments run on.
 
 `agent-workflow` is an external harness, a control plane, for coding agents. It separates
 repository-oriented work from the primary agent's reasoning and implementation. Semantic
@@ -205,6 +221,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-042](decisions/DEC-042-graphify-runs-unbounded-under-a-beating-lock.yaml) | graphify runs without a time limit, and the refresh lock is held while its worker beats | accepted | implemented | not_validated | f23fe24 |
 | [DEC-043](decisions/DEC-043-gate-lets-a-precision-read-through.yaml) | The pre-flight gate lets two small project reads through per delegation | accepted | implemented | not_validated | a06846a |
 | [DEC-044](decisions/DEC-044-side-effect-none-is-not-a-write.yaml) | Browser knowledge reads side_effect "none" as no write, so explicit drafts record selectors | accepted | implemented | observed | e9c63d7 |
+| [LIT-001](literature/LIT-001-raven-harness-of-harnesses.yaml) | Raven: The Harness of Harnesses for Composable Agentic Intelligence | — | not_applicable | not_validated | — |
 <!-- research-inventory:end -->
 
 No `H-XXX`, `EXP-XXX`, or `SYN-XXX` record is tracked: none has been run or has a result.

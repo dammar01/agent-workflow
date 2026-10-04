@@ -4,6 +4,16 @@ Applies only when developing this repository. It is not shipped: the global bund
 installed into user projects is `dist/config/claude/CLAUDE.md`, and nothing here belongs
 in it.
 
+## Research boundary
+
+`docs/research/CHARTER.md` is the research boundary: agent delegation is studied as resource
+allocation (when one more delegated execution is still worth its tokens, latency, human
+intervention and coordination), not as maximizing agents, autonomy or feature parity with
+another harness. Before proposing a major architectural addition, state the fields of its §12
+(research question, hypothesis, variable changed, experiment enabled, expected measurement,
+why existing mechanisms are insufficient, complexity introduced). A change that cannot answer
+them is not research-driven development.
+
 ## Research and decision records
 
 Full contract: `docs/research/CONTRACT.md`. Scope of "significant change" is defined there

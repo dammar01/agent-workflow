@@ -1,0 +1,18 @@
+schema_version: 3
+id: RQ-17
+question: "How does task outcome change as the number of delegated agent executions increases: increasing, saturating, or degrading after a task-dependent point?"
+date: 2026-10-05
+status: unanswered
+what_exists: |
+  The number of delegated executions per task can be counted after the fact from usage rows
+  grouped by task telemetry, and task outcome from `tools/maintain/measure_task_outcomes.py`
+  (reached main, needed a fix within 24 hours; CASE-012). In real use N is whatever the work
+  needed, so it is confounded with task difficulty and type; no run fixes the task and varies
+  N, which is what the question needs.
+records: []
+notes: |
+  The charter's RQ2 (docs/research/CHARTER.md), adopted 2026-10-05. The aim is a useful
+  decomposition range per task type, not one optimal number of agents.
+
+  Draft records: H-016. Serves RQ-16 as its scaling curve: the marginal return
+  Q(N) - Q(N-1) against C(N) - C(N-1). Related literature: LIT-001.

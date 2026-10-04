@@ -12,3 +12,8 @@ notes: |
   recorded before 3.7.3.
 
   Draft records: CASE-003 (archived draft). See also docs/evaluation/README.md.
+
+  Research charter (docs/research/CHARTER.md, adopted 2026-10-05): this question carries the
+  charter's RQ3 (additional task value per additional token spent on delegation, not tokens
+  saved in absolute terms) and RQ5 (whether externalizing exploration improves the allocation
+  of primary-agent context, not merely its size). The charter's primary question is RQ-16.

@@ -116,6 +116,11 @@ Before adding a subsystem, mechanism, or record type, the change record answers:
 
 "Build first, justify later" is not accepted for significant changes.
 
+The research charter ([CHARTER.md](CHARTER.md) §8 and §12) adds the research side of the same
+test: which research question and measurable variable the mechanism serves, which experiment
+it enables, and why an existing mechanism cannot. A mechanism that answers none of them is out
+of research scope, even when it improves the product.
+
 ## 13. Completion rule
 
 A significant feature is not considered fully documented until a future maintainer can
