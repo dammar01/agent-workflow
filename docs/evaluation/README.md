@@ -6,6 +6,7 @@ here, and they must not be read as the same kind of evidence:
 | Document | Kind | What it can support |
 | --- | --- | --- |
 | [benchmark.md](benchmark.md) | Where controlled studies are recorded (`H` + `EXP`); the earlier `bench/` harness was removed in 3.7.3 without results | Nothing yet: no controlled study has a result |
+| [real-use-benchmark.md](real-use-benchmark.md) | Real coding tasks from one developer's sessions on nine private projects, graded by what reached `main` | How often real work was accepted and fixed, and what it cost in prompts, time, and context; not that the workflow caused it |
 | [observed-usage.md](observed-usage.md) | Uncontrolled telemetry from one machine | How much text the digest contract kept out of the primary context in practice |
 
 ## Net value
@@ -29,8 +30,10 @@ number of human interactions.
 
 This is a framing, not a measured formula: several of its terms (human attention in
 particular) have no instrumentation yet. Today `main.py --command report` gives aggregate
-durations, reuse, and acceptance; per-task observability of what the agents read, how often
-exploration repeated, and how often a human intervened does not exist.
+durations, reuse, and acceptance. How often a human prompted and corrected, and whether the
+work reached `main`, is counted after the fact from transcripts and Git
+([real-use-benchmark.md](real-use-benchmark.md)); what the agents read and how often
+exploration repeated is not observed per task.
 
 Model benchmarks alone cannot evaluate a system like this: outcomes depend on the
 interaction of human behavior, agent behavior, harness behavior, and the repository. See

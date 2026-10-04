@@ -4,10 +4,18 @@ question: "Does objective-level delegation reduce human orchestration overhead?"
 date: 2026-09-29
 status: unanswered
 what_exists: |
-  No human-attention instrumentation.
-records: []
+  No run-time human-attention instrumentation. `tools/maintain/measure_real_use.py` counts it
+  after the fact from Claude Code transcripts and usage rows: prompts and corrections per
+  session, landed edits, and active time (CASE-011, the 3.7.3 baseline).
+  `tools/maintain/measure_task_outcomes.py` adds, per coding task, whether the work reached
+  main and needed a fix within 24 hours, and the kinds of follow-up prompts it took
+  (CASE-012: 97 tasks, 9 projects). There is no arm without the workflow, so the question's
+  comparison is not measured yet.
+records: [CASE-011, CASE-012]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.
 
-  Draft records: H-002 (archived draft).
+  Draft records: H-002 (archived draft); H-013 and EXP-007 (a later version against the
+  CASE-011 baseline); H-014 and EXP-008 (a quality review of the tasks CASE-012 counts as
+  solved).

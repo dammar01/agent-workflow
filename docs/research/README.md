@@ -156,6 +156,8 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [CASE-008](real-cases/CASE-008-graph-refresh-hook-cost-on-two-projects.yaml) | On two projects whose source differs sevenfold, the graph-refresh hook scan costs about 2 s on each, and graphify update fails slowly on the large graph | mixed | implemented | observed | — |
 | [CASE-009](real-cases/CASE-009-verify-rarely-passes-and-evidence-is-never-reused.yaml) | Across fourteen projects, 2% of verify rows pass and no command is served from reused evidence | negative | implemented | observed | — |
 | [CASE-010](real-cases/CASE-010-verify-latency-spread-and-graph-lookup-cost.yaml) | Verify latency varies by up to 3x its median within a project, and the graph lookup grows with node count to 9 s | mixed | implemented | observed | — |
+| [CASE-011](real-cases/CASE-011-real-use-baseline-of-3-7-3.yaml) | Real-use baseline of 3.7.3 — prompts, corrections, changes, and time per session | inconclusive | implemented | observed | 414d073 |
+| [CASE-012](real-cases/CASE-012-real-use-task-outcomes-on-nine-projects.yaml) | Real-use task outcomes on nine projects — what reached main, what needed a fix, and what it cost | mixed | implemented | observed | — |
 | [DEC-001](decisions/DEC-001-verify-browser-delegated.yaml) | `/.verify-browser` is a delegated command | accepted | implemented | validated | dd70afd |
 | [DEC-004](decisions/DEC-004-data-e2e-only-test-attribute.yaml) | `data-e2e` is the only test attribute | accepted | implemented | observed | dd70afd |
 | [DEC-005](decisions/DEC-005-repeat-brake-releases-on-change.yaml) | The repeat brake releases on a project change and is remembered as knowledge | accepted | implemented | observed | dd70afd |

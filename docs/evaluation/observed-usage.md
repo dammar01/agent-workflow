@@ -13,7 +13,13 @@ Second Agent <tokens> / <calls> calls | Saved <tokens>
 ```
 
 **Second Agent** is everything the delegate read and wrote. **Saved** is the part of that
-which never entered the primary agent's context window.
+which never entered the primary agent's context window: the delegate's fresh input (input
+minus cache read) plus its reasoning, as the status line computes it. The real-use
+benchmark reports the net figure — that fresh input less the answers that came back, without
+reasoning — which runs about 3% below the badge
+([real-use-benchmark.md](real-use-benchmark.md#main-agent-context)). The snapshot below is
+older and counted "Saved" from the digest (answer minus digest), a much smaller quantity;
+its figures are not comparable with either.
 
 ## Snapshot
 
@@ -31,6 +37,9 @@ gitignores `.workflow/`), so these numbers cannot be recomputed from the reposit
 | Digest handed to the primary agent | 92,192 chars |
 | Share that entered the primary context | 11.0% — 9.1× smaller |
 | Mix by command | `verify` 49, `explore` 30, `analyze` 17, `plan` 16 |
+
+What real work produced — tasks that reached `main`, fixes, prompts, and main-agent context
+across nine projects — is in [real-use-benchmark.md](real-use-benchmark.md).
 
 ## Units
 

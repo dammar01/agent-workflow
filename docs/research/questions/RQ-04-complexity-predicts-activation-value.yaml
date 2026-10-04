@@ -5,8 +5,10 @@ date: 2026-09-29
 status: unanswered
 what_exists: |
   `scope_width` and fan-out computed per call but only in transient result metadata, not
-  persisted; no routing on them.
-records: []
+  persisted; no routing on them. CASE-012 sets delegated calls per task beside outcome, time
+  and context on 97 real tasks; task size and delegation move together there, so it
+  describes where delegation was used, not when it was worthwhile.
+records: [CASE-012]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.

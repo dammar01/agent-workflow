@@ -238,6 +238,30 @@ controlled benchmark and the maintainer's usage telemetry are kept apart in
 [docs/evaluation/](docs/evaluation/), and telemetry is read as evidence for specific
 conditions, not as a performance claim.
 
+### Real use at a glance
+
+97 real coding tasks from 167 Claude Code sessions on nine private projects (Laravel, Next.js
+and Python codebases), over the two most used stable releases. A task counts as solved when
+the code its session left behind entered the `main` branch, and as clean when the developer
+did not change that code again within 24 hours.
+
+| Metric | Value |
+| --- | --- |
+| Solved (entered `main`) | **68 of 97 (70%)** |
+| Solved clean (no fix within 24 h) | **47 of 97 (48%)** |
+| Solved, then fixed within 24 h | 21 |
+| Partial / not in `main` / no change | 13 / 9 / 7 |
+| Features / bugs solved | 46 of 68 (68%) / 19 of 26 (73%) |
+| Prompts per task (median) | 9 — of which ~1.5 fixes or corrections |
+| Active developer time per task (median) | 53 min |
+| Tasks that delegated to the second agent | 82 of 97 (median 4 calls) |
+| Main-agent context at the end of a task (median) | 210k tokens |
+| Tokens kept from entering the main agent by delegation (median) | 574k per task (2.4× the main agent's final context) |
+
+One developer, no comparison run without the workflow, and acceptance on `main` is not a
+correctness check: read it as what happened in practice, not as what the workflow causes.
+Per release, per project, prompt kinds, and method: [real-use benchmark](docs/evaluation/real-use-benchmark.md).
+
 ---
 
 ## Documentation
