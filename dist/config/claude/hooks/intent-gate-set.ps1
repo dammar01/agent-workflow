@@ -46,7 +46,8 @@ try {
     # resolve MAIN_SESSION_ID + project root from registry (source of truth: session-bind.ps1)
     $registryPath = Join-Path $env:USERPROFILE '.claude\session_registry.json'
     if (-not (Test-Path -LiteralPath $registryPath)) { exit 0 }
-    $reg = Get-Content -LiteralPath $registryPath -Raw | ConvertFrom-Json
+    # session-bind writes UTF-8 without a BOM; 5.1 would decode a non-ASCII root as ANSI.
+    $reg = Get-Content -LiteralPath $registryPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $entry = $reg.$claudeSid
     if (-not $entry) { exit 0 }
     $mainId = [string]$entry.main_session_id
@@ -61,7 +62,7 @@ try {
     # load NL-map (co-located with this hook)
     $mapPath = Join-Path $PSScriptRoot "intent-map.json"
     if (-not (Test-Path -LiteralPath $mapPath)) { exit 0 }
-    $map = Get-Content -LiteralPath $mapPath -Raw | ConvertFrom-Json
+    $map = Get-Content -LiteralPath $mapPath -Raw -Encoding UTF8 | ConvertFrom-Json
 
     $resolved = $null
 

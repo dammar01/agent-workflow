@@ -124,7 +124,12 @@ from tests.checks.workspace_migration import _test_workspace_migration
 from tests.checks.installer_stale import _test_installer_leaves_no_stale_files
 from tests.checks.isolation import _test_suite_ignores_the_machine_seed
 from tests.checks.installer_uninstall import _test_installer_uninstall
-from tests.checks.intent_gate import _test_intent_gate_reads_the_prompt_field
+from tests.checks.intent_gate import (
+    _test_intent_gate_reads_the_prompt_field,
+    _test_intent_gate_runner_parsed,
+    _test_intent_gate_runner_tamper,
+    _test_intent_gate_non_ascii_root,
+)
 from tests.checks.verify_tests import _test_verify_runtime_tests
 from tests.checks.metrics import _test_metrics_contract
 from tests.checks.opencode_launch import _test_opencode_prompt_never_reaches_cmd
@@ -162,6 +167,9 @@ def run_tests() -> None:
     _test_suite_ignores_the_machine_seed()
     _test_installer_uninstall()
     _test_intent_gate_reads_the_prompt_field()
+    _test_intent_gate_runner_parsed()
+    _test_intent_gate_runner_tamper()
+    _test_intent_gate_non_ascii_root()
     _test_verify_runtime_tests()
     _test_metrics_contract()
     _test_opencode_prompt_never_reaches_cmd()

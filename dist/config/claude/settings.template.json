@@ -53,7 +53,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "mcp__.*|Read|Grep|Glob|Bash",
+        "matcher": "mcp__.*|Read|Grep|Glob|Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit",
         "hooks": [
           {
             "type": "command",
