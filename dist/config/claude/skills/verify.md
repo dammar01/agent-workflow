@@ -11,10 +11,23 @@ syntax → QUICK: runtime check parse lokal file berubah (git diff HEAD + untrac
   not_checked/skipped relay apa adanya, JANGAN dihitung pass.
   DILARANG verdict DONE untuk masalah runtime/behavior; maksimal "syntax OK, behavior belum diverifikasi" + saran set verify_mode=delegated.
 
+## Pilih test DULU (verify_mode=delegated — WAJIB sebelum run)
+Second agent cuma baca + telusur; runtime yang menjalankan test. Kamu yang memilih:
+1. Dari diff + dependents (siapa memanggil yang berubah), pilih test yang menutup perubahan.
+   Targeted — file/suite terkait saja, BUKAN seluruh suite. Tak ada test relevan (docs, config
+   murni) → `commands: []` + alasan.
+2. Write `.workflow/data/sessions/<MAIN_SESSION_ID>/verify/tests.json`:
+   `{"commands": ["<cmd>", ...], "reason": "<kenapa test ini menutup perubahan>"}` (max 5).
+3. Runtime hanya menjalankan command yang diawali prefix di `commands.verify_test_commands`
+   (`.workflow/config.json`), tanpa shell (`&&`/pipe/redirect ditolak). Di luar allowlist →
+   `not_verified`. Allowlist kosong → sebut ke user, sarankan prefix yang perlu ditambahkan.
+Tanpa tests.json → verify jadi `incomplete` (gap "no test request"). Test gagal → blocking.
+
 ## Protocol (verify_mode=delegated)
 1. Logic: solve problem? assumptions valid? konsisten pola codebase? → PASS/FAIL + reason
 2. Falsification: kondisi gagal? edge case? malformed input? → list
-3. Reality: test suite → run → simulate → "not executable". Actual vs expected.
+3. Reality: test pilihanmu dijalankan runtime (lihat di atas); hasilnya masuk `checks_run`
+   sebagai `runtime: ...` dan, bila gagal, `blocking_findings`. Relay apa adanya.
 
 ## Gate 3-dimensi (verify_mode=delegated — WAJIB)
 TIAP temuan bawa TIGA tag:

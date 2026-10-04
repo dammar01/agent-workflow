@@ -329,6 +329,13 @@ class UsageRecord:
     # The provider CLI's own version string as the adapter read it (codex), or None. Ties a
     # failure to the release that produced it (CASE-015).
     provider_version: str | None = None
+    # /.verify only, on the command's final row: whether main_agent wrote a test request,
+    # how many requested commands the runtime ran and how many of those did not pass, and
+    # their summed wall time — none of it inside `duration_seconds`.
+    tests_requested: bool | None = None
+    tests_run: int | None = None
+    tests_failed: int | None = None
+    tests_seconds: float | None = None
     # How many credential-shaped values the redaction boundary scrubbed from this call.
     # A count, never the values: the whole reason they were scrubbed is that they should
     # exist nowhere on disk, and telemetry is not an exception to that.
@@ -488,7 +495,20 @@ def usage_from_result(
         provider_version=(
             call.get("provider_version") if isinstance(call.get("provider_version"), str) else None
         ),
+        **_runtime_tests_fields(meta.get("runtime_tests")),
     )
+
+
+def _runtime_tests_fields(runtime_tests) -> dict:
+    if not isinstance(runtime_tests, dict):
+        return {}
+    ran = [o for o in runtime_tests.get("outcomes") or [] if isinstance(o, dict) and o.get("status") != "refused"]
+    return {
+        "tests_requested": bool(runtime_tests.get("requested")),
+        "tests_run": len(ran),
+        "tests_failed": sum(1 for o in ran if o.get("status") != "passed"),
+        "tests_seconds": runtime_tests.get("seconds"),
+    }
 
 
 def _browser_seconds(e2e_meta) -> float | None:

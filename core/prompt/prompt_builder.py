@@ -427,6 +427,13 @@ def build_prompt(
                 "- EVIDENCE = file:line OR non-code ref (db:/mcp:/runtime:/cmd:); no ref + no concrete failing scenario => NOT critical/high",
                 "- `checks_run` = what you actually ran/read; an unrun check is never a pass",
                 *(
+                    []
+                    if e2e_evidence
+                    else [
+                        "- tests: do NOT run test runners or suites — verify by reading and tracing; the runtime runs the tests main_agent chose for this change and adds their result to your verdict, so do not list unrun tests under not_verified",
+                    ]
+                ),
+                *(
                     [
                         "- [E2E EVIDENCE] above is runtime fact from a local browser run, not a claim to re-verify: judge whether its claims cover the change, whether a `pass` rests on assertions strong enough to catch the regression, and give each app-origin failure a temporal `origin` from the code and git scope; keep `app|harness|unknown` out of the `origin` tag",
                     ]

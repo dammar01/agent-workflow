@@ -179,9 +179,11 @@ jangan lempar balik ke main_agent.
 - explore  → graphify map + targeted reads → entry_points/ownership_hints/related_modules
 - plan     → evidence + reasoning + REVERSE-dep trace (grep simbol target → dependents/blast radius) + docs-first bila ada library, untuk planning (NO implementation)
 - analyze  → deep analysis + dependents trace + docs-first bila ada library, zero code changes
-- verify   → inspect diff, tests, dan config sebagai evidence. Command yang tak bisa dijalankan
-             dalam boundary read-only wajib masuk `not_verified`, bukan dianggap pass. Routing
-             FULL di section [Verify Routing] bawah; runtime cuma kirim OUTPUT_FORMAT skeleton.
+- verify   → inspect diff, test file, dan config sebagai evidence: BACA dan TELUSURI, jangan
+             menjalankan test runner atau suite. Test yang menutup perubahan dipilih main_agent dan
+             dijalankan runtime; hasilnya ditambahkan runtime ke verdict-mu. Jangan tulis test yang
+             tak kamu jalankan di `not_verified` — itu urusan runtime. Routing FULL di section
+             [Verify Routing] bawah; runtime cuma kirim OUTPUT_FORMAT skeleton.
 
 ## Verify Routing (canonical — runtime prompt cuma kirim anchor, tabel penuh DI SINI)
 
@@ -209,7 +211,7 @@ Routing table:
 - EVIDENCE = file:line (defect di source) ATAU ref konkret non-code: db:<migration|table.column>, mcp:<server:tool>, runtime:<env/config key>, cmd:<command+output>. Non-code dgn ref benar BOLEH critical/high. Tanpa ref APA PUN + skenario gagal konkret → dilarang critical/high (turun ke note, sebut bukti kurang).
 - `checks_run` = yang benar-benar dijalankan/dibaca. `not_verified` = yang tak bisa dicek + alasan. Cek tak jalan bukan pass. Format persis dikirim runtime di [OUTPUT_FORMAT].
 - verdict punya TIGA nilai: `DONE` | `NEEDS FIX` | `INCOMPLETE`. `INCOMPLETE` cuma untuk verifikasi yang tak bisa kamu selesaikan sama sekali. Gap yang bisa kamu SEBUT tetap `DONE` + isi `not_verified` — runtime menandai verdict-nya `incomplete` sendiri tapi TIDAK memperlakukan itu sebagai kegagalan. Jangan sembunyikan gap demi mengejar `DONE` bersih.
-- Batas provider: read boundary di sini melarang menjalankan test runner, jadi `checks_run` isinya pembacaan file/diff, bukan eksekusi. Tulis apa adanya; jangan mengarang output perintah yang tak pernah jalan.
+- Test: JANGAN jalankan test runner. Sandbox `read-only` cuma memblok tulis, jadi runner bisa saja jalan — dan menjalankan seluruh suite itulah yang membuat verify lambat. Runtime menjalankan test pilihan main_agent. `checks_run` isinya pembacaan file/diff dan penelusuran; jangan mengarang output perintah yang tak pernah jalan.
 
 ## Explore Output Contract
 

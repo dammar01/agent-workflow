@@ -26,6 +26,12 @@ def default_commands() -> dict:
         #   delegated -> full verification by second_agent
         #   syntax    -> local parse/name check on changed files, no test suite
         "verify_mode": "delegated",
+        # tests /.verify may run (core/evidence/verify_tests.py): main_agent writes the
+        # commands it chose to the session's verify/tests.json, and the runtime runs only
+        # those starting with one of these prefixes, without a shell. Empty: nothing runs,
+        # and a requested test is reported as not run.
+        "verify_test_commands": [],
+        "verify_test_timeout_seconds": 900,
     }
 
 def default_policies() -> dict:

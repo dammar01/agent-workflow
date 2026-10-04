@@ -884,6 +884,10 @@ Contract version 4 adds two fields and drops one kind of row:
   (the player) and `existing_tests`. `duration_seconds` stays the provider's own time.
 - `provider_version` — the provider CLI's version line as the adapter read it (codex:
   `codex --version`, once per process); `None` for adapters that do not read one.
+- `tests_requested`, `tests_run`, `tests_failed`, `tests_seconds` — `/.verify` only, on the
+  command's final row: whether main_agent wrote `verify/tests.json`, how many requested
+  commands the runtime ran (refused ones excluded), how many of those did not pass, and their
+  summed wall time. Not part of `duration_seconds`. `None` on every other row.
 - A browser run that ended before its review (incomplete, preflight, refused spec or env, no
   request) reached no provider and writes **no** usage or audit row; the `e2e_run` quality row
   and the `verify` task event still record it. Before v4 such a run wrote a `verify` row with

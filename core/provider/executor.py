@@ -633,8 +633,9 @@ class Executor:
                     row_meta = dict(measured.get("meta") or {})
                     row_meta.pop("verdict", None)
                     row_meta.pop("redactions", None)
-                    # The browser's own time belongs to the command, once.
+                    # The browser's own time and the runtime's tests belong to the command, once.
                     row_meta.pop("e2e", None)
+                    row_meta.pop("runtime_tests", None)
                     measured_row = {**measured, "digest": None, "meta": row_meta}
                 record = usage_from_result(
                     measured_row,
@@ -1611,6 +1612,12 @@ class Executor:
         )
         if not result.get("ok"):
             return result
+        if normalized_command == "verify":
+            # The tests main_agent chose for this change, run here and written into the
+            # review's [VERIFICATION] block, which the second agent never saw them in.
+            from core.evidence import verify_tests
+
+            result = verify_tests.apply(project_root, session_id, result)
         prompt_id = (self._last_call_meta or {}).get("prompt_id")
 
         digest = extract_digest(result.get("content") or "")

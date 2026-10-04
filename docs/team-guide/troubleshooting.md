@@ -37,6 +37,11 @@ the per-call files live: [reference, command table](../reference.md#command) and
 
 - **Skip the workflow for small tasks.** See [when-to-use.md](when-to-use.md). This is the
   biggest saving.
+- **Keep verify's tests targeted.** Verify no longer lets the secondary agent run your test
+  suite: Claude Code picks the tests that cover the change and the runtime runs only those.
+  Tell the project which test commands may run (an allowlist in the project's workflow
+  config, see the [reference](../reference.md), "Mode verify"); without it no test runs and
+  verify reports the tests as not run.
 - **Do something else while it runs.** A delegated call runs as a background job, and
   Claude Code hands control back to you while it works. You cannot continue *that* line of
   reasoning until the result arrives, but you can review, write, or start another task.

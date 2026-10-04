@@ -640,6 +640,8 @@ Delapan key berikut benar-benar mengubah perilaku runtime Python:
 | Key | Default | Arti |
 |---|---|---|
 | `commands.verify_mode` | `"delegated"` | `delegated` = verifikasi penuh second_agent. `syntax` = check parse lokal saja. Nilai tak dikenal jatuh ke `delegated` |
+| `commands.verify_test_commands` | `[]` | prefix command test yang boleh dijalankan runtime untuk `/.verify` (mis. `["python tests/run.py", "php artisan test"]`). Kosong = tak ada test yang jalan; test yang diminta dilaporkan tak dijalankan |
+| `commands.verify_test_timeout_seconds` | `900` | batas waktu per command test |
 | `policies.fact_relevant_limit` | `3` | maksimum fakta yang diinjeksi ke tiap prompt |
 | `policies.fact_recurrence_threshold` | `5` | jumlah sesi **lain** yang harus melaporkan klaim sebelum dipromosikan |
 | `policies.graph_leads_enabled` | `true` | injeksi shortlist dari `graphify-out/graph.json` |
@@ -823,6 +825,21 @@ Jadi `auto_verify_after_execute: false` tidak mematikan `/.verify`; ia hanya men
 `verify_mode` mengatur **sedalam apa** `/.verify` bekerja:
 
 - **`delegated`** (default) — second_agent memverifikasi dan mengembalikan kontrak berlabel. Tiap temuan wajib membawa tiga tag: `severity` (critical/high/medium/low), `origin` (introduced/regression/pre_existing/unknown), `scope_relation` (in_scope/out_of_scope). Blocking ditentukan kombinasi ketiganya, bukan severity saja — cacat pre-existing tidak menyandera verdict perubahan berjalan, dan `origin: unknown` gagal-tertutup. Section tanpa temuan wajib berisi `none` eksplisit; runtime juga menerima `none.`, `none (…)` (keterangan bebas tanpa tag), `n/a`, `not applicable`, `nothing found`/`nothing to report`, `no (blocking) findings`, `tidak ada`, `tidak ada temuan`, dan sentinel diikuti separator (`;`, `:`, `,`, `—`, `-`) dengan keterangan yang seluruhnya frasa netral (`clean`, `all clean`, `ok`, `nothing found`/`nothing blocking`/`nothing to report`, `no issues`, `bersih`, `semua bersih`, `tidak ada temuan`). Penjelasan bebas ditaruh dalam kurung. Selain itu — `none of …`, `none - caller X fails`, `none; all inspected paths are clean`, keterangan bertag, teks multi-baris — dibaca sebagai temuan; continuation lalu meminta entrinya ditulis `- none`. Pengecualian di reviewer E2E (`verify-browser`): item dengan baris lanjutan tetap kosong bila baris pertamanya `none` polos atau `none (…)`, seperti sebelumnya.
+  **Test pada mode `delegated`.** Second agent memverifikasi dengan membaca dan menelusur; ia
+  tidak menjalankan test runner. Test dipilih main_agent dari diff dan dependents, ditulis ke
+  `.workflow/data/sessions/<MAIN_SESSION_ID>/verify/tests.json` —
+  `{"commands": [...], "reason": "..."}`, maksimal 5 — lalu dijalankan **runtime** sesudah
+  review kembali (`core/evidence/verify_tests.py`). Command hanya jalan bila diawali salah satu
+  prefix di `commands.verify_test_commands`, tanpa shell (`&&`, pipe, redirect, `$(` ditolak),
+  satu per satu, masing-masing di bawah `commands.verify_test_timeout_seconds`. Hasilnya
+  ditulis ke blok `[VERIFICATION]` yang tak pernah dilihat second agent: tiap command jadi baris
+  `checks_run` `runtime: ...`; yang gagal, timeout, atau tak bisa dijalankan jadi blocking
+  finding (`origin: unknown`, gagal-tertutup); command yang ditolak, dan verify **tanpa**
+  `tests.json`, jadi gap `not_verified` sehingga verdict-nya `incomplete`. `commands: []` dengan
+  alasan menyatakan tak ada test yang relevan dan tidak menambah gap. File request dipakai sekali
+  (diganti nama `tests.used.json`). Alasannya: saat second agent ikut menjalankan test, codex
+  menjalankan seluruh suite (verify median sampai 366 s, CASE-010) sementara opencode tak bisa
+  menjalankan satu pun dan verify-nya jadi `incomplete` (CASE-009).
 - **`syntax`** — dijawab lokal, tanpa memanggil OpenCode sama sekali. Memeriksa staged, unstaged, dan untracked files, termasuk repository tanpa commit: `.py` via `compile()` in-process, `.json` via `json.loads`, `.js`/`.mjs`/`.cjs` via `node --check`, `.php` via `php -l`. File Python juga memerlukan name check `pyflakes`; bila tool tidak tersedia, hasilnya `incomplete`. Kegagalan discovery Git juga menghasilkan `incomplete`, bukan `skipped`.
 
 Semua yang tak bisa diperiksa dilaporkan apa adanya, tidak pernah dihitung lulus:
