@@ -221,8 +221,30 @@ def session_owners(transcripts: list[dict]) -> dict[str, int]:
     return owners
 
 
-# An absolute path in either OS's form: a figure set that leaves the machine carries none.
-_ABSOLUTE_PATH = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]|(?<![\w.~-])/(?:home|Users|root|mnt|var|tmp|opt|srv)/")
+# An absolute path in any OS's form: a figure set that leaves the machine carries none. Read
+# against each key and string value, not the JSON text, so escaping cannot hide one: a drive
+# (`C:\`, `C:/`), UNC (`\\server\share`, `//server/share`), a home (`~/`), and any POSIX path
+# from the root with at least two segments (`/private/var/x`, `/etc/x`).
+_ABSOLUTE_PATH = re.compile(
+    r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]"
+    r"|(?:^|[^\\])\\\\[^\\\s]+\\"
+    r"|(?:^|[\s\"'(=,;])//[^/\s]+/"
+    r"|(?:^|[\s\"'(=,;])~[\\/]"
+    r"|(?:^|[\s\"'(=,;])/[^/\s\"']+/"
+)
+
+
+def _strings(value):
+    """Every key and string value inside `value`, depth first."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield str(key)
+            yield from _strings(item)
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from _strings(item)
 
 
 def write_export(report: dict, dest: Path, forbidden=()) -> Path:
@@ -232,9 +254,11 @@ def write_export(report: dict, dest: Path, forbidden=()) -> Path:
     names); the export is refused when any of them, or any absolute path, appears in it. The
     caller decides what goes in: aggregates and the provenance stamp, never prompt text.
     """
-    text = json.dumps({"export": {"schema": 1, "recount": RECOUNT}, **report}, indent=2, ensure_ascii=False)
-    leaks = sorted({w for w in forbidden if w and len(w) > 2 and w in text})
-    if leaks or _ABSOLUTE_PATH.search(text):
+    payload = {"export": {"schema": 1, "recount": RECOUNT}, **report}
+    text = json.dumps(payload, indent=2, ensure_ascii=False)
+    strings = list(_strings(payload))
+    leaks = sorted({w for w in forbidden if w and len(w) > 2 and any(w in s for s in strings)})
+    if leaks or any(_ABSOLUTE_PATH.search(s) for s in strings):
         raise ValueError(f"export refused: it would carry {len(leaks)} project name(s) or a path")
     out = Path(dest)
     out.write_text(text + "\n", encoding="utf-8")

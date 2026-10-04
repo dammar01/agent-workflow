@@ -343,6 +343,11 @@ lapisan prompt yang bekerja. Sejak perbaikan itu, di mode auto-intent `intent-ga
 benar-benar memblokir gather tool sesudah prompt yang terpetakan ke command delegated sampai
 `.workflow/run` dipanggil; escape-nya tetap `WORKFLOW_LOCAL_MODE=1` atau `local_mode.flag`.
 
+Runner hanya lolos bila ia command itu sendiri: token pertama adalah path
+`.workflow/{run,check,inspect}.{ps1,sh}` (polos atau ber-quote), boleh didahului
+`powershell`/`pwsh`/`bash`/`sh` beserta flag-nya. Path runner yang muncul sebagai argumen
+command lain (`python -c "..." x/.workflow/run.sh`) tetap diblokir.
+
 Field `command` di marker memilih aturan lolos. Untuk `verify`, main_agent harus memilih test
 sebelum delegasi, jadi tiga hal lolos: `git diff` bersih (tanpa `&&`, `;`, pipe, redirect)
 dengan `--name-only`, `--name-status`, atau `--stat[=N]`, plus opsional `--cached`, `--staged`,

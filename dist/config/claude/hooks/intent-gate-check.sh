@@ -72,6 +72,17 @@ def same_path(candidate, expected, base):
         return False
 
 
+# A runner call: the command's first token is the runner script (bare or quoted), optionally
+# behind an interpreter and its flags (`powershell -NoProfile -ExecutionPolicy Bypass -File`).
+_RUNNER_PATH = r"\.workflow[\\/](?:run|check|inspect)\.(?:ps1|sh)"
+RUNNER = re.compile(
+    r"^\s*(?:(?:powershell|pwsh|bash|sh)(?:\.exe)?(?:\s+-[A-Za-z]+(?:\s+Bypass)?)*\s+)?"
+    r"(?:\"(?:[^\"]*[\\/])?" + _RUNNER_PATH + r"\""
+    r"|'(?:[^']*[\\/])?" + _RUNNER_PATH + r"'"
+    r"|(?:[^\s\"']*[\\/])?" + _RUNNER_PATH + r")(?=\s|$)",
+    re.IGNORECASE,
+)
+
 DIFF_SUMMARY = {"--name-only", "--name-status"}
 DIFF_ALLOWED = {"--cached", "--staged", "--relative", "--no-renames", "--no-color", "--"}
 
@@ -154,9 +165,10 @@ try:
             or bool(re.search(r"[<>]", bash_cmd))
             or ("\n" in bash_cmd)
         )
-        if (not chained) and re.search(
-            r"(^|[\\/])\.workflow[\\/](run|check|inspect)\.(ps1|sh)\b", bash_cmd
-        ):
+        # The runner must be the command itself (optionally behind powershell/pwsh/bash/sh
+        # and their flags), not a word anywhere in it: `python -c "..." x/.workflow/run.sh`
+        # is not a runner call.
+        if (not chained) and RUNNER.search(bash_cmd):
             sys.exit(0)
         # verify: the diff that tells main_agent which tests to pick (skills/verify.md).
         if cmd == "verify" and not chained and diff_summary(bash_cmd):

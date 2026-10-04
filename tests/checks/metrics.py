@@ -117,8 +117,18 @@ def _test_metrics_contract() -> None:
         dest = root / "out.json"
         metrics.write_export({"projects": 2, "per_project": {"PA": {"sessions": 3}}}, dest, forbidden=["shop-api"])
         assert_true('"schema": 1' in dest.read_text(encoding="utf-8"), "an export is written with its schema")
+        # A real stamp (producer path, params, input hash, dates) is not mistaken for a path.
+        stamp = metrics.provenance("tools/maintain/measure_real_use.py", {"version": "3.8.0", "idle_minutes": 15.0},
+                                   [dest], metric_ids=["real_use.session"])
+        metrics.write_export({"provenance": stamp, "window": ["2026-09-01", "2026-10-04"], "ratio": "3/4"},
+                             root / "stamped.json", forbidden=["shop-api"])
         for bad, why in (({"note": "shop-api"}, "a project name"), ({"note": r"E:\Work\x"}, "a Windows path"),
-                         ({"note": "/home/u/p"}, "a POSIX path")):
+                         ({"note": "/home/u/p"}, "a POSIX path"), ({"note": r"\\server\share\project"}, "a UNC path"),
+                         ({"note": "//server/share/project"}, "a forward-slash UNC path"),
+                         ({"note": "/private/var/project"}, "a POSIX path outside the usual roots"),
+                         ({"note": "~/work/project"}, "a home-relative path"),
+                         ({"note": "see /etc/hosts"}, "a path inside free text"),
+                         ({r"C:\Users\x": 1}, "a path in a key")):
             try:
                 metrics.write_export(bad, root / "bad.json", forbidden=["shop-api"])
             except ValueError:

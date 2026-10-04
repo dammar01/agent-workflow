@@ -139,7 +139,15 @@ try {
     if ($toolName -eq 'Bash') {
         $bashCmd = [string]$payload.tool_input.command
         $chained = ($bashCmd -match '[&;|`]') -or ($bashCmd -match '\$\(') -or ($bashCmd -match '[<>]') -or ($bashCmd -match "`n")
-        if ((-not $chained) -and ($bashCmd -match '(^|[\\/])\.workflow[\\/](run|check|inspect)\.(ps1|sh)\b')) {
+        # The runner must be the command itself (optionally behind powershell/pwsh/bash/sh and
+        # their flags), not a word anywhere in it: `python -c "..." x/.workflow/run.sh` is not
+        # a runner call. Same pattern as RUNNER in the .sh flavour.
+        $runnerPath = '\.workflow[\\/](?:run|check|inspect)\.(?:ps1|sh)'
+        $runner = '^\s*(?:(?:powershell|pwsh|bash|sh)(?:\.exe)?(?:\s+-[A-Za-z]+(?:\s+Bypass)?)*\s+)?' +
+                  '(?:"(?:[^"]*[\\/])?' + $runnerPath + '"' +
+                  "|'(?:[^']*[\\/])?" + $runnerPath + "'" +
+                  '|(?:[^\s"'']*[\\/])?' + $runnerPath + ')(?=\s|$)'
+        if ((-not $chained) -and ($bashCmd -match $runner)) {
             exit 0
         }
         # verify: the diff that tells main_agent which tests to pick (skills/verify.md).

@@ -159,5 +159,27 @@ def _check_verify_lane() -> None:
             for tool, tool_input in [("Bash", {"command": "git diff --name-only"}), ("Read", {"file_path": str(config)})]:
                 code = exit_code(tool, tool_input)
                 assert_true(code == 2, f"[{label}] a pending plan must block {tool} {tool_input}; exit {code}")
+
+            # The runner passes only as the command itself, never as a word inside another one.
+            runner_calls = [
+                ".workflow/run.ps1 plan \"t\" \"m1\"",
+                "./.workflow/run.sh plan \"t\" \"m1\"",
+                "\"E:/my project/.workflow/run.ps1\" plan \"t\" \"m1\"",
+                "powershell -NoProfile -ExecutionPolicy Bypass -File .workflow/run.ps1 plan \"t\" \"m1\"",
+                "bash .workflow/inspect.sh",
+            ]
+            for runner_call in runner_calls:
+                code = exit_code("Bash", {"command": runner_call})
+                assert_true(code == 0, f"[{label}] a runner call must pass the gate: {runner_call}; exit {code}")
+            smuggled = [
+                "python -c \"open('secret').read()\" /tmp/.workflow/run.sh",
+                "cat src/app.py .workflow/run.ps1",
+                "rg secret .workflow/check.sh",
+                "powershell -Command Get-Content secret .workflow/run.ps1",
+                ".workflow/run.ps1.bak plan",
+            ]
+            for command_line in smuggled:
+                code = exit_code("Bash", {"command": command_line})
+                assert_true(code == 2, f"[{label}] a runner path inside another command must block: {command_line}; exit {code}")
         finally:
             shutil.rmtree(base, ignore_errors=True)
