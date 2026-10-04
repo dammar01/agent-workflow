@@ -11,6 +11,7 @@ troubleshooting table](../../README.md#quick-start); commands and their options 
 | --- | --- |
 | A warning that `.workflow` was built by an older tool version | Run `upgrade` for that project |
 | The provider CLI is not found | Install it and make sure it is on `PATH` |
+| codex on Windows fails with `sandbox_unavailable` | Codex's own Windows sandbox would not start. Start a new session (`/clear`) and repeat the request; if new sessions fail too, update codex and run `codex` once by itself to approve its sandbox setup; meanwhile switch the secondary agent with `/.provider`. The error's next action lists these steps, and `doctor` shows the codex version to quote in a bug report ([reference](../reference.md)) |
 | Commands fail after you moved the tool checkout | Run `upgrade` from the new location |
 | Empty-looking `.lock` files in `.workflow/data` | `evidence.jsonl.lock` and the `.guard`/`.reclaim` files hold one invisible byte and stay between uses: normal. Other lock files are removed on release, so an empty one left behind is a writer that crashed and is reclaimed later. Do not delete any while something runs ([which ones and why](../runtime-contracts.md)) |
 

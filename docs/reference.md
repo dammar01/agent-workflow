@@ -701,6 +701,20 @@ Saat `init`, source-nya adalah `config/second_agent.seed.json` bila ada, atau `c
 
 `codex` dan `agy` sama-sama dilaporkan `doctor` sebagai `not_enforceable` dengan `trusted: true`: keduanya bisa membaca tiap file project dan menerima environment proses penuh — boundary-nya kewajiban agent, bukan penegakan runtime. Memilih `agy` juga butuh acknowledgement eksplisit (`requires_opt_in`); `/.provider` menolak menulisnya tanpa itu.
 
+**Codex di Windows — sandbox OS-nya sendiri.** Sandbox Windows codex (backend `elevated`) bisa
+menolak memulai sesi: ``windows sandbox failed: elevated Windows sandbox requires effective
+`:root` read access``. Pada 3.8.0 ini teramati pada thread yang **di-resume** sementara thread
+baru jalan (CASE-015; regresi upstream openai/codex#46312, dan #46114 bila setiap thread
+gagal). Runtime mengklasifikasikannya `error_type: sandbox_unavailable` — bukan `unknown` —
+dengan `next_action` berurutan: mulai sesi utama baru (`/clear` memberi `MAIN_SESSION_ID` dan
+thread codex baru) lalu jalankan ulang; bila thread baru juga gagal, perbarui codex dan jalankan
+`codex` sekali secara interaktif untuk menyetujui setup sandbox; sementara itu ganti second
+agent lewat `/.provider`. Runtime **tidak** menurunkan sandbox: profil deny-read yang dikirim
+butuh backend `elevated`, dan memilih yang lebih lemah (`[windows] sandbox = "unelevated"` di
+`~/.codex/config.toml`) adalah keputusan user. Versi codex (`codex --version`, dibaca sekali per
+proses) tercatat di `meta.provider_version`, di baris usage (`provider_version`), dan di
+`doctor` (`checks.provider_version`).
+
 Codex mengirim daftar deny yang sama sebagai flag `-c permissions.workflow.filesystem` di tiap panggilan, tetapi flag itu tidak menghentikan apa pun. Diuji terhadap codex-cli 0.147.0 mode `exec`: men-deny `**` dan `**/*` untuk `:workspace_roots` lalu meminta sebuah file di root itu tetap mengembalikan isinya, exit 0. Codex membaca dengan menjalankan shell, dan `--sandbox read-only` membatasi **tulis**, bukan baca.
 
 Artinya second_agent codex bisa membaca tiap file di project yang kamu tunjuk, `.env` termasuk. `init` melaporkan ini sebagai `status: not_enforceable` dengan `permissions_enforced: 0`, dan `dist/config/codex/AGENTS.md` menyatakan ke agent-nya bahwa menghindari file rahasia adalah kewajibannya sendiri — instruksi, bukan penegakan.

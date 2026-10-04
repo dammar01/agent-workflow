@@ -1219,6 +1219,41 @@ def _assert_codex_provider() -> None:
         f"state without an error; got {lost.last_call_meta}",
     )
 
+    # codex's Windows sandbox refusing a resumed thread (CASE-015): its own error type and
+    # the steps that fix it, not `unknown` and "inspect the logs".
+    class _SandboxCodex(_NoSessionCodex):
+        def _popen_capture(self, args, prompt, cwd, timeout, phase, on_session):
+            outcome = super()._popen_capture(args, prompt, cwd, timeout, phase, on_session)
+            return {
+                **outcome,
+                "returncode": 1,
+                "stdout": "",
+                "stderr": (
+                    "ERROR codex_core::session: Failed to create session: failed to load "
+                    "AGENTS.md instructions for environment `local`: fs sandbox helper failed "
+                    "with status exit code: 1: windows sandbox failed: elevated Windows sandbox "
+                    "requires effective `:root` read access"
+                ),
+            }
+
+    import adapters.providers.codex_adapter as codex_module
+
+    codex_module._VERSION_CACHE[codex_module.osutil.resolve_exe("codex")] = "codex-cli 9.9.9"
+    sandboxed = _SandboxCodex(command="codex")
+    refused = sandboxed.run("task", {"provider_session_id": "019fe9cb-5a19-7303-b571-38d04f2d395a"}, None, None)
+    assert_true(
+        not refused["ok"]
+        and refused["meta"]["error_type"] == "sandbox_unavailable"
+        and "/clear" in refused["meta"]["next_action"]
+        and "/.provider" in refused["meta"]["next_action"],
+        f"a sandbox refusal names itself and its fix: {refused['meta'].get('error_type')} / {refused['meta'].get('next_action')}",
+    )
+    assert_true(
+        refused["meta"].get("provider_version") == "codex-cli 9.9.9"
+        and sandboxed.last_call_meta.get("provider_version") == "codex-cli 9.9.9",
+        "the codex release travels with the failure, to the usage row too",
+    )
+
     # The seam itself: defaults must follow the SELECTED provider. Before this, a config
     # naming codex came back holding opencode's binary and opencode's `plan` persona, and
     # the workspace backfill then wrote those wrong values into the file permanently.

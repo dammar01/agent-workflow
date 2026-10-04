@@ -41,6 +41,10 @@ ERROR_TYPES = {
     # IS worth retrying, and waiting does nothing for it. Left as `unknown` it collected
     # the useless "inspect the logs and rerun" next_action.
     "streaming_failed",
+    # The provider's own OS sandbox refused to start the session (codex on Windows,
+    # CASE-015). Nothing ran; the remedy is on the provider's side, and `unknown` hid it
+    # behind "inspect the logs and rerun".
+    "sandbox_unavailable",
     "second_agent_unavailable",  # probe in a FRESH session could not get an answer either
     "job_expired",  # ran past the hard runtime ceiling (OOM backstop)
     "task_truncated",  # the instruction lost too much to trust the answer to it

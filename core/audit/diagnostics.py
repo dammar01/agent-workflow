@@ -485,6 +485,18 @@ def run_doctor(
             )
         elif active:
             checks["second_agent_read_boundary"] = {"provider": active, "status": "enforceable"}
+        if active == "codex":
+            # Which codex release this project runs. Its Windows sandbox has broken between
+            # releases (CASE-015); the version is what a fix report has to name.
+            from adapters.providers.codex_adapter import codex_version
+
+            command = (resolved.get("config") or {}).get("provider_command") or "codex"
+            version = codex_version(str(command))
+            checks["provider_version"] = {"provider": active, "version": version or "unreadable"}
+            if version is None:
+                recommended_fixes.append(
+                    f"`{command} --version` did not answer; check that the codex CLI on PATH runs"
+                )
 
         project_file = paths["workflow_dir"] / PROVIDER_CONFIG_NAME
         if resolved.get("error"):

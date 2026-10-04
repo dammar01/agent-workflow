@@ -882,6 +882,8 @@ Contract version 4 adds two fields and drops one kind of row:
   verify-browser`) or `run` (the review, `command: verify`). `None` on every other row.
 - `browser_seconds` — on the final row of a `run`: the summed `duration_seconds` of stage 2
   (the player) and `existing_tests`. `duration_seconds` stays the provider's own time.
+- `provider_version` — the provider CLI's version line as the adapter read it (codex:
+  `codex --version`, once per process); `None` for adapters that do not read one.
 - A browser run that ended before its review (incomplete, preflight, refused spec or env, no
   request) reached no provider and writes **no** usage or audit row; the `e2e_run` quality row
   and the `verify` task event still record it. Before v4 such a run wrote a `verify` row with

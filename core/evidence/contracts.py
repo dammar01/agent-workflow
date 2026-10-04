@@ -326,6 +326,9 @@ class UsageRecord:
     # project ran — which `duration_seconds` (the provider's time) never includes. On the
     # command's final row only, so a sum over rows counts it once.
     browser_seconds: float | None = None
+    # The provider CLI's own version string as the adapter read it (codex), or None. Ties a
+    # failure to the release that produced it (CASE-015).
+    provider_version: str | None = None
     # How many credential-shaped values the redaction boundary scrubbed from this call.
     # A count, never the values: the whole reason they were scrubbed is that they should
     # exist nowhere on disk, and telemetry is not an exception to that.
@@ -482,6 +485,9 @@ def usage_from_result(
         effort=call.get("effort") if isinstance(call.get("effort"), str) else None,
         e2e_stage=e2e_stage,
         browser_seconds=browser_seconds,
+        provider_version=(
+            call.get("provider_version") if isinstance(call.get("provider_version"), str) else None
+        ),
     )
 
 

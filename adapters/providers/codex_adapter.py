@@ -131,7 +131,64 @@ _PERMISSION_SIGNS = (
     "forbidden",
 )
 
+# Codex's own Windows sandbox refusing to start a session (CASE-015): "fs sandbox helper
+# failed ... windows sandbox failed: elevated Windows sandbox requires effective `:root` read
+# access". Checked before the permission signs: the read access it names is the sandbox's
+# setup, not a path the agent asked for, and "grant read access to the path" fixes nothing.
+_SANDBOX_SIGNS = (
+    "windows sandbox failed",
+    "sandbox helper failed",
+    "elevated windows sandbox",
+    "unelevated restricted-token sandbox",
+)
+
+# The steps, in the order they are worth trying. The runtime never lowers the sandbox itself:
+# the read-deny profile it sends needs the elevated backend, and choosing a weaker one is the
+# user's call. Upstream reports: openai/codex#46312 (a resumed thread fails while a new one
+# works), openai/codex#46114 (every thread fails after an update).
+_SANDBOX_NEXT_ACTION = (
+    "codex's Windows sandbox refused to start this session; nothing ran. Fix in order: "
+    "(1) a RESUMED thread failing where a new one worked is a known codex regression — start "
+    "a new main session (/clear in Claude Code, which issues a new MAIN_SESSION_ID and a new "
+    "codex thread) and rerun the same command; "
+    "(2) if new threads fail too, the elevated sandbox setup is broken — update codex, run "
+    "`codex` once interactively and approve the sandbox setup prompts (UAC), see "
+    "openai/codex#46114; "
+    "(3) until then, switch the second agent with /.provider (opencode). "
+    "The workflow does not lower the sandbox for you; meta.provider_version names the codex "
+    "release that failed."
+)
+
 _ERROR_TAIL_CHARS = 1600
+
+_VERSION_CACHE: dict[str, str | None] = {}
+
+
+def codex_version(command: str | None) -> str | None:
+    """`codex --version`, read once per binary per process; None when it cannot be read.
+
+    Recorded on every call so a failure can be tied to the release that produced it: codex
+    behavior on Windows changes between releases (CASE-015), and the trail held no version.
+    """
+    exe = osutil.resolve_exe(command or "codex")
+    if exe not in _VERSION_CACHE:
+        version = None
+        try:
+            out = subprocess.run(
+                [exe, "--version"],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=15,
+                **osutil.hidden_run_kwargs(),
+            )
+            lines = (out.stdout or "").strip().splitlines()
+            if out.returncode == 0 and lines:
+                version = lines[0].strip()[:80] or None
+        except Exception:
+            version = None
+        _VERSION_CACHE[exe] = version
+    return _VERSION_CACHE[exe]
 
 
 def _error_tail(*texts: str) -> str:
@@ -338,14 +395,19 @@ class CodexAdapter:
             "resumed": bool(resume_id),
             "sandbox": self.sandbox,
             "stderr": ensure_text(outcome["stderr"]).strip(),
+            "provider_version": codex_version(self.command),
         }
         # A resumed call that reports a different thread id opened a new thread instead:
         # the session silently lost its state. Copied onto last_call_meta as well, which is
-        # what the usage row reads; `meta` alone never reaches telemetry.
-        meta["thread_changed"] = bool(resume_id) and captured["session_id"] != resume_id
+        # what the usage row reads; `meta` alone never reaches telemetry. A call that named
+        # no thread at all (it failed before codex printed one) changed nothing it can show.
+        meta["thread_changed"] = (
+            bool(resume_id) and bool(captured["session_id"]) and captured["session_id"] != resume_id
+        )
         if isinstance(self.last_call_meta, dict):
             self.last_call_meta["resumed"] = meta["resumed"]
             self.last_call_meta["thread_changed"] = meta["thread_changed"]
+            self.last_call_meta["provider_version"] = meta["provider_version"]
         tail = _error_tail(outcome["stderr"], outcome["stdout"])
         content = self._read_last_message(last_message, outcome["stdout"])
         last_message.unlink(missing_ok=True)
@@ -405,6 +467,13 @@ class CodexAdapter:
                         "again, split the task into two narrower delegated calls. Do NOT "
                         "wait for a quota reset, this is not a limit."
                     ),
+                    meta=meta,
+                )
+            if _matches(tail, _SANDBOX_SIGNS):
+                return make_error(
+                    "sandbox_unavailable",
+                    content or "codex's Windows sandbox could not start the session",
+                    next_action=_SANDBOX_NEXT_ACTION,
                     meta=meta,
                 )
             if _matches(tail, _PERMISSION_SIGNS):
