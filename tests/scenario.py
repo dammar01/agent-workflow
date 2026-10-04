@@ -126,6 +126,7 @@ from tests.checks.isolation import _test_suite_ignores_the_machine_seed
 from tests.checks.installer_uninstall import _test_installer_uninstall
 from tests.checks.intent_gate import _test_intent_gate_reads_the_prompt_field
 from tests.checks.verify_tests import _test_verify_runtime_tests
+from tests.checks.metrics import _test_metrics_contract
 from tests.checks.opencode_launch import _test_opencode_prompt_never_reaches_cmd
 from tests.checks.provider_sessions import _test_provider_threads_are_kept_per_provider
 from tests.checks.statusline import _test_statusline_failed_calls_are_not_estimates
@@ -162,6 +163,7 @@ def run_tests() -> None:
     _test_installer_uninstall()
     _test_intent_gate_reads_the_prompt_field()
     _test_verify_runtime_tests()
+    _test_metrics_contract()
     _test_opencode_prompt_never_reaches_cmd()
     _test_statusline_failed_calls_are_not_estimates()
     _test_provider_seam()

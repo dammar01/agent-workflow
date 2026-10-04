@@ -53,6 +53,7 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from core.audit import metrics  # noqa: E402
 from core.audit.transcript import EDIT_TOOLS, is_human_turn, project_slug  # noqa: E402
 
 BANNER = re.compile(r"Workflow Main Agent — v(\d+\.\d+\.\d+)")
@@ -239,6 +240,7 @@ def main() -> int:
     projects = sorted(p for p in glob.glob(os.path.join(args.projects_root, "*"))
                       if os.path.isdir(p) and os.path.basename(p) not in args.exclude)
     sessions, usage, labels = [], [], {}
+    inputs: list[Path] = []
     for path in projects:
         name = os.path.basename(path)
         tdir = os.path.join(args.transcripts, project_slug(os.path.abspath(path)))
@@ -247,6 +249,7 @@ def main() -> int:
             s = read_transcript(f, args.idle_minutes * 60)
             if s["version"] == args.version and s["prompts"]:
                 found.append(s)
+                inputs.append(Path(f))
         if not found:
             continue
         labels[name] = name if args.show_names else f"P{chr(ord('A') + len(labels))}"
@@ -254,8 +257,9 @@ def main() -> int:
         for s in found:
             s["project"] = labels[name]
         sessions += found
-        rows = [r for r in load_usage(os.path.join(path, ".workflow", "data", "usage.jsonl"))
-                if r.get("session_id") in bound]
+        usage_path = os.path.join(path, ".workflow", "data", "usage.jsonl")
+        inputs.append(Path(usage_path))
+        rows = [r for r in load_usage(usage_path) if r.get("session_id") in bound]
         for row in rows:
             row["_project"] = labels[name]
         usage += rows
@@ -288,6 +292,12 @@ def main() -> int:
     prompts_total = sum(len(s["prompts"]) for s in sessions)
     follow_total = sum(s["follow_ups"] for s in sessions)
     report = {
+        "provenance": metrics.provenance(
+            "tools/maintain/measure_real_use.py",
+            {"version": args.version, "idle_minutes": args.idle_minutes, "excluded": len(args.exclude)},
+            inputs,
+            metric_ids=[m for m in metrics.REGISTRY if m.startswith("real_use.")],
+        ),
         "version": args.version,
         "window": [min(s["start"] for s in sessions if s["start"])[:10],
                    max(s["start"] for s in sessions if s["start"])[:10]],

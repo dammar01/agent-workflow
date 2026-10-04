@@ -716,4 +716,20 @@ def report(project_root) -> dict:
         "graph_refresh": graph_refresh(project_root),
         # Its own stream: tasks span local skills and commits, which are not usage rows.
         "tasks": task_report(project_root),
+        # Which metric definitions, tool commit and inputs produced every figure above
+        # (core/audit/metrics.py): a figure is cited as <metric id>@<version>.
+        "provenance": _report_provenance(project_root),
     }
+
+
+def _report_provenance(project_root) -> dict:
+    from core.audit import metrics
+    from core.evidence.contracts import TASK_STREAM_NAME
+
+    streams = [USAGE_STREAM_NAME, QUALITY_STREAM_NAME, TASK_STREAM_NAME]
+    return metrics.provenance(
+        "core/audit/telemetry.py report()",
+        {},
+        [_stream_path(project_root, name) for name in streams],
+        metric_ids=[mid for mid in metrics.REGISTRY if mid.startswith("runtime.")],
+    )

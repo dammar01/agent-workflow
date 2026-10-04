@@ -106,6 +106,7 @@ from tests.checks.isolation import _test_suite_ignores_the_machine_seed  # noqa:
 from tests.checks.installer_uninstall import _test_installer_uninstall  # noqa: E402
 from tests.checks.intent_gate import _test_intent_gate_reads_the_prompt_field  # noqa: E402
 from tests.checks.verify_tests import _test_verify_runtime_tests  # noqa: E402
+from tests.checks.metrics import _test_metrics_contract  # noqa: E402
 from tests.checks.usage_tokens import _test_usage_token_accounting  # noqa: E402
 from tests.checks.redaction import _test_redaction_boundary  # noqa: E402
 from tests.checks.registry import _test_every_check_is_registered  # noqa: E402
@@ -211,6 +212,7 @@ SUITES: dict[str, tuple] = {
     "installer-seed-optin": (_test_installer_seed_reports_unenforced_provider, "an unenforced provider names its opt-in variable"),
     "installer-seed-state": (_test_installer_check_reports_second_agent_default, "--check describes the seed without calling it drift"),
     "installer-e2e": (_test_installer_e2e_deps_are_opt_in, "--with-e2e installs the Playwright extra and its browser; nothing without it"),
+    "metrics-contract": (_test_metrics_contract, "every benchmark metric has an ID, version and method, is documented, and its producers stamp provenance"),
     "verify-runtime-tests": (_test_verify_runtime_tests, "tests main_agent chose run only under the allowlist, without a shell, and decide the verdict beside the review"),
     "gate-prompt-field": (_test_intent_gate_reads_the_prompt_field, "intent-gate-set arms the gate from Claude Code's `prompt` field"),
     "installer-uninstall": (_test_installer_uninstall, "first install writes the managed block alone; --uninstall cuts it and keeps the user's text and hooks; a moved hook leaves its old event"),

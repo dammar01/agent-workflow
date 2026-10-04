@@ -201,6 +201,15 @@ implemented in code, an experiment that ran. Figures in a tracked record come fr
 source that can be re-counted (for example a named telemetry file and line range); a figure
 without one is removed, not rounded.
 
+A figure that a registered metric produces names it as `<id>@<version>`
+([`docs/evaluation/metrics.md`](../evaluation/metrics.md), source `core/audit/metrics.py`,
+DEC-026) in the record's evidence source, together with the producer's `provenance` stamp:
+the tool commit, the parameters it ran with, and the input hash. A changed method is a new
+metric version, never a silent redefinition; two figures with different IDs are not compared
+as the same quantity. The inputs of real-use figures are private, so "re-countable" means on
+the maintainer's machine: a record presenting such a figure states that, and does not imply
+that a reader can reproduce it. Records frozen before DEC-026 keep their figures as written.
+
 Proposed hypotheses, planned experiments, syntheses, and decisions without implementation
 are drafts. Drafts live in `docs/research-drafts/` with the same subfolders. That directory
 is git-ignored: it is the maintainer's local working area, not part of a release. Tracked

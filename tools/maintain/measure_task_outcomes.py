@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import json
 import os
 import re
@@ -54,12 +55,18 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from core.audit import metrics  # noqa: E402
 from core.audit.transcript import project_slug  # noqa: E402
 from tools.maintain.measure_real_use import CORRECTION, load_usage, read_transcript  # noqa: E402
 
 CODING = ("feature", "bug", "performance", "migration", "refactor")
+# Defaults of the outcome rule (metric outcome.solved / outcome.solved_fixed); each can be set
+# on the command line, and the values used are stamped into the output's provenance.
 SOLVED_SHARE, PARTIAL_SHARE, MIN_LINE = 0.8, 0.3, 8
 FIX_WINDOW = timedelta(hours=24)
+SEARCH_WINDOW = timedelta(days=30)
+AUTHOR_BEFORE, AUTHOR_AFTER = timedelta(minutes=5), timedelta(minutes=1)
+IDLE_SECONDS = 900
 INTENT_MAP = Path(__file__).resolve().parents[2] / "dist" / "config" / "claude" / "hooks" / "intent-map.json"
 TESTFILE = re.compile(r"(^|/)(tests?|__tests__|spec)/|\.(test|spec)\.[jt]sx?$|Test\.php$", re.I)
 
@@ -203,7 +210,7 @@ def outcome(repo: Repo, per_file, start, end) -> dict:
         return out
     best = None
     for row in git(repo.path, "log", "main", "--first-parent", "--reverse", "--format=%H\t%cI",
-                   f"--since={start.isoformat()}", f"--until={(end + timedelta(days=30)).isoformat()}").splitlines():
+                   f"--since={start.isoformat()}", f"--until={(end + SEARCH_WINDOW).isoformat()}").splitlines():
         rev, ts = row.split("\t")
         share = repo.share(per_file, rev)
         if best is None or share > best[0] + 1e-9 or share >= SOLVED_SHARE:
@@ -215,7 +222,7 @@ def outcome(repo: Repo, per_file, start, end) -> dict:
     share, rev0, t0 = best
     out["main_share"] = round(share, 2)
     files = {k.lower() for k in per_file}
-    authors = {c["author"] for c in repo.touching(rev0, start - timedelta(minutes=5), t0 + timedelta(minutes=1), files)}
+    authors = {c["author"] for c in repo.touching(rev0, start - AUTHOR_BEFORE, t0 + AUTHOR_AFTER, files)}
     rev1 = git(repo.path, "rev-list", "-1", "--first-parent", f"--before={(t0 + FIX_WINDOW).isoformat()}", "main").strip()
     if rev1 and rev1 != rev0:
         lost = {k.lower() for k, v in per_file.items()
@@ -370,6 +377,17 @@ def summary(tasks: list[dict]) -> dict:
     }
 
 
+def _apply_rule(args) -> None:
+    """The outcome rule's parameters, from the command line, for this run."""
+    global SOLVED_SHARE, PARTIAL_SHARE, FIX_WINDOW, SEARCH_WINDOW, IDLE_SECONDS, AUTHOR_BEFORE, AUTHOR_AFTER
+    SOLVED_SHARE, PARTIAL_SHARE = args.solved_share, args.partial_share
+    FIX_WINDOW = timedelta(hours=args.fix_hours)
+    SEARCH_WINDOW = timedelta(days=args.search_days)
+    IDLE_SECONDS = args.idle_minutes * 60
+    AUTHOR_BEFORE = timedelta(minutes=args.author_before_minutes)
+    AUTHOR_AFTER = timedelta(minutes=args.author_after_minutes)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--projects-root", required=True)
@@ -378,8 +396,18 @@ def main() -> int:
     ap.add_argument("--transcripts", default=os.path.expanduser("~/.claude/projects"))
     ap.add_argument("--exclude", action="append", default=["agent-workflow"])
     ap.add_argument("--show-names", action="store_true")
+    ap.add_argument("--solved-share", type=float, default=SOLVED_SHARE)
+    ap.add_argument("--partial-share", type=float, default=PARTIAL_SHARE)
+    ap.add_argument("--fix-hours", type=float, default=FIX_WINDOW.total_seconds() / 3600)
+    ap.add_argument("--search-days", type=float, default=SEARCH_WINDOW.days)
+    ap.add_argument("--idle-minutes", type=float, default=IDLE_SECONDS / 60)
+    ap.add_argument("--author-before-minutes", type=float, default=AUTHOR_BEFORE.total_seconds() / 60)
+    ap.add_argument("--author-after-minutes", type=float, default=AUTHOR_AFTER.total_seconds() / 60)
     args = ap.parse_args()
+    _apply_rule(args)
     labels = json.loads(Path(args.labels).read_text(encoding="utf-8"))
+    inputs = [Path(args.labels), INTENT_MAP]
+    heads = []
 
     tasks, names, unlabelled = [], {}, 0
     for path in sorted(p for p in glob.glob(os.path.join(args.projects_root, "*")) if os.path.isdir(p)):
@@ -387,11 +415,14 @@ def main() -> int:
         if name in args.exclude:
             continue
         tdir = os.path.join(args.transcripts, project_slug(os.path.abspath(path)))
-        usage = load_usage(os.path.join(path, ".workflow", "data", "usage.jsonl"))
+        usage_path = os.path.join(path, ".workflow", "data", "usage.jsonl")
+        usage = load_usage(usage_path)
+        inputs.append(Path(usage_path))
+        heads.append(git(path, "rev-parse", "--verify", "-q", "main").strip())
         root = os.path.abspath(path).replace("\\", "/") + "/"
         repo = Repo(path)
         for f in sorted(glob.glob(os.path.join(tdir, "*.jsonl"))):
-            s = read_transcript(f, 900)
+            s = read_transcript(f, IDLE_SECONDS)
             if s["version"] not in args.version or not s["prompts"]:
                 continue
             category = labels.get(os.path.basename(f))
@@ -400,6 +431,7 @@ def main() -> int:
                 continue
             if category not in CODING:
                 continue
+            inputs.append(Path(f))
             start = datetime.fromisoformat(s["start"])
             end = start + timedelta(minutes=s["wall_minutes"])
             per_file = session_lines(f, root)
@@ -434,7 +466,20 @@ def main() -> int:
     def bucket(n):
         return "0" if n == 0 else "1-2" if n <= 2 else "3-5" if n <= 5 else "6+"
 
+    params = {
+        "versions": args.version,
+        "solved_share": SOLVED_SHARE, "partial_share": PARTIAL_SHARE, "min_line_chars": MIN_LINE,
+        "fix_hours": FIX_WINDOW.total_seconds() / 3600, "search_days": SEARCH_WINDOW.total_seconds() / 86400,
+        "idle_minutes": IDLE_SECONDS / 60,
+        "author_window_minutes": [-AUTHOR_BEFORE.total_seconds() / 60, AUTHOR_AFTER.total_seconds() / 60],
+        # git history cannot be hashed cheaply; the main heads it was read at can.
+        "main_heads_sha256": hashlib.sha256("\n".join(sorted(heads)).encode()).hexdigest(),
+    }
     report = {
+        "provenance": metrics.provenance(
+            "tools/maintain/measure_task_outcomes.py", params, inputs,
+            metric_ids=[m for m in metrics.REGISTRY if m.startswith("outcome.")],
+        ),
         "versions": args.version, "unlabelled_sessions": unlabelled,
         "all": summary(tasks),
         "by_version": {v: summary([t for t in tasks if t["version"] == v]) for v in args.version},

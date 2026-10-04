@@ -8,6 +8,7 @@ here, and they must not be read as the same kind of evidence:
 | [benchmark.md](benchmark.md) | Where controlled studies are recorded (`H` + `EXP`); the earlier `bench/` harness was removed in 3.7.3 without results | Nothing yet: no controlled study has a result |
 | [real-use-benchmark.md](real-use-benchmark.md) | Real coding tasks from one developer's sessions on nine private projects, graded by what reached `main` | How often real work was accepted and fixed, and what it cost in prompts, time, and context; not that the workflow caused it |
 | [observed-usage.md](observed-usage.md) | Uncontrolled telemetry from one machine | How much text the digest contract kept out of the primary context in practice |
+| [metrics.md](metrics.md) | The calculation contract: every figure's ID, version, method, denominator and missing-data rule | How a figure on the other pages was computed, and whether two figures measure the same thing |
 
 ## Net value
 
