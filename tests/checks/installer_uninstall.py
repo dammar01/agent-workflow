@@ -38,7 +38,12 @@ _BLOCK = f"<!-- {_START} — v9, do not edit manually -->\nworkflow rules\n<!-- 
 
 
 def _cmd(stem: str) -> dict:
-    return {"type": "command", "command": f'powershell -File "C:\\h\\.claude\\hooks\\{stem}.ps1"'}
+    return {"type": "command", "command": f'powershell -File "C:\\Users\\h\\.claude\\hooks\\{stem}.ps1"'}
+
+
+def _elsewhere(stem: str) -> dict:
+    """The user's own script that happens to share a shipped stem."""
+    return {"type": "command", "command": f'bash "$HOME/tools/{stem}.sh"'}
 
 
 def _test_installer_uninstall() -> None:
@@ -74,6 +79,21 @@ def _test_installer_uninstall() -> None:
             f"the user's text above and below the block survives: {rest!r}",
         )
         assert_true(_without_block(f"{_BLOCK}\n", _START, _END) == "", "a file holding only the block is left empty")
+        # Only the seam where the block was cut is normalised; blank runs elsewhere are the user's.
+        spaced = f"# My rules\n\n\n\nthree blank lines above\n\n{_BLOCK}\n\n## More\n\n\n\nand here\n\n\n"
+        assert_true(
+            _without_block(spaced, _START, _END)
+            == "# My rules\n\n\n\nthree blank lines above\n\n## More\n\n\n\nand here\n\n\n",
+            f"blank runs away from the block stay byte-identical: {_without_block(spaced, _START, _END)!r}",
+        )
+        assert_true(
+            _without_block(f"{_BLOCK}\n\n# mine\n\n\n\nx\n", _START, _END) == "# mine\n\n\n\nx\n",
+            "a block at the top takes only its own separator",
+        )
+        assert_true(
+            _without_block(f"# a\n\n\n\nb\n\n\n{_BLOCK}\n", _START, _END) == "# a\n\n\n\nb\n",
+            "a block at the end takes only its own separator",
+        )
         assert_true(_without_block("# no block here\n", _START, _END) is None, "a file without the block is not ours to touch")
 
         # --- settings: workflow hooks and statusLine go, the user's stay ---------------------
@@ -83,16 +103,29 @@ def _test_installer_uninstall() -> None:
             "hooks": {
                 "SessionStart": [{"matcher": "startup", "hooks": [_cmd("session-bind"), _cmd("my-own-hook")]}],
                 "Stop": [{"hooks": [_cmd("graph-refresh")]}],
+                "PostToolUse": [{"matcher": "Edit", "hooks": [_elsewhere("task-events")]}],
             },
         }
-        stripped, changes = _strip_settings(settings, {"session-bind", "graph-refresh", "workflow-statusline"})
+        stripped, changes = _strip_settings(
+            settings, {"session-bind", "graph-refresh", "workflow-statusline", "task-events"}
+        )
         assert_true(
             stripped.get("model") == "the-users-choice" and "statusLine" not in stripped,
             f"keys the user owns stay; the workflow statusLine goes: {stripped}",
         )
         assert_true(
-            stripped["hooks"] == {"SessionStart": [{"matcher": "startup", "hooks": [_cmd("my-own-hook")]}]},
-            f"only the user's hook survives, in its entry: {stripped.get('hooks')}",
+            stripped["hooks"] == {
+                "SessionStart": [{"matcher": "startup", "hooks": [_cmd("my-own-hook")]}],
+                "PostToolUse": [{"matcher": "Edit", "hooks": [_elsewhere("task-events")]}],
+            },
+            "only the user's hooks survive, in their entries, a shipped stem outside the hooks "
+            f"dir included: {stripped.get('hooks')}",
+        )
+        their_status = {"statusLine": {"type": "command", "command": "bash ~/bin/workflow-statusline.sh"}}
+        kept, status_changes = _strip_settings(their_status, {"workflow-statusline"})
+        assert_true(
+            kept == their_status and not status_changes,
+            f"a statusLine running the user's own same-named script stays: {kept}",
         )
         assert_true(len(changes) == 3, f"each removal is named: {changes}")
 
@@ -103,14 +136,17 @@ def _test_installer_uninstall() -> None:
                 {"matcher": "Bash", "hooks": [_cmd("my-own-hook")]},
             ],
             "PostToolUse": [{"matcher": "Edit", "hooks": [_cmd("task-events")]}],
+            "Stop": [{"hooks": [_elsewhere("task-events")]}],
         }
         template = {"PostToolUse": [{"matcher": "Edit", "hooks": [_cmd("task-events")]}]}
         moved, removed = _drop_relocated_hooks(current, template)
         assert_true(
             removed == 1
             and moved["PreToolUse"] == [{"matcher": "Bash", "hooks": [_cmd("my-own-hook")]}]
-            and moved["PostToolUse"] == current["PostToolUse"],
-            f"task-events leaves PreToolUse, the user's hook and the new registration stay: {moved}",
+            and moved["PostToolUse"] == current["PostToolUse"]
+            and moved["Stop"] == current["Stop"],
+            "task-events leaves PreToolUse; the user's hooks (their own task-events.sh included) "
+            f"and the new registration stay: {moved}",
         )
         # --- bookkeeping the uninstall removes comes back with --rollback -----------------
         mode = root / "home" / ".workflow-install-mode.json"
@@ -196,7 +232,7 @@ def _check_settings_before_hooks(root: Path) -> None:
     settings = home / ".claude" / "settings.json"
     body = {
         "model": "mine",
-        "hooks": {"SessionStart": [{"hooks": [_cmd("session-bind"), _cmd("my-own-hook")]}]},
+        "hooks": {"SessionStart": [{"hooks": [_cmd("session-bind"), _cmd("my-own-hook"), _elsewhere("session-bind")]}]},
     }
     saved = {
         name: getattr(uninstall_mod, name)
@@ -218,7 +254,7 @@ def _check_settings_before_hooks(root: Path) -> None:
         after = json.loads(settings.read_text(encoding="utf-8"))
         assert_true(
             clean and after["model"] == "mine"
-            and after["hooks"] == {"SessionStart": [{"hooks": [_cmd("my-own-hook")]}]},
+            and after["hooks"] == {"SessionStart": [{"hooks": [_cmd("my-own-hook"), _elsewhere("session-bind")]}]},
             f"a BOM-prefixed settings.json is cleaned, the user's keys kept: {after} {plan.warnings}",
         )
         _reset_receipt()

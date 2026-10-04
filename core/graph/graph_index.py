@@ -54,7 +54,9 @@ def graph_path(project_root) -> Path:
 
 
 REFRESH_LOCK_FILENAME = ".refresh.lock"
-_REFRESH_LOCK_MAX_AGE_SECONDS = 900  # the graph-refresh hook's own limit
+# Equal to LOCK_MAX_AGE_S / $LockMaxAgeSeconds in graph-refresh.sh / .ps1 (a test parses both):
+# the hooks clamp graphify's bound below it, so a running refresh never reads as stale here.
+_REFRESH_LOCK_MAX_AGE_SECONDS = 900
 
 
 def refresh_in_progress(project_root) -> bool:

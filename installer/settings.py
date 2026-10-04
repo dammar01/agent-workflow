@@ -29,17 +29,66 @@ from installer.base import (
     _resolve_placeholders,
 )
 
-def _hook_script_ids(entry: dict) -> set[str]:
-    """Stems of the hook scripts an entry invokes (e.g. `intent-gate-check`).
+# A script path inside a command: quoted (the shape every shipped command uses) or a bare
+# token. The trailing guard keeps `tool.shell` or `x.sh2` from reading as a script.
+_SCRIPT_PATH = re.compile(
+    r"""(?:"([^"]*?\.(?:ps1|sh))"|'([^']*?\.(?:ps1|sh))'|([^\s"'`;|&<>()]+\.(?:ps1|sh)))(?![\w.-])""",
+    re.IGNORECASE,
+)
+# Spellings of the home directory a hand-written or older command may use in place of the
+# absolute path the installer renders `{{HOME}}` to.
+_HOME_ALIASES = ("~", "$home", "${home}", "%userprofile%", "$env:userprofile", "$env:home")
+# The parent of `.claude` when it is SOME user's home: a settings.json synced from another
+# machine, or a renamed profile, still names our hooks dir under its old home.
+_HOME_SHAPED = re.compile(r"^(?:(?:[a-z]:|/[a-z]|/mnt/[a-z])/users/[^/]+|/users/[^/]+|/home/[^/]+|/root)$")
 
-    Script stems define workflow ownership. Extensions are ignored so `.ps1` and `.sh`
-    variants collapse to one logical hook during a cross-platform install.
+
+def _norm_path(path: str) -> str:
+    """One spelling for a path as it appears in a command: forward slashes, no repeated or
+    trailing slash, lower case (Windows paths are case-insensitive, and a POSIX home that
+    differs only in case is not a collision worth guarding)."""
+    path = re.sub(r"/+", "/", path.strip().replace("\\", "/")).lower()
+    return path.rstrip("/") if len(path) > 1 else path
+
+
+def _is_our_hooks_dir(directory: str) -> bool:
+    """True when `directory` (normalised) is the hooks dir the installer writes to."""
+    home, sep, tail = directory.rpartition("/.claude/hooks")
+    if not sep or tail:
+        return False
+    return home in {_norm_path(str(HOME)), *_HOME_ALIASES} or bool(_HOME_SHAPED.match(home))
+
+
+def _command_script_ids(cmd: str) -> set[str]:
+    """Stems of OUR hook scripts one command runs; empty when it runs anything else.
+
+    A script counts as ours only when it sits in the installed hooks dir (`<home>/.claude/
+    hooks/`); a user's `~/tools/task-events.sh` shares a stem and nothing else. A command
+    that also runs a script from anywhere else is the user's own composition and is left
+    whole — refreshing or stripping it would take their half with ours.
+    """
+    ids: set[str] = set()
+    for match in _SCRIPT_PATH.finditer(cmd if isinstance(cmd, str) else ""):
+        directory, _sep, name = _norm_path(next(g for g in match.groups() if g)).rpartition("/")
+        if not _is_our_hooks_dir(directory):
+            return set()
+        ids.add(name.rsplit(".", 1)[0])
+    return ids
+
+
+def _hook_script_ids(entry: dict) -> set[str]:
+    """Stems of the workflow hook scripts an entry invokes (e.g. `intent-gate-check`).
+
+    Script stems define workflow ownership, but only for a script inside the installed
+    hooks dir (see `_command_script_ids`); callers then intersect with the stems a release
+    ships. Extensions are ignored so `.ps1` and `.sh` variants collapse to one logical
+    hook during a cross-platform install.
     """
     ids: set[str] = set()
     hooks = entry.get("hooks", []) if isinstance(entry, dict) else []
     for h in hooks if isinstance(hooks, list) else []:
         cmd = h.get("command", "") if isinstance(h, dict) else ""
-        ids.update(m.lower() for m in re.findall(r"([\w.-]+)\.(?:ps1|sh)", cmd))
+        ids |= _command_script_ids(cmd)
     return ids
 
 

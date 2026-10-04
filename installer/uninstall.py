@@ -19,7 +19,6 @@ uninstall. Dry run unless `--apply`.
 from __future__ import annotations
 
 import json
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -56,9 +55,18 @@ def _without_block(text: str, start: str, end: str) -> str | None:
     block = _managed_block(text, start, end)
     if block is None:
         return None
-    rest = text.replace(block, "", 1)
-    # The install separated its block from the user's text with one blank line.
-    return re.sub(r"\n{3,}", "\n\n", rest).strip("\n") + "\n" if rest.strip() else ""
+    at = text.index(block)
+    before, after = text[:at], text[at + len(block):]
+    if not (before + after).strip():
+        return ""
+    # The install separated its block from the user's text with one blank line. Only that
+    # seam is normalised: blank runs anywhere else in the user's text are theirs, byte for byte.
+    before, after = before.rstrip("\n"), after.lstrip("\n")
+    if not before.strip():
+        return after
+    if not after:
+        return before + "\n"
+    return before + "\n\n" + after
 
 
 def _remove_receipted(path: Path, key: str, plan: Plan, apply: bool, backup_root: Path, why: str) -> None:

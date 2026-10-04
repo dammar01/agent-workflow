@@ -139,9 +139,9 @@ def _check_settings_drop_retired_hooks_and_refresh_statusline() -> None:
 
     hooks = {
         "Stop": [
-            {"hooks": [{"type": "command", "command": 'powershell -File "C:/h/.claude/hooks/old-gate.ps1"'},
+            {"hooks": [{"type": "command", "command": 'powershell -File "C:/Users/h/.claude/hooks/old-gate.ps1"'},
                        {"type": "command", "command": "python my_tool.py"}]},
-            {"hooks": [{"type": "command", "command": 'bash "/h/.claude/hooks/mine.sh"'}]},
+            {"hooks": [{"type": "command", "command": 'bash "/home/h/.claude/hooks/mine.sh"'}]},
         ]
     }
     cleaned, dropped = _drop_retired_hooks(hooks, {"old-gate"})
@@ -163,9 +163,9 @@ def _check_settings_drop_retired_hooks_and_refresh_statusline() -> None:
         template = json.loads(src.read_text(encoding="utf-8"))
         dest = home / "settings.json"
         current = json.loads(json.dumps(template))
-        current["statusLine"] = {"type": "command", "command": 'powershell -File "C:/old/.claude/hooks/workflow-statusline.ps1" -Legacy'}
+        current["statusLine"] = {"type": "command", "command": 'powershell -File "C:/Users/old/.claude/hooks/workflow-statusline.ps1" -Legacy'}
         current["hooks"].setdefault("Stop", []).append(
-            {"hooks": [{"type": "command", "command": 'powershell -NoProfile -File "C:/h/.claude/hooks/old-gate.ps1"'}]}
+            {"hooks": [{"type": "command", "command": 'powershell -NoProfile -File "C:/Users/h/.claude/hooks/old-gate.ps1"'}]}
         )
         dest.write_text(json.dumps(current), encoding="utf-8")
         plan = Plan()
@@ -176,6 +176,19 @@ def _check_settings_drop_retired_hooks_and_refresh_statusline() -> None:
         expected_status = _rewrite_hooks_for_posix(_resolve_in_json(json.loads(src.read_text(encoding="utf-8")), None))["statusLine"]
         assert_true(written["statusLine"] == expected_status, f"a workflow statusLine is refreshed to the shipped command: {written['statusLine']}")
         assert_true("old-gate" not in json.dumps(written["hooks"]), "the hook entry for a retired script is dropped")
+
+        their_same_name = {"type": "command", "command": "bash ~/bin/workflow-statusline.sh"}
+        current = json.loads(dest.read_text(encoding="utf-8"))
+        current["statusLine"] = their_same_name
+        current["hooks"].setdefault("Stop", []).append({"hooks": [{"type": "command", "command": "bash ~/bin/old-gate.sh"}]})
+        dest.write_text(json.dumps(current), encoding="utf-8")
+        _install_settings(src, dest, Plan(), True, backups / "install_29990101_000003")
+        after = json.loads(dest.read_text(encoding="utf-8"))
+        assert_true(
+            after["statusLine"] == their_same_name and "bash ~/bin/old-gate.sh" in json.dumps(after["hooks"]),
+            "a script outside the installed hooks dir is the user's even under a shipped or retired name: "
+            f"{after['statusLine']}",
+        )
 
         user_status = {"type": "command", "command": "node ~/my-statusline.js"}
         current = json.loads(dest.read_text(encoding="utf-8"))

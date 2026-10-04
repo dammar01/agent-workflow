@@ -326,7 +326,151 @@ def _check_call_during_refresh() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _sh_namespace() -> dict:
+    """The `.sh` flavour's embedded python, loaded without running a hook (no payload)."""
+    namespace: dict = {"__name__": "graph_refresh_sh"}
+    saved = os.environ.pop("CLAUDE_HOOK_RAW", None)
+    try:
+        exec(_embedded_python(), namespace)
+    except SystemExit:
+        pass
+    finally:
+        if saved is not None:
+            os.environ["CLAUDE_HOOK_RAW"] = saved
+    return namespace
+
+
+def _ps1_block(text: str, first: str) -> str:
+    """The lines of graph-refresh.ps1 from the one starting with `first` to its closing `}`."""
+    start = text.index(first)
+    return text[start : text.index("\n}\n", start) + 3]
+
+
+def _run_ps1_snippet(shell: str, root: Path, body: str, env: dict | None = None) -> str:
+    script = root / f"snippet-{time.monotonic_ns()}.ps1"
+    script.write_text(body, encoding="utf-8")
+    done = subprocess.run(
+        [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script)],
+        capture_output=True, text=True, timeout=60, env={**os.environ, **(env or {})}, **hidden_run_kwargs(),
+    )
+    return done.stdout.strip()
+
+
+def _check_limit_is_clamped_below_the_lock() -> None:
+    """GRAPH_REFRESH_LIMIT_S cannot outlive the lock: a graphify still running when its lock
+    reads as stale would get a second one started beside it. Both flavours clamp to the
+    lock's age minus the same margin, and the reader ages the lock the same way."""
+    import re
+
+    sh = (HOOKS / "graph-refresh.sh").read_text(encoding="utf-8").replace("\r\n", "\n")
+    ps1 = (HOOKS / "graph-refresh.ps1").read_text(encoding="utf-8").replace("\r\n", "\n")
+    sh_age = int(re.search(r"^LOCK_MAX_AGE_S = (\d+)$", sh, re.M).group(1))
+    sh_margin = int(re.search(r"^LOCK_MARGIN_S = (\d+)$", sh, re.M).group(1))
+    ps1_age = int(re.search(r"^\$LockMaxAgeSeconds = (\d+)$", ps1, re.M).group(1))
+    ps1_margin = int(re.search(r"^\$LockMarginSeconds = (\d+)$", ps1, re.M).group(1))
+    reader_age = graph_index._REFRESH_LOCK_MAX_AGE_SECONDS
+    assert_true(
+        sh_age == ps1_age == reader_age and sh_margin == ps1_margin and 0 < sh_margin < sh_age,
+        f"lock age and margin agree across graph-refresh.sh ({sh_age}/{sh_margin}), graph-refresh.ps1 "
+        f"({ps1_age}/{ps1_margin}) and core.graph.graph_index ({reader_age})",
+    )
+    ceiling = sh_age - sh_margin
+
+    namespace = _sh_namespace()
+    saved = os.environ.get("GRAPH_REFRESH_LIMIT_S")
+    try:
+        for given, expected in (("99999", ceiling), (str(ceiling + 1), ceiling), ("5", 5), ("0", 600), ("soon", 600)):
+            os.environ["GRAPH_REFRESH_LIMIT_S"] = given
+            got = namespace["limit_seconds"]()
+            assert_true(got == expected, f"[sh] GRAPH_REFRESH_LIMIT_S={given} bounds graphify at {expected}s; got {got}")
+    finally:
+        if saved is None:
+            os.environ.pop("GRAPH_REFRESH_LIMIT_S", None)
+        else:
+            os.environ["GRAPH_REFRESH_LIMIT_S"] = saved
+
+    shell = powershell_for_hooks()
+    if not shell:
+        return
+    block = _ps1_block(ps1, "$LockMaxAgeSeconds = ")
+    root = Path(tempfile.mkdtemp(prefix="graph-refresh-limit-"))
+    try:
+        for given, expected in (("99999", ceiling), ("5", 5), ("soon", 600)):
+            got = _run_ps1_snippet(shell, root, block + "$GraphifyLimitMs\n", {"GRAPH_REFRESH_LIMIT_S": given})
+            assert_true(
+                got == str(expected * 1000),
+                f"[ps1] GRAPH_REFRESH_LIMIT_S={given} bounds graphify at {expected}s; got {got!r} ms",
+            )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+class _Worker:
+    def __init__(self, pid: int, exit_code):
+        self.pid, self._exit_code = pid, exit_code
+
+    def poll(self):
+        return self._exit_code
+
+
+def _check_hand_off_only_while_the_lock_is_ours() -> None:
+    """The hook hands its lock to the worker only while it still holds it. A worker that
+    already finished has removed the lock; writing it back would leave an orphan naming a
+    dead pid. Both flavours: missing stays missing, another hook's lock is not clobbered."""
+    hand_off = _sh_namespace()["hand_off"]
+    root = Path(tempfile.mkdtemp(prefix="graph-refresh-handoff-"))
+    try:
+        lock = root / ".refresh.lock"
+
+        def leftovers() -> list[str]:
+            return sorted(p.name for p in root.iterdir() if p.name.startswith(".refresh.lock."))
+
+        hand_off(str(lock), "tok", _Worker(4242, None))
+        assert_true(not lock.exists() and not leftovers(), "[sh] a lock the worker already removed is not recreated")
+
+        foreign = json.dumps({"pid": 1, "token": "other", "started": 1})
+        lock.write_text(foreign, encoding="utf-8")
+        hand_off(str(lock), "tok", _Worker(4242, None))
+        assert_true(lock.read_text(encoding="utf-8") == foreign and not leftovers(), "[sh] another hook's lock is left alone")
+
+        lock.write_text(json.dumps({"pid": 7, "token": "tok", "started": 1}), encoding="utf-8")
+        hand_off(str(lock), "tok", _Worker(4242, None))
+        handed = json.loads(lock.read_text(encoding="utf-8"))
+        assert_true(
+            handed.get("pid") == 4242 and handed.get("token") == "tok" and not leftovers(),
+            f"[sh] a lock still ours is handed to the running worker: {handed}",
+        )
+
+        lock.write_text(json.dumps({"pid": 7, "token": "tok", "started": 1}), encoding="utf-8")
+        hand_off(str(lock), "tok", _Worker(4242, 0))
+        assert_true(not lock.exists(), "[sh] a worker that finished during the hand-off leaves no lock behind")
+
+        shell = powershell_for_hooks()
+        if not shell:
+            return
+        ps1 = (HOOKS / "graph-refresh.ps1").read_text(encoding="utf-8").replace("\r\n", "\n")
+        function = _ps1_block(ps1, "function Set-RefreshLock")
+        call = f"try {{ Set-RefreshLock '{lock}' 4242 'tok' $false }} catch {{ }}\n"
+        lock.unlink(missing_ok=True)
+        _run_ps1_snippet(shell, root, function + call)
+        assert_true(not lock.exists() and not leftovers(), "[ps1] a lock the worker already removed is not recreated")
+        lock.write_text(foreign, encoding="utf-8")
+        _run_ps1_snippet(shell, root, function + call)
+        assert_true(lock.read_text(encoding="utf-8") == foreign and not leftovers(), "[ps1] another hook's lock is left alone")
+        lock.write_text(json.dumps({"pid": 7, "token": "tok", "started": 1}), encoding="utf-8")
+        _run_ps1_snippet(shell, root, function + call)
+        handed = json.loads(lock.read_text(encoding="utf-8"))
+        assert_true(
+            handed.get("pid") == 4242 and handed.get("token") == "tok" and not leftovers(),
+            f"[ps1] a lock still ours is handed to the worker: {handed}",
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _test_graph_refresh_hook() -> None:
+    _check_limit_is_clamped_below_the_lock()
+    _check_hand_off_only_while_the_lock_is_ours()
     _check_call_during_refresh()
     for flavour, command in _runners():
         _check_runner(flavour, command)

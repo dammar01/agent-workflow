@@ -22,17 +22,23 @@ SKIP_DIRS = {
     "dist", "build", ".next", "coverage", "target", "graphify-out", ".workflow",
 }
 GRAPHIFY_LIMIT_S = 600
+# How old a lock may be before a dead or reused pid no longer holds it. core.graph.graph_index
+# reads the lock with the same age, and graph-refresh.ps1 uses the same numbers.
 LOCK_MAX_AGE_S = 900
+# The bound always ends this far before the lock expires: a graphify still running when its
+# lock reads as stale would have a second one started beside it.
+LOCK_MARGIN_S = 60
 
 
 def limit_seconds(default=GRAPHIFY_LIMIT_S):
     # GRAPH_REFRESH_LIMIT_S overrides the bound (tests); a value that is not a positive
-    # whole number keeps the default instead of failing the refresh.
+    # whole number keeps the default instead of failing the refresh, and a larger one is
+    # clamped below the lock's age.
     try:
         value = int(str(os.environ.get("GRAPH_REFRESH_LIMIT_S", "")).strip())
     except ValueError:
         return default
-    return value if value > 0 else default
+    return min(value, LOCK_MAX_AGE_S - LOCK_MARGIN_S) if value > 0 else default
 
 # The worker runs as its own python process, started in a new session so it outlives the
 # hook, with no handle shared with it. argv: root hook_ms scan_ms visited skipped token
@@ -170,6 +176,37 @@ def lock_held(path):
             return False
 
 
+def lock_token(path):
+    # The token of the lock as written, or None when there is none (or it cannot be read).
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh).get("token")
+    except Exception:
+        return None
+
+
+def hand_off(lock_path, token, worker):
+    # Replace the hook's lock with one naming the worker, but only while the lock is still
+    # this hook's: a worker that already finished has removed it, and a lock written back
+    # then would name a dead pid with no one left to remove it. Written beside the lock and
+    # renamed over it, so a reader never sees an empty or half lock.
+    staged = lock_path + "." + token
+    try:
+        with open(staged, "w", encoding="utf-8") as fh:
+            json.dump({"pid": worker.pid, "token": token, "started": int(time.time())}, fh)
+        if lock_token(lock_path) != token:
+            return
+        os.replace(staged, lock_path)
+        # POSIX has no rename that requires its target to exist (graph-refresh.ps1 gets one
+        # from File.Replace): a worker that finished between the check and the rename has
+        # just had its lock written back, so take it out again.
+        if worker.poll() is not None and lock_token(lock_path) == token:
+            os.remove(lock_path)
+    finally:
+        if os.path.exists(staged):
+            os.remove(staged)
+
+
 def write_row(root, fields):
     # Fail-open: a workspace without .workflow/data gets no row.
     data = os.path.join(root, ".workflow", "data")
@@ -278,18 +315,8 @@ try:
     )
     # Hand the lock to the worker before this hook exits: a lock naming the hook's own pid
     # would read as abandoned the moment it returns, while graphify is still writing.
-    # Only while it still exists: a worker that already finished has removed it. Written
-    # beside the lock and renamed over it, so a reader never sees an empty or half lock.
     try:
-        if os.path.exists(lock_path):
-            staged = lock_path + "." + token
-            try:
-                with open(staged, "w", encoding="utf-8") as fh:
-                    json.dump({"pid": worker.pid, "token": token, "started": int(time.time())}, fh)
-                os.replace(staged, lock_path)
-            finally:
-                if os.path.exists(staged):
-                    os.remove(staged)
+        hand_off(lock_path, token, worker)
     except Exception:
         pass
     sys.exit(0)

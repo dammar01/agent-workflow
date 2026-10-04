@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "89041e540a0111e520ee2c6d4e52937096482cad005033d728fe60d73b74b2f5",
-      "bytes": 28302,
+      "sha256": "5faf389c14492c6ec056e30c9544ea5d28de5f828bc4a7dda716f747df983560",
+      "bytes": 28536,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -140,8 +140,8 @@
     },
     {
       "path": "claude/skills/verify-browser.md",
-      "sha256": "f2066acb6cb638882802ff64c9e505b70e8d925fbc614bf586e8ea23bbb6cb2d",
-      "bytes": 31815,
+      "sha256": "a183dcd7774664f32506723803284a54248f508eff8cd2e32bdb7d01ee792215",
+      "bytes": 31934,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -294,36 +294,36 @@
     },
     {
       "path": "claude/hooks/graph-refresh.ps1",
-      "sha256": "2fb4a24442b2fcfc24842233967393dab12f1e652c1069bc9a9a781a4cd17fcd",
-      "bytes": 16895,
+      "sha256": "2e0e04e0e85e4cef60bd7615e2b047de7d62f7f454bd0e1de4dc8dfc6bdafee0",
+      "bytes": 17653,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/graph-refresh.sh",
-      "sha256": "a98474493cc6a22ca94c685ee34923ae00ea07cf5abfefb6103eba6faa341a9b",
-      "bytes": 12068,
+      "sha256": "c5d917cd20fc464917481903bedac77838733f59d83b51c29246e7a4f1c72972",
+      "bytes": 13335,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/intent-gate-check.ps1",
-      "sha256": "cad4ae269b9ae852acd528ccd4d9d93433251be73b9ee0a16bdb316a2b1fd7ee",
-      "bytes": 9429,
+      "sha256": "23f48e8b5e61f834699f38e5ca1481a4870ba55ed6bff5965fba4ff78ba986bd",
+      "bytes": 18794,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/intent-gate-check.sh",
-      "sha256": "07380a2fe20c191b0d085facd8b0ae84c27cd2d33d6a33ac6c19ba1814e3ab29",
-      "bytes": 8567,
+      "sha256": "074ba99ae6c6756e897e467a9c183d319d14e08d2dfc9bf9619f6ba5f0672bf0",
+      "bytes": 15459,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/intent-gate-set.ps1",
-      "sha256": "0299f5743a0db329911a3c9a5719f401d5f5f821e46e2a12ad5e6ac4fee38fee",
-      "bytes": 4498,
+      "sha256": "a04d0af3cae1e590b59555795a65d792cb5177252783a57f60b9e2e83272775f",
+      "bytes": 4618,
       "merge": "replace",
       "component": "runtime"
     },
@@ -441,8 +441,8 @@
     },
     {
       "path": "claude/settings.template.json",
-      "sha256": "66f03b3a32452f38f2d46bcebf4a873efcf1216cba569ec95cbf23a5961e3402",
-      "bytes": 2228,
+      "sha256": "62ce5e03326bf58f86ff5ce4fdbce7687f8931798e31af0e21e1b1fc4edef2bf",
+      "bytes": 2273,
       "merge": "merge",
       "component": "runtime"
     },

@@ -44,16 +44,20 @@ $SourceExtensions = @('.py', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.php
 # implementing turn whatever the source size (CASE-008).
 $SkipDirs = @('node_modules', '.git', '.venv', 'venv', '__pycache__', 'vendor', 'dist', 'build', '.next', 'coverage', 'target', 'graphify-out', '.workflow')
 
-# How long the detached worker lets graphify run (GRAPH_REFRESH_LIMIT_S overrides it, for
-# tests), and how old a lock may be before a dead or reused pid no longer holds it.
+# How old a lock may be before a dead or reused pid no longer holds it (core.graph.graph_index
+# reads the lock with the same age, and graph-refresh.sh uses the same numbers), and how long
+# the detached worker lets graphify run (GRAPH_REFRESH_LIMIT_S overrides it, for tests).
 # A value that is not a positive whole number keeps the default: the bound is set before
-# any try, so a bad override must not stop the hook.
+# any try, so a bad override must not stop the hook. A larger one is clamped to end
+# $LockMarginSeconds before the lock expires: a graphify still running when its lock reads
+# as stale would have a second one started beside it.
+$LockMaxAgeSeconds = 900
+$LockMarginSeconds = 60
 $GraphifyLimitMs = 600000
 $limitSeconds = 0
 if ($env:GRAPH_REFRESH_LIMIT_S -and [int]::TryParse($env:GRAPH_REFRESH_LIMIT_S.Trim(), [ref]$limitSeconds) -and $limitSeconds -gt 0) {
-    $GraphifyLimitMs = $limitSeconds * 1000
+    $GraphifyLimitMs = [Math]::Min([long]$limitSeconds, [long]($LockMaxAgeSeconds - $LockMarginSeconds)) * 1000
 }
-$LockMaxAgeSeconds = 900
 
 function Write-RefreshRow([string]$Root, [hashtable]$Fields) {
     # One row in the project's quality stream, beside test and e2e rows. Fail-open: a
@@ -126,13 +130,21 @@ function Set-RefreshLock([string]$LockPath, [int]$HolderPid, [string]$LockToken,
         try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
         return
     }
-    # Replacing a held lock: written beside it and swapped in, so a reader never sees it
-    # empty or half written. File.Replace needs the lock to exist, which is the point.
+    # Replacing a held lock, and only while it is still this hook's: a worker that already
+    # finished has removed it, and a lock written back then would name a dead pid with no
+    # one left to remove it. Written beside it and swapped in, so a reader never sees it
+    # empty or half written. File.Replace needs the lock to exist, which closes the window
+    # between the token check and the swap.
     $staged = "$LockPath.$LockToken"
-    [System.IO.File]::WriteAllBytes($staged, $bytes)
-    # [NullString]::Value, not $null: PowerShell passes $null to a .NET string as "", which
-    # Replace refuses as an illegal backup path.
-    try { [System.IO.File]::Replace($staged, $LockPath, [NullString]::Value) }
+    try {
+        [System.IO.File]::WriteAllBytes($staged, $bytes)
+        $current = $null
+        try { $current = ([System.IO.File]::ReadAllText($LockPath) | ConvertFrom-Json).token } catch { }
+        if ($current -cne $LockToken) { return }
+        # [NullString]::Value, not $null: PowerShell passes $null to a .NET string as "", which
+        # Replace refuses as an illegal backup path.
+        [System.IO.File]::Replace($staged, $LockPath, [NullString]::Value)
+    }
     finally { Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue }
 }
 
@@ -308,8 +320,8 @@ try {
     }
     # Hand the lock to the worker before this hook exits: a lock naming the hook's own pid
     # would read as abandoned the moment it returns, while graphify is still writing.
-    # Only while it still exists: a worker that already finished has removed it.
-    try { if (Test-Path -LiteralPath $lockPath) { Set-RefreshLock $lockPath $workerPid $token $false } } catch { }
+    # Only while it is still this hook's (Set-RefreshLock checks the token).
+    try { Set-RefreshLock $lockPath $workerPid $token $false } catch { }
     exit 0
 }
 catch {

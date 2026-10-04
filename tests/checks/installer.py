@@ -324,6 +324,78 @@ def _test_installer_settings_merge() -> None:
     finally:
         settings_mod.os.name = original_os_name
 
+    _check_hook_ownership_is_by_directory()
+
+
+def _check_hook_ownership_is_by_directory() -> None:
+    """A shipped stem is ours only inside the installed hooks dir.
+
+    Ownership used to be the script's stem alone, so a user's own `~/tools/task-events.sh`
+    was refreshed, relocated and stripped as if the workflow had written it.
+    """
+    from installer.settings import _hook_script_ids
+
+    def ids(command: str) -> set[str]:
+        return _hook_script_ids({"hooks": [{"type": "command", "command": command}]})
+
+    original_home = settings_mod.HOME
+    # Deliberately not home-shaped (an AGENT_HOME sandbox): only equality with HOME, or an
+    # alias for it, can make these ours.
+    settings_mod.HOME = Path("D:\\sandbox\\agent-home")
+    try:
+        ours = [
+            'powershell -NoProfile -ExecutionPolicy Bypass -File "D:\\sandbox\\agent-home\\.claude\\hooks\\session-bind.ps1"',
+            'bash "D:/sandbox/agent-home/.claude/hooks/session-bind.sh"',
+            "bash 'd:/Sandbox/Agent-Home//.claude/hooks/session-bind.sh'",
+            "bash ~/.claude/hooks/session-bind.sh",
+            'bash "$HOME/.claude/hooks/session-bind.sh"',
+            'bash "${HOME}/.claude/hooks/session-bind.sh"',
+            'powershell -File "%USERPROFILE%\\.claude\\hooks\\session-bind.ps1"',
+            'powershell -File "$env:USERPROFILE\\.claude\\hooks\\session-bind.ps1"',
+            # Rendered by an older install, or synced from another machine: a user's home.
+            'powershell -NoProfile -ExecutionPolicy Bypass -File "C:\\Users\\x\\.claude\\hooks\\session-bind.ps1"',
+            'bash "/home/old/.claude/hooks/session-bind.sh"',
+            'bash "/Users/me/.claude/hooks/session-bind.sh"',
+        ]
+        for command in ours:
+            assert_true(ids(command) == {"session-bind"}, f"a shipped form must stay ours: {command!r} -> {ids(command)}")
+        assert_true(
+            ids('powershell -NoProfile -ExecutionPolicy Bypass -File "C:\\Users\\x\\.claude\\hooks\\statusline.ps1"')
+            == {"statusline"},
+            "the statusLine an older release shipped is still recognised (as a retired stem)",
+        )
+        theirs = [
+            'bash "/home/u/tools/task-events.sh"',
+            "bash ~/tools/task-events.sh",
+            'powershell -File "C:\\tools\\session-bind.ps1"',
+            'bash "$CLAUDE_PROJECT_DIR/.claude/hooks/session-bind.sh"',
+            'bash "/srv/app/.claude/hooks/session-bind.sh"',
+            'bash "D:/sandbox/agent-home/.claude/hooks/extra/session-bind.sh"',
+            # Their composition around our script: refreshing or stripping it takes their half.
+            "bash ~/.claude/hooks/session-bind.sh && bash ~/tools/notify.sh",
+            "my-tool --config session-bind.shell",
+        ]
+        for command in theirs:
+            assert_true(not ids(command), f"a user's command must not read as ours: {command!r} -> {ids(command)}")
+
+        # Through the merge: the user's same-stem hook stays verbatim, ours is added beside it.
+        user_entry = {"hooks": [{"type": "command", "command": "bash ~/tools/session-bind.sh"}]}
+        shipped = {"hooks": [{"type": "command", "command": 'bash "D:/sandbox/agent-home/.claude/hooks/session-bind.sh"'}]}
+        merged, updated = _merge_hook_entries([json.loads(json.dumps(user_entry))], [shipped])
+        assert_true(
+            merged == [user_entry, shipped] and updated == 1,
+            f"a user hook sharing a shipped stem is not refreshed into ours: {merged}",
+        )
+        relocated, removed = settings_mod._drop_relocated_hooks(
+            {"PreToolUse": [json.loads(json.dumps(user_entry))]}, {"PostToolUse": [shipped]}
+        )
+        assert_true(
+            removed == 0 and relocated == {"PreToolUse": [user_entry]},
+            f"nor relocated off an event the template no longer uses: {relocated}",
+        )
+    finally:
+        settings_mod.HOME = original_home
+
 
 def _rollback_fixture(root: Path) -> tuple[Path, Path, Path]:
     """A fake HOME holding one receipted install: one restorable file, one created file."""
