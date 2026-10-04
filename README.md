@@ -116,6 +116,19 @@ skip the interactive choice. Reopen the terminal so `AGENT_PATH` takes effect.
 > **Skipping this step leaves the delegated agent running without write restrictions.**
 > The restrictions it installs are fully enforced only for `opencode`; see [Security](#security).
 
+**Pick how the workflow switches on.** The installer only adds its own marked block to your
+`~/.claude/CLAUDE.md` and each provider's `AGENTS.md`; your text outside it is never changed.
+
+| You want | Install with |
+| --- | --- |
+| The workflow as the default way of working: plain requests are routed to commands | `python install.py --apply --set-env --auto-intent` |
+| Your own setup untouched until you type a `/.<command>` | `python install.py --apply --set-env --only-command` |
+
+The choice is remembered for later upgrades. `python install.py --uninstall` removes the
+workflow's block, hooks and files again (`--rollback` undoes an install or an uninstall).
+Every flag: [reference](docs/reference.md#detail-installer). Step by step, with good practice:
+[installation guide](docs/team-guide/installation.md).
+
 ### 3. Enable it in your project
 
 ```bash

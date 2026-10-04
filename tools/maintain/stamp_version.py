@@ -92,6 +92,9 @@ EXEMPT: dict[str, tuple[str, ...]] = {
         "Upgrade ke layout `data/`",
         # The v3.7.1 trusted-provider stance for codex/agy, described as history.
         "Sejak v3.7.1 posisi ini",
+        # Provider CLI releases (config/providers.py stable_version), not ours.
+        "(`stable_version`): opencode",
+        "Rilis codex 0.155.0 sampai",
     ),
     "dist/config/claude/settings.template.json": (
         # Marketplace pins: the plugin repos' own release tags, not ours.

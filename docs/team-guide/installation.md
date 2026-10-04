@@ -46,7 +46,9 @@ This is the one decision that changes how Claude Code feels day to day.
 
 Pick command-only if you already have a CLAUDE.md you rely on, or if you share the machine's
 Claude Code with work that has nothing to do with this workflow. You can switch at any time;
-the installer remembers your choice across upgrades.
+the installer remembers your choice across upgrades. Each mode is one installer flag named
+after it; the two install lines are in the [README](../../README.md#2-install-the-global-configuration)
+and the flags in the [reference](../reference.md#mode-intent).
 
 The secondary agent's instructions are scoped the same way in both modes: they apply only to
 calls the workflow makes. Using codex or opencode directly in your own terminal is unaffected.
@@ -77,4 +79,15 @@ run it from. Run `init`'s upgrade in other projects as the reference describes.
   next install.
 - One clone per machine. Two clones installing over each other leave hooks pointing at
   whichever ran last.
+- Tell each project which test commands `/.verify` may run. Until you do, verify runs no
+  test and cannot pass; `doctor` warns about it. You still choose the tests per change; the
+  list only says which commands are allowed. ([Reference: Mode verify](../reference.md#mode-verify))
+- Keep the secondary agent on the release this workflow version was tested with. A newer
+  release usually works, but provider releases have broken delegated calls before; `doctor`
+  names the tested release when yours differs, and that is the one to go back to.
+  ([Reference: provider releases](../reference.md#provider-releases))
+- If `doctor` reports an old global-config header outside the workflow's markers, it is left
+  over from an early install. It is your text now; delete it by hand if you do not want it.
+- To see what the workflow does for you over weeks of use, measure your own sessions:
+  [measure your use](measure-your-use.md).
 - When something misbehaves, see [troubleshooting](troubleshooting.md) before reinstalling.

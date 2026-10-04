@@ -289,7 +289,7 @@ mengukur panjang **prompt**, bukan berapa yang dibaca. Baris cadangan menyalakan
 | `SessionStart` | `startup\|resume\|clear\|compact` | `session-bind` | mengikat sesi Claude ke `MAIN_SESSION_ID` |
 | `UserPromptSubmit` | — | `intent-gate-set` | mode auto-intent saja: pasang marker gate untuk prompt delegated |
 | `UserPromptSubmit` | — | `task-events` | skill lokal dari prompt; snapshot HEAD |
-| `PreToolUse` | `mcp__.*\|Read\|Grep\|Glob\|Bash` | `intent-gate-check` | blokir gather tool selama marker gate ada |
+| `PreToolUse` | `mcp__.*\|Read\|Grep\|Glob\|Bash` | `intent-gate-check` | blokir gather tool selama marker gate ada; marker berintent `verify` meloloskan jalur pilih-test (lihat "Mode intent") |
 | `PostToolUse` | `Skill\|Edit\|Write\|MultiEdit\|NotebookEdit` | `task-events` | skill via tool `Skill`, file diedit |
 | `Stop` | — | `graph-refresh` | regenerasi graph setelah turn yang mengimplementasi (detached) |
 | `Stop` | — | `task-events` | commit sejak snapshot HEAD |
@@ -310,6 +310,13 @@ Di POSIX command `powershell ... .ps1` ditulis ulang menjadi `bash ... .sh`.
 - `settings.json` kehilangan command hook yang menjalankan script workflow (dikirim atau
   pensiun) dan `statusLine` workflow; key lain tetap, termasuk yang dulu ditanam rilis lama;
 - mode intent dan ledger dihapus.
+
+`settings.json` dibersihkan **sebelum** script hook dihapus, dibaca longgar (BOM, cp1252). Bila
+tak bisa di-parse atau bukan object JSON, semua script `hooks/` dibiarkan dan uninstall
+memperingatkannya, sehingga tak ada hook yang menunjuk file hilang. File instruksi yang
+markernya tak berpasangan (START tanpa END, END tanpa START, END sebelum START, atau lebih dari
+satu blok) ditolak saat install (aksi `refused` + peringatan berisi path dan kedua marker) dan
+dibiarkan saat uninstall.
 
 Tidak disentuh: `config/second_agent.seed.json`, `AGENT_PATH` dari `--set-env`, dan
 `.workflow/` di tiap project. Semua perubahan lewat backup + receipt yang sama dengan install,
@@ -335,6 +342,15 @@ dikirim Claude Code (field-nya `prompt`). Akibatnya gate runtime tidak pernah ak
 lapisan prompt yang bekerja. Sejak perbaikan itu, di mode auto-intent `intent-gate-check`
 benar-benar memblokir gather tool sesudah prompt yang terpetakan ke command delegated sampai
 `.workflow/run` dipanggil; escape-nya tetap `WORKFLOW_LOCAL_MODE=1` atau `local_mode.flag`.
+
+Field `command` di marker memilih aturan lolos. Untuk `verify`, main_agent harus memilih test
+sebelum delegasi, jadi tiga hal lolos: `git diff` bersih (tanpa `&&`, `;`, pipe, redirect)
+dengan `--name-only`, `--name-status`, atau `--stat[=N]`, plus opsional `--cached`, `--staged`,
+`--relative`, `--no-renames`, `--no-color`, `--`, ref, dan path (opsi lain seperti `-p` atau
+`--output` tetap diblokir); Read `<root>/.workflow/config.json`; Read/Write
+`sessions/<id>/verify/tests.json` milik sesi itu. Dependents hanya bisa disimpulkan dari nama
+file di diff. Matcher `PreToolUse` tidak memuat `Write`, jadi Write memang tak pernah di-gate.
+`.ps1` hook diuji di Windows PowerShell 5.1 (`powershell`), shell yang dipasang settings.
 
 `dist/config/claude/CLAUDE.md` sengaja memuat **kedua** stanza mode — `COMMAND-ONLY` dan
 `AUTO-INTENT`, masing-masing dibungkus marker `<!-- <MODE>:START -->` / `<!-- <MODE>:END -->`.
@@ -788,11 +804,11 @@ Dengan `policies.graph_leads_enabled: true`, runtime membaca `graphify-out/graph
 
 Runtime Python tidak pernah menjalankan `graphify init`, `build`, `watch`, atau `update`. Satu-satunya pemicu `graphify update` adalah Stop hook `graph-refresh` di bundle Claude (`.ps1` dan `.sh`); `CLAUDE.md` dan skill `refactor` tidak lagi meminta main agent menjalankannya. Hook jalan setelah `[EXECUTION RESULT]` atau `[REFACTOR RESULT]`, hanya bila graph sudah ada, lebih tua dari source, dan binary tersedia:
 
-- scan mtime melewati direktori skip (`vendor`, `node_modules`, `.git`, `.workflow`, `graphify-out`, ...) sebelum masuk, jadi biayanya mengikuti jumlah source, bukan jumlah dependency;
-- graph basi → hook membuat `graphify-out/.refresh.lock` (`pid`, `token`, `started`), menjalankan worker terpisah, lalu kembali. Turn tidak menunggu graphify. Worker menjalankan `graphify update` maksimal 600 detik, mencatat satu baris, lalu menghapus lock miliknya;
+- scan mtime melewati direktori skip (`vendor`, `node_modules`, `.git`, `.workflow`, `graphify-out`, `target`, ...) sebelum masuk, jadi biayanya mengikuti jumlah source, bukan jumlah dependency; nama direktori dan ekstensi dicocokkan tanpa peduli huruf besar-kecil di kedua flavour;
+- graph basi → hook membuat `graphify-out/.refresh.lock` (`pid`, `token`, `started`), menjalankan worker terpisah, lalu kembali. Turn tidak menunggu graphify. Worker menjalankan `graphify update` maksimal 600 detik (`GRAPH_REFRESH_LIMIT_S`; nilai tak valid kembali ke 600), mencatat satu baris, lalu menghapus lock miliknya. Lock basi (pid mati) hanya dihapus bila isinya masih sama saat dibaca ulang tepat sebelum dihapus; lock yang berubah dianggap `skipped_running`, sehingga dua sesi tak menjalankan dua refresh bersamaan;
 - graphify menulis ulang `graph.json` di tempat, jadi selama lock dipegang proses hidup (dan berumur < 15 menit) runtime memperlakukan graph sebagai tidak tersedia, dan main agent diminta menganggapnya basi. Lock yang ada tetapi tak terbaca dianggap dipegang selama berumur < 15 menit; penggantian lock ke pid worker ditulis ke file sementara lalu di-rename;
-- refresh dihitung sukses bila `graph.json` ditulis ulang, apa pun exit code-nya (graphify exit 1 pada graph besar karena visualisasi HTML);
-- tiap run yang lolos gate pertama pada project yang sudah punya `graph.json` menulis baris `kind: graph_refresh` ke `.workflow/data/quality.jsonl` (bila direktori itu ada) dengan `outcome` (`skipped_fresh`, `skipped_running`, `no_graphify`, `refreshed`, `timeout`, `error`), `hook_ms` (yang dibayar turn), `scan_ms`, `files_visited`, `dirs_skipped`, dan untuk refresh `graphify_ms`, `graphify_exit`, `graph_rewritten`. `--command report` merangkumnya di `graph_refresh`.
+- refresh dihitung `refreshed` bila graphify selesai dalam batas waktu, `graph.json` ditulis ulang, dan bisa di-parse sebagai JSON, apa pun exit code-nya (graphify exit 1 pada graph besar karena visualisasi HTML). graphify yang dibunuh karena batas waktu tetap `timeout` walau `graph.json` sempat berubah; tulisan ulang yang tak bisa di-parse tercatat `corrupt`;
+- tiap run yang lolos gate pertama pada project yang sudah punya `graph.json` menulis baris `kind: graph_refresh` ke `.workflow/data/quality.jsonl` (bila direktori itu ada) dengan `outcome` (`skipped_fresh`, `skipped_running`, `no_graphify`, `refreshed`, `timeout`, `corrupt`, `error`), `hook_ms` (yang dibayar turn), `scan_ms`, `files_visited`, `dirs_skipped`, dan untuk refresh `graphify_ms`, `graphify_exit`, `graph_rewritten`. `--command report` merangkumnya di `graph_refresh`.
 
 Hook fail-open, tidak pernah menolak response, tidak pernah membuat graph baru atau menjalankan `init`/`build`/`watch`. Outer timeout Stop hook tetap 60 detik.
 
@@ -836,8 +852,17 @@ Jadi `auto_verify_after_execute: false` tidak mematikan `/.verify`; ia hanya men
   `checks_run` `runtime: ...`; yang gagal, timeout, atau tak bisa dijalankan jadi blocking
   finding (`origin: unknown`, gagal-tertutup); command yang ditolak, dan verify **tanpa**
   `tests.json`, jadi gap `not_verified` sehingga verdict-nya `incomplete`. `commands: []` dengan
-  alasan menyatakan tak ada test yang relevan dan tidak menambah gap. File request dipakai sekali
-  (diganti nama `tests.used.json`). Alasannya: saat second agent ikut menjalankan test, codex
+  alasan menyatakan tak ada test yang relevan dan tidak menambah gap. `reason` wajib satu baris
+  (yang berisi newline membuat request tak terpakai); `command` dan `detail` dirapatkan jadi satu
+  baris sebelum masuk blok, sehingga teks request tak bisa memalsukan section. File request
+  dipakai sekali, diganti nama `tests.used.json` **sesudah** hasilnya digabung, sehingga run
+  pemulihan dari job yang sama masih menemukannya. Timeout membunuh seluruh pohon proses command
+  (process group + `taskkill /T` / `killpg`), lalu output dikumpulkan paling lama 5 s; timeout
+  bernilai boolean diabaikan (default 900). Baris prompt "jangan jalankan test runner" hanya
+  dikirim bila `verify_test_commands` terisi; selama kosong, `doctor` memberi peringatan
+  (`checks.verify_test_commands: empty`) karena verify tak menjalankan test dan tak bisa `pass`.
+  Saat intent verify, gate hook mengizinkan main_agent membaca `git diff --name-only`/`--stat`,
+  `.workflow/config.json`, dan menulis `verify/tests.json` sebelum `.workflow/run`. Alasannya: saat second agent ikut menjalankan test, codex
   menjalankan seluruh suite (verify median sampai 366 s, CASE-010) sementara opencode tak bisa
   menjalankan satu pun dan verify-nya jadi `incomplete` (CASE-009).
 - **`syntax`** — dijawab lokal, tanpa memanggil OpenCode sama sekali. Memeriksa staged, unstaged, dan untracked files, termasuk repository tanpa commit: `.py` via `compile()` in-process, `.json` via `json.loads`, `.js`/`.mjs`/`.cjs` via `node --check`, `.php` via `php -l`. File Python juga memerlukan name check `pyflakes`; bila tool tidak tersedia, hasilnya `incomplete`. Kegagalan discovery Git juga menghasilkan `incomplete`, bukan `skipped`.
@@ -854,6 +879,29 @@ Python diperiksa in-process, bukan lewat `py_compile`, supaya tak ada `.pyc` yan
 
 `verdict: pass` berarti semua checker yang berlaku selesai tanpa finding dan tidak ada gap.
 **Bukan** berarti fiturnya bekerja atau test perilaku telah dijalankan.
+
+---
+
+## Provider releases
+
+Tiap provider di `config/providers.py` menyebut rilis CLI tempat versi workflow ini diuji
+(`stable_version`): opencode `1.18.34`, codex `0.154.0`, agy `1.1.13`. Runtime membaca
+`<cli> --version` sekali per proses (`core/provider/versions.py`) dan mencatat di tiap usage
+row `provider_version` serta `provider_version_status`: `stable` (sama), `untested` (rilis
+lain, termasuk pre-release), `unreadable` (CLI tak menjawab). `doctor` melaporkan
+`checks.provider_version` `{provider, version, status, stable}` dan memberi peringatan saat
+`untested`. Sifatnya advisori: call tetap jalan; tak ada yang memblokir atau menginstal provider.
+
+Kembali ke rilis stabil bila call gagal setelah provider di-update:
+
+| Provider | Pin |
+|---|---|
+| codex | `npm i -g @openai/codex@<stable>` |
+| opencode | `npm i -g opencode-ai@<stable>` (atau installer opencode dengan versi itu) |
+| agy | installer agy dengan versi itu |
+
+Rilis codex 0.155.0 sampai 0.160.0 gagal me-resume thread di Windows dengan
+`sandbox_unavailable` (CASE-016); thread baru tetap jalan.
 
 ---
 

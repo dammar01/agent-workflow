@@ -623,8 +623,9 @@ to `harness`.
 Classification: a heuristic selector that misses, a selector of any provenance that matched
 several elements (`selector_ambiguous` — the element is there, the selector is not unique),
 and a write or navigation the run's own policy refused, are the scenario's (`scenario`); a
-driver error is the harness's; a grounded selector missing from a settled page is the app's,
-from an unsettled page `unknown`;
+driver error is the harness's; a grounded selector (provenance `source`, `existing_test`,
+`runtime_probe` or `proven`) missing from a settled page is the app's, from an unsettled page
+`unknown`;
 timeouts are `unknown`. A run whose undecided failures are all `scenario` ends
 `incomplete: scenario_error`: not retried, not counted by the repeat brake.
 
@@ -673,8 +674,10 @@ weakens the matching entry; `STALE_AFTER_FAILS` (2) in a row retire it. A select
 also records `matched`, the candidate that matched; it is `proven` while the entry is live
 and has not missed since it last passed, and, when anchored, while its source line still
 exists (checked when proven selectors are read, not only by `clean`). A `proven` candidate
-that does not match — nothing matched, or a later candidate won; a step that fails after it
-matched is not a miss — weakens every entry it was proven by, whatever the
+that was tried and did not match — nothing matched, or a later candidate won; a step that
+fails after it matched is not a miss, and neither is a step that failed before its selectors
+were tried (not ready, an exception: no `selection.match_counts`); only candidates the browser
+counted can miss — weakens every entry it was proven by, whatever the
 step's key, so one miss demotes it to the usual order and two retire it. The application
 fingerprint is not consulted for this: it changes on every commit. A selector with a
 `source_ref` is anchored like a fact; `--command clean` relocates a moved anchor and drops
@@ -882,8 +885,11 @@ Contract version 4 adds two fields and drops one kind of row:
   verify-browser`) or `run` (the review, `command: verify`). `None` on every other row.
 - `browser_seconds` — on the final row of a `run`: the summed `duration_seconds` of stage 2
   (the player) and `existing_tests`. `duration_seconds` stays the provider's own time.
-- `provider_version` — the provider CLI's version line as the adapter read it (codex:
-  `codex --version`, once per process); `None` for adapters that do not read one.
+- `provider_version` — the provider CLI's version line (`<cli> --version`, read once per
+  process for every provider); `None` when it did not answer.
+- `provider_version_status` — `stable` when that release is the bundle's `stable_version`,
+  `untested` for any other release, `unreadable` when no version was read
+  (`core/provider/versions.py`; reference "Provider releases").
 - `tests_requested`, `tests_run`, `tests_failed`, `tests_seconds` — `/.verify` only, on the
   command's final row: whether main_agent wrote `verify/tests.json`, how many requested
   commands the runtime ran (refused ones excluded), how many of those did not pass, and their
