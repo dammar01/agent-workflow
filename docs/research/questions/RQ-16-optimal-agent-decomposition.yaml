@@ -15,8 +15,9 @@ what_exists: |
 records: []
 notes: |
   The primary question of the research charter (docs/research/CHARTER.md, RQ1), adopted
-  2026-10-05. The charter's cost vector is R = (N, T, L, H, K); the question asks for the
-  cheapest R that still meets a quality target, which is task-dependent by assumption.
+  2026-10-05. The charter's cost vector is R = (N, T, L, H, K), each measured on its own; the
+  question asks for the N whose cost, normalized and weighted as an experiment states (charter
+  §2), is lowest while quality still meets a target, which is task-dependent by assumption.
 
   Draft records: H-016 (diminishing marginal return of decomposition, the charter's H1).
   Related tracked questions: RQ-17 (how quality changes with N), RQ-01 (token and context

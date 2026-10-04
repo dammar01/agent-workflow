@@ -16,3 +16,8 @@ notes: |
 
   Draft records: H-016. Serves RQ-16 as its scaling curve: the marginal return
   Q(N) - Q(N-1) against C(N) - C(N-1). Related literature: LIT-001.
+
+  CASE-012's table by delegated calls per task (tasks with 3-5 calls solved more often than
+  tasks with 6 or more) is the correlation this question cannot use as an answer: larger tasks
+  drew more calls, as CASE-012 states. It is not an optimal number or a useful range, and no
+  record or prompt may present it as one before an experiment fixes the task and varies N.

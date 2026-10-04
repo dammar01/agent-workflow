@@ -14,20 +14,42 @@ The research boundary, adopted 2026-10-05: [CHARTER.md](CHARTER.md).
 
 ## Current thesis and positioning
 
-Since 2026-10-05 the research direction is set by the [charter](CHARTER.md): agent delegation
-is studied as a **resource allocation** problem. Its working thesis, a hypothesis until a
-controlled experiment tests it (draft H-016):
+### Primary research thesis
+
+Since 2026-10-05 the research direction is set by the [charter](CHARTER.md), and this is the
+project's one thesis: agent delegation is studied as **resource-aware agent decomposition**,
+a resource allocation problem. It is a hypothesis until a controlled experiment tests it
+(draft H-016):
 
 > Agent decomposition is not inherently beneficial. Its value depends on the marginal task
 > improvement obtained relative to the additional token, latency, human, and coordination
 > costs introduced by the decomposition.
 
 Its primary question is RQ-16 (the degree of decomposition that is optimal for a task under
-those costs), with RQ-17 (how outcome changes with the number of delegated executions); the
-existing RQ-01, RQ-02 and RQ-13 carry its token, context, human and latency questions.
-LIT-001, a harness of harnesses that composes many specialized agents across domains, is kept
-as the reference for that broader abstraction; this project does not follow it and stays with
-the charter's questions and hypothesis. Feature parity with it is not a goal. The positioning below is the architecture that the charter's experiments run on.
+those costs), with RQ-17 (how outcome changes with the number of delegated executions). The
+costs are measured one by one and combined only under an experiment's stated normalization and
+weights (charter §2). No figure in this repository is an optimal number of agents: the
+real-use table by calls per task (CASE-012) is a correlation with task size, not a range.
+
+### Supporting hypotheses
+
+Mechanisms tested inside that thesis. Each is a hypothesis under its own question, not a rival
+thesis; one that holds makes a delegated execution worth more, and says nothing by itself about
+how many are worth their cost.
+
+- **External exploration** (RQ-01): coding agents may work more effectively on complex tasks
+  when repository exploration, evidence acquisition and workflow control are externalized from
+  the primary reasoning context. This was the project's working thesis before the charter.
+- **Context allocation** (RQ-01; charter RQ5): externalization is context *allocation*, not
+  context reduction, and is worth it only if relevant information is not lost.
+- **Human orchestration** (RQ-02; charter RQ6 and the human part of RQ4): whether delegation
+  reduces intervention, moves it, or adds it through coordination and correction.
+- **Latency** (RQ-13; the charter's L and the runtime part of RQ4): externalization costs extra
+  execution and waiting (maintainer latency: CASE-004, a draft).
+- **Persistent knowledge** (RQ-06): stored repository knowledge may reduce repeated
+  exploration.
+
+### Architecture the experiments run on
 
 `agent-workflow` is an external harness, a control plane, for coding agents. It separates
 repository-oriented work from the primary agent's reasoning and implementation. Semantic
@@ -35,28 +57,22 @@ reasoning stays with the model; deterministic software handles state, policy, co
 provenance, and execution control. The secondary agent is an evidence-producing specialist,
 not an equally trusted second brain.
 
-Working thesis:
-
-> Coding agents may work more effectively on complex software-engineering tasks when
-> repository exploration, evidence acquisition, and workflow control are externalized from
-> the primary reasoning context.
-
-The goal is context and responsibility separation, not necessarily less total computation:
-externalization moves exploration elsewhere at the cost of extra execution and latency
-(maintainer latency: CASE-004, a draft). It
-is context *allocation*, not context reduction.
-
 The right label is agent harness with a delegated specialist, not a multi-agent
 collaboration system: a primary intelligence, a specialized external worker, and a
 deterministic control plane. How responsibility should be divided among them is still a
 draft (SYN-002, see "Drafts" below).
+
+LIT-001, a harness of harnesses that composes many specialized agents across domains, is kept
+as the reference for that broader abstraction; this project does not follow it and stays with
+the charter's questions and hypothesis. Feature parity with it is not a goal.
 
 A direction, not a present claim: with its provider abstraction, audit trail, evidence
 records, and experiment records (`EXP-XXX`, where benchmark method now lives), the project can
 also serve as experimental infrastructure for studying agentic software engineering.
 
 Claims this project does **not** make: that it makes coding agents smarter, that it is a
-state-of-the-art coding agent, or that the workflow is better for every task. It is an
+state-of-the-art coding agent, that the workflow is better for every task, or that any number
+of agents is optimal. It is an
 engineering exploration of harness architecture, not a proven research result.
 
 Open questions: [questions.md](questions.md). Period summaries: [logs/](logs/).

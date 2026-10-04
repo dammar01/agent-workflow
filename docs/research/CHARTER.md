@@ -54,6 +54,49 @@ and:
 * \(H\) = human intervention
 * \(K\) = coordination overhead
 
+### Two levels: measurement and decision
+
+(Added 2026-10-05: the components above have no common unit — quality is a rate, tokens a
+count in thousands, latency seconds, intervention a count, coordination partly an estimate —
+so no formula in this charter adds them as they are measured.)
+
+**Measurement level.** Each quantity is measured and reported on its own, per task and per
+decomposition level:
+
+$$
+Q,\quad T,\quad L,\quad H,\quad K
+$$
+
+and their differences between levels, \(\Delta Q, \Delta T, \Delta L, \Delta H, \Delta K\).
+A finding at this level names the quantity it is about; it never states a total cost.
+
+**Decision level.** Only an experiment that states its normalization (\(\hat T, \hat L, \hat H,
+\hat K\), each mapped to a common scale) and its weights (\(w_T, w_L, w_H, w_K\), set by that
+experiment or its context, and reported with the result) forms a cost:
+
+$$
+Cost(N)
+=
+w_T \hat T(N) + w_L \hat L(N) + w_H \hat H(N) + w_K \hat K(N)
+$$
+
+and the decision it supports:
+
+$$
+N^*
+=
+\arg\min_N Cost(N)
+\quad
+\text{subject to}
+\quad
+Q(N) \ge Q_{target}
+$$
+
+\(Cost(R)\) above, \(\Delta Cost_i\) in §3 and \(C(N)\) in §10 mean this decision-level cost,
+under a stated normalization and weights. Different weights can give a different \(N^*\) from
+the same measurements; a result is therefore reported with its weights, and the raw
+measurements are kept so it can be recomputed.
+
 ---
 
 ## 3. Core Hypothesis
@@ -352,6 +395,12 @@ Possible confounders include:
 * provider behavior,
 * execution retries.
 
+(Added 2026-10-05.) The real-use table of outcomes by delegated calls per task (CASE-012:
+tasks with 3–5 calls solved more often than tasks with 6 or more) is a correlation in which
+task size and the number of calls move together. It must not be read as an optimal number of
+agents or as a useful decomposition range; only an experiment that fixes the task and varies
+\(N\) can speak to that (RQ-17).
+
 ---
 
 ## 10. Primary Experimental Direction
@@ -411,6 +460,10 @@ $$
 $$
 
 which indicates that additional decomposition may no longer be justified under the selected cost model.
+
+(Added 2026-10-05.) Here \(\Delta Q(N)\) and \(\Delta C(N)\) are compared only at the decision
+level of §2: \(C(N)\) is the normalized, weighted cost, never a raw sum of tokens, seconds and
+counts. Each of \(\Delta T, \Delta L, \Delta H, \Delta K\) is still reported on its own.
 
 This threshold is expected to be **task-dependent**, not universal.
 
