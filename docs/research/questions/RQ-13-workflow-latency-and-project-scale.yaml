@@ -35,6 +35,6 @@ notes: |
   `refreshing`/`available`/`absent`).
 
   Research charter (docs/research/CHARTER.md, adopted 2026-10-05): the latency L of the
-  charter's cost vector, and the runtime part of its RQ4 coordination overhead
+  charter's cost vector, and the runtime part of its CQ4 coordination overhead
   (continuations, verification, hooks), are measured under this question. The charter's
   primary question is RQ-16.

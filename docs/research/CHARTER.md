@@ -1,9 +1,25 @@
 # Research Charter — Agent Decomposition & Resource Allocation
 
 Adopted by the maintainer on 2026-10-05 as the research boundary of `agent-workflow`. It sets
-the direction; [`CONTRACT.md`](CONTRACT.md) still governs how evidence is recorded. The charter's
-questions are tracked as RQ-16 and RQ-17 (new) and through the existing RQ-01, RQ-02 and RQ-13
-(see [questions.md](questions.md)); its core hypothesis is a draft until an experiment tests it.
+the direction; [`CONTRACT.md`](CONTRACT.md) still governs how evidence is recorded.
+
+The charter numbers its own questions `CQ1`–`CQ6` and its hypothesis `CH1`. They are not record
+IDs: a research question record is `RQ-NN` and a hypothesis record `H-NNN`
+([questions.md](questions.md), CONTRACT.md §16). `CQ1` is RQ-16, not RQ-01. Where the charter's
+items are tracked:
+
+| Charter | Record | Note |
+| --- | --- | --- |
+| CQ1 Optimal agent decomposition | RQ-16 | new |
+| CQ2 Agent scaling | RQ-17 | new |
+| CQ3 Token efficiency | RQ-01 | carried by an existing question |
+| CQ4 Coordination efficiency | RQ-02 (human coordination), RQ-13 (runtime coordination) | split across two |
+| CQ5 Context allocation | RQ-01 | carried by an existing question |
+| CQ6 Human intervention | RQ-02 | carried by an existing question |
+| CH1 Diminishing marginal return | H-016 | draft until an experiment tests it |
+
+Cite the record ID when writing about evidence; use the `CQ`/`CH` label only to point back to
+this text.
 
 ## 1. Research Objective
 
@@ -19,7 +35,7 @@ The project therefore treats agent delegation as a **resource allocation problem
 
 ## 2. Primary Research Question
 
-### RQ1 — Optimal Agent Decomposition
+### CQ1 — Optimal Agent Decomposition
 
 > **What degree of agent decomposition is optimal for a task under constraints of token usage, latency, human intervention, and coordination overhead?**
 
@@ -101,7 +117,7 @@ measurements are kept so it can be recomputed.
 
 ## 3. Core Hypothesis
 
-### H1 — Diminishing Marginal Return
+### CH1 — Diminishing Marginal Return
 
 > **Increasing agentic decomposition does not produce linear improvement in task outcome. Beyond a task-dependent point, additional agents produce diminishing or negative marginal returns because coordination, token, latency, and intervention costs increase.**
 
@@ -138,7 +154,7 @@ The practical meaning of the inequality depends on the chosen normalization of e
 
 ## 4. Secondary Research Questions
 
-### RQ2 — Agent Scaling
+### CQ2 — Agent Scaling
 
 > **How does task outcome change as the number of delegated agent executions increases?**
 
@@ -158,7 +174,7 @@ The goal is to identify a task-dependent **useful decomposition range**, not a u
 
 ---
 
-### RQ3 — Token Efficiency
+### CQ3 — Token Efficiency
 
 > **How much additional task value is obtained per unit of additional token/computation expenditure?**
 
@@ -178,7 +194,7 @@ The relevant question is:
 
 ---
 
-### RQ4 — Coordination Efficiency
+### CQ4 — Coordination Efficiency
 
 > **How does coordination overhead change as agent decomposition increases, and at what point does coordination offset the benefit of additional agents?**
 
@@ -208,7 +224,7 @@ because increasing the number of agents may increase both simultaneously.
 
 ---
 
-### RQ5 — Context Allocation
+### CQ5 — Context Allocation
 
 > **Does externalizing repository exploration and analysis to secondary agents improve the allocation of primary-agent context, rather than merely reducing token usage?**
 
@@ -228,7 +244,7 @@ A reduction in primary-agent context is not automatically a positive outcome if 
 
 ---
 
-### RQ6 — Human Intervention
+### CQ6 — Human Intervention
 
 > **How does agent decomposition affect the amount of human intervention required to reach a successful task outcome?**
 

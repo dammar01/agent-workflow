@@ -21,7 +21,7 @@ notes: |
   solved).
 
   Research charter (docs/research/CHARTER.md, adopted 2026-10-05): this question carries the
-  charter's RQ6 (whether more decomposition reduces human intervention, moves it to another
+  charter's CQ6 (whether more decomposition reduces human intervention, moves it to another
   stage, or adds it through coordination and correction) and the human-coordination part of
-  its RQ4 (task decomposition, handoff, result interpretation, synthesis). The charter's
+  its CQ4 (task decomposition, handoff, result interpretation, synthesis). The charter's
   primary question is RQ-16.

@@ -4,7 +4,9 @@ question: "Can a workflow be replayed to validate a candidate intervention?"
 date: 2026-09-29
 status: unanswered
 what_exists: |
-  No general replay; browser verification is deliberately never re-run.
+  No replay of a finished run. Browser verification retries only inside the same command,
+  for incomplete outcomes caused by the environment (`settings.max_retries`), and never
+  replays a run afterwards.
 records: []
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first

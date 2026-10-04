@@ -40,11 +40,11 @@ how many are worth their cost.
 - **External exploration** (RQ-01): coding agents may work more effectively on complex tasks
   when repository exploration, evidence acquisition and workflow control are externalized from
   the primary reasoning context. This was the project's working thesis before the charter.
-- **Context allocation** (RQ-01; charter RQ5): externalization is context *allocation*, not
+- **Context allocation** (RQ-01; charter CQ5): externalization is context *allocation*, not
   context reduction, and is worth it only if relevant information is not lost.
-- **Human orchestration** (RQ-02; charter RQ6 and the human part of RQ4): whether delegation
+- **Human orchestration** (RQ-02; charter CQ6 and the human part of CQ4): whether delegation
   reduces intervention, moves it, or adds it through coordination and correction.
-- **Latency** (RQ-13; the charter's L and the runtime part of RQ4): externalization costs extra
+- **Latency** (RQ-13; the charter's L and the runtime part of CQ4): externalization costs extra
   execution and waiting (maintainer latency: CASE-004, a draft).
 - **Persistent knowledge** (RQ-06): stored repository knowledge may reduce repeated
   exploration.
@@ -248,18 +248,20 @@ Proposed hypotheses, planned experiments, syntheses, and decisions without a res
 kept in `docs/research-drafts/` (same subfolders). That directory is git-ignored and exists
 only on the maintainer's machine; tracked records mention draft IDs as plain text, never as
 links. A draft moves back here only when it has been carried out and has a recorded result.
-Drafts currently held: H-004, H-008, H-009, H-010 and EXP-004 (v3.8.0 research still to be
-carried out, each naming its research question), CASE-004 (moved back on 2026-09-28: the records it relates to are all
-drafts), and H-005, EXP-002, CASE-002, SYN-002, DEC-002 (Markdown, still referenced).
+Drafts currently held (2026-10-05): H-004, H-008..H-016 and EXP-004..EXP-009 (YAML, each
+naming its research question; H-016 is the charter's CH1), CASE-004 (moved back on
+2026-09-28: the records it relates to are all drafts), and H-005, EXP-002, CASE-002, SYN-002,
+DEC-002 (Markdown, still referenced).
 H-001..H-003, H-006, H-007, EXP-001, EXP-003, CASE-001, CASE-003, SYN-001 and DEC-003 are
 kept in `docs/research-drafts/_archive/`, which the check does not read. Drafts use the
 same YAML format; the Markdown ones are listed by `check_research.py --drafts` until
 converted. A draft returns here only as a YAML record that passes the check.
 
-No `LIT-XXX` or `ARC-XXX` record exists yet. For literature this is deliberate: papers
-remembered during research were not recorded because their metadata was not available
-([logs/2026-09-26.md](logs/2026-09-26.md), "Deliberately not recorded"). No historical
-decision has been reconstructed as an `ARC` record so far.
+LIT-001 (2026-10-05) is the first literature record: a reference for a broader agent
+abstraction that this project does not follow, recorded from its verified arXiv metadata and
+abstract. Papers remembered during earlier research were not recorded because their metadata
+was not available ([logs/2026-09-26.md](logs/2026-09-26.md), "Deliberately not recorded").
+No `ARC-XXX` record exists yet: no historical decision has been reconstructed as one.
 
 ## Relationship to other documentation
 

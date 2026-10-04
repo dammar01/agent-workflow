@@ -11,7 +11,7 @@ what_exists: |
   N, which is what the question needs.
 records: []
 notes: |
-  The charter's RQ2 (docs/research/CHARTER.md), adopted 2026-10-05. The aim is a useful
+  The charter's CQ2 (docs/research/CHARTER.md), adopted 2026-10-05. The aim is a useful
   decomposition range per task type, not one optimal number of agents.
 
   Draft records: H-016. Serves RQ-16 as its scaling curve: the marginal return
@@ -21,3 +21,7 @@ notes: |
   tasks with 6 or more) is the correlation this question cannot use as an answer: larger tasks
   drew more calls, as CASE-012 states. It is not an optimal number or a useful range, and no
   record or prompt may present it as one before an experiment fixes the task and varies N.
+
+  CASE-011 and CASE-012 bear on this question but are not listed under `records`: a listed
+  record must name this question back (CONTRACT.md section 16), and both are frozen records
+  that name the questions they were written for. They are cited above as what exists.

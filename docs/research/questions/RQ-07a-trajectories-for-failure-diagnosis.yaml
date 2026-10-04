@@ -15,7 +15,10 @@ notes: |
   verification, intervention, outcome) accumulates only through real use, which makes it
   valuable for research. Only part of it is recorded today: the runtime keeps routing,
   evidence, verification verdicts, and continuation and recovery events, but not the plan, the
-  execution, human interventions, or the task outcome (CASE-004, draft). What is recorded is
+  execution, human interventions, or the task outcome (CASE-004, draft). Corrected
+  2026-10-05: task telemetry (DEC-015, `core/audit/task_telemetry.py`) records skill, edit
+  and commit events and a derived task completion, and CASE-012 measured task outcomes after
+  the fact; the plan's content and human interventions are still not recorded at run time. What is recorded is
   stored in each user's own `.workflow/` and contains their code and prompts. Any collection
   across users requires their consent and sanitization under CONTRACT.md section 5; nothing in
   the runtime collects it.
