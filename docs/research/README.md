@@ -203,6 +203,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-040](decisions/DEC-040-proven-selector-route-folds-identifiers.yaml) | A proven selector's route folds identifier segments to :id | accepted | implemented | not_validated | 56c2a64 |
 | [DEC-041](decisions/DEC-041-check-asks-only-the-project-providers-boundary.yaml) | install --check asks only for the project boundary of the provider the project runs | accepted | implemented | not_validated | 8dcc672 |
 | [DEC-042](decisions/DEC-042-graphify-runs-unbounded-under-a-beating-lock.yaml) | graphify runs without a time limit, and the refresh lock is held while its worker beats | accepted | implemented | not_validated | f23fe24 |
+| [DEC-043](decisions/DEC-043-gate-lets-a-precision-read-through.yaml) | The pre-flight gate lets two small project reads through per delegation | accepted | implemented | not_validated | a06846a |
 <!-- research-inventory:end -->
 
 No `H-XXX`, `EXP-XXX`, or `SYN-XXX` record is tracked: none has been run or has a result.
