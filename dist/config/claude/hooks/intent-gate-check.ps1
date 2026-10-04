@@ -10,6 +10,11 @@
 # command line is a clean runner call with no shell metacharacters that could chain a
 # gather command onto it (e.g. `.workflow/run ... && cat x`).
 #
+# A pending verify marker opens one narrow lane, for what skills/verify.md asks before the
+# run (pick tests from the diff): a clean `git diff --name-only|--name-status|--stat ...`
+# (no patch, no file output), a Read of .workflow/config.json or of this session's
+# verify/tests.json, and a Write of that tests.json. Everything else stays blocked.
+#
 # Escape hatches (allow despite marker):
 #   - env  WORKFLOW_LOCAL_MODE=1
 #   - file .workflow/data/sessions/<MAIN_SESSION_ID>/runtime/local_mode.flag exists
@@ -62,6 +67,33 @@ function Get-WorkflowDataDir([string]$root) {
     return $data
 }
 
+function Test-SamePath([string]$Candidate, [string]$Expected, [string]$Base) {
+    # True when $Candidate names $Expected. A relative path resolves against the project
+    # root; case is ignored, as the Windows filesystem ignores it.
+    if ([string]::IsNullOrWhiteSpace($Candidate)) { return $false }
+    try {
+        if (-not [System.IO.Path]::IsPathRooted($Candidate)) { $Candidate = Join-Path $Base $Candidate }
+        $a = [System.IO.Path]::GetFullPath($Candidate).TrimEnd('\', '/')
+        $b = [System.IO.Path]::GetFullPath($Expected).TrimEnd('\', '/')
+        return [string]::Equals($a, $b, [System.StringComparison]::OrdinalIgnoreCase)
+    } catch { return $false }
+}
+
+function Test-DiffSummary([string]$Command) {
+    # `git diff` that names files only: --name-only, --name-status or --stat, every other
+    # option from a short list that can neither print a patch nor write a file; refs and
+    # paths are free. The caller has already rejected shell metacharacters.
+    $tokens = @($Command.Trim() -split '\s+')
+    if ($tokens.Count -lt 3 -or $tokens[0] -ne 'git' -or $tokens[1] -ne 'diff') { return $false }
+    $summary = $false
+    foreach ($tok in $tokens[2..($tokens.Count - 1)]) {
+        if (@('--name-only', '--name-status') -contains $tok -or $tok -match '^--stat(=\d+(,\d+)*)?$') { $summary = $true; continue }
+        if (@('--cached', '--staged', '--relative', '--no-renames', '--no-color', '--') -contains $tok) { continue }
+        if ($tok.StartsWith('-')) { return $false }
+    }
+    return $summary
+}
+
 try {
     $raw = [Console]::In.ReadToEnd()
     if ([string]::IsNullOrWhiteSpace($raw)) { exit 0 }
@@ -97,6 +129,10 @@ try {
     # no pending delegation -> allow
     if (-not (Test-Path -LiteralPath $marker)) { exit 0 }
 
+    $cmd = "?"
+    try { $cmd = ([string]((Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json).command)) }
+    catch { Write-HookWarning 'marker_unreadable' $_.Exception.Message }
+
     # Bash allowlist: permit ONLY a clean .workflow/{run,check,inspect} invocation. A command
     # carrying &, ;, |, backtick, $(...), redirect, or a newline could smuggle a gather step
     # past the gate, so any of those forces the block path below even for a runner call.
@@ -106,12 +142,19 @@ try {
         if ((-not $chained) -and ($bashCmd -match '(^|[\\/])\.workflow[\\/](run|check|inspect)\.(ps1|sh)\b')) {
             exit 0
         }
+        # verify: the diff that tells main_agent which tests to pick (skills/verify.md).
+        if ($cmd -eq 'verify' -and (-not $chained) -and (Test-DiffSummary $bashCmd)) { exit 0 }
+    }
+
+    # verify: the test allowlist and this session's test request, nothing else.
+    if ($cmd -eq 'verify' -and @('Read', 'Write') -contains $toolName) {
+        $target = [string]$payload.tool_input.file_path
+        $testsJson = Join-Path (Split-Path -Parent $runtimeDir) 'verify\tests.json'
+        if (Test-SamePath $target $testsJson $root) { exit 0 }
+        if ($toolName -eq 'Read' -and (Test-SamePath $target (Join-Path $root '.workflow\config.json') $root)) { exit 0 }
     }
 
     # pending DELEGATED + gather tool -> HARD block
-    $cmd = "?"
-    try { $cmd = ([string]((Get-Content -LiteralPath $marker -Raw | ConvertFrom-Json).command)) }
-    catch { Write-HookWarning 'marker_unreadable' $_.Exception.Message }
 
     $what = if ($toolName -eq 'Bash') { "a shell read (cat/rg/grep/git show) -- reading the codebase is second_agent's job" } else { "a bulk-gather tool" }
     $reason = @"

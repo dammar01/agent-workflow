@@ -19,8 +19,8 @@ so it fails closed); a refused command or a missing request is a `not_verified` 
 verdict is then derived from the block as usual, so `pass` needs green tests and a review
 with no blocking finding.
 
-The request is consumed: it is renamed to `tests.used.json` once read, so a later verify
-never reruns an old choice silently.
+The request is consumed: it is renamed to `tests.used.json` once its results are written
+into the verify result, so a later verify never reruns an old choice silently.
 """
 
 from __future__ import annotations
@@ -29,7 +29,6 @@ import json
 import os
 import re
 import shlex
-import subprocess
 import time
 from pathlib import Path
 
@@ -57,9 +56,20 @@ def _policy(project_root) -> tuple[list[list[str]], int]:
         _split(str(item)) for item in commands.get("verify_test_commands") or [] if str(item).strip()
     ]
     timeout = commands.get("verify_test_timeout_seconds", DEFAULT_TIMEOUT_SECONDS)
-    if not isinstance(timeout, int) or timeout <= 0:
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
         timeout = DEFAULT_TIMEOUT_SECONDS
     return [p for p in prefixes if p], timeout
+
+
+def configured(project_root) -> bool:
+    """True when the project lists at least one test command prefix the runtime may run."""
+    return bool(_policy(project_root)[0])
+
+
+def _one_line(value) -> str:
+    """`value` on one line. Request text lands inside the [VERIFICATION] block, whose
+    sections are found by header line: a newline in it could forge a section."""
+    return " ".join(str(value).split())
 
 
 def _split(command: str) -> list[str]:
@@ -74,21 +84,27 @@ def _split(command: str) -> list[str]:
 
 
 def read_request(project_root, session_id: str) -> dict | None:
-    """The request as written, or None when there is none. Consumed on read."""
+    """The request as written, or None when there is none. Not consumed here: see `apply`."""
     path = request_path(project_root, session_id)
     if not path.is_file():
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        data = {"invalid": "tests.json is not valid JSON"}
+        return {"invalid": "tests.json is not valid JSON"}
+    if not isinstance(data, dict):
+        return {"invalid": "tests.json must be an object"}
+    if any(ch in str(data.get("reason") or "") for ch in "\r\n"):
+        return {"invalid": "`reason` must be one line"}
+    return data
+
+
+def _consume(project_root, session_id: str) -> None:
+    path = request_path(project_root, session_id)
     try:
         path.replace(path.with_name("tests.used.json"))
     except OSError:
         pass
-    if not isinstance(data, dict):
-        return {"invalid": "tests.json must be an object"}
-    return data
 
 
 def _allowed(tokens: list[str], prefixes: list[list[str]]) -> bool:
@@ -120,22 +136,16 @@ def run_tests(project_root, request: dict) -> list[dict]:
             continue
         started = time.monotonic()
         try:
-            done = subprocess.run(
-                [osutil.resolve_exe(tokens[0]), *tokens[1:]],
-                cwd=str(project_root),
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout,
-                **osutil.hidden_run_kwargs(),
+            # Bounded and tree-killed: a runner whose worker outlives it must not hang verify.
+            code, stdout, stderr = osutil.run_bounded(
+                [osutil.resolve_exe(tokens[0]), *tokens[1:]], timeout, cwd=str(project_root)
             )
-            status = "passed" if done.returncode == 0 else "failed"
-            tail = ((done.stdout or "") + "\n" + (done.stderr or "")).strip()[-OUTPUT_TAIL_CHARS:]
-            outcome = {"command": command, "status": status, "exit_code": done.returncode, "tail": tail}
-        except subprocess.TimeoutExpired:
-            outcome = {"command": command, "status": "timeout", "detail": f"over {timeout} s"}
+            if code is None:
+                outcome = {"command": command, "status": "timeout", "detail": f"over {timeout} s"}
+            else:
+                status = "passed" if code == 0 else "failed"
+                tail = (stdout + "\n" + stderr).strip()[-OUTPUT_TAIL_CHARS:]
+                outcome = {"command": command, "status": status, "exit_code": code, "tail": tail}
         except OSError as exc:
             outcome = {"command": command, "status": "error", "detail": str(exc)[:200]}
         outcome["seconds"] = round(time.monotonic() - started, 1)
@@ -158,19 +168,19 @@ def _findings(request: dict | None, outcomes: list[dict]) -> dict[str, list[str]
     if request.get("invalid"):
         add["not_verified"].append(f"tests: the test request was not usable ({request['invalid']}); no test ran")
         return add
-    reason = str(request.get("reason") or "").strip() or "no reason given"
+    reason = _one_line(request.get("reason") or "") or "no reason given"
     if not outcomes:
         add["checks_run"].append(f"runtime: no test requested — {reason}")
         return add
     for outcome in outcomes:
-        command = outcome["command"]
+        command = _one_line(outcome["command"])
         status = outcome["status"]
         if status == "passed":
             add["checks_run"].append(f"runtime: `{command}` passed in {outcome['seconds']} s")
         elif status == "refused":
-            add["not_verified"].append(f"tests: `{command}` was not run — {outcome['detail']}")
+            add["not_verified"].append(f"tests: `{command}` was not run — {_one_line(outcome['detail'])}")
         else:
-            detail = (
+            detail = _one_line(
                 f"exited {outcome['exit_code']}" if status == "failed" else outcome.get("detail") or status
             )
             tail = " ".join((outcome.get("tail") or "").split())[-300:]
@@ -240,6 +250,12 @@ def apply(project_root, session_id: str, result: dict) -> dict:
     request = read_request(project_root, session_id)
     outcomes = run_tests(project_root, request) if request and not request.get("invalid") else []
     result["content"] = merge(result.get("content") or "", request, outcomes)
+    # Consumed only now that its results are in the result. Renaming on read lost the
+    # request when the worker died while the tests ran: the recovered run of the same job
+    # found none and reported "no test request". A death between here and the result being
+    # saved still loses it; that recovered run reports the gap (incomplete), never a pass.
+    if request is not None:
+        _consume(project_root, session_id)
     meta = result.setdefault("meta", {})
     meta["runtime_tests"] = {
         "requested": request is not None and not request.get("invalid"),

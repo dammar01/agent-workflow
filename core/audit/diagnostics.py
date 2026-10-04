@@ -85,6 +85,22 @@ def _free_tier_models(config: dict) -> list[tuple[str, str]]:
     return found
 
 
+_OLD_GLOBAL_HEADER = "# Claude Code — Personal Global Config (v"
+
+
+def _claude_md_leftover() -> str | None:
+    """~/.claude/CLAUDE.md when it holds the old global header outside the managed block."""
+    path = Path(_expand_home("{{HOME}}")) / ".claude" / "CLAUDE.md"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    while (block := _marker_block(text, "WORKFLOW-MAIN-AGENT:START", "WORKFLOW-MAIN-AGENT:END")):
+        text = text.replace(block, "")
+    found = any(line.startswith(_OLD_GLOBAL_HEADER) for line in text.splitlines())
+    return str(path) if found else None
+
+
 # What a v3.5.x layout legitimately keeps at the .workflow root, so doctor does not call a
 # not-yet-migrated workspace's own data "stray".
 _LEGACY_ROOT_ITEMS = frozenset(
@@ -381,6 +397,32 @@ def run_doctor(
         recommended_fixes.append(
             f"Review .workflow/config.json: {len(config_warnings)} knob warning(s) "
             "(unknown key or wrong type — silently ignored)"
+        )
+
+    # /.verify runs only the test commands the project allowlists. With none listed it runs
+    # no test at all and every verify carries that gap, so the user is told here — as a
+    # warning, since a project may choose review-only verification.
+    from core.evidence import verify_tests
+
+    test_allowlist = verify_tests.configured(project_root)
+    checks["verify_test_commands"] = "configured" if test_allowlist else "empty"
+    if not test_allowlist:
+        recommended_fixes.append(
+            "WARNING: commands.verify_test_commands in .workflow/config.json is empty, so "
+            "/.verify runs no test and every verify reports that gap — list the test command "
+            'prefixes the runtime may run, e.g. ["python -m pytest", "npm test"]'
+        )
+
+    # A pre-marker install wrote the main-agent config as plain text at the top of
+    # ~/.claude/CLAUDE.md. Install now owns only the marked block, so that copy is no longer
+    # updated or removed by anything: stale instructions read beside the current ones.
+    leftover = _claude_md_leftover()
+    checks["claude_md_leftover_header"] = leftover or "none"
+    if leftover:
+        recommended_fixes.append(
+            f"WARNING: {leftover} has a '# Claude Code — Personal Global Config (v...' header "
+            "outside the WORKFLOW-MAIN-AGENT markers — leftover from an old install. It is "
+            "your text now (install never touches it); delete that section by hand"
         )
 
     # /.verify-browser readiness, metadata only and never an issue: the browser and the

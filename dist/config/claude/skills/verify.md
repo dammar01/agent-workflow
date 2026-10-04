@@ -21,6 +21,8 @@ Second agent cuma baca + telusur; runtime yang menjalankan test. Kamu yang memil
 3. Runtime hanya menjalankan command yang diawali prefix di `commands.verify_test_commands`
    (`.workflow/config.json`), tanpa shell (`&&`/pipe/redirect ditolak). Di luar allowlist →
    `not_verified`. Allowlist kosong → sebut ke user, sarankan prefix yang perlu ditambahkan.
+Gate: selama marker verify aktif (sebelum `.workflow/run verify`) yang lolos HANYA `git diff --name-only|--name-status|--stat [ref] [-- path]`
+(bersih, nol pipe/`&&`/redirect), Read `.workflow/config.json` + tests.json sesi ini, dan Write tests.json itu. Baca isi file src/test → ke-block; cukup nama file dari diff.
 Tanpa tests.json → verify jadi `incomplete` (gap "no test request"). Test gagal → blocking.
 
 ## Protocol (verify_mode=delegated)

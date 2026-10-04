@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "94c11bcb62905d93062431274a719653c6b4e50ddc219c30efb163e2db5bbc82",
-      "bytes": 28072,
+      "sha256": "89041e540a0111e520ee2c6d4e52937096482cad005033d728fe60d73b74b2f5",
+      "bytes": 28302,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -147,8 +147,8 @@
     },
     {
       "path": "claude/skills/verify.md",
-      "sha256": "f77a543a48e9b2ab81c90ee06e82de79436db6c19dad480e88038f5dee7b06e7",
-      "bytes": 4495,
+      "sha256": "f878fa79a2e9515d00badef10a74fb2c0d0b1c520bf76b70a9f6a2099c7f6e00",
+      "bytes": 4814,
       "merge": "replace",
       "component": "prompt_bundle"
     },
@@ -294,29 +294,29 @@
     },
     {
       "path": "claude/hooks/graph-refresh.ps1",
-      "sha256": "f1ab5d8564cab33759073f67922b4b0d7f006271b2070006a7abd9bca8bd7c2f",
-      "bytes": 14557,
+      "sha256": "a45bb358c9605b2c102f461f8556f242dfae33a8026e8c37eac269f001fcc4ed",
+      "bytes": 16652,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/graph-refresh.sh",
-      "sha256": "d75241d00a43be734aa717bb666383042b468ff8af8fb98f69bbaaf1db0a216f",
-      "bytes": 9664,
+      "sha256": "d01c1bfe9c02be0a29f8b6d998dfedce27184b61856a9c7aa4a84bb4748c8b62",
+      "bytes": 11281,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/intent-gate-check.ps1",
-      "sha256": "737fc80bf3ceddc299242f82a29aa75e6ab8704ff499ab0fadb01e98e90702d0",
-      "bytes": 6295,
+      "sha256": "2459710e4167127665fe3f222c70766cdb6acbd9f5b9e721e90865d693e3f99e",
+      "bytes": 8853,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/intent-gate-check.sh",
-      "sha256": "d3142356db7fffa4ff84d12ee64c64412524e7a593bd4ba105c14a01b742ca13",
-      "bytes": 5657,
+      "sha256": "073209c220f98e9018fe12de7ee87e10d0ff6b001616a8067e85028e3de74fbc",
+      "bytes": 7885,
       "merge": "replace",
       "component": "runtime"
     },
@@ -357,8 +357,8 @@
     },
     {
       "path": "claude/hooks/task-events.ps1",
-      "sha256": "e8cb0034f4929c9e6cfe0af86696e4fe7536f59f9b4510fb4b1f3ecb3784a855",
-      "bytes": 7509,
+      "sha256": "f247b34ef4856e4dc4c8612b446963e233aaf3ea684c36ea6406dbbb52b3f915",
+      "bytes": 8101,
       "merge": "replace",
       "component": "runtime"
     },

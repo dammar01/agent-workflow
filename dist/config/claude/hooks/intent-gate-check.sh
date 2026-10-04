@@ -3,6 +3,9 @@
 # Matcher (settings.json): mcp__.*|Read|Grep|Glob|Bash. If a DELEGATED marker is pending
 # (set by intent-gate-set.sh, not yet cleared by .workflow/run) -> HARD-block: exit 2 with
 # the reason on stderr. Bash allowlist: only a clean .workflow/{run,check,inspect} call.
+# A pending verify marker also lets through what skills/verify.md asks before the run: a
+# clean `git diff --name-only|--name-status|--stat ...`, a Read of .workflow/config.json or
+# of this session's verify/tests.json, and a Write of that tests.json.
 # Escapes: WORKFLOW_LOCAL_MODE=1 / local_mode.flag. Marker/session absent -> allow (fail-open).
 # exit 2 = block ; every other path exits 0. Exit code flows from python3 (no trailing exit).
 RAW="$(cat)"
@@ -55,6 +58,42 @@ def hook_warning(kind, message):
         pass
 
 
+def same_path(candidate, expected, base):
+    # True when candidate names expected. A relative path resolves against the project root.
+    if not candidate.strip():
+        return False
+    try:
+        if not os.path.isabs(candidate):
+            candidate = os.path.join(base, candidate)
+        a = os.path.normcase(os.path.abspath(candidate))
+        b = os.path.normcase(os.path.abspath(expected))
+        return a == b
+    except Exception:
+        return False
+
+
+DIFF_SUMMARY = {"--name-only", "--name-status"}
+DIFF_ALLOWED = {"--cached", "--staged", "--relative", "--no-renames", "--no-color", "--"}
+
+
+def diff_summary(command):
+    # `git diff` that names files only: --name-only, --name-status or --stat, every other
+    # option from a short list that can neither print a patch nor write a file; refs and
+    # paths are free. The caller has already rejected shell metacharacters.
+    tokens = command.split()
+    if len(tokens) < 3 or tokens[0] != "git" or tokens[1] != "diff":
+        return False
+    summary = False
+    for tok in tokens[2:]:
+        if tok in DIFF_SUMMARY or re.fullmatch(r"--stat(=\d+(,\d+)*)?", tok):
+            summary = True
+        elif tok in DIFF_ALLOWED:
+            continue
+        elif tok.startswith("-"):
+            return False
+    return summary
+
+
 try:
     raw = os.environ.get("CLAUDE_HOOK_RAW", "")
     if not raw.strip():
@@ -93,11 +132,22 @@ try:
     if not os.path.isfile(marker):
         sys.exit(0)
 
+    cmd = "?"
+    try:
+        with open(marker, "r", encoding="utf-8") as f:
+            cmd = str(json.load(f).get("command") or "?")
+    except Exception as exc:
+        cmd = "?"
+        hook_warning("marker_unreadable", exc)
+
+    ti = payload.get("tool_input") or {}
+    if not isinstance(ti, dict):
+        ti = {}
+
     # Bash allowlist: permit ONLY a clean .workflow/{run,check,inspect} call. Any shell
     # metacharacter that could chain a gather step forces the block path below.
     if tool_name == "Bash":
-        ti = payload.get("tool_input") or {}
-        bash_cmd = str(ti.get("command") or "") if isinstance(ti, dict) else ""
+        bash_cmd = str(ti.get("command") or "")
         chained = (
             bool(re.search(r"[&;|`]", bash_cmd))
             or ("$(" in bash_cmd)
@@ -108,14 +158,18 @@ try:
             r"(^|[\\/])\.workflow[\\/](run|check|inspect)\.(ps1|sh)\b", bash_cmd
         ):
             sys.exit(0)
+        # verify: the diff that tells main_agent which tests to pick (skills/verify.md).
+        if cmd == "verify" and not chained and diff_summary(bash_cmd):
+            sys.exit(0)
 
-    cmd = "?"
-    try:
-        with open(marker, "r", encoding="utf-8") as f:
-            cmd = str(json.load(f).get("command") or "?")
-    except Exception as exc:
-        cmd = "?"
-        hook_warning("marker_unreadable", exc)
+    # verify: the test allowlist and this session's test request, nothing else.
+    if cmd == "verify" and tool_name in ("Read", "Write"):
+        target = str(ti.get("file_path") or "")
+        tests_json = os.path.join(os.path.dirname(runtime_dir), "verify", "tests.json")
+        if same_path(target, tests_json, root):
+            sys.exit(0)
+        if tool_name == "Read" and same_path(target, os.path.join(root, ".workflow", "config.json"), root):
+            sys.exit(0)
 
     what = (
         "a shell read (cat/rg/grep/git show) -- reading the codebase is second_agent's job"

@@ -413,6 +413,9 @@ def build_prompt(
 
     # Only /.verify gets the severity-tiered contract; other routes use the terse fallback.
     if command == "verify":
+        from core.evidence import verify_tests
+
+        runtime_tests = bool(project_root) and verify_tests.configured(project_root)
         return "\n".join(
             [
                 *header,
@@ -426,9 +429,11 @@ def build_prompt(
                 "- ROUTE BY TAGS, never by severity alone: introduced|regression + critical|high => blocking_findings; unknown + critical|high => blocking_findings (fail closed, until evidence moves it off `unknown`); pre_existing + critical|high => escalations; introduced|regression + out_of_scope + medium|low => escalations; everything else => notes",
                 "- EVIDENCE = file:line OR non-code ref (db:/mcp:/runtime:/cmd:); no ref + no concrete failing scenario => NOT critical/high",
                 "- `checks_run` = what you actually ran/read; an unrun check is never a pass",
+                # Only where the runtime will run tests: with no allowlist it runs none, and
+                # forbidding the second agent's own runs would leave the change untested.
                 *(
                     []
-                    if e2e_evidence
+                    if e2e_evidence or not runtime_tests
                     else [
                         "- tests: do NOT run test runners or suites — verify by reading and tracing; the runtime runs the tests main_agent chose for this change and adds their result to your verdict, so do not list unrun tests under not_verified",
                     ]

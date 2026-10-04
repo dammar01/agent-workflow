@@ -214,6 +214,43 @@ def terminate_tree(proc: "subprocess.Popen | None", pid: int | None = None) -> d
     return {"method": method, "ok": ok}
 
 
+def run_bounded(
+    args: list[str], timeout: float, cwd: str | None = None, drain_seconds: float = 5
+) -> tuple[int | None, str, str]:
+    """Run `args` to completion or `timeout`; (returncode, stdout, stderr). None = timed out.
+
+    `subprocess.run(timeout=...)` is not bounded: on timeout it kills only the direct child
+    and then waits on the pipes with no limit, so a grandchild still holding stdout (a test
+    runner's worker, a `.cmd` shim's node) hangs the caller on Windows. Here the child runs in
+    its own process group, the whole tree is killed on timeout, and the output already
+    written is collected for at most `drain_seconds` before giving up on it.
+    """
+    proc = subprocess.Popen(
+        args,
+        cwd=cwd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        **hidden_run_kwargs(),
+    )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+        return proc.returncode, out or "", err or ""
+    except subprocess.TimeoutExpired:
+        terminate_tree(proc)
+        try:
+            out, err = proc.communicate(timeout=drain_seconds)
+        except Exception:  # a descendant outside the tree still holds a pipe: give up on it
+            out, err = "", ""
+        return None, out or "", err or ""
+    except BaseException:
+        terminate_tree(proc)
+        raise
+
+
 def process_alive(pid: int | None) -> bool:
     """True if `pid` is a live process. Cross-OS, stdlib only.
 
