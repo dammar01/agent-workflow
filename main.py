@@ -320,11 +320,17 @@ def run(
         # Before the session sweep, so a guard is judged by its lock, not dropped with its dir.
         guards = prune_runtime_guards(workflow_paths(project_root)["sessions_dir"])
         sessions = prune_sessions(project_root)
+        from core.graph import graph_index
+
+        # Only a lock no worker beats any more; a live refresh is never touched, and no
+        # process is ever killed from here (DEC-042).
+        graph_lock = graph_index.release_stale_refresh_lock(project_root)
         return {
             "ok": True,
             "content": (
                 f"released {len(locks['released'])} stale session lock(s), "
                 f"kept {locks['kept']}; "
+                f"graph refresh lock {'removed (stale)' if graph_lock['removed'] else graph_lock['state']}; "
                 f"pruned {summary['removed']} job(s), kept {summary['kept']}; "
                 f"logs removed {summary['logs_removed']}; "
                 f"facts kept {facts['kept']}, dropped {facts['removed']} stale; "
@@ -332,7 +338,7 @@ def run(
                 f"runtime guards removed {guards['removed']}, kept {guards['kept']}; "
                 f"sessions removed {sessions['removed']}, kept {sessions['kept']}"
             ),
-            "meta": {**summary, "locks": locks, "facts": facts, "e2e_knowledge": browser_knowledge, "runtime_guards": guards, "sessions": sessions},
+            "meta": {**summary, "locks": locks, "graph_refresh_lock": graph_lock, "facts": facts, "e2e_knowledge": browser_knowledge, "runtime_guards": guards, "sessions": sessions},
         }
 
     if normalized_command == "inspect":

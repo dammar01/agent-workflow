@@ -31,22 +31,15 @@ HOOKS = REPO_ROOT / "dist" / "config" / "claude" / "hooks"
 _FAKE_SLEEP_S = 3
 
 # FAKE_GRAPHIFY_MODE: "ok" sleeps then writes a graph; "corrupt" sleeps then writes half a
-# graph; "early" writes a graph at once and then outlives the bound, as a graphify killed
-# after its write would.
+# graph.
 _FAKE_GRAPHIFY = """
 import os, sys, time
 mode = os.environ.get("FAKE_GRAPHIFY_MODE", "ok")
 pause = float(os.environ.get("FAKE_GRAPHIFY_SLEEP", "0"))
-if mode != "early":
-    time.sleep(pause)
+time.sleep(pause)
 body = '{"nodes": [' if mode == "corrupt" else '{"nodes": [], "links": [], "refreshed": true}'
 with open(os.path.join("graphify-out", "graph.json"), "w", encoding="utf-8") as fh:
     fh.write(body)
-if mode == "early":
-    time.sleep(pause)
-    # Reached only by a graphify that outlived its kill: the wrapper died, this child did not.
-    with open(os.path.join("graphify-out", "survived.txt"), "w", encoding="utf-8") as fh:
-        fh.write("alive")
 sys.exit(1)
 """
 
@@ -143,10 +136,12 @@ def _wait_for_release(project: Path, limit: float = 60.0) -> bool:
     return False
 
 
-def _write_lock(project: Path, pid: int, started: float) -> None:
-    (project / "graphify-out" / ".refresh.lock").write_text(
-        json.dumps({"pid": pid, "started": int(started)}), encoding="utf-8"
-    )
+def _write_lock(project: Path, pid: int, started: float, beat: float | None = None) -> None:
+    """Without `beat` the lock is one written before DEC-042, read by the legacy age rule."""
+    lock = {"pid": pid, "started": int(started)}
+    if beat is not None:
+        lock["beat"] = int(beat)
+    (project / "graphify-out" / ".refresh.lock").write_text(json.dumps(lock), encoding="utf-8")
 
 
 def _check_runner(flavour: str, command: list[str]) -> None:
@@ -245,21 +240,42 @@ def _check_runner(flavour: str, command: list[str]) -> None:
             f"[{flavour}] a lock older than the limit holds nothing; got {rows}",
         )
 
-        # Killed at the bound after it rewrote graph.json: a timeout, never a refresh.
-        project = _project(root / "timeout", stale=True)
-        _run_hook(command, project, bin_dir, extra_env={"FAKE_GRAPHIFY_MODE": "early", "GRAPH_REFRESH_LIMIT_S": "1"})
-        assert_true(_wait_for_release(project), f"[{flavour}] the timed-out worker removes its lock")
+        # No time limit (DEC-042): the old GRAPH_REFRESH_LIMIT_S no longer kills graphify, and
+        # the worker beats the lock while graphify runs, naming graphify's pid.
+        project = _project(root / "nolimit", stale=True)
+        _run_hook(command, project, bin_dir, extra_env={"GRAPH_REFRESH_LIMIT_S": "1", "GRAPH_REFRESH_BEAT_S": "0.5"})
+        time.sleep(_FAKE_SLEEP_S / 2 + 0.5)
+        try:
+            beating = json.loads((project / "graphify-out" / ".refresh.lock").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            beating = {}
+        assert_true(
+            isinstance(beating.get("beat"), int) and beating["beat"] > beating.get("started", 0)
+            and isinstance(beating.get("graphify_pid"), int),
+            f"[{flavour}] the worker rewrites `beat` and names graphify while it runs; lock={beating}",
+        )
+        assert_true(_wait_for_release(project), f"[{flavour}] the worker removes its lock when graphify ends")
         rows = _rows(project)
         assert_true(
-            [row.get("outcome") for row in rows] == ["timeout"] and rows[0].get("graph_rewritten") is True,
-            f"[{flavour}] a graphify killed at the bound stays a timeout though graph.json moved; got {rows}",
+            [row.get("outcome") for row in rows] == ["refreshed"] and rows[0].get("graphify_ms", 0) >= _FAKE_SLEEP_S * 1000,
+            f"[{flavour}] graphify runs to its end past the old limit; got {rows}",
         )
-        # The kill takes the whole tree: graphify runs behind a wrapper (graphify.cmd, a shell
-        # shim), and a surviving child would keep writing after the lock is gone.
-        time.sleep(_FAKE_SLEEP_S + 2)
+
+        # A lock of any age is held while its worker beats; a beat gone quiet holds nothing.
+        project = _project(root / "longrun", stale=True)
+        _write_lock(project, os.getpid(), time.time() - 3600, beat=time.time())
+        _run_hook(command, project, bin_dir)
         assert_true(
-            not (project / "graphify-out" / "survived.txt").exists(),
-            f"[{flavour}] a timed-out graphify's child is killed with its wrapper",
+            [row.get("outcome") for row in _rows(project)] == ["skipped_running"],
+            f"[{flavour}] an hour-old lock with a fresh beat is a refresh still running; got {_rows(project)}",
+        )
+        project = _project(root / "quiet", stale=True)
+        _write_lock(project, os.getpid(), time.time() - 3600, beat=time.time() - 300)
+        _run_hook(command, project, bin_dir)
+        assert_true(_wait_for_release(project), f"[{flavour}] the reclaiming worker removes its lock")
+        assert_true(
+            [row.get("outcome") for row in _rows(project)] == ["refreshed"],
+            f"[{flavour}] a lock whose beat stopped is reclaimed; got {_rows(project)}",
         )
 
         # Finished, rewrote graph.json, and left it unparseable: corrupt, not refreshed.
@@ -272,14 +288,14 @@ def _check_runner(flavour: str, command: list[str]) -> None:
             f"[{flavour}] a rewritten graph.json that does not parse is recorded as corrupt; got {rows}",
         )
 
-        # A bad GRAPH_REFRESH_LIMIT_S keeps the default bound instead of stopping the hook.
-        project = _project(root / "badlimit", stale=True)
-        _run_hook(command, project, bin_dir, extra_env={"GRAPH_REFRESH_LIMIT_S": "soon", "FAKE_GRAPHIFY_SLEEP": "0"})
-        assert_true(_wait_for_release(project), f"[{flavour}] the worker runs under the default bound")
+        # A bad GRAPH_REFRESH_BEAT_S keeps the default interval instead of stopping the hook.
+        project = _project(root / "badbeat", stale=True)
+        _run_hook(command, project, bin_dir, extra_env={"GRAPH_REFRESH_BEAT_S": "soon", "FAKE_GRAPHIFY_SLEEP": "0"})
+        assert_true(_wait_for_release(project), f"[{flavour}] the worker runs under the default beat")
         rows = _rows(project)
         assert_true(
             [row.get("outcome") for row in rows] == ["refreshed"],
-            f"[{flavour}] an unparseable GRAPH_REFRESH_LIMIT_S falls back to the default; got {rows}",
+            f"[{flavour}] an unparseable GRAPH_REFRESH_BEAT_S falls back to the default; got {rows}",
         )
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -299,6 +315,8 @@ def _check_call_during_refresh() -> None:
             ("live", lambda p: _write_lock(p, os.getpid(), time.time()), "refreshing"),
             ("torn", lambda p: (p / "graphify-out" / ".refresh.lock").write_text('{"pid": ', encoding="utf-8"), "refreshing"),
             ("expired", lambda p: _write_lock(p, os.getpid(), time.time() - 3600), "empty"),
+            ("beating", lambda p: _write_lock(p, 999999, time.time() - 3600, beat=time.time()), "refreshing"),
+            ("quiet", lambda p: _write_lock(p, os.getpid(), time.time() - 3600, beat=time.time() - 300), "empty"),
             ("released", lambda p: None, "empty"),
             ("absent", lambda p: shutil.rmtree(p / "graphify-out"), "absent"),
         ]
@@ -356,51 +374,56 @@ def _run_ps1_snippet(shell: str, root: Path, body: str, env: dict | None = None)
     return done.stdout.strip()
 
 
-def _check_limit_is_clamped_below_the_lock() -> None:
-    """GRAPH_REFRESH_LIMIT_S cannot outlive the lock: a graphify still running when its lock
-    reads as stale would get a second one started beside it. Both flavours clamp to the
-    lock's age minus the same margin, and the reader ages the lock the same way."""
+def _check_lock_rule_agrees() -> None:
+    """Both hooks and the reader judge a lock by the same numbers (DEC-042): held while its
+    beat is younger than the stale window, a legacy lock by its age, and the interval a
+    worker beats at is well inside the window. GRAPH_REFRESH_BEAT_S only shortens it."""
     import re
 
     sh = (HOOKS / "graph-refresh.sh").read_text(encoding="utf-8").replace("\r\n", "\n")
     ps1 = (HOOKS / "graph-refresh.ps1").read_text(encoding="utf-8").replace("\r\n", "\n")
-    sh_age = int(re.search(r"^LOCK_MAX_AGE_S = (\d+)$", sh, re.M).group(1))
-    sh_margin = int(re.search(r"^LOCK_MARGIN_S = (\d+)$", sh, re.M).group(1))
-    ps1_age = int(re.search(r"^\$LockMaxAgeSeconds = (\d+)$", ps1, re.M).group(1))
-    ps1_margin = int(re.search(r"^\$LockMarginSeconds = (\d+)$", ps1, re.M).group(1))
-    reader_age = graph_index._REFRESH_LOCK_MAX_AGE_SECONDS
-    assert_true(
-        sh_age == ps1_age == reader_age and sh_margin == ps1_margin and 0 < sh_margin < sh_age,
-        f"lock age and margin agree across graph-refresh.sh ({sh_age}/{sh_margin}), graph-refresh.ps1 "
-        f"({ps1_age}/{ps1_margin}) and core.graph.graph_index ({reader_age})",
+
+    def number(text: str, pattern: str) -> int:
+        return int(re.search(pattern, text, re.M).group(1))
+
+    sh_beat, sh_stale, sh_legacy = (number(sh, rf"^{name} = (\d+)$") for name in ("BEAT_INTERVAL_S", "BEAT_STALE_S", "LEGACY_MAX_AGE_S"))
+    ps1_beat, ps1_stale, ps1_legacy = (
+        number(ps1, rf"^\${name} = (\d+)$") for name in ("BeatIntervalSeconds", "BeatStaleSeconds", "LegacyMaxAgeSeconds")
     )
-    ceiling = sh_age - sh_margin
+    reader = (graph_index._REFRESH_BEAT_STALE_SECONDS, graph_index._REFRESH_LEGACY_MAX_AGE_SECONDS)
+    assert_true(
+        (sh_beat, sh_stale, sh_legacy) == (ps1_beat, ps1_stale, ps1_legacy)
+        and (sh_stale, sh_legacy) == reader and 0 < sh_beat * 4 <= sh_stale,
+        f"lock rule agrees across graph-refresh.sh ({sh_beat}/{sh_stale}/{sh_legacy}), graph-refresh.ps1 "
+        f"({ps1_beat}/{ps1_stale}/{ps1_legacy}) and core.graph.graph_index {reader}",
+    )
+    assert_true(
+        "GRAPH_REFRESH_LIMIT_S" not in sh and "GRAPH_REFRESH_LIMIT_S" not in ps1,
+        "neither flavour reads GRAPH_REFRESH_LIMIT_S any more: graphify has no time limit",
+    )
 
     namespace = _sh_namespace()
-    saved = os.environ.get("GRAPH_REFRESH_LIMIT_S")
+    saved = os.environ.get("GRAPH_REFRESH_BEAT_S")
     try:
-        for given, expected in (("99999", ceiling), (str(ceiling + 1), ceiling), ("5", 5), ("0", 600), ("soon", 600)):
-            os.environ["GRAPH_REFRESH_LIMIT_S"] = given
-            got = namespace["limit_seconds"]()
-            assert_true(got == expected, f"[sh] GRAPH_REFRESH_LIMIT_S={given} bounds graphify at {expected}s; got {got}")
+        for given, expected in (("0.5", 0.5), ("0", sh_beat), (str(sh_stale), sh_beat), ("soon", sh_beat)):
+            os.environ["GRAPH_REFRESH_BEAT_S"] = given
+            got = namespace["beat_interval"]()
+            assert_true(got == expected, f"[sh] GRAPH_REFRESH_BEAT_S={given} beats every {expected}s; got {got}")
     finally:
         if saved is None:
-            os.environ.pop("GRAPH_REFRESH_LIMIT_S", None)
+            os.environ.pop("GRAPH_REFRESH_BEAT_S", None)
         else:
-            os.environ["GRAPH_REFRESH_LIMIT_S"] = saved
+            os.environ["GRAPH_REFRESH_BEAT_S"] = saved
 
     shell = powershell_for_hooks()
     if not shell:
         return
-    block = _ps1_block(ps1, "$LockMaxAgeSeconds = ")
-    root = Path(tempfile.mkdtemp(prefix="graph-refresh-limit-"))
+    block = _ps1_block(ps1, "$BeatIntervalSeconds = ")
+    root = Path(tempfile.mkdtemp(prefix="graph-refresh-beat-"))
     try:
-        for given, expected in (("99999", ceiling), ("5", 5), ("soon", 600)):
-            got = _run_ps1_snippet(shell, root, block + "$GraphifyLimitMs\n", {"GRAPH_REFRESH_LIMIT_S": given})
-            assert_true(
-                got == str(expected * 1000),
-                f"[ps1] GRAPH_REFRESH_LIMIT_S={given} bounds graphify at {expected}s; got {got!r} ms",
-            )
+        for given, expected in (("0.5", "0.5"), ("soon", str(ps1_beat)), (str(ps1_stale), str(ps1_beat))):
+            got = _run_ps1_snippet(shell, root, block + "[string]$BeatIntervalSeconds\n", {"GRAPH_REFRESH_BEAT_S": given})
+            assert_true(got == expected, f"[ps1] GRAPH_REFRESH_BEAT_S={given} beats every {expected}s; got {got!r}")
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -437,7 +460,8 @@ def _check_hand_off_only_while_the_lock_is_ours() -> None:
         hand_off(str(lock), "tok", _Worker(4242, None))
         handed = json.loads(lock.read_text(encoding="utf-8"))
         assert_true(
-            handed.get("pid") == 4242 and handed.get("token") == "tok" and not leftovers(),
+            handed.get("pid") == 4242 and handed.get("token") == "tok" and isinstance(handed.get("beat"), int)
+            and not leftovers(),
             f"[sh] a lock still ours is handed to the running worker: {handed}",
         )
 
@@ -461,15 +485,73 @@ def _check_hand_off_only_while_the_lock_is_ours() -> None:
         _run_ps1_snippet(shell, root, function + call)
         handed = json.loads(lock.read_text(encoding="utf-8"))
         assert_true(
-            handed.get("pid") == 4242 and handed.get("token") == "tok" and not leftovers(),
+            handed.get("pid") == 4242 and handed.get("token") == "tok" and isinstance(handed.get("beat"), int)
+            and not leftovers(),
             f"[ps1] a lock still ours is handed to the worker: {handed}",
         )
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _check_doctor_and_clean_read_the_lock() -> None:
+    """With no time limit a hung graphify holds the lock for as long as its worker lives, so
+    doctor names the lock and clean removes it only once nothing beats it (DEC-042). clean
+    never kills a process and never removes a lock a worker is beating."""
+    from core.audit.diagnostics import run_doctor
+    from core.runtime.state import ensure_workflow_workspace
+    from core.workspace.workspace_paths import read_json_file
+
+    root = Path(tempfile.mkdtemp(prefix="graph-refresh-clean-"))
+    try:
+        now = time.time()
+        cases = [
+            ("absent", None, "absent", False),
+            ("beating", lambda p: _write_lock(p, 999999, now - 7200, beat=now), "active", False),
+            ("quiet", lambda p: _write_lock(p, os.getpid(), now - 7200, beat=now - 300), "stale", True),
+            ("legacy-live", lambda p: _write_lock(p, os.getpid(), now), "active", False),
+            ("legacy-old", lambda p: _write_lock(p, os.getpid(), now - 3600), "stale", True),
+            ("torn", lambda p: (p / "graphify-out" / ".refresh.lock").write_text('{"pid": ', encoding="utf-8"), "unreadable", False),
+        ]
+        for name, arrange, state, removed in cases:
+            project = _project(root / name, stale=False)
+            if arrange:
+                arrange(project)
+            got = graph_index.refresh_lock_state(project)
+            assert_true(got["state"] == state, f"[{name}] lock state is {state}: {got}")
+            released = graph_index.release_stale_refresh_lock(project)
+            lock_left = (project / "graphify-out" / ".refresh.lock").exists()
+            assert_true(
+                released["removed"] is removed and lock_left is (not removed and state != "absent"),
+                f"[{name}] clean removes only a stale lock: {released}, lock left={lock_left}",
+            )
+
+        workspace = root / "doctor"
+        workspace.mkdir()
+        ensure_workflow_workspace(workspace, os.getenv("AGENT_PATH"))
+        (workspace / "graphify-out").mkdir()
+        (workspace / "graphify-out" / "graph.json").write_text("{}", encoding="utf-8")
+        _write_lock(workspace, 999999, now - 7200, beat=now)
+        meta = run_doctor(workspace, "does-not-exist", "graph-lock")["meta"]
+        checks = read_json_file(Path(meta["doctor_report"]))["checks"]
+        assert_true(
+            checks.get("graph_refresh_lock", {}).get("state") == "active"
+            and any("graph refresh has held" in fix for fix in meta["recommended_fixes"])
+            and not any(".refresh.lock" in issue for issue in meta["issues"]),
+            f"doctor names a refresh running for hours as advice, not an issue: {checks.get('graph_refresh_lock')}, {meta}",
+        )
+        _write_lock(workspace, os.getpid(), now - 7200, beat=now - 300)
+        meta = run_doctor(workspace, "does-not-exist", "graph-lock")["meta"]
+        assert_true(
+            any("--command clean" in fix and "no live worker" in fix for fix in meta["recommended_fixes"]),
+            f"doctor points a stale refresh lock at clean: {meta['recommended_fixes']}",
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _test_graph_refresh_hook() -> None:
-    _check_limit_is_clamped_below_the_lock()
+    _check_lock_rule_agrees()
+    _check_doctor_and_clean_read_the_lock()
     _check_hand_off_only_while_the_lock_is_ours()
     _check_call_during_refresh()
     for flavour, command in _runners():

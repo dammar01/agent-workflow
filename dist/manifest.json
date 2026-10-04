@@ -294,15 +294,15 @@
     },
     {
       "path": "claude/hooks/graph-refresh.ps1",
-      "sha256": "d84284de1872ce5337f40c762f9314f92fd33be9bd5d3adb26747c3061dbf3e5",
-      "bytes": 18958,
+      "sha256": "526dc17330aed0248f41720b6a82d65814da341bccb084fdd080350ff9b84f14",
+      "bytes": 19986,
       "merge": "replace",
       "component": "runtime"
     },
     {
       "path": "claude/hooks/graph-refresh.sh",
-      "sha256": "c5d917cd20fc464917481903bedac77838733f59d83b51c29246e7a4f1c72972",
-      "bytes": 13335,
+      "sha256": "9466157370ab0ec64520123d009737d8029501babf93f718b193fdb74a1fbcaa",
+      "bytes": 13381,
       "merge": "replace",
       "component": "runtime"
     },

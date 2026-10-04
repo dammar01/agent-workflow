@@ -54,31 +54,79 @@ def graph_path(project_root) -> Path:
 
 
 REFRESH_LOCK_FILENAME = ".refresh.lock"
-# Equal to LOCK_MAX_AGE_S / $LockMaxAgeSeconds in graph-refresh.sh / .ps1 (a test parses both):
-# the hooks clamp graphify's bound below it, so a running refresh never reads as stale here.
-_REFRESH_LOCK_MAX_AGE_SECONDS = 900
+# Equal to BEAT_STALE_S / $BeatStaleSeconds and LEGACY_MAX_AGE_S / $LegacyMaxAgeSeconds in
+# graph-refresh.sh / .ps1 (a test parses both). graphify runs without a time limit (DEC-042),
+# so a lock is held while its worker keeps rewriting `beat`, every BEAT_INTERVAL_S there, not
+# while it is young: a refresh of any length never reads as stale.
+_REFRESH_BEAT_STALE_SECONDS = 120
+# Locks written before `beat` existed keep the rule they were written under.
+_REFRESH_LEGACY_MAX_AGE_SECONDS = 900
+
+
+def refresh_lock_state(project_root) -> dict:
+    """What `graphify-out/.refresh.lock` says, for readers, doctor and clean.
+
+    `state` is `absent`, `active` (a worker is beating, or a legacy lock is young with a live
+    pid), `stale` (no beat for _REFRESH_BEAT_STALE_SECONDS, or a legacy lock past its age or
+    pid), or `unreadable` (present but not a lock; held while its mtime is younger than the
+    beat window, since every writer replaces the file whole). `beat_age` / `age` are seconds
+    when known; `pid` and `graphify_pid` are what the lock names.
+    """
+    path = Path(project_root) / GRAPH_DIRNAME / REFRESH_LOCK_FILENAME
+    now = time.time()
+    try:
+        lock = json.loads(path.read_text(encoding="utf-8"))
+        started = int(lock["started"])
+        pid = int(lock["pid"])
+        info = {"path": str(path), "pid": pid, "age": int(now - started),
+                "graphify_pid": lock.get("graphify_pid")}
+        if "beat" in lock:
+            beat_age = now - int(lock["beat"])
+            info["beat_age"] = int(beat_age)
+            info["state"] = "active" if beat_age < _REFRESH_BEAT_STALE_SECONDS else "stale"
+        else:
+            young = now - started < _REFRESH_LEGACY_MAX_AGE_SECONDS
+            info["state"] = "active" if young and process_alive(pid) else "stale"
+        return info
+    except FileNotFoundError:
+        return {"path": str(path), "state": "absent"}
+    except (OSError, ValueError, KeyError, TypeError):
+        try:
+            mtime_age = now - path.stat().st_mtime
+        except OSError:
+            return {"path": str(path), "state": "absent"}
+        held = mtime_age < _REFRESH_BEAT_STALE_SECONDS
+        return {"path": str(path), "state": "unreadable" if held else "stale", "age": int(mtime_age)}
 
 
 def refresh_in_progress(project_root) -> bool:
     """True while the graph-refresh worker holds `graphify-out/.refresh.lock`.
 
     graphify rewrites graph.json in place, so a read during a refresh can see half a file
-    (DEC-012). A lock whose pid is gone, or older than the hook's own limit, holds nothing.
-    A lock that exists but cannot be read is held while it is young: failing open there
-    would read the graph exactly when a writer is mid-way through the lock.
+    (DEC-012). A lock that exists but cannot be read is held while it is young: failing open
+    there would read the graph exactly when a writer is mid-way through the lock.
     """
-    path = Path(project_root) / GRAPH_DIRNAME / REFRESH_LOCK_FILENAME
+    return refresh_lock_state(project_root)["state"] in ("active", "unreadable")
+
+
+def release_stale_refresh_lock(project_root) -> dict:
+    """Remove the refresh lock only when it is stale. Never touches a process.
+
+    Re-read right before the delete: a lock that changed since it was judged belongs to a
+    hook that just took it.
+    """
+    state = refresh_lock_state(project_root)
+    if state["state"] != "stale":
+        return {**state, "removed": False}
+    path = Path(state["path"])
     try:
-        lock = json.loads(path.read_text(encoding="utf-8"))
-        age = time.time() - int(lock["started"])
-        return age < _REFRESH_LOCK_MAX_AGE_SECONDS and process_alive(int(lock["pid"]))
-    except FileNotFoundError:
-        return False
-    except (OSError, ValueError, KeyError, TypeError):
-        try:
-            return time.time() - path.stat().st_mtime < _REFRESH_LOCK_MAX_AGE_SECONDS
-        except OSError:
-            return False
+        seen = path.read_bytes()
+        if refresh_lock_state(project_root)["state"] != "stale" or path.read_bytes() != seen:
+            return {**state, "removed": False}
+        path.unlink()
+        return {**state, "removed": True}
+    except OSError:
+        return {**state, "removed": False}
 
 
 def load_graph(project_root) -> dict | None:

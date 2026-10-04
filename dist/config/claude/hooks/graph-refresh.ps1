@@ -16,7 +16,8 @@
 # takes longer than any wait a Stop hook can afford: bounded at 45 s it was killed before
 # writing, so the turn paid 47 s and the graph never refreshed (CASE-008). The hook now
 # scans, starts this same script as a worker (-WorkerRoot) and returns; the worker runs
-# graphify with a long bound, records one row, and removes graphify-out/.refresh.lock.
+# graphify with no time limit (DEC-042), beating the lock while it runs, records one row,
+# and removes graphify-out/.refresh.lock.
 # graphify rewrites graph.json in place, so a reader that finds the lock treats the graph
 # as stale rather than parsing a half-written file.
 #
@@ -44,19 +45,19 @@ $SourceExtensions = @('.py', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.php
 # implementing turn whatever the source size (CASE-008).
 $SkipDirs = @('node_modules', '.git', '.venv', 'venv', '__pycache__', 'vendor', 'dist', 'build', '.next', 'coverage', 'target', 'graphify-out', '.workflow')
 
-# How old a lock may be before a dead or reused pid no longer holds it (core.graph.graph_index
-# reads the lock with the same age, and graph-refresh.sh uses the same numbers), and how long
-# the detached worker lets graphify run (GRAPH_REFRESH_LIMIT_S overrides it, for tests).
-# A value that is not a positive whole number keeps the default: the bound is set before
-# any try, so a bad override must not stop the hook. A larger one is clamped to end
-# $LockMarginSeconds before the lock expires: a graphify still running when its lock reads
-# as stale would have a second one started beside it.
-$LockMaxAgeSeconds = 900
-$LockMarginSeconds = 60
-$GraphifyLimitMs = 600000
-$limitSeconds = 0
-if ($env:GRAPH_REFRESH_LIMIT_S -and [int]::TryParse($env:GRAPH_REFRESH_LIMIT_S.Trim(), [ref]$limitSeconds) -and $limitSeconds -gt 0) {
-    $GraphifyLimitMs = [Math]::Min([long]$limitSeconds, [long]($LockMaxAgeSeconds - $LockMarginSeconds)) * 1000
+# graphify runs without a time limit (DEC-042): a large graph takes as long as it takes, and
+# the worker never kills it. The lock is held while the worker keeps rewriting `beat`, every
+# $BeatIntervalSeconds; a lock whose beat is $BeatStaleSeconds old has no worker behind it. A
+# lock without `beat` was written before this rule and keeps the old one: $LegacyMaxAgeSeconds
+# and a live pid. core.graph.graph_index and graph-refresh.sh use the same numbers (a test
+# parses all three). GRAPH_REFRESH_BEAT_S shortens the interval for tests; a value that is not
+# a positive number below the stale window keeps the default, so a bad one cannot stop the hook.
+$BeatIntervalSeconds = 15
+$BeatStaleSeconds = 120
+$LegacyMaxAgeSeconds = 900
+$beatOverride = 0.0
+if ($env:GRAPH_REFRESH_BEAT_S -and [double]::TryParse($env:GRAPH_REFRESH_BEAT_S.Trim(), [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$beatOverride) -and $beatOverride -gt 0 -and $beatOverride -lt $BeatStaleSeconds) {
+    $BeatIntervalSeconds = $beatOverride
 }
 
 function Write-RefreshRow([string]$Root, [hashtable]$Fields) {
@@ -100,34 +101,52 @@ function Test-JsonFile([string]$Path) {
     } catch { return $false }
 }
 
-function Get-LiveLockPid([string]$LockPath) {
-    # The pid holding the refresh lock, or 0 when there is no lock or its holder is gone.
-    # A lock that exists but cannot be read is held while young (-1): failing open there
-    # would read or refresh the graph exactly while its owner is writing the lock.
-    if (-not (Test-Path -LiteralPath $LockPath)) { return 0 }
+function Test-LockHeld([string]$LockPath) {
+    # Same rule as core.graph.graph_index.refresh_lock_state. A lock that exists but cannot
+    # be read is held while its mtime is inside the beat window: failing open there would
+    # read or refresh the graph exactly while its owner is writing the lock, and every
+    # writer replaces the file whole, so a live one keeps it young.
+    if (-not (Test-Path -LiteralPath $LockPath)) { return $false }
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     try {
-        # -ErrorAction Stop: pwsh 7 reports bad JSON as a non-terminating error, which skipped
-        # the catch below and read a torn lock as started at 0, so as abandoned.
+        # -ErrorAction Stop: pwsh 7 reports bad JSON as a non-terminating error, which would
+        # skip the catch below and read a torn lock as abandoned.
         $lock = Get-Content -LiteralPath $LockPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
         if ($null -eq $lock -or $null -eq $lock.started) { throw 'unreadable lock' }
-        $age = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [long]$lock.started
-        if ($age -lt $LockMaxAgeSeconds -and (Get-Process -Id ([int]$lock.pid) -ErrorAction SilentlyContinue)) {
-            return [int]$lock.pid
+        if ($null -ne $lock.PSObject.Properties['beat']) {
+            return (($now - [long]$lock.beat) -lt $BeatStaleSeconds)
         }
-        return 0
+        return ((($now - [long]$lock.started) -lt $LegacyMaxAgeSeconds) -and
+                [bool](Get-Process -Id ([int]$lock.pid) -ErrorAction SilentlyContinue))
     } catch {
         try {
             # -Force: off Windows a dot-file is hidden, and Get-Item without it finds nothing.
             $age = ([DateTime]::UtcNow - (Get-Item -LiteralPath $LockPath -Force).LastWriteTimeUtc).TotalSeconds
-            if ($age -lt $LockMaxAgeSeconds) { return -1 }
+            return ($age -lt $BeatStaleSeconds)
         } catch { }
     }
-    return 0
+    return $false
+}
+
+function Update-LockBeat([string]$LockPath, [string]$LockToken, [int]$GraphifyPid) {
+    # Rewrite `beat` while the lock is still this worker's, staged and swapped in so a
+    # reader never sees half a lock. The pid stays whatever the lock names.
+    $staged = "$LockPath.beat.$LockToken"
+    try {
+        $lock = [System.IO.File]::ReadAllText($LockPath) | ConvertFrom-Json -ErrorAction Stop
+        if ([string]$lock.token -cne $LockToken) { return }
+        $body = '{"pid": ' + [long]$lock.pid + ', "token": "' + $LockToken + '", "started": ' + [long]$lock.started +
+                ', "beat": ' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + ', "graphify_pid": ' + $GraphifyPid + '}'
+        [System.IO.File]::WriteAllBytes($staged, [System.Text.Encoding]::UTF8.GetBytes($body))
+        [System.IO.File]::Replace($staged, $LockPath, [NullString]::Value)
+    } catch { }
+    finally { Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue }
 }
 
 function Set-RefreshLock([string]$LockPath, [int]$HolderPid, [string]$LockToken, [bool]$CreateNew) {
     # The token says who owns the lock; the pid only says whether its holder still runs.
-    $body = '{"pid": ' + $HolderPid + ', "token": "' + $LockToken + '", "started": ' + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + '}'
+    $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $body = '{"pid": ' + $HolderPid + ', "token": "' + $LockToken + '", "started": ' + $now + ', "beat": ' + $now + '}'
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
     if ($CreateNew) {
         $stream = [System.IO.File]::Open($LockPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write)
@@ -158,7 +177,7 @@ if ($WorkerRoot) {
     $lockPath  = Join-Path $WorkerRoot 'graphify-out\.refresh.lock'
     $outFile = Join-Path ([System.IO.Path]::GetTempPath()) ("graphify-{0}.out" -f [guid]::NewGuid())
     $errFile = Join-Path ([System.IO.Path]::GetTempPath()) ("graphify-{0}.err" -f [guid]::NewGuid())
-    $outcome = 'error'; $exitCode = $null; $graphifyMs = 0; $rewritten = $false; $finished = $false
+    $outcome = 'error'; $exitCode = $null; $graphifyMs = 0; $rewritten = $false
     try {
         $before = (Get-Item -LiteralPath $graphPath).LastWriteTimeUtc
         $graphify = (Get-Command graphify -ErrorAction Stop).Source
@@ -177,24 +196,17 @@ if ($WorkerRoot) {
         # Holding the handle is what makes ExitCode readable after exit; without it
         # Start-Process -PassThru reports $null.
         $null = $proc.Handle
-        if ($proc.WaitForExit($GraphifyLimitMs)) {
-            $exitCode = $proc.ExitCode
-            $finished = $true
-        } else {
-            # The whole tree, not graphify alone: a wrapper's child that survived would keep
-            # writing graph.json after the lock that warns readers is gone.
-            try { & taskkill.exe /PID $proc.Id /T /F *> $null } catch { }
-            try { $proc.Kill() } catch { }
-            $outcome = 'timeout'
-        }
+        Update-LockBeat $lockPath $Token $proc.Id
+        # No limit: wait as long as graphify runs, beating so readers know a writer is alive.
+        $beatMs = [int]([double]$BeatIntervalSeconds * 1000)
+        while (-not $proc.WaitForExit($beatMs)) { Update-LockBeat $lockPath $Token $proc.Id }
+        $exitCode = $proc.ExitCode
         $graphifyMs = [long]$sw.Elapsed.TotalMilliseconds
         $rewritten = (Get-Item -LiteralPath $graphPath).LastWriteTimeUtc -ne $before
         # graphify exits 1 on a large graph when only its HTML view fails, having written
         # graph.json (CASE-008): a rewritten graph is the success signal, not the exit code.
-        # Only from a graphify that finished: one killed at the bound may have left a graph
-        # half written, and stays a timeout. A finished rewrite that does not parse is
-        # 'corrupt', never a refresh.
-        if ($finished -and $rewritten) {
+        # A rewrite that does not parse is 'corrupt', never a refresh.
+        if ($rewritten) {
             $outcome = if (Test-JsonFile $graphPath) { 'refreshed' } else { 'corrupt' }
         }
     } catch {
@@ -248,7 +260,7 @@ try {
     # A lock that changed since it was judged belongs to a hook that just took it: deleting
     # it as stale would start a second graphify beside the first. Re-read right before the
     # delete, and only the lock judged stale is removed.
-    if ((Get-LiveLockPid $lockPath) -or ($null -ne $seenLock -and (Read-LockText $lockPath) -cne $seenLock)) {
+    if ((Test-LockHeld $lockPath) -or ($null -ne $seenLock -and (Read-LockText $lockPath) -cne $seenLock)) {
         # A refresh from an earlier turn is still running; it will pick up this change or
         # the next implementing turn will.
         Write-RefreshRow $root @{ outcome = 'skipped_running'; hook_ms = [long]$hookClock.Elapsed.TotalMilliseconds }

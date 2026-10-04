@@ -251,6 +251,24 @@ def run_doctor(
             "once no worker is still running"
         )
 
+    # The graph refresh lock. graphify runs without a time limit (DEC-042), so a hung one
+    # holds the graph for as long as its worker lives: readers fall back to no graph leads.
+    # Reported, never a readiness issue, because delegated work goes on without the graph.
+    from core.graph import graph_index
+
+    refresh = graph_index.refresh_lock_state(project_root)
+    checks["graph_refresh_lock"] = {k: refresh[k] for k in ("state", "age", "beat_age", "pid", "graphify_pid") if k in refresh}
+    if refresh["state"] == "active" and refresh.get("age", 0) >= 3600:
+        recommended_fixes.append(
+            f"A graph refresh has held {refresh['path']} for {refresh['age'] // 60} min (worker pid "
+            f"{refresh.get('pid')}, graphify pid {refresh.get('graphify_pid')}); the graph is unread meanwhile. "
+            "If graphify is stuck, stop that process; its lock then goes stale and `--command clean` removes it"
+        )
+    elif refresh["state"] == "stale":
+        recommended_fixes.append(
+            f"Graph refresh lock {refresh['path']} has no live worker behind it: run `--command clean` to remove it"
+        )
+
     reports_writable, reports_error = check_writable(paths["doctor_report"])
     checks["reports_folder_writable"] = reports_writable
     if reports_error:

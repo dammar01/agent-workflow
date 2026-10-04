@@ -845,7 +845,7 @@ one-byte file carrying an OS byte-range lock, kept between uses:
 | --- | --- | --- | --- |
 | `facts.jsonl.lock`, `e2e-knowledge.jsonl.lock`, `promote.lock` | `OwnedFileLock` | `{pid, token, at}` | Removed on release; a leftover empty one is a writer that crashed between create and write, reclaimed after the TTL |
 | `storage/jobs/locks/<session>.lock` (agent install, not the project) | job session lock | job id and token | Removed on release |
-| `graphify-out/.refresh.lock` | graph-refresh Stop hook, then its detached worker | `{pid, token, started}` | Removed by the worker holding the token; held means a live pid and younger than 15 minutes, otherwise the next hook removes it |
+| `graphify-out/.refresh.lock` | graph-refresh Stop hook, then its detached worker | `{pid, token, started, beat, graphify_pid}` | Removed by the worker holding the token. Held while `beat` is younger than 120 s, whatever the lock's age: the worker rewrites it every 15 s and graphify has no time limit (DEC-042). A lock without `beat` keeps the old rule (live pid, younger than 15 minutes). A stale one is removed by the next hook or by `clean`; nothing kills a process |
 | `evidence.jsonl.lock` | OS lock on byte 0 | one NUL byte | Kept: the lock is the open handle, released by closing it |
 | `<lock>.reclaim` | OS lock on byte 0 | one NUL byte | Kept, one per `OwnedFileLock` that was ever reclaimed |
 | `storage/jobs/.capacity.guard`, `<session>.lock.guard`, `<claim>.guard` | OS lock on byte 0 (`JobManager._exclusive_file_guard`) | one NUL byte | Kept, one per session or claim path; they accumulate (CASE-007) |

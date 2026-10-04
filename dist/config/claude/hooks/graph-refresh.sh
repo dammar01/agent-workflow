@@ -4,9 +4,10 @@
 #   1. Did this turn implement? ([EXECUTION RESULT] / [REFACTOR RESULT] in last message)
 #   2. Is the graph older than the sources? (mtime compare, skip dirs pruned before descent)
 # Both must pass. The refresh is detached (DEC-012): the hook starts a worker that runs
-# `graphify update` only (never init/build/watch), records one row in the quality stream,
-# and removes graphify-out/.refresh.lock. Readers treat the graph as stale while the lock
-# is held, because graphify rewrites graph.json in place.
+# `graphify update` only (never init/build/watch) with no time limit (DEC-042), beats the
+# lock while it runs, records one row in the quality stream, and removes
+# graphify-out/.refresh.lock. Readers treat the graph as stale while the lock is held,
+# because graphify rewrites graph.json in place.
 # Never blocks the response (always exit 0).
 RAW="$(cat)"
 [ -z "$RAW" ] && exit 0
@@ -21,32 +22,57 @@ SKIP_DIRS = {
     "node_modules", ".git", ".venv", "venv", "__pycache__", "vendor",
     "dist", "build", ".next", "coverage", "target", "graphify-out", ".workflow",
 }
-GRAPHIFY_LIMIT_S = 600
-# How old a lock may be before a dead or reused pid no longer holds it. core.graph.graph_index
-# reads the lock with the same age, and graph-refresh.ps1 uses the same numbers.
-LOCK_MAX_AGE_S = 900
-# The bound always ends this far before the lock expires: a graphify still running when its
-# lock reads as stale would have a second one started beside it.
-LOCK_MARGIN_S = 60
+# graphify runs without a time limit (DEC-042): a large graph takes as long as it takes, and
+# the worker never kills it. The lock is held while the worker keeps rewriting `beat`, every
+# BEAT_INTERVAL_S; a lock whose beat is BEAT_STALE_S old has no worker behind it. A lock
+# without `beat` was written before this rule and keeps the old one: LEGACY_MAX_AGE_S and a
+# live pid. core.graph.graph_index and graph-refresh.ps1 use the same numbers (a test parses
+# all three). GRAPH_REFRESH_BEAT_S shortens the interval for tests.
+BEAT_INTERVAL_S = 15
+BEAT_STALE_S = 120
+LEGACY_MAX_AGE_S = 900
 
 
-def limit_seconds(default=GRAPHIFY_LIMIT_S):
-    # GRAPH_REFRESH_LIMIT_S overrides the bound (tests); a value that is not a positive
-    # whole number keeps the default instead of failing the refresh, and a larger one is
-    # clamped below the lock's age.
+def beat_interval():
     try:
-        value = int(str(os.environ.get("GRAPH_REFRESH_LIMIT_S", "")).strip())
+        value = float(str(os.environ.get("GRAPH_REFRESH_BEAT_S", "")).strip())
     except ValueError:
-        return default
-    return min(value, LOCK_MAX_AGE_S - LOCK_MARGIN_S) if value > 0 else default
+        return BEAT_INTERVAL_S
+    return value if 0 < value < BEAT_STALE_S else BEAT_INTERVAL_S
 
 # The worker runs as its own python process, started in a new session so it outlives the
-# hook, with no handle shared with it. argv: root hook_ms scan_ms visited skipped token
+# hook, with no handle shared with it. argv: root hook_ms scan_ms visited skipped token beat_s
 WORKER = r'''
 import os, sys, json, shutil, subprocess, time
 root, hook_ms, scan_ms, visited, skipped, token = sys.argv[1], *map(int, sys.argv[2:6]), sys.argv[6]
+interval = float(sys.argv[7])
 graph = os.path.join(root, "graphify-out", "graph.json")
 lock = os.path.join(root, "graphify-out", ".refresh.lock")
+
+
+def beat(graphify_pid):
+    # Rewrite `beat` while the lock is still this worker's, beside it and renamed over it
+    # so a reader never sees half a lock. The pid stays whatever the lock names.
+    staged = lock + ".beat." + token
+    try:
+        with open(lock, encoding="utf-8") as fh:
+            current = json.load(fh)
+        if current.get("token") != token:
+            return
+        current["beat"] = int(time.time())
+        current["graphify_pid"] = graphify_pid
+        with open(staged, "w", encoding="utf-8") as fh:
+            json.dump(current, fh)
+        os.replace(staged, lock)
+    except Exception:
+        pass
+    finally:
+        try:
+            os.remove(staged)
+        except OSError:
+            pass
+
+
 hide = {}
 if os.name == "nt":
     # This worker has no console; without SW_HIDE a console child (graphify.cmd) would
@@ -55,51 +81,29 @@ if os.name == "nt":
     info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     info.wShowWindow = 0
     hide = {"startupinfo": info, "creationflags": 0x08000000}  # CREATE_NO_WINDOW
-try:
-    limit = int(str(os.environ.get("GRAPH_REFRESH_LIMIT_S", "")).strip())
-except ValueError:
-    limit = 0
-limit = limit if limit > 0 else 600
-outcome, exit_code, graphify_ms, rewritten, finished = "error", None, 0, False, False
+outcome, exit_code, graphify_ms, rewritten = "error", None, 0, False
 try:
     before = os.path.getmtime(graph)
     started = time.monotonic()
-    # Its own process group, so a timeout kills graphify and everything it started: a
-    # wrapper (graphify.cmd, a venv shim) whose child survived would keep writing graph.json
-    # after the lock that warns readers is gone.
-    group = {"start_new_session": True} if os.name != "nt" else {}
     proc = subprocess.Popen(
         [shutil.which("graphify") or "graphify", "update"], cwd=root,
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        **group, **hide,
+        **hide,
     )
-    try:
-        exit_code = proc.wait(timeout=limit)
-        finished = True
-    except subprocess.TimeoutExpired:
-        outcome = "timeout"
+    beat(proc.pid)
+    # No limit: wait as long as graphify runs, beating so readers know a writer is alive.
+    while True:
         try:
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30, **hide)
-            else:
-                import signal
-                os.killpg(proc.pid, signal.SIGKILL)
-        except Exception:
-            pass
-        try:
-            proc.kill()
-            proc.wait(timeout=10)
-        except Exception:
-            pass
+            exit_code = proc.wait(timeout=interval)
+            break
+        except subprocess.TimeoutExpired:
+            beat(proc.pid)
     graphify_ms = int((time.monotonic() - started) * 1000)
     rewritten = os.path.getmtime(graph) != before
     # graphify exits 1 on a large graph when only its HTML view fails, having written
     # graph.json (CASE-008): a rewritten graph is the success signal, not the exit code.
-    # Only from a graphify that finished: one killed at the bound may have left a graph
-    # half written, and stays a timeout. A finished rewrite that does not parse is
-    # "corrupt", never a refresh.
-    if finished and rewritten:
+    # A rewrite that does not parse is "corrupt", never a refresh.
+    if rewritten:
         try:
             with open(graph, encoding="utf-8") as fh:
                 json.load(fh)
@@ -162,16 +166,20 @@ def read_lock(path):
 
 
 def lock_held(path):
+    # Same rule as core.graph.graph_index.refresh_lock_state.
     try:
         with open(path, encoding="utf-8") as fh:
             lock = json.load(fh)
-        return time.time() - int(lock["started"]) < LOCK_MAX_AGE_S and pid_alive(int(lock["pid"]))
+        if "beat" in lock:
+            return time.time() - int(lock["beat"]) < BEAT_STALE_S
+        return time.time() - int(lock["started"]) < LEGACY_MAX_AGE_S and pid_alive(int(lock["pid"]))
     except FileNotFoundError:
         return False
     except Exception:
-        # Present but unreadable: held while young, like core.graph.graph_index reads it.
+        # Present but unreadable: held while its mtime is inside the beat window; every
+        # writer replaces the file whole, so a live one keeps it young.
         try:
-            return time.time() - os.path.getmtime(path) < LOCK_MAX_AGE_S
+            return time.time() - os.path.getmtime(path) < BEAT_STALE_S
         except OSError:
             return False
 
@@ -193,7 +201,8 @@ def hand_off(lock_path, token, worker):
     staged = lock_path + "." + token
     try:
         with open(staged, "w", encoding="utf-8") as fh:
-            json.dump({"pid": worker.pid, "token": token, "started": int(time.time())}, fh)
+            now = int(time.time())
+            json.dump({"pid": worker.pid, "token": token, "started": now, "beat": now}, fh)
         if lock_token(lock_path) != token:
             return
         os.replace(staged, lock_path)
@@ -293,7 +302,8 @@ try:
     token = os.urandom(8).hex()
     try:
         fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, json.dumps({"pid": os.getpid(), "token": token, "started": int(time.time())}).encode())
+        now = int(time.time())
+        os.write(fd, json.dumps({"pid": os.getpid(), "token": token, "started": now, "beat": now}).encode())
         os.close(fd)
     except OSError:
         sys.exit(0)
@@ -306,12 +316,11 @@ try:
         flags["creationflags"] = 0x00000008 | 0x08000000  # DETACHED_PROCESS | CREATE_NO_WINDOW
     else:
         flags["start_new_session"] = True
-    env = {**os.environ}
-    env["GRAPH_REFRESH_LIMIT_S"] = str(limit_seconds())
     worker = subprocess.Popen(
-        [sys.executable, "-c", WORKER, root, str(hook_ms()), str(scan_ms), str(visited), str(skipped), token],
+        [sys.executable, "-c", WORKER, root, str(hook_ms()), str(scan_ms), str(visited), str(skipped), token,
+         str(beat_interval())],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        close_fds=True, env=env, **flags,
+        close_fds=True, **flags,
     )
     # Hand the lock to the worker before this hook exits: a lock naming the hook's own pid
     # would read as abandoned the moment it returns, while graphify is still writing.
