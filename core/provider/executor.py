@@ -607,6 +607,20 @@ class Executor:
             metas = self._per_invocation_metas(self._last_call_meta or {}) or [
                 self._last_call_meta
             ]
+            result_meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
+            # A browser run that ended before its review (incomplete, preflight, spec or
+            # env refused, no request) reached no provider. A row for it carried no prompt
+            # id and no tokens, so every reader counted it as a call of its own — the
+            # statusline as one more second-agent call, the report as a judged verify with
+            # zero tokens in the baseline. The browser run itself is the `e2e_run` quality
+            # row; the task event below still records the verify.
+            provider_less_run = (
+                self._last_call_meta is None
+                and not result_meta.get("reused_evidence")
+                and result_meta.get("invocation") == "verify-browser"
+            )
+            if provider_less_run:
+                metas = []
             last = len(metas) - 1
             payload = None
             for index, call_meta in enumerate(metas):
@@ -619,6 +633,8 @@ class Executor:
                     row_meta = dict(measured.get("meta") or {})
                     row_meta.pop("verdict", None)
                     row_meta.pop("redactions", None)
+                    # The browser's own time belongs to the command, once.
+                    row_meta.pop("e2e", None)
                     measured_row = {**measured, "digest": None, "meta": row_meta}
                 record = usage_from_result(
                     measured_row,
@@ -634,23 +650,24 @@ class Executor:
             # The audit row is a strict subset, written separately rather than derived
             # from the usage stream at read time: telemetry may legitimately be pruned or
             # resampled, and an audit trail that disappears with it is not a trail.
-            write_audit_record(
-                project_root,
-                {
-                    "at": payload["recorded_at"],
-                    "session_id": payload["session_id"],
-                    "correlation_id": payload["correlation_id"],
-                    "prompt_id": payload["prompt_id"],
-                    "command": payload["command"],
-                    "provider": payload["provider"],
-                    "model": payload["model"],
-                    "ok": payload["ok"],
-                    "error_type": payload["error_type"],
-                    "verdict": payload["verdict"],
-                    "redactions": payload["redactions"],
-                    "project_root": str(project_root),
-                },
-            )
+            if payload is not None:
+                write_audit_record(
+                    project_root,
+                    {
+                        "at": payload["recorded_at"],
+                        "session_id": payload["session_id"],
+                        "correlation_id": payload["correlation_id"],
+                        "prompt_id": payload["prompt_id"],
+                        "command": payload["command"],
+                        "provider": payload["provider"],
+                        "model": payload["model"],
+                        "ok": payload["ok"],
+                        "error_type": payload["error_type"],
+                        "verdict": payload["verdict"],
+                        "redactions": payload["redactions"],
+                        "project_root": str(project_root),
+                    },
+                )
             # One task event per command (DEC-015), carrying the verdict the reply declared
             # and the one the runtime derived from it. Only a derived `pass` closes a task
             # (DEC-020): a DONE the runtime marks `incomplete`, for not_verified gaps too,
@@ -668,7 +685,7 @@ class Executor:
                 derived=derived_verdict,
                 next_action=(result.get("digest") or {}).get("recommended_next_action")
                 if isinstance(result.get("digest"), dict) else None,
-                prompt_id=payload["prompt_id"],
+                prompt_id=payload["prompt_id"] if payload else None,
             )
         except Exception:
             # Instrumentation, not the call. Broad on purpose: this runs on the return
@@ -1452,6 +1469,9 @@ class Executor:
             bound = bind_session(project_root, session_id)
             # Once per command: the run is finalised, and its usage row written, once.
             self._graph_status, self._graph_ms = graph_state_for_call(project_root)
+            # The e2e_spec draft takes the exploration route but is never offered reuse;
+            # left unset, every draft counted as an `unrecorded` reuse-eligible command.
+            self._reuse_outcome = "not_offered"
             result = e2e_runner.run(
                 self,
                 project_root=project_root,

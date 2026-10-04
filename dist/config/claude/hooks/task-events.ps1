@@ -1,23 +1,31 @@
-# task-events.ps1 - PostToolUse hook, and PreToolUse for Bash (DEC-015)
+# task-events.ps1 - task telemetry hook (DEC-015)
 #
-# Matcher (settings.json): PostToolUse Read|Skill|Edit|Write|MultiEdit|NotebookEdit|Bash;
-# PreToolUse Bash.
-# Records what the runtime never sees into .workflow/data/tasks.jsonl:
-#   - a local workflow skill being loaded (Read of ~/.claude/skills/<name>.md, or the Skill tool)
-#   - a file edited inside the project (not .workflow/ or .git/)
-#   - a commit just made: PreToolUse saves HEAD before a Bash `git commit`, PostToolUse
-#     records the new HEAD only if it moved. A failed commit, or one with no saved HEAD,
-#     records nothing.
-# Delegated skills are left out: the runtime records them with their verdict. No prompt
-# change is needed; every event is a tool call that already happened. Only appends: task
-# state is derived at report time (core/audit/task_telemetry.py). Same contract as
-# task-events.sh. Never blocks: every path exits 0.
+# Registered on three events (settings.json):
+#   UserPromptSubmit                                     -> a local skill invoked as /.<name>
+#   PostToolUse  Skill|Edit|Write|MultiEdit|NotebookEdit -> the Skill tool, a file edited
+#   Stop                                                 -> commits made since the last look
+# Records what the runtime never sees into .workflow/data/tasks.jsonl. Delegated skills are
+# left out: the runtime records them with their verdict.
+#
+# Why these events and not Read/Bash: each run is a fresh PowerShell, ~450 ms on Windows, and
+# the 3.8.0 draft hooked every Read and every Bash call (twice for Bash) to catch the rare
+# skill load and commit. A skill is invoked from the prompt, and a commit is a HEAD that
+# moved between two turns, so both are read once per turn instead.
+#
+# Commits: the first event of a session snapshots HEAD under .workflow/data/task-hook/; each
+# Stop records the commits between that snapshot and HEAD (first-parent, so a merge names
+# what it brought in) and moves the snapshot. A commit made outside Claude between turns is
+# recorded at the next Stop; task_telemetry claims it for a task only when its paths match
+# that task's edits.
+#
+# Only appends: task state is derived at report time (core/audit/task_telemetry.py). Same
+# contract as task-events.sh. Never blocks: every path exits 0.
 
 $ErrorActionPreference = 'Stop'
 
 $LocalSkills = @('execute', 'init', 'upgrade', 'doctor', 'sweep', 'refactor', 'commit', 'review',
     'compress', 'memory', 'caveman', 'local', 'provider', 'promote', 'help')
-$GitCommit = '\bgit\b[^\n|;&]*\bcommit\b'
+$EventVersion = 2
 
 function Find-ProjectRoot([string]$Start) {
     if ([string]::IsNullOrWhiteSpace($Start)) { $Start = (Get-Location).Path }
@@ -53,59 +61,83 @@ function Get-InsidePath([string]$Root, [string]$Path) {
     return $rel
 }
 
+function Get-Head([string]$Root) {
+    $head = & git -C $Root rev-parse --verify -q HEAD 2>$null
+    if ($LASTEXITCODE -ne 0) { return '' }
+    return ([string]$head).Trim()
+}
+
 function Get-SnapshotPath($Payload, [string]$Root) {
-    $key = [string]$Payload.tool_use_id
-    if ([string]::IsNullOrWhiteSpace($key)) { $key = [string]$Payload.session_id }
+    $key = [string]$Payload.session_id
     if ([string]::IsNullOrWhiteSpace($key)) { return $null }
     $key = [regex]::Replace($key, '[^\w-]', '_')
     return (Join-Path $Root ('.workflow\data\task-hook\' + $key + '.head'))
 }
 
-function Save-Head($Payload, [string]$Root) {
-    $path = Get-SnapshotPath $Payload $Root
-    if (-not $path) { return }
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
-    $head = & git -C $Root rev-parse --verify -q HEAD 2>$null
-    if ($LASTEXITCODE -ne 0) { $head = '' }
-    [System.IO.File]::WriteAllText($path, ([string]$head).Trim(), (New-Object System.Text.UTF8Encoding($false)))
+function Write-Snapshot([string]$Path, [string]$Head) {
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
+    [System.IO.File]::WriteAllText($Path, $Head, (New-Object System.Text.UTF8Encoding($false)))
 }
 
-function Get-Event($Payload, [string]$Root) {
+function Get-Commits($Payload, [string]$Root) {
+    # The commits since this session's snapshot, oldest first, each with its paths.
+    $path = Get-SnapshotPath $Payload $Root
+    if (-not $path) { return @() }
+    $now = Get-Head $Root
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+        if ($now) { Write-Snapshot $path $now }
+        return @()
+    }
+    $before = ([System.IO.File]::ReadAllText($path)).Trim()
+    if (-not $now -or $now -eq $before) { return @() }
+    Write-Snapshot $path $now
+    $range = if ($before) { "$before..$now" } else { $now }
+    $out = & git -C $Root log --reverse --first-parent -m '--format=commit:%H' --name-only --relative $range 2>$null
+    if ($LASTEXITCODE -ne 0) { return @() }
+    $commits = @()
+    $current = $null
+    foreach ($line in @($out)) {
+        $text = ([string]$line).Trim()
+        if (-not $text) { continue }
+        if ($text.StartsWith('commit:')) {
+            if ($current) { $commits += $current }
+            $current = [ordered]@{ kind = 'commit'; commit = $text.Substring(7); paths = @() }
+        } elseif ($current) {
+            $current.paths += $text
+        }
+    }
+    if ($current) { $commits += $current }
+    return $commits
+}
+
+function Get-Events($Payload, [string]$Root) {
+    $hook = [string]$Payload.hook_event_name
+    if ($hook -eq 'UserPromptSubmit') {
+        # Snapshots HEAD on a session's first prompt; later, records commits made between
+        # turns (in a terminal, say) before the snapshot moves past them.
+        $found = @(Get-Commits $Payload $Root)
+        $m = [regex]::Match([string]$Payload.prompt, '^\s*/\.([\w-]+)')
+        if ($m.Success -and $LocalSkills -contains $m.Groups[1].Value) {
+            $found += [ordered]@{ kind = 'skill'; skill = $m.Groups[1].Value }
+        }
+        return $found
+    }
+    if ($hook -eq 'Stop') { return @(Get-Commits $Payload $Root) }
+    if ($hook -ne 'PostToolUse') { return @() }
     $tool = [string]$Payload.tool_name
     $ti = $Payload.tool_input
-    if ($tool -eq 'Read') {
-        $m = [regex]::Match([string]$ti.file_path, '[\\/]\.claude[\\/]skills[\\/]\.?([\w-]+)\.md$')
-        if ($m.Success -and $LocalSkills -contains $m.Groups[1].Value) {
-            return [ordered]@{ kind = 'skill'; skill = $m.Groups[1].Value }
-        }
-        return $null
-    }
     if ($tool -eq 'Skill') {
         $name = ([string]$ti.skill).TrimStart('.')
-        if ($LocalSkills -contains $name) { return [ordered]@{ kind = 'skill'; skill = $name } }
-        return $null
+        if ($LocalSkills -contains $name) { return @([ordered]@{ kind = 'skill'; skill = $name }) }
+        return @()
     }
     if (@('Edit', 'Write', 'MultiEdit', 'NotebookEdit') -contains $tool) {
         $target = [string]$ti.file_path
         if ([string]::IsNullOrWhiteSpace($target)) { $target = [string]$ti.notebook_path }
         $rel = Get-InsidePath $Root $target
-        if ($rel) { return [ordered]@{ kind = 'edit'; path = $rel } }
-        return $null
+        if ($rel) { return @([ordered]@{ kind = 'edit'; path = $rel }) }
     }
-    if ($tool -eq 'Bash' -and [regex]::IsMatch([string]$ti.command, $GitCommit)) {
-        $path = Get-SnapshotPath $Payload $Root
-        if (-not $path -or -not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
-        $before = ([System.IO.File]::ReadAllText($path)).Trim()
-        Remove-Item -LiteralPath $path -Force
-        $out = & git -C $Root log -1 '--format=%H' --name-only --relative 2>$null
-        if ($LASTEXITCODE -ne 0) { return $null }
-        $lines = @($out | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
-        if ($lines.Count -lt 1 -or $lines[0] -eq $before) { return $null }
-        $paths = @()
-        if ($lines.Count -gt 1) { $paths = @($lines[1..($lines.Count - 1)]) }
-        return [ordered]@{ kind = 'commit'; commit = $lines[0]; paths = $paths }
-    }
-    return $null
+    return @()
 }
 
 try {
@@ -114,22 +146,21 @@ try {
     $payload = $raw | ConvertFrom-Json
     $root = Find-ProjectRoot ([string]$payload.cwd)
     if (-not $root) { exit 0 }
-    if ([string]$payload.hook_event_name -eq 'PreToolUse') {
-        if ([string]$payload.tool_name -eq 'Bash' -and [regex]::IsMatch([string]$payload.tool_input.command, $GitCommit)) {
-            Save-Head $payload $root
+    $taskEvents = @(Get-Events $payload $root)
+    if ($taskEvents.Count -eq 0) { exit 0 }
+    $session = Get-MainSession ([string]$payload.session_id)
+    $lines = New-Object System.Text.StringBuilder
+    foreach ($taskEvent in $taskEvents) {
+        $row = [ordered]@{
+            v          = $EventVersion
+            at         = (Get-Date).ToUniversalTime().ToString('o')
+            source     = 'hook'
+            session_id = $session
         }
-        exit 0
+        foreach ($key in $taskEvent.Keys) { $row[$key] = $taskEvent[$key] }
+        if ($row.Contains('paths')) { $row['paths'] = @($row['paths']) }
+        [void]$lines.Append(($row | ConvertTo-Json -Compress -Depth 4) + "`n")
     }
-    $taskEvent = Get-Event $payload $root
-    if (-not $taskEvent) { exit 0 }
-    $row = [ordered]@{
-        v          = 1
-        at         = (Get-Date).ToUniversalTime().ToString('o')
-        source     = 'hook'
-        session_id = (Get-MainSession ([string]$payload.session_id))
-    }
-    foreach ($key in $taskEvent.Keys) { $row[$key] = $taskEvent[$key] }
-    $line = ($row | ConvertTo-Json -Compress -Depth 4) + "`n"
-    [System.IO.File]::AppendAllText((Join-Path $root '.workflow\data\tasks.jsonl'), $line, (New-Object System.Text.UTF8Encoding($false)))
+    [System.IO.File]::AppendAllText((Join-Path $root '.workflow\data\tasks.jsonl'), $lines.ToString(), (New-Object System.Text.UTF8Encoding($false)))
 } catch { }
 exit 0

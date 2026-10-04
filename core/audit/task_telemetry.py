@@ -3,9 +3,11 @@
 
 Events come from two writers into `tasks.jsonl`: the runtime records each delegated
 command it runs, and the `task-events` hook records what never passes through it — a
-local skill being loaded, a file edited, a commit made. Nothing is derived at write time;
-the hook stays a few lines of append, and a better reading of the same history needs no
-migration.
+local skill invoked from the prompt, a file edited, a commit made. Since event v2 the hook
+reads a commit as a HEAD that moved between turns (UserPromptSubmit/Stop) rather than from
+every Bash call, so a commit is recorded at the end of the turn that made it, after that
+turn's verify. Nothing is derived at write time; the hook stays a few lines of append, and a
+better reading of the same history needs no migration.
 
 A task is the run of events in one MAIN_SESSION_ID from its first event until a verify
 whose derived verdict is `pass` after the task edited something. A commit is the

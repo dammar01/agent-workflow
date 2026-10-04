@@ -1364,6 +1364,38 @@ def _test_e2e_routing() -> None:
             and all(e.get("source") == "runtime" for e in task_events),
             f"one task event per delegated command (DEC-015): {task_events}",
         )
+        stages = {r.get("command"): r.get("e2e_stage") for r in rows}
+        assert_true(
+            stages == {"verify-browser": "draft", "verify": "run"},
+            f"each browser row names its stage (contract v4): {stages}",
+        )
+        run_row = next(r for r in rows if r.get("command") == "verify")
+        assert_true(
+            isinstance(run_row.get("browser_seconds"), (int, float)),
+            f"a run records the browser's own time beside the provider's: {run_row.get('browser_seconds')}",
+        )
+        assert_true(
+            all(r.get("reuse_outcome") == "not_offered" for r in rows),
+            f"a browser command is never offered reuse, and says so: {[r.get('reuse_outcome') for r in rows]}",
+        )
+
+        # --- a run that ends before its review reached no provider: no usage row ---------------
+        root = workspace("e2e-usage-noreview-")
+        adapter = _adapter()
+        _, result = _flow(root, adapter, "harness_fail", {"E2E_USER": "u"})
+        rows = _usage_rows(root)
+        assert_true(
+            result["meta"].get("verdict") == "incomplete" and _commands(adapter) == ["e2e_spec"],
+            f"the harness failure ends the run before its review: {_commands(adapter)}",
+        )
+        assert_true(
+            [r.get("command") for r in rows] == ["verify-browser"],
+            f"only the draft reached a provider, so only the draft is a usage row: {[r.get('command') for r in rows]}",
+        )
+        assert_true(
+            sorted(e.get("skill") for e in load_events(root)) == ["verify", "verify-browser"],
+            "the run is still a verify in the task's sequence",
+        )
 
         root = workspace("e2e-usage-reviewfail-")
         adapter = _adapter(fail={"verify"})

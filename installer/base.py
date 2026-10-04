@@ -371,20 +371,24 @@ def _install_text(
     if key == "claude/CLAUDE.md":
         incoming = _apply_intent_mode(incoming, only_command)
 
-    if key in MARKERS and dest.exists():
+    if key in MARKERS:
+        # A first install writes the managed block alone, like every later one splices it:
+        # text outside the markers was written once, never refreshed, and never removable
+        # by --uninstall, because nothing could tell it from the user's own.
         start, end = MARKERS[key]
-        existing = _read_text_lenient(dest)
+        exists = dest.exists()
+        existing = _read_text_lenient(dest) if exists else ""
         merged, how = _merge_managed(existing, incoming, start, end)
-        if merged == existing:
+        if exists and merged == existing:
             plan.add("unchanged", dest)
             return
         pre_sha256 = _file_sha256(dest)
-        saved = _backup(dest, backup_root, plan, apply, key)
-        plan.add("merge", dest, how)
+        saved = _backup(dest, backup_root, plan, apply, key) if exists else None
+        plan.add("merge" if exists else "create", dest, how if exists else "managed block only")
         if apply:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_text(merged, encoding="utf-8")
-            _record("merge", dest, key, saved, pre_sha256)
+            _record("merge" if exists else "create", dest, key, saved, pre_sha256)
         return
 
     if dest.exists() and _read_text_lenient(dest) == incoming:

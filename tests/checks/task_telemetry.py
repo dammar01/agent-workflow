@@ -127,7 +127,11 @@ def _git(root: Path, *args: str) -> None:
 
 
 def _check_hook_flavours() -> None:
-    """Both flavours turn the same tool calls into the same events."""
+    """Both flavours turn the same hook events into the same task events (event v2).
+
+    A skill comes from the prompt or the Skill tool, never from a Read; a commit is a HEAD
+    that moved between two turn boundaries, recorded once, whatever Bash calls ran.
+    """
     base = Path(tempfile.mkdtemp(prefix="task-hook-"))
     try:
         home = base / "home"
@@ -152,38 +156,44 @@ def _check_hook_flavours() -> None:
                 (project / "src" / "a.py").write_text("x = 2\n", encoding="utf-8")
                 _git(project, "commit", "-q", "-am", "b")
 
-            commit = {"command": "git commit -m b"}
-            # (event, tool, input, tool_use_id, what the command itself does in between)
+            def commit_c():
+                (project / "src" / "c.py").write_text("y = 1\n", encoding="utf-8")
+                _git(project, "add", "src")
+                _git(project, "commit", "-q", "-m", "c")
+
+            # (event, tool, input, prompt, what happens after the hook ran)
             calls = [
-                ("PostToolUse", "Read", {"file_path": str(skills / "execute.md")}, "u0", None),
-                ("PostToolUse", "Read", {"file_path": str(skills / "verify.md")}, "u0", None),
-                ("PostToolUse", "Read", {"file_path": str(project / "src" / "a.py")}, "u0", None),
-                ("PostToolUse", "Skill", {"skill": ".commit"}, "u0", None),
-                ("PostToolUse", "Skill", {"skill": "caveman:caveman"}, "u0", None),
-                ("PostToolUse", "Edit", {"file_path": str(project / "src" / "a.py")}, "u0", None),
-                ("PostToolUse", "Write", {"file_path": str(project / ".workflow" / "config.json")}, "u0", None),
-                ("PostToolUse", "Write", {"file_path": str(base / "outside.py")}, "u0", None),
-                ("PostToolUse", "Bash", {"command": "git status"}, "u0", None),
-                # A commit that moves HEAD is recorded.
-                ("PreToolUse", "Bash", commit, "u1", commit_b),
-                ("PostToolUse", "Bash", commit, "u1", None),
-                # A commit that fails leaves HEAD where it was: nothing, though the last
-                # commit is seconds old.
-                ("PreToolUse", "Bash", commit, "u2", None),
-                ("PostToolUse", "Bash", commit, "u2", None),
-                # No saved HEAD: nothing to compare against, so nothing is claimed.
-                ("PostToolUse", "Bash", commit, "u3", None),
+                # The session's first event snapshots HEAD; /.execute is a local skill.
+                ("UserPromptSubmit", None, None, "/.execute -y", None),
+                # Delegated commands are the runtime's; prose is no command.
+                ("UserPromptSubmit", None, None, "/.plan something", None),
+                ("UserPromptSubmit", None, None, "tolong /.commit", None),
+                # A Read is not a skill load any more, a skill file included.
+                ("PostToolUse", "Read", {"file_path": str(skills / "verify.md")}, None, None),
+                ("PostToolUse", "Skill", {"skill": ".commit"}, None, None),
+                ("PostToolUse", "Skill", {"skill": "caveman:caveman"}, None, None),
+                ("PostToolUse", "Edit", {"file_path": str(project / "src" / "a.py")}, None, None),
+                ("PostToolUse", "Write", {"file_path": str(project / ".workflow" / "config.json")}, None, None),
+                ("PostToolUse", "Write", {"file_path": str(base / "outside.py")}, None, None),
+                ("PostToolUse", "Bash", {"command": "git commit -m b"}, None, commit_b),
+                # The turn ends: the commit made during it is recorded, once.
+                ("Stop", None, None, None, None),
+                ("Stop", None, None, None, commit_c),
+                # A commit made between turns is recorded when the next prompt arrives.
+                ("UserPromptSubmit", None, None, "lanjut", None),
+                ("Stop", None, None, None, None),
             ]
-            for event, tool, tool_input, use_id, between in calls:
-                payload = {
-                    "session_id": "claude-1", "cwd": str(project), "hook_event_name": event,
-                    "tool_name": tool, "tool_input": tool_input, "tool_use_id": use_id,
-                }
+            for event, tool, tool_input, prompt, after in calls:
+                payload = {"session_id": "claude-1", "cwd": str(project), "hook_event_name": event}
+                if tool:
+                    payload.update({"tool_name": tool, "tool_input": tool_input})
+                if prompt is not None:
+                    payload["prompt"] = prompt
                 raw = json.dumps(payload)
                 # The .sh wrapper hands its stdin to the embedded python as CLAUDE_HOOK_RAW.
                 subprocess.run(argv, input=raw, text=True, env={**env, "CLAUDE_HOOK_RAW": raw}, capture_output=True, timeout=60)
-                if between:
-                    between()
+                if after:
+                    after()
             stream = project / ".workflow" / "data" / "tasks.jsonl"
             rows = [json.loads(line) for line in stream.read_text(encoding="utf-8").splitlines()] if stream.exists() else []
             for row in rows:
@@ -192,10 +202,11 @@ def _check_hook_flavours() -> None:
                     row["commit"] = len(row["commit"])
             results[name] = rows
         expected = [
-            {"v": 1, "source": "hook", "session_id": "main_x", "kind": "skill", "skill": "execute"},
-            {"v": 1, "source": "hook", "session_id": "main_x", "kind": "skill", "skill": "commit"},
-            {"v": 1, "source": "hook", "session_id": "main_x", "kind": "edit", "path": "src/a.py"},
-            {"v": 1, "source": "hook", "session_id": "main_x", "kind": "commit", "commit": 40, "paths": ["src/a.py"]},
+            {"v": 2, "source": "hook", "session_id": "main_x", "kind": "skill", "skill": "execute"},
+            {"v": 2, "source": "hook", "session_id": "main_x", "kind": "skill", "skill": "commit"},
+            {"v": 2, "source": "hook", "session_id": "main_x", "kind": "edit", "path": "src/a.py"},
+            {"v": 2, "source": "hook", "session_id": "main_x", "kind": "commit", "commit": 40, "paths": ["src/a.py"]},
+            {"v": 2, "source": "hook", "session_id": "main_x", "kind": "commit", "commit": 40, "paths": ["src/c.py"]},
         ]
         for name, rows in results.items():
             assert_true(rows == expected, f"[{name}] hook events:\n{rows}\nexpected:\n{expected}")

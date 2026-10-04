@@ -219,6 +219,50 @@ def _drop_retired_hooks(hooks: dict, retired: set[str]) -> tuple[dict, int]:
     return out, removed
 
 
+def _drop_relocated_hooks(hooks: dict, tmpl_hooks: dict) -> tuple[dict, int]:
+    """Remove commands for a shipped script from events the template no longer runs it on.
+
+    `_merge_hook_entries` works one event at a time, so a script that moved — task-events
+    left PreToolUse in 3.8.0 — kept its old entry forever. A shipped script is ours to
+    place: on an event whose template entries do not name it, its command goes. A user's
+    own script is never shipped, so it is never touched.
+    """
+    def _ids(entries) -> set[str]:
+        out: set[str] = set()
+        for entry in entries if isinstance(entries, list) else []:
+            if isinstance(entry, dict):
+                out |= _hook_script_ids(entry)
+        return out
+
+    shipped: set[str] = set()
+    for entries in (tmpl_hooks or {}).values():
+        shipped |= _ids(entries)
+    removed = 0
+    out: dict = {}
+    for event, entries in hooks.items():
+        if not isinstance(entries, list):
+            out[event] = entries
+            continue
+        allowed = _ids((tmpl_hooks or {}).get(event))
+        kept_entries = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
+                kept_entries.append(entry)
+                continue
+            kept_hooks = []
+            for hook in entry["hooks"]:
+                stems = _hook_script_ids({"hooks": [hook]})
+                if stems and stems <= shipped and not stems & allowed:
+                    removed += 1
+                else:
+                    kept_hooks.append(hook)
+            if kept_hooks:
+                kept_entries.append({**entry, "hooks": kept_hooks})
+        if kept_entries:
+            out[event] = kept_entries
+    return out, removed
+
+
 def _install_settings(
     src: Path,
     dest: Path,
@@ -316,6 +360,12 @@ def _install_settings(
                     f"hooks.{event} (refreshed {updated} shipped entr"
                     f"{'y' if updated == 1 else 'ies'})"
                 )
+        merged_hooks, relocated = _drop_relocated_hooks(merged_hooks, tmpl_hooks or {})
+        if relocated:
+            hook_changes.append(
+                f"hooks (removed {relocated} shipped command{'s' if relocated != 1 else ''} "
+                "from events this release no longer registers them on)"
+            )
         if merged_hooks == (cur_hooks or {}):
             merged_hooks = None
 

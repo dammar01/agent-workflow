@@ -27,8 +27,9 @@ from typing import Any
 # gate: `_coerce` drops unknown keys either way, so a v1 row stays readable and simply
 # reports its actual_* fields as None — which is the truth about it. Bumped to 3 for
 # reuse_outcome/graph_status/graph_ms/provider_resumed/provider_thread_changed/effort; a
-# v2 row reads them as None, "not recorded".
-CONTRACT_VERSION = 3
+# v2 row reads them as None, "not recorded". Bumped to 4 for e2e_stage/browser_seconds,
+# and because a browser run that reached no provider stopped writing a row at all.
+CONTRACT_VERSION = 4
 
 # Where the usage stream lands, relative to the project's `.workflow` directory. A sibling
 # of redactions.jsonl and deliberately project-local: telemetry about a codebase is
@@ -45,7 +46,9 @@ QUALITY_STREAM_NAME = "quality.jsonl"
 # task-events hook. Not usage: local skills and edits are not delegated calls, and governance
 # budgets read the usage stream as billable work.
 TASK_STREAM_NAME = "tasks.jsonl"
-TASK_EVENT_VERSION = 1
+# 2: the hook reads skills from the prompt and commits from HEAD at turn boundaries instead
+# of from every Read and Bash call; a commit row now always carries `paths`.
+TASK_EVENT_VERSION = 2
 
 
 def _coerce(cls, payload: dict | None):
@@ -315,6 +318,14 @@ class UsageRecord:
     # Reasoning effort the adapter passed (`low`, `medium`, `high`, ...). None is the
     # provider's own default, not "unknown effort": no flag was sent.
     effort: str | None = None
+    # verify-browser only: `draft` (the e2e_spec call, recorded as `verify-browser`) or
+    # `run` (the review, recorded as `verify`). Lets a reader keep browser verification
+    # apart from /.verify without joining on prompt ids.
+    e2e_stage: str | None = None
+    # Wall time the browser itself took in a `run` — the player and any existing tests the
+    # project ran — which `duration_seconds` (the provider's time) never includes. On the
+    # command's final row only, so a sum over rows counts it once.
+    browser_seconds: float | None = None
     # How many credential-shaped values the redaction boundary scrubbed from this call.
     # A count, never the values: the whole reason they were scrubbed is that they should
     # exist nowhere on disk, and telemetry is not an exception to that.
@@ -387,6 +398,13 @@ def usage_from_result(
     meta = result.get("meta") if isinstance(result, dict) else None
     meta = meta if isinstance(meta, dict) else {}
     call = call_meta if isinstance(call_meta, dict) else {}
+
+    e2e_stage = None
+    if spec.command == "verify-browser":
+        e2e_stage = "draft"
+    elif meta.get("invocation") == "verify-browser":
+        e2e_stage = "run"
+    browser_seconds = _browser_seconds(meta.get("e2e")) if e2e_stage == "run" else None
 
     response_chars = call.get("response_chars")
     if response_chars is None:
@@ -462,4 +480,19 @@ def usage_from_result(
             call.get("thread_changed") if isinstance(call.get("thread_changed"), bool) else None
         ),
         effort=call.get("effort") if isinstance(call.get("effort"), str) else None,
+        e2e_stage=e2e_stage,
+        browser_seconds=browser_seconds,
     )
+
+
+def _browser_seconds(e2e_meta) -> float | None:
+    """The player's and the project's own tests' time in one browser run, or None."""
+    stages = e2e_meta.get("stages") if isinstance(e2e_meta, dict) else None
+    measured = [
+        float(stage["duration_seconds"])
+        for stage in stages or []
+        if isinstance(stage, dict)
+        and stage.get("stage") in (2, "existing_tests")
+        and isinstance(stage.get("duration_seconds"), (int, float))
+    ]
+    return round(sum(measured), 3) if measured else None

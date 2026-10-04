@@ -35,7 +35,10 @@ try {
     if ([string]::IsNullOrWhiteSpace($raw)) { exit 0 }
 
     $payload   = $raw | ConvertFrom-Json
-    $prompt    = [string]$payload.user_prompt
+    # Claude Code sends the prompt as `prompt`. This read `user_prompt` alone, which is
+    # never set, so every prompt classified as "no command" and the runtime gate never armed.
+    $prompt    = [string]$payload.prompt
+    if ([string]::IsNullOrWhiteSpace($prompt)) { $prompt = [string]$payload.user_prompt }
     $claudeSid = $payload.session_id
     $cwd       = $payload.cwd
     if ([string]::IsNullOrWhiteSpace($claudeSid)) { exit 0 }

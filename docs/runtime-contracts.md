@@ -779,6 +779,19 @@ user's own script is theirs. `--check` reports leftovers. `init`/`upgrade` point
 at the build running the command first, then `$AGENT_PATH`, and only then the path recorded
 in config.json.
 
+An instruction file with markers (`CLAUDE.md`, each provider `AGENTS.md`) that does not
+exist yet is written as the managed block alone, as a later install would splice it; text
+outside the markers in `dist/` is never installed. Hook entries are merged per event by the
+script they run; a shipped script's command on an event whose template entries no longer
+name it is removed from that event (`_drop_relocated_hooks`), so a hook that moved does not
+keep running in its old place.
+
+`--uninstall` is the inverse, through the same backup and receipt: the managed block is cut
+from each instruction file (a file left empty is removed, `action: remove`); a managed file is
+removed only when its hash is one an install recorded; settings.json loses every command that
+runs a shipped or retired workflow script, and a workflow `statusLine`, keeping all other
+keys; the mode file and ledger are deleted unreceipted. `--rollback` undoes it like an install.
+
 The receipt (`backups/install_<timestamp>/install_receipt.json`, `schema_version: 2`) is
 written incrementally: once, empty, before any destination changes — so a receipt that cannot
 be written fails the apply before anything was touched — and again after every recorded step,
@@ -846,7 +859,7 @@ fail differently:
   `call_meta_error`, no field on the result. A missing usage or audit row is therefore not
   evidence that the call failed.
 
-Usage rows carry contract version 3. Version 3 adds six fields, all `None` on older rows:
+Usage rows carry contract version 4 (below). Version 3 added six fields, all `None` on older rows:
 
 - `reuse_outcome` — why the reuse lookup did or did not serve the command: `hit`,
   `no_prior`, `stale`, `unreadable`, `error`, `not_offered`, `disabled`.
@@ -863,6 +876,21 @@ Usage rows carry contract version 3. Version 3 adds six fields, all `None` on ol
 `refreshing` means the call ran while `graphify-out/.refresh.lock` was held and went without
 leads. The lookup never waits on that lock.
 
+Contract version 4 adds two fields and drops one kind of row:
+
+- `e2e_stage` — `verify-browser` only: `draft` (the `e2e_spec` call, `command:
+  verify-browser`) or `run` (the review, `command: verify`). `None` on every other row.
+- `browser_seconds` — on the final row of a `run`: the summed `duration_seconds` of stage 2
+  (the player) and `existing_tests`. `duration_seconds` stays the provider's own time.
+- A browser run that ended before its review (incomplete, preflight, refused spec or env, no
+  request) reached no provider and writes **no** usage or audit row; the `e2e_run` quality row
+  and the `verify` task event still record it. Before v4 such a run wrote a `verify` row with
+  no `prompt_id`, `provider` or tokens, which the statusline counted as a call and the report
+  as a judged verify and a zero-token baseline verification. `telemetry.report` drops rows of
+  that shape (`provider_less_browser_run`); the statusline, being session-scoped, does not.
+- `reuse_outcome` is `not_offered` on both browser stages, and `evidence_reuse` leaves
+  `verify-browser` drafts out of the reuse-eligible commands, current and past rows alike.
+
 ## Task events
 
 `tasks.jsonl` (DEC-015, `core/audit/task_telemetry.py`) is append-only and has two writers.
@@ -871,17 +899,27 @@ after the usage and audit rows and inside the same fail-open block: `skill` (the
 `verdict` (verify only: the reply's declared verdict, `NEEDS FIX` when the contract finds a
 blocking finding), `derived` (verify only: the runtime's derived verdict, `pass`,
 `incomplete` or `fail`; DEC-020), `next_action`, `prompt_id`. A finalised browser run is `verify`, its draft
-`verify-browser`. The `task-events` PostToolUse hook appends `source: hook` events for what
-never reaches the runtime: `skill` for a local workflow skill loaded by `Read` of
-`~/.claude/skills/<name>.md` or by the `Skill` tool (delegated skills are skipped, the runtime
-has them), `edit` with a project-relative `path` (`.workflow/` and `.git/` excluded), and
-`commit` with `commit` and `paths` from `git log -1 --name-only --relative`, only when HEAD
-moved during the command: the same hook on `PreToolUse` (matcher `Bash`) saves HEAD for a
-`git commit` under `.workflow/data/task-hook/<tool_use_id>.head`, and `PostToolUse` reads
-and removes it. A failed commit leaves HEAD where it was and records nothing; no saved HEAD
-records nothing. The hook resolves MAIN_SESSION_ID through
-`~/.claude/session_registry.json`, writes only when `.workflow/data/` exists, and exits 0 on
-every path.
+`verify-browser`, including a run that reached no provider and so wrote no usage row. The
+`task-events` hook appends `source: hook` events (`v: 2`) for what never reaches the runtime:
+
+- `UserPromptSubmit`: `skill` for a prompt that opens with `/.<name>` naming a local workflow
+  skill (delegated skills are skipped, the runtime has them);
+- `PostToolUse` (matcher `Skill|Edit|Write|MultiEdit|NotebookEdit`): `skill` for the `Skill`
+  tool naming a local skill, and `edit` with a project-relative `path` (`.workflow/` and
+  `.git/` excluded);
+- `commit` rows, from a HEAD snapshot per Claude session at
+  `.workflow/data/task-hook/<session_id>.head`. The session's first event writes it. Each
+  `Stop`, and each later `UserPromptSubmit`, compares HEAD with it and, when HEAD moved,
+  appends one row per commit in `git log --reverse --first-parent -m --name-only --relative
+  <snapshot>..HEAD` (`commit`, `paths`), then moves the snapshot. A commit is therefore
+  recorded at the end of the turn that made it, after any verify in that turn; one made
+  between turns is recorded on the next prompt.
+
+Version 1 events (before 3.8.0) came from every `Read` and `Bash` call: a skill was a `Read`
+of `~/.claude/skills/<name>.md`, and a commit was a `git commit` that moved HEAD between
+`PreToolUse` and `PostToolUse`. The reader treats both versions alike. The hook resolves
+MAIN_SESSION_ID through `~/.claude/session_registry.json`, writes only when
+`.workflow/data/` exists, and exits 0 on every path.
 
 Nothing is derived at write time. `derive_tasks` walks the events in order per session: the
 first event opens a task; an `edit` clears a verdict seen before it; a verify whose

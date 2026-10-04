@@ -368,7 +368,13 @@ def e2e_metrics(project_root, rows: list[UsageRecord] | None = None) -> dict:
     e2e_prompts = {pid for run in runs for pid in run.get("provider_prompt_ids") or []}
     summary = {kind: _e2e_summary([r for r in runs if r.get("run_kind") == kind], usage_by_prompt) for kind in E2E_RUN_KINDS}
 
-    baseline = _work_groups([row for row in rows if row.command == "verify" and row.prompt_id not in e2e_prompts])
+    baseline = _work_groups([
+        row for row in rows
+        if row.command == "verify"
+        and row.e2e_stage is None
+        and row.prompt_id not in e2e_prompts
+        and not provider_less_browser_run(row)
+    ])
     baseline_tokens = [float(sum(billable_input(r) + billable_output(r) for r in group)) for group in baseline]
     baseline_durations = [
         float(sum(r.duration_seconds for r in group if r.duration_seconds is not None))
@@ -454,7 +460,10 @@ def evidence_reuse(rows) -> dict:
     guessed from its command. Provider cached input is a different thing and is not
     counted here: a reuse hit never reaches a provider.
     """
-    eligible = [row for row in rows if row.role in _REUSE_ROLES]
+    # A verify-browser draft takes the exploration route but is never offered reuse.
+    eligible = [
+        row for row in rows if row.role in _REUSE_ROLES and row.command != "verify-browser"
+    ]
     groups = _work_groups(eligible)
     reused = sum(1 for group in groups if any(row.reused_evidence for row in group))
     # One outcome per command. Rows written before contract v3 carry none and are counted
@@ -607,9 +616,27 @@ def task_report(project_root) -> dict:
     return task_telemetry.report(project_root)
 
 
+def provider_less_browser_run(row: UsageRecord) -> bool:
+    """A row written before contract v4 for a browser run that reached no provider.
+
+    A run that ended before its review (incomplete, preflight, refused spec) still wrote a
+    `verify` row with no prompt id, no provider and no tokens. It was not a call: it read
+    as an extra second-agent call, a judged verify, and a zero-token baseline verification.
+    Every ordinary verify has a prompt id, so the shape is unambiguous. v4 writes none.
+    """
+    return (
+        row.command == "verify"
+        and row.prompt_id is None
+        and row.provider is None
+        and not row.reused_evidence
+        and row.actual_input_tokens is None
+        and row.estimated_input_tokens is None
+    )
+
+
 def report(project_root) -> dict:
     """Every P1 metric, over the whole recorded history of this project."""
-    rows = load_usage(project_root)
+    rows = [row for row in load_usage(project_root) if not provider_less_browser_run(row)]
     # Time to complete a COMMAND, so a continuation's two invocations add up rather than
     # being averaged as two independent calls. The user waited for their sum; a mean over
     # the parts reports a wait nobody had, and reports it as shorter.

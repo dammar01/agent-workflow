@@ -425,6 +425,14 @@ def main() -> int:
         "--apply is also given",
     )
     parser.add_argument(
+        "--uninstall",
+        action="store_true",
+        help="remove what the workflow installed: its block in CLAUDE.md and each provider "
+        "AGENTS.md (your own text stays), unedited skills/commands/hooks/agents, and its "
+        "settings.json hooks and statusLine. Receipted, so --rollback undoes it. Dry run "
+        "unless --apply is also given",
+    )
+    parser.add_argument(
         "--set-env",
         action="store_true",
         help="also persist AGENT_PATH for future shells (Windows: HKCU\\Environment; "
@@ -463,6 +471,10 @@ def main() -> int:
 
     if args.rollback is not None:
         return _run_rollback(args.rollback or None, apply)
+    if args.uninstall:
+        from installer.uninstall import run_uninstall
+
+        return run_uninstall(apply)
 
     if args.only_command and args.auto_intent:
         print("[INSTALL] --only-command and --auto-intent are opposites; pick one")

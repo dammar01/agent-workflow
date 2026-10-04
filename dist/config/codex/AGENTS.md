@@ -1,6 +1,12 @@
 <!-- WORKFLOW-SECOND-AGENT:START — v3.8.0, do not edit manually -->
 # Codex Second Agent — v3.8.0
 
+## Scope
+This block applies ONLY when the request's instructions — inline, or in the file attached
+to it — open with `[WORKFLOW_AGENT]`: a call made by the agent-workflow runtime. Any other
+session is the user using Codex directly: ignore this whole block and follow the user's own
+instructions.
+
 ## [SECOND_AGENT CONSTRAINT — NON-NEGOTIABLE]
 
 role:      read-only information/evidence gathering

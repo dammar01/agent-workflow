@@ -102,6 +102,9 @@ from tests.checks.provider import (  # noqa: E402
     _test_provider_selection,
 )
 from tests.checks.provider_sessions import _test_provider_threads_are_kept_per_provider  # noqa: E402
+from tests.checks.isolation import _test_suite_ignores_the_machine_seed  # noqa: E402
+from tests.checks.installer_uninstall import _test_installer_uninstall  # noqa: E402
+from tests.checks.intent_gate import _test_intent_gate_reads_the_prompt_field  # noqa: E402
 from tests.checks.usage_tokens import _test_usage_token_accounting  # noqa: E402
 from tests.checks.redaction import _test_redaction_boundary  # noqa: E402
 from tests.checks.registry import _test_every_check_is_registered  # noqa: E402
@@ -130,6 +133,7 @@ from tests.scenario import run_tests  # noqa: E402
 SUITES: dict[str, tuple] = {
     "scenario": (run_tests, "stateful sequence + every standalone check (the full run)"),
     "registry": (_test_every_check_is_registered, "every check here is reachable from both entry points"),
+    "test-isolation": (_test_suite_ignores_the_machine_seed, "test workspaces are seeded from the shipped example, never the machine's provider pick"),
     "bundle-sync": (_test_bundle_registry_bijection, "skills/ and intent-map.json agree with CLAUDE.md"),
     "hook-flavours": (_test_every_shipped_hook_has_both_os_flavours, "every shipped hook ships .ps1 and .sh"),
     "stamp-version": (_test_stamp_version_reads_versions_not_addresses, "version stamping ignores IP addresses and --check passes"),
@@ -206,6 +210,8 @@ SUITES: dict[str, tuple] = {
     "installer-seed-optin": (_test_installer_seed_reports_unenforced_provider, "an unenforced provider names its opt-in variable"),
     "installer-seed-state": (_test_installer_check_reports_second_agent_default, "--check describes the seed without calling it drift"),
     "installer-e2e": (_test_installer_e2e_deps_are_opt_in, "--with-e2e installs the Playwright extra and its browser; nothing without it"),
+    "gate-prompt-field": (_test_intent_gate_reads_the_prompt_field, "intent-gate-set arms the gate from Claude Code's `prompt` field"),
+    "installer-uninstall": (_test_installer_uninstall, "first install writes the managed block alone; --uninstall cuts it and keeps the user's text and hooks; a moved hook leaves its old event"),
     "installer-stale": (_test_installer_leaves_no_stale_files, "--apply removes only recorded, unedited, unshipped files, drops retired hooks, refuses an unstamped dist"),
     "audit": (_test_audit_report, "the governance trail reads back and keeps a null provider visible"),
     "audit-torn": (_test_audit_survives_a_torn_row, "a partial final line does not hide the readable trail"),

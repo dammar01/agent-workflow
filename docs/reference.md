@@ -107,12 +107,32 @@ Clone → jalankan satu script → terkonfigurasi.
 git clone <repo> && cd agent-workflow
 python install.py            # DRY RUN — tampilkan semua perubahan, tulis nol
 python install.py --apply    # baru menulis
-python install.py --apply --only-command      # matikan auto-intent
+python install.py --apply --only-command      # workflow aktif hanya lewat /.<command>
 python install.py --apply --provider codex --model gpt-5.6-sol   # pilih second agent tanpa ditanya
 python install.py --check                     # cek bundle + instalasi (termasuk project bila cwd punya .workflow/)
 python install.py --rollback                  # dry-run rollback terakhir
 python install.py --rollback --apply          # rollback setelah preflight hash
+python install.py --uninstall                 # dry-run: apa yang akan dicabut
+python install.py --uninstall --apply         # cabut, ber-receipt (bisa di-rollback)
 ```
+
+Semua flag `install.py`:
+
+| Flag | Efek | Tulis? |
+|---|---|---|
+| (tanpa flag) | dry run: cetak rencana | tidak |
+| `--apply` | jalankan rencana; digabung dengan flag lain di bawah untuk benar-benar menulis | ya |
+| `--only-command` | mode command-only (lihat "Mode intent"); disimpan, berlaku untuk install berikutnya | dengan `--apply` |
+| `--auto-intent` | kembalikan mode auto-intent | dengan `--apply` |
+| `--provider NAME` / `--model ID` | pilihan second agent untuk seed (`--model` butuh `--provider`) | dengan `--apply` |
+| `--with-e2e` | juga pasang extra Playwright + Chromium untuk `/.verify-browser` | dengan `--apply` |
+| `--set-env` | permanenkan `AGENT_PATH` (Windows: `HKCU\Environment`; POSIX: `~/.bashrc`/`~/.zshrc`) | dengan `--apply` |
+| `--check` | laporan drift bundle, instalasi global, dan project bila cwd punya `.workflow/` | tidak |
+| `--rollback [ID]` | batalkan satu install/uninstall dari receipt-nya (default: terbaru) | dengan `--apply` |
+| `--uninstall` | cabut yang dipasang workflow (lihat "Uninstall") | dengan `--apply` |
+
+`AGENT_HOME` (env) mengganti `~` sebagai home target — dipakai test dan e2e installer untuk
+memasang ke HOME sementara.
 
 **Dry run adalah default, disengaja.** Script ini menulis ke config agent global — dibaca setiap project di mesin itu. Kesalahan di sini tidak terkurung dalam satu repo.
 
@@ -120,11 +140,12 @@ Yang dilakukan `--apply`:
 
 | Target | Strategi |
 |---|---|
-| `~/.claude/CLAUDE.md` | ganti isi **di antara marker** `WORKFLOW-MAIN-AGENT` — tulisan tangan di luar marker selamat |
-| `~/.claude/skills/*.md` | replace (template) |
-| `~/.claude/hooks/*` | replace |
-| `~/.claude/settings.json` | tambah key dan refresh hook milik workflow; hook user dipertahankan |
-| `~/.config/opencode/AGENTS.md` | ganti isi di antara marker `WORKFLOW-SECOND-AGENT` |
+| `~/.claude/CLAUDE.md` | ganti isi **di antara marker** `WORKFLOW-MAIN-AGENT` — tulisan tangan di luar marker selamat. File belum ada → ditulis **hanya blok marker** |
+| `~/.claude/skills/*.md`, `~/.claude/commands/*.md` | replace (template) |
+| `~/.claude/hooks/*` | replace; hanya flavour OS aktif (`.ps1` di Windows, `.sh` di POSIX) |
+| `~/.claude/settings.json` | tambah hook dan `statusLine` milik workflow; hook dan key user dipertahankan (lihat "Hook yang didaftarkan") |
+| `~/.config/opencode/AGENTS.md`, `~/.codex/AGENTS.md`, `~/.agy/AGENTS.md` | ganti isi di antara marker `WORKFLOW-SECOND-AGENT`; file belum ada → hanya blok marker. Blok itu hanya berlaku untuk call runtime (instruksi dibuka `[WORKFLOW_AGENT]`); sesi provider yang dipakai user langsung mengabaikannya |
+| `~/.claude/.workflow-install-mode.json`, `~/.claude/.workflow-installed.json` | mode intent terpilih dan ledger file yang ditulis install (untuk membersihkan file basi) |
 | `~/.config/opencode/opencode.{json,jsonc}` | merge additive untuk config umum; permission `agent.plan` milik workflow ditegakkan, key user lain dipertahankan |
 | `~/.config/opencode/agents/*.md` | replace — satu roster subagent global, dipakai semua project yang dikelola workflow |
 | `<project_root>/opencode.json` | **bukan** tugas installer — dipasang dan di-refresh oleh `init`/`upgrade` (deny-rule file rahasia ditegakkan tiap kali) |
@@ -201,7 +222,10 @@ Bila installer dijalankan dari dalam project yang sudah memiliki `.workflow/`, i
 Installer memasang `~/.claude/hooks/workflow-statusline.<ps1|sh>` dan mendaftarkannya sebagai
 `statusLine` di `settings.json`.
 
-`settings.json` **additive**: hanya key yang belum ada yang ditulis. Sudah punya
+`settings.json` **additive**: hanya key yang belum ada yang ditulis, dan template sejak 3.8.0
+hanya membawa `hooks` dan `statusLine` — `model`, `enabledPlugins`,
+`extraKnownMarketplaces`, `effortLevel`, dan `permissions.defaultMode` tidak lagi ditanam
+(itu preferensi, bukan kebutuhan workflow; yang sudah tertanam oleh rilis lama dibiarkan). Sudah punya
 `statusLine` sendiri → punyamu menang, badge tak muncul, dan tabrakannya dilaporkan di
 output install. Hapus key itu lalu jalankan ulang `install.py --apply` bila ingin memakai
 yang dikirim.
@@ -258,13 +282,59 @@ dan menghasilkan 11,7k untuk sesi yang sama — 50× lebih kecil. Field itu kini
 untuk baris yang tak terhitung provider, karena pada baris seperti itu estimasi `chars//4`
 mengukur panjang **prompt**, bukan berapa yang dibaca. Baris cadangan menyalakan `~`.
 
+### Hook yang didaftarkan
+
+| Event | Matcher | Script | Fungsi |
+|---|---|---|---|
+| `SessionStart` | `startup\|resume\|clear\|compact` | `session-bind` | mengikat sesi Claude ke `MAIN_SESSION_ID` |
+| `UserPromptSubmit` | — | `intent-gate-set` | mode auto-intent saja: pasang marker gate untuk prompt delegated |
+| `UserPromptSubmit` | — | `task-events` | skill lokal dari prompt; snapshot HEAD |
+| `PreToolUse` | `mcp__.*\|Read\|Grep\|Glob\|Bash` | `intent-gate-check` | blokir gather tool selama marker gate ada |
+| `PostToolUse` | `Skill\|Edit\|Write\|MultiEdit\|NotebookEdit` | `task-events` | skill via tool `Skill`, file diedit |
+| `Stop` | — | `graph-refresh` | regenerasi graph setelah turn yang mengimplementasi (detached) |
+| `Stop` | — | `task-events` | commit sejak snapshot HEAD |
+
+Hook dikenali dari nama script-nya. Saat install, hook milik workflow di-refresh per event,
+hook user dibiarkan, dan command script workflow yang tidak lagi didaftarkan rilis ini di
+suatu event dicabut dari event itu (misalnya `task-events` di `PreToolUse` dari draft 3.8.0).
+Di POSIX command `powershell ... .ps1` ditulis ulang menjadi `bash ... .sh`.
+
+### Uninstall
+
+`python install.py --uninstall` (dry run) lalu `--uninstall --apply`:
+
+- blok `WORKFLOW-MAIN-AGENT` / `WORKFLOW-SECOND-AGENT` dipotong dari CLAUDE.md dan tiap
+  AGENTS.md; teks user di atas dan di bawahnya tetap. File yang isinya hanya blok itu dihapus;
+- skill, command, hook, dan agent provider dihapus **hanya** bila isinya masih persis yang
+  ditulis install (ledger atau receipt); file yang sudah diedit dibiarkan dan disebut;
+- `settings.json` kehilangan command hook yang menjalankan script workflow (dikirim atau
+  pensiun) dan `statusLine` workflow; key lain tetap, termasuk yang dulu ditanam rilis lama;
+- mode intent dan ledger dihapus.
+
+Tidak disentuh: `config/second_agent.seed.json`, `AGENT_PATH` dari `--set-env`, dan
+`.workflow/` di tiap project. Semua perubahan lewat backup + receipt yang sama dengan install,
+jadi `python install.py --rollback --apply` membatalkan uninstall.
+
 ### Mode intent
 
 Default installer adalah **auto-intent**: bahasa natural dapat dipetakan ke command dan
-hook `UserPromptSubmit` mengaktifkan pre-flight gate. `--only-command` mempertahankan hanya
-kontrak prefix `/.` dan menghapus hook `intent-gate-set` milik workflow yang sudah
-terpasang; hook lain milik user tidak dihapus. Jalankan `--auto-intent` untuk memulihkannya.
-Tanpa kedua flag, upgrade mempertahankan mode instalasi sebelumnya.
+hook `UserPromptSubmit` mengaktifkan pre-flight gate. Seluruh blok workflow berlaku di
+setiap pesan.
+
+`--only-command` membuat workflow **aktif hanya saat dipanggil**: blok yang terpasang dibuka
+stanza "Cakupan aktif" — aturan workflow (gaya caveman, Output Contract, gate, `[NEXT]`,
+Graphify, Global Forbidden) berlaku hanya setelah user memanggil `/.<command>` atau skill
+workflow dan selama command itu berjalan. Pesan tanpa prefix adalah chat biasa yang
+mengikuti instruksi user di luar blok (CLAUDE.md user, memory, project). Hook
+`intent-gate-set` tidak didaftarkan; hook pasif (`session-bind`, `task-events`,
+`graph-refresh`) dan `statusLine` tetap, karena hanya mencatat. Jalankan `--auto-intent`
+untuk memulihkan mode default. Tanpa kedua flag, upgrade mempertahankan mode sebelumnya.
+
+Sampai 3.8.0 `intent-gate-set` membaca prompt dari field `user_prompt`, yang tidak pernah
+dikirim Claude Code (field-nya `prompt`). Akibatnya gate runtime tidak pernah aktif dan hanya
+lapisan prompt yang bekerja. Sejak perbaikan itu, di mode auto-intent `intent-gate-check`
+benar-benar memblokir gather tool sesudah prompt yang terpetakan ke command delegated sampai
+`.workflow/run` dipanggil; escape-nya tetap `WORKFLOW_LOCAL_MODE=1` atau `local_mode.flag`.
 
 `dist/config/claude/CLAUDE.md` sengaja memuat **kedua** stanza mode — `COMMAND-ONLY` dan
 `AUTO-INTENT`, masing-masing dibungkus marker `<!-- <MODE>:START -->` / `<!-- <MODE>:END -->`.
@@ -721,7 +791,7 @@ Cache verdict graph memakai fingerprint path, mtime nanosecond, dan ukuran selur
 `--command report` → `tasks` membaca `.workflow/data/tasks.jsonl` (DEC-015, direvisi DEC-020). Satu task = rangkaian event dalam satu MAIN_SESSION_ID, dari event pertamanya sampai verify yang verdict **turunan** runtime-nya `pass` setelah task itu mengedit file. Commit adalah langkah berikut yang dianjurkan, bukan penutup. Event ditulis dua pihak, tanpa instruksi tambahan di prompt:
 
 - runtime: satu event per command delegated (`explore`, `analyze`, `plan`, `verify`, `verify-browser`). Event verify membawa `verdict` (yang **dideklarasikan** reply; `DONE` dengan blocking finding dihitung `NEEDS FIX`) dan `derived` (verdict turunan runtime: `pass`, `incomplete`, atau `fail`). Hanya `derived: pass` yang menutup task; `DONE` yang oleh runtime dianggap `incomplete`, termasuk karena `not_verified`, membiarkan task tetap `open`;
-- hook `task-events` (`.ps1`/`.sh`; `PostToolUse` matcher `Read|Skill|Edit|Write|MultiEdit|NotebookEdit|Bash`, `PreToolUse` matcher `Bash`): skill lokal dimuat (`Read` `~/.claude/skills/<name>.md` atau tool `Skill`), file di dalam project diedit (bukan `.workflow/`/`.git/`), dan `git commit` yang benar-benar memindahkan HEAD: `PreToolUse` menyimpan HEAD sebelum command, `PostToolUse` mencatat commit hanya bila HEAD berubah. Commit gagal, atau tanpa HEAD tersimpan, tidak dicatat.
+- hook `task-events` (`.ps1`/`.sh`; `UserPromptSubmit`, `PostToolUse` matcher `Skill|Edit|Write|MultiEdit|NotebookEdit`, `Stop`): skill lokal yang dipanggil dari prompt (`/.<name>`) atau lewat tool `Skill`, file di dalam project diedit (bukan `.workflow/`/`.git/`), dan commit sebagai HEAD yang **berpindah antar turn**. Event pertama sesi menyimpan snapshot HEAD di `.workflow/data/task-hook/<claude_session_id>.head`; tiap `Stop` (atau prompt berikutnya, untuk commit yang dibuat di terminal di antara turn) mencatat commit sejak snapshot — first-parent, urut terlama dulu, masing-masing dengan `paths` — lalu memajukan snapshot. Event v2 (`v: 2`). Sebelum 3.8.0 hook ini jalan di setiap `Read` dan `Bash` (dua kali untuk `Bash`); satu spawn PowerShell ~450 ms di Windows, sementara skill dan commit cukup dibaca sekali per turn. Konsekuensi: skill yang dimuat lewat `Read` tanpa prefix (auto-intent bahasa natural) tidak tercatat, dan commit tercatat di akhir turn yang membuatnya, sesudah verify di turn itu.
 
 State: `completed` (verify `derived: pass` tanpa edit sesudahnya, di-commit atau belum), `open` (ada edit, belum `pass` — di-commit atau belum), `read_only` (tidak ada edit), `unknown` (event tanpa identitas sesi). Edit sesudah `pass` membuka task baru. Commit yang memuat file task yang baru `completed` masuk ke `sequence` task itu; commit di task `open` masuk ke `sequence`-nya tanpa mengubah state. Event sebelum DEC-020 tidak membawa `derived`, sehingga task-nya tetap `open`. Output: `tasks`, `by_state`, `skill_counts`, `unclaimed_commits` (commit yang tidak memuat file task mana pun), dan `recent` (10 task terakhir dengan `sequence`). Stream ini terpisah dari `usage.jsonl`: skill lokal dan edit bukan call delegated dan tidak boleh masuk budget governance.
 
@@ -1019,8 +1089,10 @@ lama ke `#batasan-yang-diketahui` tetap berfungsi.
 
 ## Benchmark
 
-Dipindah ke [`docs/evaluation/benchmark.md`](evaluation/benchmark.md). Telemetry pemakaian
-nyata ada di [`docs/evaluation/observed-usage.md`](evaluation/observed-usage.md).
+Dipindah ke [`docs/evaluation/benchmark.md`](evaluation/benchmark.md). Hasil pemakaian nyata
+(task yang masuk `main`, perbaikan, prompt, context) ada di
+[`docs/evaluation/real-use-benchmark.md`](evaluation/real-use-benchmark.md); telemetry status
+line di [`docs/evaluation/observed-usage.md`](evaluation/observed-usage.md).
 
 ---
 

@@ -134,6 +134,8 @@ def _evidence_reuse_counts_commands_it_could_serve() -> None:
         # Verify is never offered reuse, so it is not in the denominator.
         _usage(command="verify", role="verification", prompt_id="p2"),
         _usage(command="explore", prompt_id="p3"),
+        # A verify-browser draft takes the exploration route but is never offered reuse.
+        _usage(command="verify-browser", role="exploration", prompt_id="p4", e2e_stage="draft"),
     ]
     reuse = telemetry.evidence_reuse(rows)
     assert_true(
@@ -333,8 +335,39 @@ def _torn_row_is_skipped_not_fatal() -> None:
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _provider_less_browser_runs_are_not_calls() -> None:
+    """Rows written before contract v4 for a browser run that reached no provider."""
+    root = Path(tempfile.mkdtemp(prefix="telemetry-ghost-"))
+    try:
+        (root / ".workflow" / "data").mkdir(parents=True)
+        ghost = _usage(command="verify", session_id="s", ok=True, verdict="incomplete", accepted=False)
+        real = _usage(
+            command="verify", session_id="s", ok=True, prompt_id="p1", provider="opencode",
+            verdict="pass", accepted=True, correlation_id="t1", estimated_input_tokens=100,
+        )
+        assert_true(
+            telemetry.provider_less_browser_run(ghost) and not telemetry.provider_less_browser_run(real),
+            "the legacy ghost shape is recognised, an ordinary verify is not",
+        )
+        for row in (ghost, real):
+            write_usage_record(root, row.to_dict())
+        report = telemetry.report(root)
+        assert_true(
+            report["calls"] == 1,
+            f"a browser run with no provider call is not a call: {report['calls']}",
+        )
+        baseline = report["e2e"]["delegated_verify_baseline"]
+        assert_true(
+            baseline["verifications"] == 1,
+            f"nor a zero-token verification in the baseline: {baseline}",
+        )
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def _test_telemetry_metrics() -> None:
     _acceptance_is_per_task()
+    _provider_less_browser_runs_are_not_calls()
     _unjudged_work_is_not_incorrect()
     _report_reports_its_denominators()
     _evidence_reuse_counts_commands_it_could_serve()

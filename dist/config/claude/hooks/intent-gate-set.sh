@@ -28,7 +28,9 @@ try:
     if not raw.strip():
         sys.exit(0)
     payload = json.loads(raw)
-    prompt = str(payload.get("user_prompt") or "")
+    # Claude Code sends the prompt as `prompt`; `user_prompt` alone was never set, so the
+    # runtime gate never armed.
+    prompt = str(payload.get("prompt") or payload.get("user_prompt") or "")
     claude_sid = payload.get("session_id")
     cwd = payload.get("cwd")
     if not claude_sid:

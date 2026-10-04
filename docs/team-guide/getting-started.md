@@ -2,7 +2,8 @@
 
 ## One-time setup (each team member)
 
-Follow [Install in the README](../../README.md#install). In short:
+Follow [Install in the README](../../README.md#install); [installation.md](installation.md)
+covers choosing a mode, upgrading and uninstalling. In short:
 
 1. Clone the repository to a permanent location.
 2. Run the global install once per machine. Do not skip it: it installs the Claude Code

@@ -1,8 +1,4 @@
 {
-  "permissions": {
-    "defaultMode": "default"
-  },
-  "model": "claude-opus-4-8",
   "hooks": {
     "SessionStart": [
       {
@@ -24,6 +20,15 @@
             "timeout": 60
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"{{HOME}}\\.claude\\hooks\\task-events.ps1\"",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -33,6 +38,15 @@
             "type": "command",
             "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"{{HOME}}\\.claude\\hooks\\intent-gate-set.ps1\"",
             "timeout": 15
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"{{HOME}}\\.claude\\hooks\\task-events.ps1\"",
+            "timeout": 10
           }
         ]
       }
@@ -47,21 +61,11 @@
             "timeout": 15
           }
         ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"{{HOME}}\\.claude\\hooks\\task-events.ps1\"",
-            "timeout": 10
-          }
-        ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "Read|Skill|Edit|Write|MultiEdit|NotebookEdit|Bash",
+        "matcher": "Skill|Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
           {
             "type": "command",
@@ -75,26 +79,5 @@
   "statusLine": {
     "type": "command",
     "command": "powershell -NoProfile -ExecutionPolicy Bypass -File \"{{HOME}}\\.claude\\hooks\\workflow-statusline.ps1\""
-  },
-  "enabledPlugins": {
-    "caveman@caveman": true,
-    "ui-ux-pro-max@ui-ux-pro-max-skill": true
-  },
-  "extraKnownMarketplaces": {
-    "caveman": {
-      "source": {
-        "source": "github",
-        "repo": "JuliusBrussee/caveman",
-        "ref": "v2.7.0"
-      }
-    },
-    "ui-ux-pro-max-skill": {
-      "source": {
-        "source": "github",
-        "repo": "nextlevelbuilder/ui-ux-pro-max-skill",
-        "ref": "v2.15.0"
-      }
-    }
-  },
-  "effortLevel": "high"
+  }
 }
