@@ -31,11 +31,13 @@ Per session it counts:
 
 Read-only. Prints one JSON object of counts and distributions. Project names are replaced by
 letters unless --show-names is given; prompt text is printed only with --sample-rebuttals,
-which is for the maintainer's terminal and must never be committed. Not part of the test
-suite.
+which is for the local terminal and must never be committed or shared. Not part of the test
+suite. Any user of the workflow can run it over their own projects; `--export <file>` writes
+the same figures as a file that may be shared, refused if it would carry a path or a project
+name (and never combined with --show-names or --sample-rebuttals).
 
-  python tools/maintain/measure_real_use.py --projects-root E:/Work/project --version 3.7.3
-  python tools/maintain/measure_real_use.py --projects-root E:/Work/project --version 3.7.3 --sample-rebuttals 40
+  python tools/maintain/measure_real_use.py --projects-root <dir> --version 3.7.3
+  python tools/maintain/measure_real_use.py --projects-root <dir> --version 3.8.0 --export real-use.json
 """
 
 from __future__ import annotations
@@ -235,7 +237,11 @@ def main() -> int:
     ap.add_argument("--sample-rebuttals", type=int, default=0, metavar="N",
                     help="print N follow-ups with their classification for a hand check; local only")
     ap.add_argument("--sample-seed", type=int, default=0)
+    ap.add_argument("--export", metavar="FILE",
+                    help="also write the figures to FILE for sharing; refused if it would carry a path or project name")
     args = ap.parse_args()
+    if args.export and (args.show_names or args.sample_rebuttals):
+        ap.error("--export cannot be combined with --show-names or --sample-rebuttals")
 
     projects = sorted(p for p in glob.glob(os.path.join(args.projects_root, "*"))
                       if os.path.isdir(p) and os.path.basename(p) not in args.exclude)
@@ -267,10 +273,12 @@ def main() -> int:
         # `.workflow/run` inside a subagent, whose records are the sidechain read_transcript
         # skips. A continuation writes several rows under one prompt id, so count prompt ids;
         # a row no provider answered (verify-browser's closing row, a quick verify) is not one.
-        for s in found:
+        # A row belongs to one transcript only, the earliest that binds its session id.
+        owners = metrics.session_owners(found)
+        for i, s in enumerate(found):
             calls = {}
             for row in rows:
-                if row.get("session_id") in s["sessions"] and row.get("provider"):
+                if owners.get(row.get("session_id")) == i and row.get("provider"):
                     calls[row.get("prompt_id") or row.get("correlation_id")] = row.get("command")
             s["delegated"] = Counter(calls.values())
 
@@ -358,6 +366,12 @@ def main() -> int:
         },
     }
     print(json.dumps(report, indent=2, ensure_ascii=False))
+    if args.export:
+        try:
+            metrics.write_export(report, Path(args.export), forbidden=[os.path.basename(p) for p in projects])
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
 
     if args.sample_rebuttals:
         follow = [(p, bool(CORRECTION.search(p[:800]))) for s in sessions for p in s["prompts"][1:]]

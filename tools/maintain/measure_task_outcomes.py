@@ -34,7 +34,9 @@ Per task, from the transcript, the project's Git history, and the runtime's usag
 
 Lines are matched by content, so a file moved to another directory is followed by its name.
 Read-only. Prints one JSON object of figures; project names become letters unless
---show-names. Not part of the test suite.
+--show-names. Not part of the test suite. Any user can run it over their own projects with
+their own labels file; `--export <file>` writes the figures as a file that may be shared,
+refused if it would carry a path or a project name (never with --show-names).
 
   python tools/maintain/measure_task_outcomes.py --projects-root <dir> --labels <labels.json> --version 3.6.0 --version 3.7.3
 """
@@ -403,7 +405,11 @@ def main() -> int:
     ap.add_argument("--idle-minutes", type=float, default=IDLE_SECONDS / 60)
     ap.add_argument("--author-before-minutes", type=float, default=AUTHOR_BEFORE.total_seconds() / 60)
     ap.add_argument("--author-after-minutes", type=float, default=AUTHOR_AFTER.total_seconds() / 60)
+    ap.add_argument("--export", metavar="FILE",
+                    help="also write the figures to FILE for sharing; refused if it would carry a path or project name")
     args = ap.parse_args()
+    if args.export and args.show_names:
+        ap.error("--export cannot be combined with --show-names")
     _apply_rule(args)
     labels = json.loads(Path(args.labels).read_text(encoding="utf-8"))
     inputs = [Path(args.labels), INTENT_MAP]
@@ -421,10 +427,15 @@ def main() -> int:
         heads.append(git(path, "rev-parse", "--verify", "-q", "main").strip())
         root = os.path.abspath(path).replace("\\", "/") + "/"
         repo = Repo(path)
+        found = []
         for f in sorted(glob.glob(os.path.join(tdir, "*.jsonl"))):
             s = read_transcript(f, IDLE_SECONDS)
-            if s["version"] not in args.version or not s["prompts"]:
-                continue
+            if s["version"] in args.version and s["prompts"]:
+                found.append((f, s))
+        # A usage row belongs to one transcript only, the earliest that binds its session id,
+        # whatever that transcript's label: a resumed copy must not count the row again.
+        owners = metrics.session_owners([s for _, s in found])
+        for i, (f, s) in enumerate(found):
             category = labels.get(os.path.basename(f))
             if category is None:
                 unlabelled += 1
@@ -436,7 +447,7 @@ def main() -> int:
             end = start + timedelta(minutes=s["wall_minutes"])
             per_file = session_lines(f, root)
             out = outcome(repo, per_file, start, end)
-            rows = [r for r in usage if r.get("session_id") in s["sessions"]]
+            rows = [r for r in usage if owners.get(r.get("session_id")) == i]
             saved_recorded, saved_digest = saved_tokens(path, rows)
             net = saved_net(rows)
             tasks.append({
@@ -490,6 +501,12 @@ def main() -> int:
         "by_project": {letters[n]: summary([t for t in tasks if t["project"] == n]) for n in order},
     }
     print(json.dumps(report, indent=2, ensure_ascii=False))
+    if args.export:
+        try:
+            metrics.write_export(report, Path(args.export), forbidden=list(names))
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
     return 0
 
 

@@ -11,11 +11,35 @@ The calculation contract for every benchmark figure this project reports. The re
 - **Each producer stamps its output** with a `provenance` block: registry version, the metric
   versions it computed, the tool's commit (`+dirty` when uncommitted), its parameters, and a hash
   over its inputs (contents only, no paths).
-- **Recount:** maintainer machine only: inputs are private transcripts, usage streams and git history; the method is public, the data is not.
+- **Recount:** on the machine holding the inputs only: inputs are private transcripts, usage streams and git history; the method is public, the data is not.
+- **Measuring your own use.** Any user can run the offline tools over their own projects; the
+  figures are theirs. `--export <file>` writes a copy that may be shared (aggregates and the
+  provenance stamp), refused if it would carry a path or a project name. How to run them:
+  [Measure your own use](../team-guide/measure-your-use.md).
 - The statistics differ between producers on purpose: unifying them would change figures
   already recorded (CASE-011, CASE-012). Each metric names its convention below.
 
 Registry version: **1**.
+
+## Running the tools
+
+Both read only; both print one JSON object. Run them from the clone.
+
+```bash
+# Real use of one version over every project under a folder (real_use.*)
+python tools/maintain/measure_real_use.py --projects-root <folder> --version 3.8.0
+
+# Coding outcomes: what reached main, fixes within 24 h, context saved (outcome.*)
+python tools/maintain/measure_task_outcomes.py --projects-root <folder> --labels <labels.json> --version 3.8.0
+
+# The same, also written to a file that may be shared (refused if it would carry a path or a project name)
+python tools/maintain/measure_real_use.py --projects-root <folder> --version 3.8.0 --export real-use.json
+```
+
+`--transcripts` points at another transcript folder (default `~/.claude/projects`);
+`--exclude <dir>` leaves a project out (default: the clone itself, `agent-workflow`). The
+labels file maps a transcript file name to its category: `{"<session>.jsonl": "feature"}`.
+`--export` cannot be combined with `--show-names` or, for real use, `--sample-rebuttals`.
 
 ## Statistic conventions
 
@@ -53,7 +77,7 @@ Registry version: **1**.
 | `real_use.prompts_per_session@1` | prompt | `nearest_rank` | Human turns, excluding interrupts, compaction summaries, shell echoes and argument-less built-in slash commands. | sessions | - |
 | `real_use.rebuttal@1` | follow-up prompt | `count` | A follow-up whose first 800 characters match the CORRECTION pattern (Indonesian and English). Recall measured 0.08 in CASE-011: a lower bound. | follow-up prompts | - |
 | `real_use.active_minutes@1` | minutes per session | `nearest_rank` | Sum of gaps between consecutive transcript timestamps no longer than --idle-minutes (default 15). | sessions | - |
-| `real_use.delegated_call@1` | prompt answered by a provider | `count` | Distinct prompt_id (else correlation_id) among a session's usage rows that name a provider. Its `delegated_runtime` block is per row, not per command. | - | - |
+| `real_use.delegated_call@2` | prompt answered by a provider | `count` | Distinct prompt_id (else correlation_id) among a session's usage rows that name a provider. A usage row belongs to one session: the earliest-starting transcript that binds its MAIN_SESSION_ID (@1 joined it to every such transcript; identical on all data recorded up to 2026-10-04, where no id was bound twice). Its `delegated_runtime` block is per row, not per command. | - | - |
 
 ### Task outcomes (`tools/maintain/measure_task_outcomes.py`)
 
@@ -63,4 +87,4 @@ Registry version: **1**.
 | `outcome.solved@1` | coding task | `rate` | The first first-parent state of `main`, from session start to end + --search-days (30), holding at least --solved-share (0.8) of the lines the session left (Edit/Write/MultiEdit lines of 8+ characters it did not itself remove). 0.3 to 0.8 is partial; below is not in main. | coding tasks | A repository without `main` grades every task not_in_main. |
 | `outcome.solved_fixed@1` | solved task | `count` | A solved task whose lines changed on main within --fix-hours (24) of landing, in a commit by an author of the commits that brought them in (author window: -5 min before start, +1 min after landing). | - | - |
 | `outcome.context_final@1` | tokens | `median_stdlib` | input + cache_read + cache_creation of the task's last main-agent message. p90 uses p90_floor. | tasks with usage | Tasks without usage are left out of the statistic. |
-| `outcome.context_saved@1` | tokens per task | `median_stdlib` | Second agent's fresh input (input - cached) plus reasoning, minus what returned to the main agent (response characters // 4). p90 uses p90_floor. | coding tasks | Rows without provider counts fall back to estimates; such tasks are counted in context_saved_partly_estimated_tasks. |
+| `outcome.context_saved@2` | tokens per task | `median_stdlib` | Second agent's fresh input (input - cached) minus what returned to the main agent (response characters // 4), floored at 0; reasoning is reported apart, not counted. Usage rows belong to the earliest-starting transcript that binds their MAIN_SESSION_ID. p90 uses p90_floor. (@1 computed the same net, joined rows to every binding transcript, and its definition text wrongly added reasoning.) | coding tasks | Rows without provider counts fall back to estimates; such tasks are counted in context_saved_partly_estimated_tasks. |

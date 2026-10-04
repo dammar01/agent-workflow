@@ -15,6 +15,8 @@ Read in this order:
    **The most important page.**
 6. [examples.md](examples.md) — the same task done two ways.
 7. [troubleshooting.md](troubleshooting.md) — errors, slowness, and what to do about them.
+8. [measure-your-use.md](measure-your-use.md) — summarize weeks of your own sessions, and
+   share the figures without sharing your projects.
 
 The one idea to take away: agent-workflow changes **who does the decomposition and
 repository discovery**. If you still break every task into small instructions yourself, it

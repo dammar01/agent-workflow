@@ -13,8 +13,10 @@ version instead of quietly meaning something else.
 Every producer also stamps its output with `provenance()`: the registry version, the tool,
 the tool's commit, the parameters it ran with, and a hash over its inputs. The inputs are
 private (Claude Code transcripts, usage streams, project git history), so a figure can be
-recounted on the maintainer's machine only. `RECOUNT` says so in every stamp, so no output
-can be read as reproducible by anyone with a clone.
+recounted only on the machine that holds them: any user can measure their own use with the
+same tools, and nobody can recount another user's figure. `RECOUNT` says so in every stamp.
+`write_export` writes a figure set that may leave that machine: aggregates and the stamp,
+refused when it would carry a path or a project name.
 
 The registry is documented in docs/evaluation/metrics.md; a test keeps the two in step.
 """
@@ -22,6 +24,8 @@ The registry is documented in docs/evaluation/metrics.md; a test keeps the two i
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,8 +35,8 @@ from utils import osutil
 METRICS_VERSION = 1
 
 RECOUNT = (
-    "maintainer machine only: inputs are private transcripts, usage streams and git history; "
-    "the method is public, the data is not"
+    "on the machine holding the inputs only: inputs are private transcripts, usage streams and "
+    "git history; the method is public, the data is not"
 )
 
 # Statistic conventions, named once. Each metric says which one it uses.
@@ -123,8 +127,8 @@ REGISTRY: dict[str, dict] = {
         "denominator": "sessions", "missing": "-",
     },
     "real_use.delegated_call": {
-        "version": 1, "producer": _REAL_USE, "unit": "prompt answered by a provider", "statistic": "count",
-        "definition": "Distinct prompt_id (else correlation_id) among a session's usage rows that name a provider. Its `delegated_runtime` block is per row, not per command.",
+        "version": 2, "producer": _REAL_USE, "unit": "prompt answered by a provider", "statistic": "count",
+        "definition": "Distinct prompt_id (else correlation_id) among a session's usage rows that name a provider. A usage row belongs to one session: the earliest-starting transcript that binds its MAIN_SESSION_ID (@1 joined it to every such transcript; identical on all data recorded up to 2026-10-04, where no id was bound twice). Its `delegated_runtime` block is per row, not per command.",
         "denominator": "-", "missing": "-",
     },
     # --- offline: measure_task_outcomes ----------------------------------------------------
@@ -149,8 +153,8 @@ REGISTRY: dict[str, dict] = {
         "denominator": "tasks with usage", "missing": "Tasks without usage are left out of the statistic.",
     },
     "outcome.context_saved": {
-        "version": 1, "producer": _OUTCOMES, "unit": "tokens per task", "statistic": "median_stdlib",
-        "definition": "Second agent's fresh input (input - cached) plus reasoning, minus what returned to the main agent (response characters // 4). p90 uses p90_floor.",
+        "version": 2, "producer": _OUTCOMES, "unit": "tokens per task", "statistic": "median_stdlib",
+        "definition": "Second agent's fresh input (input - cached) minus what returned to the main agent (response characters // 4), floored at 0; reasoning is reported apart, not counted. Usage rows belong to the earliest-starting transcript that binds their MAIN_SESSION_ID. p90 uses p90_floor. (@1 computed the same net, joined rows to every binding transcript, and its definition text wrongly added reasoning.)",
         "denominator": "coding tasks", "missing": "Rows without provider counts fall back to estimates; such tasks are counted in context_saved_partly_estimated_tasks.",
     },
 }
@@ -200,3 +204,38 @@ def provenance(producer: str, params: dict, inputs, metric_ids=None) -> dict:
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "recount": RECOUNT,
     }
+
+
+def session_owners(transcripts: list[dict]) -> dict[str, int]:
+    """Which transcript owns each MAIN_SESSION_ID: the earliest-starting one that binds it.
+
+    A usage row is joined to a transcript by the session id it carries; a resumed or copied
+    transcript can bind the same id again, and joining the row to both would count it twice.
+    Index into `transcripts`; ties keep the earlier index.
+    """
+    order = sorted(range(len(transcripts)), key=lambda i: (transcripts[i].get("start") or "~", i))
+    owners: dict[str, int] = {}
+    for i in order:
+        for sid in transcripts[i].get("sessions") or ():
+            owners.setdefault(sid, i)
+    return owners
+
+
+# An absolute path in either OS's form: a figure set that leaves the machine carries none.
+_ABSOLUTE_PATH = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]|(?<![\w.~-])/(?:home|Users|root|mnt|var|tmp|opt|srv)/")
+
+
+def write_export(report: dict, dest: Path, forbidden=()) -> Path:
+    """Write a figure set meant to leave this machine, or refuse with ValueError.
+
+    `forbidden` holds the strings that would identify the user's projects (their directory
+    names); the export is refused when any of them, or any absolute path, appears in it. The
+    caller decides what goes in: aggregates and the provenance stamp, never prompt text.
+    """
+    text = json.dumps({"export": {"schema": 1, "recount": RECOUNT}, **report}, indent=2, ensure_ascii=False)
+    leaks = sorted({w for w in forbidden if w and len(w) > 2 and w in text})
+    if leaks or _ABSOLUTE_PATH.search(text):
+        raise ValueError(f"export refused: it would carry {len(leaks)} project name(s) or a path")
+    out = Path(dest)
+    out.write_text(text + "\n", encoding="utf-8")
+    return out

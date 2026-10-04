@@ -42,7 +42,7 @@ def _test_metrics_contract() -> None:
         assert_true(
             stamp["metrics_version"] == metrics.METRICS_VERSION
             and set(stamp["metrics"]) == {m for m in metrics.REGISTRY if m.startswith("runtime.")}
-            and "maintainer machine only" in stamp["recount"],
+            and "machine holding the inputs only" in stamp["recount"],
             f"report() carries its provenance: {stamp}",
         )
     finally:
@@ -83,3 +83,48 @@ def _test_metrics_contract() -> None:
     values = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     assert_true(dist(values)["median"] == 5 and dist(values)["p90"] == 9, "nearest_rank: round(p * (n - 1)), half to even (round(4.5) == 4)")
     assert_true(outcomes.p90(values) == 9 and outcomes.med(values) == 5.5, "p90_floor and median_stdlib")
+
+    # --- the implementation computes what the registry defines ---------------------------
+    # outcome.context_saved: fresh input (input - cached) minus returned (chars // 4), floored
+    # at 0; reasoning is reported apart and never counted.
+    net = outcomes.saved_net([
+        {"actual_input_tokens": 1000, "actual_cached_input_tokens": 300, "actual_reasoning_tokens": 500,
+         "response_chars": 400},
+        {"actual_input_tokens": 200, "actual_cached_input_tokens": 0, "response_chars": 40},
+    ])
+    assert_true(
+        (net["fresh"], net["returned"], net["reasoning"], net["net"]) == (900, 110, 500, 790),
+        f"outcome.context_saved is fresh minus returned, reasoning apart: {net}",
+    )
+    assert_true("minus what returned" in metrics.REGISTRY["outcome.context_saved"]["definition"]
+                and "plus reasoning" not in metrics.REGISTRY["outcome.context_saved"]["definition"],
+                "the registry states the formula the tool runs")
+    assert_true(outcomes.saved_net([{"actual_input_tokens": 10, "response_chars": 4000}])["net"] == 0,
+                "the net is floored at 0")
+
+    # --- a usage row belongs to one transcript: the earliest that binds its session -------
+    owners = metrics.session_owners([
+        {"start": "2026-10-02T00:00:00", "sessions": {"main_a"}},
+        {"start": "2026-10-01T00:00:00", "sessions": {"main_a", "main_b"}},
+        {"start": None, "sessions": {"main_c", "main_a"}},
+    ])
+    assert_true(owners == {"main_a": 1, "main_b": 1, "main_c": 2},
+                f"a resumed copy binding the same id does not own its rows: {owners}")
+
+    # --- an export carries no path and no project name ------------------------------------
+    root = Path(tempfile.mkdtemp(prefix="metrics-export-"))
+    try:
+        dest = root / "out.json"
+        metrics.write_export({"projects": 2, "per_project": {"PA": {"sessions": 3}}}, dest, forbidden=["shop-api"])
+        assert_true('"schema": 1' in dest.read_text(encoding="utf-8"), "an export is written with its schema")
+        for bad, why in (({"note": "shop-api"}, "a project name"), ({"note": r"E:\Work\x"}, "a Windows path"),
+                         ({"note": "/home/u/p"}, "a POSIX path")):
+            try:
+                metrics.write_export(bad, root / "bad.json", forbidden=["shop-api"])
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"an export carrying {why} is refused")
+        assert_true(not (root / "bad.json").exists(), "a refused export writes nothing")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
