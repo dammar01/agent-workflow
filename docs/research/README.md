@@ -237,6 +237,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-042](decisions/DEC-042-graphify-runs-unbounded-under-a-beating-lock.yaml) | graphify runs without a time limit, and the refresh lock is held while its worker beats | accepted | implemented | not_validated | f23fe24 |
 | [DEC-043](decisions/DEC-043-gate-lets-a-precision-read-through.yaml) | The pre-flight gate lets two small project reads through per delegation | accepted | implemented | not_validated | a06846a |
 | [DEC-044](decisions/DEC-044-side-effect-none-is-not-a-write.yaml) | Browser knowledge reads side_effect "none" as no write, so explicit drafts record selectors | accepted | implemented | observed | e9c63d7 |
+| [DEC-045](decisions/DEC-045-task-notifications-do-not-arm-the-gate.yaml) | A background task's notification neither arms nor clears the pre-flight gate | accepted | implemented | not_validated | 2110262 |
 | [LIT-001](literature/LIT-001-raven-harness-of-harnesses.yaml) | Raven: The Harness of Harnesses for Composable Agentic Intelligence | — | not_applicable | not_validated | — |
 <!-- research-inventory:end -->
 
