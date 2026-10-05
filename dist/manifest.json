@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "cc15f43c8c70e58092b73ef0d41b798b50d597023d7307c88cb313c41b59ea80",
-      "bytes": 29011,
+      "sha256": "57b1480db96438140ec51f3fd48c8ddb4a66e13cd271ed6bbb0e467151d76cfb",
+      "bytes": 29157,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -357,8 +357,8 @@
     },
     {
       "path": "claude/hooks/task-events.ps1",
-      "sha256": "f247b34ef4856e4dc4c8612b446963e233aaf3ea684c36ea6406dbbb52b3f915",
-      "bytes": 8101,
+      "sha256": "4a9b29b83a8c08502f2aa2fa30acbe9b8f08a176fcad0542a06dda99ec2412f7",
+      "bytes": 9542,
       "merge": "replace",
       "component": "runtime"
     },

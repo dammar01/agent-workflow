@@ -72,7 +72,8 @@ depends on the provider: see [Security](../security.md) and
                     14  contract check (shape only)
                           truncated? ► max 1 continuation
                     15  digest extraction + result shaping
-                          (full | slim | ref_only + evidence_ref)
+                          (heavy meta dropped; content ► preview +
+                           content_mode=ref_only when AI_PROXY_SLIM_CONTENT)
                     16  persist:
                           explore/plan/analyze ► facts + evidence (immutable, anchored)
                           all delegated        ► usage + audit
@@ -83,8 +84,9 @@ depends on the provider: see [Security](../security.md) and
  19 reason, write code, verify
 ```
 
-The secondary agent returns plain text. `digest`, `evidence_ref`, and every validation
-result are added by the runtime after the adapter returns.
+The secondary agent returns plain text. `digest` (only when a `[DIGEST]` block parses),
+`evidence_ref` (only on the explore/plan/analyze evidence path, step 16), and every
+validation result are added by the runtime after the adapter returns.
 
 | Step | Component | Source |
 | --- | --- | --- |
@@ -105,7 +107,8 @@ result are added by the runtime after the adapter returns.
 ## Side paths
 
 ```text
- local command (doctor/sweep/init/clean...) ► main.run ► Executor      (no job, no await)
+ local command (init/doctor/upgrade/clean/
+   inspect/provider/sweep)                  ► main.run                  (before Executor; no job, no await)
  verify, verify_mode=syntax                 ► Executor ► quick_verify   (no Router, no provider)
  verify-browser                             ► Executor ► e2e runner     (Playwright pipeline)
  promote-validate ► promote-verify ► promote-write ► docs/project-knowledge   (manual; write only on production_branch, default main)

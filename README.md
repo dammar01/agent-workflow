@@ -42,7 +42,8 @@ It is **not a replacement** for Claude Code or any other coding agent. It is an 
 control layer around them.
 
 Delegated results are treated as **evidence candidates**, not truth. Every delegated call
-returns the same envelope:
+returns the same envelope; `digest` appears when the secondary agent's summary parses, and
+`evidence_ref` on the explore/plan/analyze evidence path:
 
 ```json
 { "ok": true, "content": "...", "meta": {}, "digest": {}, "evidence_ref": {} }

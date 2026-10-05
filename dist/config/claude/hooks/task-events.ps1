@@ -61,19 +61,47 @@ function Get-InsidePath([string]$Root, [string]$Path) {
     return $rel
 }
 
+$GitTimeoutMs = 5000
+$script:GitExit = 0
+
+function ConvertTo-ProcessArg([string]$Arg) {
+    # Windows command-line quoting for ProcessStartInfo.Arguments (5.1 has no ArgumentList):
+    # backslashes double only where they precede a quote or the closing quote.
+    if ($Arg -ne '' -and $Arg -notmatch '[\s"]') { return $Arg }
+    $escaped = [regex]::Replace($Arg, '(\\*)"', { param($m) $m.Groups[1].Value * 2 + '\"' })
+    $escaped = [regex]::Replace($escaped, '(\\+)$', { param($m) $m.Groups[1].Value * 2 })
+    return '"' + $escaped + '"'
+}
+
 function Invoke-Git([string[]]$GitArgs) {
-    # Windows PowerShell 5.1 turns a native command's stderr into an error record, and under
-    # $ErrorActionPreference='Stop' that record terminates the script even with 2>$null:
-    # "fatal: not a git repository" lost every event of a project without git. Git runs
-    # under a local 'Continue'; the caller judges it by $LASTEXITCODE alone.
-    $ErrorActionPreference = 'Continue'
-    $out = & git @GitArgs 2>$null
-    return ,@($out)
+    # Git runs as a bare process, not `& git`, for two reasons. Windows PowerShell 5.1 turns a
+    # native command's stderr into an error record that terminates the script under 'Stop'
+    # even with 2>$null ("fatal: not a git repository" lost every event of a project without
+    # git, DEC-030); here stderr is drained and dropped. And `& git` cannot be bounded: a git
+    # stuck on a lock would hold the hook until Claude Code's own timeout killed it. Same
+    # 5-second ceiling as git_out in task-events.sh. The caller judges by $script:GitExit.
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = 'git'
+    $psi.Arguments = (@($GitArgs | ForEach-Object { ConvertTo-ProcessArg $_ }) -join ' ')
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.StandardOutputEncoding = New-Object System.Text.UTF8Encoding($false)
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $stdout = $proc.StandardOutput.ReadToEndAsync()
+    $null = $proc.StandardError.ReadToEndAsync()
+    if (-not $proc.WaitForExit($GitTimeoutMs)) {
+        try { $proc.Kill() } catch { }
+        throw "git timed out after $GitTimeoutMs ms"
+    }
+    $script:GitExit = $proc.ExitCode
+    return ,@($stdout.Result -split "`r?`n")
 }
 
 function Get-Head([string]$Root) {
     try { $head = Invoke-Git @('-C', $Root, 'rev-parse', '--verify', '-q', 'HEAD') } catch { return '' }
-    if ($LASTEXITCODE -ne 0) { return '' }
+    if ($script:GitExit -ne 0) { return '' }
     return ([string]($head -join '')).Trim()
 }
 
@@ -103,7 +131,7 @@ function Get-Commits($Payload, [string]$Root) {
     Write-Snapshot $path $now
     $range = if ($before) { "$before..$now" } else { $now }
     try { $out = Invoke-Git @('-C', $Root, 'log', '--reverse', '--first-parent', '-m', '--format=commit:%H', '--name-only', '--relative', $range) } catch { return @() }
-    if ($LASTEXITCODE -ne 0) { return @() }
+    if ($script:GitExit -ne 0) { return @() }
     $commits = @()
     $current = $null
     foreach ($line in @($out)) {

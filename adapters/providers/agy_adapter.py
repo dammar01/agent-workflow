@@ -446,7 +446,7 @@ class AgyAdapter:
                 )
             if _matches(tail, _STREAM_FAIL_SIGNS):
                 return make_error(
-                    "stream_failed",
+                    "streaming_failed",
                     tail or "agy lost the provider stream mid-response",
                     next_action=(
                         "Transient — the stream dropped, the request itself was fine. "

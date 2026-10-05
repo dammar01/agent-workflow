@@ -59,6 +59,10 @@ ERROR_TYPES = {
     "worker_capacity",
     "sweep_git_error",
     "runtime_lock",
+    # The project-local provider session file would not load (unreadable, or not a session).
+    # Raised from main before any job exists; unregistered, it raised out of make_error and
+    # a corrupt file produced a traceback instead of the repair instruction.
+    "session_state_error",
     # The session hit its configured token ceiling. Its own type rather than `unknown`
     # because the remedy is exact and unlike every other refusal here: nothing is broken,
     # nothing will fix itself by waiting or retrying, and the only next steps are raising

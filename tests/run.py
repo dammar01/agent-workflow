@@ -25,6 +25,7 @@ from tests.checks.adapters import (  # noqa: E402
     _test_adapter_error_normalization,
     _test_stdin_failure_reaches_call_meta,
     _test_adapter_redaction_is_shared,
+    _test_error_types_are_registered,
 )
 from tests.checks.audit import (  # noqa: E402
     _test_audit_is_not_telemetry,
@@ -200,6 +201,7 @@ SUITES: dict[str, tuple] = {
     "adapters": (_test_adapter_error_normalization, "every adapter normalises errors and counts redactions alike"),
     "adapters-shared": (_test_adapter_redaction_is_shared, "no adapter carries a private copy of the redaction helpers"),
     "adapters-stdin": (_test_stdin_failure_reaches_call_meta, "a failed stdin handover names its cause in the call meta"),
+    "error-types": (_test_error_types_are_registered, "every literal make_error type is registered, so no failure path raises"),
     "prompt-blocks": (_test_prompt_contract_blocks, "every role/command branch asks for a shape the runtime parses"),
     "prompt-verify": (_test_verify_branch_carries_routing_contract, "verify prompt carries the severity routing triple"),
     "prompt-tools": (_test_permitted_tools_line, "declared tool policy reaches the prompt, absence stays absent"),

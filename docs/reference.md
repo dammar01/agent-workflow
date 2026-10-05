@@ -17,7 +17,7 @@ Runtime ini duduk di antara keduanya: menerima command, merakit prompt terstrukt
 
 `digest` ditambahkan hanya bila output second_agent membawa blok `[DIGEST]` yang dapat diparse; ia bukan field wajib.
 
-Evidence, config, dan state per-sesi yang project-local hidup di `.workflow/` pada project target. Binding sesi OpenCode, antrean job, dan cache lintas project milik tool tetap berada di `storage/` repo ini.
+Evidence, config, state per-sesi, dan binding sesi provider (`.workflow/data/provider-sessions/`) hidup project-local di `.workflow/` pada project target. Antrean job dan cache lintas project milik tool tetap berada di `storage/` repo ini (lihat [Layout workspace](#layout-workspace)).
 
 ---
 
@@ -41,6 +41,38 @@ Prompt user
 Auto-intent, output `[OPTIONS]` pada `/.plan`, dan keputusan menjalankan `/.verify` setelah `/.execute` berada di lapisan prompt **main_agent**. Runtime Python tidak menerima pesan user mentah dan tidak melihat response final yang ditulis main_agent. Runtime hanya mengelola delegasi, evidence, job, dan policy metadata.
 
 Diagram ini menggambarkan jalur delegated penuh. `sweep` dipotong lebih awal oleh `main.run()` dan selesai lokal tanpa `Executor`; `verify` dengan `verify_mode: syntax` berhenti di `quick_verify` sebelum Router, Graphify, PromptBuilder, OpenCode, dan second_agent.
+
+---
+
+## Envelope response
+
+Setiap hasil berbentuk `{ok, content, meta}`. Field lain bersifat kondisional:
+
+| Field | Kapan ada | Isi |
+|---|---|---|
+| `digest` | output second_agent membawa blok `[DIGEST]` yang dapat diparse | ringkasan untuk direlay. `digest.anchors = {certified, total}` ditambahkan bila evidence mencatat anchor; confidence yang diturunkan karena anchor/graph menyimpan nilai aslinya di `digest.confidence_reported` dan alasannya di `digest.confidence_capped_by` |
+| `evidence_ref` | hanya jalur evidence explore/plan/analyze | `{artifact_path, anchors, certified_anchors, reused}`. `reused: true` = artifact sesi lampau dipakai ulang (lihat [Evidence reuse dan boundary](#evidence-reuse-dan-boundary)) |
+| `meta.task_cap`, `meta.task_cap_source` | setiap call delegated | batas panjang task efektif. `task_cap_source`: `transport` (dihitung dari sisa ruang command line argv), `floor` (scaffolding hampir memenuhi command line; angka minimum), `policy` (opt-in `AI_PROXY_MAX_TASK_CHARS_NO_ARGV`), `unbounded` (`task_cap: null`; transport stdin/file atau argv di luar Windows) |
+| `meta.task_truncated` | task dipotong oleh cap | sinyal untuk meringkas instruksi, bukan untuk memecah call |
+| `meta.content_mode`, `meta.content_full_chars` | `AI_PROXY_SLIM_CONTENT` aktif, content panjang, dan artifact ada di disk | `content_mode: "ref_only"`: `content` hanya preview; teks lengkap di `evidence_ref.artifact_path` |
+| `meta.policy` | setiap call delegated | `auto_verify_after_execute`, `verify_mode`, `subagent_fanout_enabled` yang efektif |
+| `meta.error_type`, `meta.next_action` | `ok: false` | keduanya wajib; `error_type` dari himpunan tertutup di bawah |
+
+### `error_type`
+
+Himpunan tertutup di `core/evidence/contract.py` `ERROR_TYPES`; `make_error` menolak nama di luar himpunan itu, dan suite `error-types` memastikan setiap literal yang dipakai kode terdaftar.
+
+| Kelompok | `error_type` |
+|---|---|
+| Provider dan worker | `timeout`, `worker_died`, `worker_crashed`, `worker_stalled`, `job_expired`, `rate_limited`, `streaming_failed`, `sandbox_unavailable`, `second_agent_unavailable`, `command_not_found`, `permission_denied` |
+| Output second_agent | `empty_output`, `invalid_evidence`, `session_capture_failed`, `task_truncated`, `fact_ingest_failed` |
+| Prompt dan command line | `prompt_too_long`, `unsafe_command_line` |
+| Config provider | `provider_config_missing`, `provider_config_invalid`, `model_unset`, `invalid_provider_selection` |
+| Job, sesi, workspace | `job_already_running`, `job_submit_error`, `worker_capacity`, `runtime_lock`, `session_state_error`, `routing_error`, `workflow_init_error`, `workflow_upgrade_error`, `sweep_git_error`, `budget_exceeded` |
+| Promote dan knowledge | `promote_input_missing`, `promote_input_unreadable`, `promote_existing_unreadable`, `promote_not_on_branch`, `promote_not_production_branch`, `promote_write_rejected`, `invalid_knowledge`, `secret_shaped_content`, `ignored_source`, `ignored_destination` |
+| Lainnya | `unknown` |
+
+`worker_died` dengan `meta.reason: recovery_exhausted` berarti recovery otomatis sudah dipakai; jangan ulang otomatis (lihat [Job asinkron & pemulihan](#job-asinkron--pemulihan)).
 
 ---
 
@@ -696,7 +728,7 @@ gunakan `await` seperti contoh di atas. `sweep` dan command lokal lain selesai l
 
 Dibuat saat `init`, dan berisi **override saja**: section `commands`, `policies`, `e2e` kosong/tidak ada berarti semua key memakai default bawaan build yang sedang jalan. Tulis hanya key yang ingin kamu ubah; key yang tidak ada tidak pernah diisi otomatis, jadi default yang berubah di rilis berikutnya ikut sampai ke project ini.
 
-Delapan key berikut benar-benar mengubah perilaku runtime Python:
+Sepuluh key berikut benar-benar mengubah perilaku runtime Python:
 
 | Key | Default | Arti |
 |---|---|---|

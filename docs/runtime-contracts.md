@@ -14,22 +14,30 @@ changed in a later build reaches every project (`config_defaults.merge_config_de
 `effective_section`). The upgrade to layout 2 strips values equal to a default and unknown
 or retired keys, and reports each.
 
-Everything else under `commands` and `policies` is an instruction to main_agent only.
-Those keys are inert in this process: renaming one changes nothing here. The list is
-kept explicit so that "configured" is never mistaken for "enforced".
+The keys below change what this process does. Everything else under `commands` and
+`policies` is an instruction to main_agent only: inert here, so renaming one changes
+nothing in Python. The list is kept explicit so that "configured" is never mistaken for
+"enforced"; defaults and meaning are in
+[reference.md, "`.workflow/config.json`"](reference.md#workflowconfigjson).
 
 - `commands.verify_mode` (`delegated` | `syntax`; anything else warns and falls back to `delegated`)
+- `commands.verify_test_commands`, `commands.verify_test_timeout_seconds` (`core/evidence/verify_tests.py`)
 - `policies.fact_relevant_limit`
 - `policies.fact_recurrence_threshold`
 - `policies.graph_leads_enabled`
 - `policies.subagent_fanout_enabled`
+- `policies.production_branch`, `policies.knowledge_dir`, `policies.knowledge_relevant_limit` (promote and the knowledge sidecar)
+
+`commands.auto_verify_after_execute` sits between the two: the runtime reads it and echoes
+it in `meta.policy`, but nothing in Python acts on it (see the table below).
 
 `/.verify-browser` reads one section of config.json, `e2e`, as the project's default
 settings; everything else about a run travels in a per-session request (see below).
 
-Timeout, stall, and probe settings are **not** here. They live in `opencode.json`, where
-the adapter and the job manager read them. The doctor report names that location so their
-home is not a guessing game.
+Timeout, stall, and probe settings are **not** here. They are provider settings in the
+project's `.workflow/second_agent.json` (`timeout_seconds`, `stall_threshold_seconds`,
+`idle_stall_seconds`, `probe_timeout_seconds`, …; defaults in
+`config.settings.default_provider_config`), where the adapter and the job manager read them.
 
 ## Contracts the runtime cannot enforce
 
@@ -122,7 +130,9 @@ wildcards are not, at most 20; see below), `secrets_profile` (a
 `secrets.json` profile name; empty = the file's `default`), `secrets_template_profiles`
 (profile names a newly created `secrets.json` gets; at most 20, unique),
 `fail_on_console_error`, `max_retries` (how many extra browsers one run may start; see
-below), `artifact_max_mb`, `existing_test_command` (config-only; an argv template run
+below), `ignore_repeat_brake` (see below), `keep_created_data` (default `false`; with
+`allow_side_effects`, lets a `creates_test_data` step carry `no_cleanup_reason` instead of a
+cleanup, reported as cleanup `not_planned`), `artifact_max_mb`, `existing_test_command` (config-only; an argv template run
 without a shell; `{files}` and `{base_url}` expand), `existing_test_allowlist` and
 `existing_test_timeout_s` (both config-only). An unknown key or a wrong type is `request_invalid`, not a silent
 fallback; `allowed_mutation_paths`, removed, is `request_invalid` with a message naming

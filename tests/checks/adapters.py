@@ -17,6 +17,9 @@ rather than three near-copies: a fourth provider joins this check by existing, w
 the same reason the accounting itself now lives in adapters/redaction.py.
 """
 
+import re
+from pathlib import Path
+
 from adapters.providers import agy_adapter, codex_adapter, opencode_adapter
 from core.evidence.contract import ERROR_TYPES
 from tests.checks.support import assert_true
@@ -173,4 +176,32 @@ def _test_stdin_failure_reaches_call_meta() -> None:
     assert_true(
         meta.get("prompt_chars") == 5 and meta.get("stdin_write_failed") is None,
         f"a successful handover reported a failure, which would make the signal noise: {meta}",
+    )
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_MAKE_ERROR_LITERAL = re.compile(r'make_error\(\s*"([a-z_]+)"')
+
+
+def _test_error_types_are_registered() -> None:
+    """Every literal error_type handed to make_error is in the closed set.
+
+    make_error raises on an unregistered type, so a typo there is not a wrong label: it is
+    a traceback on exactly the failure path the error was written for. Two shipped that
+    way — main's `session_state_error` and agy's `stream_failed` — and no test reached
+    either path. Scanning the source catches the next one without having to provoke it.
+    """
+    unregistered = []
+    for path in sorted(_REPO_ROOT.rglob("*.py")):
+        parts = path.relative_to(_REPO_ROOT).parts
+        if parts[0] in (".workflow", "tests", ".git") or "__pycache__" in parts:
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        for match in _MAKE_ERROR_LITERAL.finditer(text):
+            if match.group(1) not in ERROR_TYPES:
+                line = text.count("\n", 0, match.start()) + 1
+                unregistered.append(f"{path.relative_to(_REPO_ROOT).as_posix()}:{line} {match.group(1)}")
+    assert_true(
+        not unregistered,
+        f"make_error called with an unregistered error_type (it would raise): {unregistered}",
     )
