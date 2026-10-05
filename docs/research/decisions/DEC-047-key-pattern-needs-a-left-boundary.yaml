@@ -32,7 +32,7 @@ evidence_notes: |
   `redaction`, `adapters` and `e2e-redact` suites pass.
 implementation:
   version: 3.8.1
-  commits: [uncommitted]
+  commits: [58db760da61ddc00531ec2443f71758a13bec9a2]
   components:
     - utils/redact.py (left boundary on the openai-style pattern)
     - tests/checks/redaction.py, tests/run.py (redaction-boundary suite)

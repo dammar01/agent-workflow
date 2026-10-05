@@ -44,7 +44,7 @@ evidence_notes: |
   triggers; `intent-map.json` is unchanged, so the runtime gate classifies prompts as before.
 implementation:
   version: 3.8.1
-  commits: [uncommitted]
+  commits: [58db760da61ddc00531ec2443f71758a13bec9a2]
   components:
     - dist/config/claude/CLAUDE.md (NL map plan/execute, tie-break 4, Intent detection limits, Execution rules approval, Global Forbidden)
     - dist/config/claude/skills/execute.md (no-plan gate, approval, project-root scope)
