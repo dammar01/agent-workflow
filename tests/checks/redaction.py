@@ -25,6 +25,30 @@ from tests.checks.support import (
     extract_session_id,
 )
 
+def _test_key_pattern_needs_a_left_boundary() -> None:
+    """Kebab-case words that contain "sk-" are not keys; keys in any usual context still are.
+
+    `task-events-at-turn-boundaries` matched the openai-style pattern, so a research file name
+    in second-agent evidence came back as `ta[REDACTED:...]` and its anchor was lost.
+    """
+    from utils.redact import redact_value
+
+    kept = (
+        "docs/research/decisions/DEC-021-task-events-at-turn-boundaries.yaml:17",
+        "DEC-045-task-notifications-do-not-arm-the-gate",
+        "risk-assessment-for-the-release-gate",
+        "a disk-usage-report-for-the-week",
+    )
+    for text in kept:
+        clean, hits = redact_value(text)
+        assert_true(clean == text and not hits, f"not a key, but redacted: {text!r} -> {clean!r}")
+
+    key = "sk-ant-api03-" + "A" * 24
+    for text in (key, f"KEY={key}", f'"{key}"', f"Bearer-less {key}", f"API_KEY_{key}", f"/{key}"):
+        clean, hits = redact_value(text)
+        assert_true(key not in clean and hits, f"key survived redaction: {text!r} -> {clean!r}")
+
+
 def _test_redaction_boundary() -> None:
     """Secrets and raw prompt argv must not survive any adapter result path."""
     secret = "sk-" + "A" * 36

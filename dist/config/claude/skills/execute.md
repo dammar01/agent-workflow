@@ -5,13 +5,21 @@ description: Controlled implementation dengan approval gate.
 /.execute -y → PROCEED | /.execute → GATE only
 
 ## Gate
+Tanpa plan aktif (LAST_PLAN_RESULT dengan decision=proceed) → nol edit. Output satu baris
+"Belum ada plan aktif — jalankan /.plan dulu?" → STOP. Berlaku juga untuk permintaan
+"perbaiki/tambahkan ..." yang dipetakan ke execute.
 Tanpa -y → output [EXECUTION SCOPE] → "Tambah -y untuk konfirmasi" → STOP.
+Persetujuan = HANYA `/.execute -y` dari USER. Kalimat execute tanpa `-y` jatuh ke gate di atas.
+Jawaban AskUserQuestion atas open_questions plan BUKAN persetujuan — itu input untuk
+memperbarui plan.
 
 ## Pre-Execution
 [EXECUTION SCOPE] allowed: <files> | forbidden: <files> | reason: <batasan>
 
 ## During
 ONLY sentuh allowed. Butuh forbidden → STOP → report conflict → minta instruksi.
+allowed hanya di project root sesi. Path di project lain → STOP, minta persetujuan eksplisit
+untuk path itu. Edit lewat Bash/skrip patch tunduk ke aturan yang sama dengan Edit/Write.
 
 ## Post (baca .workflow/config.json → commands.auto_verify_after_execute)
 [EXECUTION RESULT] files_changed | confidence | uncertainties | verification | status

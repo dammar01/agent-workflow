@@ -2,7 +2,10 @@
 import re
 
 SECRET_PATTERNS: list[tuple[re.Pattern, str]] = [
-    (re.compile(r"sk-[A-Za-z0-9_\-]{16,}"), "openai-style key"),
+    # Anchored on the left: `task-events-at-turn-boundaries` contains "sk-" plus 16 key-class
+    # characters, so research file names and kebab-case identifiers were scrubbed as keys and
+    # the evidence anchors pointing at them were lost (DEC-047).
+    (re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_\-]{16,}"), "openai-style key"),
     (re.compile(r"\bghp_[A-Za-z0-9]{20,}"), "github token"),
     (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"), "github token"),
     (re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}"), "slack token"),

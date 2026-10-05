@@ -74,4 +74,7 @@ BOUNDED (langgar = output invalid):
 ## STEP 3
 resolvable_uncertainties WAJIB kamu coba tutup DULU sebelum tanya user; sisakan open_questions saja ke user.
 decision=proceed → "Setuju? Jalankan /.execute -y". clarify → tanya open_questions. JANGAN auto-execute.
+Jawaban open_questions masuk → perbarui [PLAN] (assumptions, confidence, decision) → decision baru
+proceed → "Setuju? Jalankan /.execute -y" → BERHENTI. Jawaban itu BUKAN persetujuan eksekusi;
+nol edit sampai user memberi /.execute -y.
 User pilih opsi non-rekomendasi → JALANKAN pilihannya, jangan debat ulang. Sudah kamu sebut minus-nya; keputusan miliknya.

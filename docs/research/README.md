@@ -195,6 +195,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [CASE-015](real-cases/CASE-015-codex-windows-sandbox-fails-on-thread-resume.yaml) | Codex on Windows failed a resumed verify at its elevated sandbox, and the runtime called it `unknown` | negative | implemented | observed | 8d2d42b |
 | [CASE-016](real-cases/CASE-016-codex-resume-sandbox-regression-bisect.yaml) | Codex resumes a thread on Windows through 0.154.0 and fails every resume from 0.155.0 to 0.160.0 | negative | implemented | observed | — |
 | [CASE-017](real-cases/CASE-017-verify-browser-usage-recount-after-dec-022.yaml) | Verify-browser usage is one row per provider invocation after DEC-022; no miscount found, and no real run yet to confirm it | positive | implemented | observed | 8d2d42b |
+| [CASE-018](real-cases/CASE-018-real-use-execute-without-plan-or-approval.yaml) | Real use of 3.8.1 — feature requests executed without a plan, plan answers taken as approval | negative | implemented | observed | 4a09c04 |
 | [DEC-001](decisions/DEC-001-verify-browser-delegated.yaml) | `/.verify-browser` is a delegated command | accepted | implemented | validated | dd70afd |
 | [DEC-004](decisions/DEC-004-data-e2e-only-test-attribute.yaml) | `data-e2e` is the only test attribute | accepted | implemented | observed | dd70afd |
 | [DEC-005](decisions/DEC-005-repeat-brake-releases-on-change.yaml) | The repeat brake releases on a project change and is remembered as knowledge | accepted | implemented | observed | dd70afd |
@@ -238,6 +239,8 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-043](decisions/DEC-043-gate-lets-a-precision-read-through.yaml) | The pre-flight gate lets two small project reads through per delegation | accepted | implemented | not_validated | a06846a |
 | [DEC-044](decisions/DEC-044-side-effect-none-is-not-a-write.yaml) | Browser knowledge reads side_effect "none" as no write, so explicit drafts record selectors | accepted | implemented | observed | e9c63d7 |
 | [DEC-045](decisions/DEC-045-task-notifications-do-not-arm-the-gate.yaml) | A background task's notification neither arms nor clears the pre-flight gate | accepted | implemented | not_validated | 2110262 |
+| [DEC-046](decisions/DEC-046-new-behavior-goes-through-plan-and-only-the-user-approves-execution.yaml) | New behavior goes through plan, and only the user's execute approves execution | accepted | implemented | not_validated | uncommitted |
+| [DEC-047](decisions/DEC-047-key-pattern-needs-a-left-boundary.yaml) | The openai-style key pattern needs a left boundary | accepted | implemented | not_validated | uncommitted |
 | [LIT-001](literature/LIT-001-raven-harness-of-harnesses.yaml) | Raven: The Harness of Harnesses for Composable Agentic Intelligence | — | not_applicable | not_validated | — |
 <!-- research-inventory:end -->
 

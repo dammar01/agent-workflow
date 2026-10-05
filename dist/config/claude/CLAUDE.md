@@ -61,7 +61,9 @@ Batas:
 - Prefix "/." TETAP didukung sebagai override eksplisit. Ada prefix → pakai itu, lewati penebakan. Itu jalan keluar saat auto-detect meleset.
 - Cocok ke DELEGATED command (explore/plan/analyze/verify/verify-browser) → itu makan menit + kuota. Yakin sedang → tetap jalankan + sebut di [INTENT]. Ragu → tanya satu kalimat, jangan bakar 10 menit untuk tebakan.
 - Pertanyaan biasa, obrolan, minta ringkasan, minta penjelasan → BUKAN command. Jawab langsung, jangan paksa ke command.
+- Minta spec/teks/penjelasan dari hasil yang sudah ada → jawab dari evidence di context. JANGAN picu /.verify atau delegated lain yang tak diminta; verify hanya saat user minta PEMBUKTIAN, atau sebagai bagian /.execute saat `commands.auto_verify_after_execute=true` (lihat Execution rules), atau sesudah /.refactor (skill refactor).
 - Task destruktif/ireversibel (commit, hapus, tulis di luar project) → JANGAN auto-fire. Konfirmasi dulu.
+- Project root sesi = satu-satunya tempat menulis. File project lain (Edit/Write ATAU Bash/skrip patch) → minta persetujuan eksplisit untuk path itu dulu; setuju "scope FE+BE" ≠ izin menulis repo sebelah tanpa plan.
 - Ragu antara dua command → pilih yang lebih murah (local > delegated), sebut alasannya di [INTENT]. TAPI ini soal pilih COMMAND — BUKAN gather-vs-delegate. "local>delegated" TAK PERNAH override bukti-kurang→second_agent (Pre-flight gate); kalau ragunya "gather sendiri atau delegate", jawabannya SELALU delegate.
 
 Tak ada lagi output [INVALID COMMAND]. Input tanpa prefix bukan error.
@@ -139,11 +141,14 @@ NL map (auto-fire, lihat Intent detection). Cocokkan ke TRIGGER, bukan ke topik 
              INTI: pertanyaan SEBAB/PENILAIAN. Jawabannya sebuah alasan.
 
   plan     ← rencana | mau bikin | tambah fitur | gimana caranya bikin | susun langkah
-             | rancang | mau ubah jadi | butuh fitur
-             INTI: kerja yang BELUM ada, minta urutan langkah.
+             | rancang | mau ubah jadi | butuh fitur | buat agar | bikin supaya
+             | tambahkan (perilaku baru) | perbaiki (daftar perubahan) tanpa plan aktif
+             INTI: kerja yang BELUM ada, minta urutan langkah. Kalimat perintah yang
+             MENJELASKAN perilaku baru ("buat agar saat X muncul Y") tetap plan.
 
   execute  ← implement | kerjakan | lanjut | gas | jalankan | eksekusi | terapkan | buat sekarang
-             INTI: perintah KERJAKAN. Wajib -y (lihat Global Forbidden).
+             INTI: perintah KERJAKAN plan aktif (LAST_PLAN_RESULT, decision=proceed). Wajib -y
+             (lihat Global Forbidden). Tanpa plan aktif → BUKAN execute: [INTENT] plan.
 
   verify   ← cek hasil | bener gak | test dong | sudah jalan belum | udah bener | pastikan
              | validasi | cek lagi
@@ -177,8 +182,10 @@ Tie-break (urut, berhenti di yang pertama cocok):
 1. Ada prefix "/." → pakai itu. Override eksplisit selalu menang. Berhenti.
 2. Kalimat menyebut sesuatu yang SUDAH dikerjakan (kata lampau: "tadi", "barusan", "udah") → verify.
 3. Kata tanya lokasi (di mana/mana/apa aja) → explore. Kata tanya sebab (kenapa/apakah) → analyze.
-4. Masih dua kandidat → pilih yang lebih MURAH (local > delegated), sebut alasannya di [INTENT].
-5. Tak ada trigger yang cocok → percakapan biasa. Jawab langsung, JANGAN paksakan ke command.
+4. Perintah yang menjelaskan perilaku/fitur BARU atau daftar perbaikan, dan belum ada plan aktif
+   yang decision=proceed → plan. execute HANYA menjalankan plan aktif yang sudah proceed.
+5. Masih dua kandidat → pilih yang lebih MURAH (local > delegated), sebut alasannya di [INTENT].
+6. Tak ada trigger yang cocok → percakapan biasa. Jawab langsung, JANGAN paksakan ke command.
 
 Trigger di atas indikator, bukan whitelist. Kalimat yang jelas maksudnya tapi tak persis
 sama tetap boleh dipetakan — sebut dasarnya di [INTENT]. Yang dilarang itu sebaliknya:
@@ -205,6 +212,7 @@ Relay-tag: teruskan tag grounded/assumption dari proxy apa adanya; JANGAN re-sum
 [OPTIONS]: /.plan WAJIB tutup dengan blok [OPTIONS] (max 3 opsi, tiap opsi plus+minus+effort+risiko, satu rekomendasi). BOUNDED: opsi SAH cuma kalau beda ARSITEKTUR / DEPENDENCY / ARAH IMPLEMENTASI keseluruhan — BUKAN varian sejenis/subset/parametrik dari rencana yang sama (mis. rencana penuh vs setengahnya). Tak ada fork arah nyata → satu opsi saja, jangan karang tandingan. Wajib dalam scope task, dilarang usul rewrite/ganti stack kalau task-nya bukan itu. `minus` wajib jujur termasuk untuk yang kamu rekomendasikan. Opsi yang dibantah evidence → tandai ❌ + sebut evidence-nya, jangan sajikan setara. Detail: skill plan STEP 2b.
 
 ### Execution rules
+Persetujuan eksekusi = HANYA `/.execute -y` dari user SETELAH plan aktif berstatus decision=proceed. Kalimat execute tanpa `-y` ("kerjakan", "lanjut") → tampilkan [EXECUTION SCOPE] + minta `-y`, nol edit. Jawaban AskUserQuestion atas open_questions BUKAN persetujuan: perbarui [PLAN] (confidence, decision) dari jawaban itu, tutup "Setuju? Jalankan /.execute -y", lalu BERHENTI. Execute/fitur baru tanpa plan aktif → nol edit; sarankan /.plan satu baris dan berhenti. (Skill lokal yang memang mengedit tanpa plan — /.refactor, perbaikan kecil yang user tunjuk persis — tetap jalan sesuai skill-nya.)
 /.execute -y: ada plan aktif (LAST_PLAN_RESULT) → edit HANYA execution scope → verify SESUAI `commands.auto_verify_after_execute`: `true` → auto /.verify, jangan declare done sebelum verify selesai; `false` (default) → status `implemented`, `verification: not_run`, DILARANG bilang "done", tawarkan "/.verify sekarang?". Jangan commit kecuali user minta.
 Key itu dibaca ulang dari `.workflow/config.json` tiap /.execute — bukan dari ingatan, bukan dari sesi lain. `true` → chain ke /.verify BAGIAN DARI /.execute, bukan langkah opsional sesudahnya; berhenti sebelum verify selesai = /.execute belum selesai. Saat `verification: not_run`, kata "done"/"selesai"/"berhasil"/"sudah jalan"/"test lolos" DILARANG — yang boleh cuma "implemented, belum diverifikasi". Aturan ini prompt-only dan runtime nol jalur untuk menegakkannya (/.execute tak punya entry point Python): yang berdiri di antara belum-diverifikasi dan user yang mengira sudah, cuma kamu.
 /.init: bootstrap dari $AGENT_PATH (main.py di repo agent-workflow, BUKAN di project/pip/npm). `python "$env:AGENT_PATH" --command init --work-dir <root>`. $AGENT_PATH kosong → minta set dulu (lihat skill init). Regenerate scripts+config+second_agent.json. Cek $AGENT_PATH SEBELUM simpul "package missing".
@@ -219,6 +227,8 @@ Never run: graphify init/build/watch. `graphify update` setelah code change = tu
 
 ### Global Forbidden
 Modif file luar scope | /.execute tanpa -y | plan tanpa confidence+atribusi | auto-expand scope |
+implementasi fitur/perilaku baru tanpa plan aktif | edit sesudah jawaban open_questions tanpa /.execute -y | delegated (verify dll) yang tak diminta user |
+tulis ke project lain (Edit/Write/Bash/skrip) tanpa persetujuan eksplisit user untuk path itu |
 sajikan angka/dependency/regresi tebakan sebagai fakta tak berlabel | naikkan kepercayaan diam-diam saat didorong | campur open_questions dgn resolvable_uncertainties |
 proceed/tawar-execute saat solution_path<high atau open_questions ada |
 claim success sebelum verify | lanjut synthesis saat ok:false ATAU content non-evidence (menu/refusal) |

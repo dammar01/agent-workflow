@@ -114,7 +114,7 @@ from tests.checks.intent_gate import (  # noqa: E402
 from tests.checks.verify_tests import _test_verify_runtime_tests  # noqa: E402
 from tests.checks.metrics import _test_metrics_contract  # noqa: E402
 from tests.checks.usage_tokens import _test_usage_token_accounting  # noqa: E402
-from tests.checks.redaction import _test_redaction_boundary  # noqa: E402
+from tests.checks.redaction import _test_key_pattern_needs_a_left_boundary, _test_redaction_boundary  # noqa: E402
 from tests.checks.registry import _test_every_check_is_registered  # noqa: E402
 from tests.checks.stamp_version import _test_stamp_version_reads_versions_not_addresses  # noqa: E402
 from tests.checks.manifest import _test_manifest_matches_dist  # noqa: E402
@@ -165,6 +165,7 @@ SUITES: dict[str, tuple] = {
     "evidence-lock-file": (_test_evidence_lock_file, "evidence.jsonl.lock is a persistent one-byte OS lock that excludes other processes"),
     "runtime-guards": (_test_runtime_guard_cleanup, "clean removes the runtime-lock guards of dead sessions, keeps live and held ones (DEC-013)"),
     "redaction": (_test_redaction_boundary, "secret boundary on outbound payloads"),
+    "redaction-boundary": (_test_key_pattern_needs_a_left_boundary, "kebab-case words containing sk- are not keys; real keys still are"),
     "verify-gaps": (_test_quick_verify_gaps, "quick verify reports gaps as incomplete"),
     "verify-routing": (_test_verification_routing, "the routing table decides what blocks, both ways"),
     "verify-empty-section": (_test_empty_section_is_not_a_finding, "an empty section holds nothing, not the next heading"),
