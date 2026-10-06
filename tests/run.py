@@ -117,7 +117,13 @@ from tests.checks.usage_tokens import _test_usage_token_accounting  # noqa: E402
 from tests.checks.redaction import _test_key_pattern_needs_a_left_boundary, _test_redaction_boundary  # noqa: E402
 from tests.checks.registry import _test_every_check_is_registered  # noqa: E402
 from tests.checks.stamp_version import _test_stamp_version_reads_versions_not_addresses  # noqa: E402
-from tests.checks.manifest import _test_manifest_matches_dist  # noqa: E402
+from tests.checks.manifest import _test_malformed_manifest_entry_fails_closed, _test_manifest_matches_dist  # noqa: E402
+from tests.checks.codex_write_probe import _test_codex_sandbox_blocks_writes  # noqa: E402
+from tests.checks.session_persistence import (  # noqa: E402
+    _test_atomic_write_outlasts_a_held_file,
+    _test_provider_thread_id_is_never_lost_silently,
+    _test_result_names_the_provider_boundary,
+)
 from tests.checks.research import _test_research_records_follow_the_schema  # noqa: E402
 from tests.checks.workflow_layout import _test_workflow_layout  # noqa: E402
 from tests.checks.workspace_migration import _test_workspace_migration  # noqa: E402
@@ -146,6 +152,7 @@ SUITES: dict[str, tuple] = {
     "hook-flavours": (_test_every_shipped_hook_has_both_os_flavours, "every shipped hook ships .ps1 and .sh"),
     "stamp-version": (_test_stamp_version_reads_versions_not_addresses, "version stamping ignores IP addresses and --check passes"),
     "manifest": (_test_manifest_matches_dist, "dist/manifest.json matches the dist/ tree it describes"),
+    "manifest-malformed": (_test_malformed_manifest_entry_fails_closed, "a malformed manifest entry fails bundle integrity by name"),
     "research": (_test_research_records_follow_the_schema, "research records are YAML the schema accepts; every rule the check claims is refused on a broken fixture"),
     "workflow-layout": (_test_workflow_layout, ".workflow/ keeps editable files, data/ the rest; unmigrated workspaces and hooks follow the same rule"),
     "workspace-migration": (_test_workspace_migration, "v3.5.x -> data layout moves everything once with a backup, refuses under a live job, rolls back on failure; overrides-only config; current/ mirror"),
@@ -153,6 +160,10 @@ SUITES: dict[str, tuple] = {
     "statusline": (_test_statusline_failed_calls_are_not_estimates, "a failed call is counted beside the calls, never as an estimate"),
     "provider-seam": (_test_provider_seam, "adapter registry and provider resolution"),
     "provider-threads": (_test_provider_threads_are_kept_per_provider, "a provider thread is resumed only by the provider that issued it"),
+    "atomic-write-held": (_test_atomic_write_outlasts_a_held_file, "a reader briefly holding a file does not lose an atomic write"),
+    "session-persistence": (_test_provider_thread_id_is_never_lost_silently, "a provider thread id is kept, or its loss is named"),
+    "provider-boundary": (_test_result_names_the_provider_boundary, "every delegated result names its provider's read/write boundary"),
+    "codex-write-probe": (_test_codex_sandbox_blocks_writes, "opt-in (WORKFLOW_CODEX_PROBE=1): a real codex call cannot write under --sandbox read-only"),
     "provider-selection": (_test_provider_selection, "interactive provider/model/effort write"),
     "agy": (_test_agy_provider, "agy parsing, argv, and its read-boundary guard"),
     "doctor-read-boundary": (_test_doctor_read_boundary_warning, "doctor warns that a codex/agy second agent reads every file and env var"),

@@ -11,6 +11,7 @@ import secrets
 import shutil
 import subprocess
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -52,6 +53,24 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+# Windows refuses `os.replace` onto a file another process holds open without
+# FILE_SHARE_DELETE — which is every plain Python `open()`, so a `check.py` or hook that is
+# merely reading the target at that moment fails the write with PermissionError. The
+# reader lets go in milliseconds; a short bounded retry outlasts it, a real permission
+# problem still raises after the last attempt.
+REPLACE_RETRY_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8)
+
+
+def _replace_with_retry(source: Path, target: Path) -> None:
+    for delay in REPLACE_RETRY_DELAYS:
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            time.sleep(delay)
+    os.replace(source, target)
+
+
 def atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(
@@ -60,7 +79,7 @@ def atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None
     )
     try:
         temp.write_text(content, encoding=encoding)
-        os.replace(temp, path)
+        _replace_with_retry(temp, path)
     finally:
         try:
             temp.unlink()

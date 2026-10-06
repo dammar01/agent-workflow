@@ -343,7 +343,9 @@ class AgyAdapter:
                     self.on_session_created(conversation_id)
                 except Exception:
                     # The session is captured either way; a caller whose callback raises
-                    # must not lose the run that produced it.
+                    # must not lose the run that produced it. The executor's callback does
+                    # not raise: it keeps a failed write and retries it after the run, and
+                    # names the loss on the result (`session_persisted: false`).
                     pass
 
         try:

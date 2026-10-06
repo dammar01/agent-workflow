@@ -86,6 +86,74 @@ def _test_e2e_redaction_variants() -> None:
                 email not in text and quote_plus(email) not in text and "${E2E_USER}" in text,
                 f"{path.relative_to(root)} is scrubbed in place: {text}",
             )
+
+        # Fail-closed: a file the pass cannot scrub does not survive it unscrubbed.
+        from core.evidence.e2e import redact as redact_module
+
+        stuck = root / "stuck.html"
+        stuck.write_text(f"<p>{email}</p>", encoding="utf-8")
+        fine = root / "fine.txt"
+        fine.write_text(f"user={email}", encoding="utf-8")
+        original_write = redact_module.atomic_write_text
+
+        def refuse_stuck(path, content, encoding="utf-8"):
+            if Path(path).name == "stuck.html":
+                raise PermissionError("[WinError 32] The process cannot access the file")
+            return original_write(path, content, encoding=encoding)
+
+        failures: list[dict] = []
+        redact_module.atomic_write_text = refuse_stuck
+        try:
+            scrub_text_files(root, env, failures)
+        finally:
+            redact_module.atomic_write_text = original_write
+        assert_true(not stuck.exists(), "an artifact that could not be scrubbed is deleted, not left behind")
+        assert_true(
+            [(Path(f["path"]).name, f["removed"]) for f in failures] == [("stuck.html", True)],
+            f"and it is reported, removed: {failures}",
+        )
+        assert_true(email not in fine.read_text(encoding="utf-8"), "the rest of the directory is still scrubbed")
+
+        # Neither scrubbed nor deletable: reported as left behind, so the runner withholds
+        # every artifact of the attempt.
+        stuck.write_text(f"<p>{email}</p>", encoding="utf-8")
+        original_unlink = Path.unlink
+
+        def refuse_unlink(self, *args, **kwargs):
+            if self.name == "stuck.html":
+                raise PermissionError("[WinError 32] The process cannot access the file")
+            return original_unlink(self, *args, **kwargs)
+
+        failures = []
+        redact_module.atomic_write_text = refuse_stuck
+        Path.unlink = refuse_unlink
+        try:
+            scrub_text_files(root, env, failures)
+        finally:
+            redact_module.atomic_write_text = original_write
+            Path.unlink = original_unlink
+        assert_true(
+            [(Path(f["path"]).name, f["removed"]) for f in failures] == [("stuck.html", False)],
+            f"a file that survives its failed scrub is reported as left behind: {failures}",
+        )
+        stuck.unlink()
+
+        # A directory that cannot be listed: nothing in it is known, so the whole run is.
+        original_rglob = Path.rglob
+
+        def refuse_listing(self, pattern):
+            raise PermissionError("[WinError 5] Access is denied")
+
+        failures = []
+        Path.rglob = refuse_listing
+        try:
+            scrub_text_files(root, env, failures)
+        finally:
+            Path.rglob = original_rglob
+        assert_true(
+            failures == [{"path": str(root), "removed": False, "error": "PermissionError"}],
+            f"an unlistable directory is reported as left behind, not as clean: {failures}",
+        )
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

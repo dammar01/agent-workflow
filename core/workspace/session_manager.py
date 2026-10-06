@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from config.settings import SESSION_DIR
+from core.workspace.workspace_paths import atomic_write_json
 
 # A provider thread id belongs to the provider that issued it. opencode ids carry a `ses_`
 # prefix; codex and agy issue opaque ids that never do. That is the only provenance a
@@ -136,12 +137,18 @@ class SessionManager:
         self._save(session)
 
     def _save(self, session: dict) -> None:
-        path = self._path_for(session["session_id"])
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp = path.with_suffix(".tmp")
-        with temp.open("w", encoding="utf-8") as file:
-            json.dump(session, file, indent=2)
-        temp.replace(path)
+        # The shared primitive, not a hand-rolled `<id>.tmp`: a fixed temp name let two
+        # writers of one session clobber each other's temp file, and a bare `replace` lost
+        # the provider thread id whenever a reader held the record open on Windows.
+        atomic_write_json(self._path_for(session["session_id"]), session)
+
+    def ensure_writable(self, session: dict) -> None:
+        """Raise unless this session's record can be written right now.
+
+        Called before a provider is spawned, so storage that cannot take the thread id
+        fails the call before any work is paid for, instead of in the middle of it.
+        """
+        self._save(session)
 
     def _path_for(self, session_id: str) -> Path:
         safe_name = re.sub(r"[^A-Za-z0-9_.-]", "_", session_id)

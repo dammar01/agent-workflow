@@ -3,7 +3,7 @@ from pathlib import Path
 
 from adapters.contract.base import SecondAgentAdapter
 from adapters.contract.registry import hint_conflict, resolve_adapter, selected_provider
-from config.providers import transport_budget
+from config.providers import provider_boundary, transport_budget
 from config.settings import DEFAULT_TASK_TRUNCATION_HARD_RATIO
 from core.evidence.contract import (
     FANOUT_DECLINED,
@@ -927,6 +927,26 @@ class Executor:
         if not handoff.get("ok"):
             return handoff
 
+        # Storage that cannot take the provider thread id must fail the call HERE, before
+        # anything is spent. codex and agy report their id mid-stream, after the work has
+        # started; a write that failed there used to vanish inside the adapter, leaving a
+        # paid-for call with no thread to resume or continue.
+        ensure_writable = getattr(session_manager, "ensure_writable", None)
+        if ensure_writable is not None:
+            try:
+                ensure_writable(session)
+            except Exception as exc:  # noqa: BLE001 — becomes a named error, not a crash
+                return make_error(
+                    "session_capture_failed",
+                    "session record is not writable; the provider thread id could not be kept",
+                    next_action=(
+                        "Check write access to .workflow/data/sessions and that no other "
+                        "process holds the session file, then retry; the delegated task "
+                        "was not started."
+                    ),
+                    meta={"error": f"{type(exc).__name__}: {exc}"},
+                )
+
         # Late binding: until here the adapter could only be the import-time default.
         self.adapter = self._adapter_for(project_root)
         # `or` rather than a dict default: the route always carries both keys, and a null
@@ -958,20 +978,47 @@ class Executor:
         # binding and before the session is copied for the adapter, because this is the
         # first point that knows which provider the call goes to.
         if session_manager is not None:
-            session_manager.bind_provider(session, route.get("provider"))
+            # The preflight above proved the record writable a moment ago; a write that
+            # fails here anyway is the same named failure, with the task still not started,
+            # never a raw exception out of the executor.
+            try:
+                session_manager.bind_provider(session, route.get("provider"))
+            except OSError as exc:
+                self.adapter.on_progress = None
+                return make_error(
+                    "session_capture_failed",
+                    "session record could not be bound to the selected provider",
+                    next_action=(
+                        "Check write access to .workflow/data/sessions and that no other "
+                        "process holds the session file, then retry; the delegated task "
+                        "was not started."
+                    ),
+                    meta={"error": f"{type(exc).__name__}: {exc}"},
+                )
         else:
             bind_provider(session, route.get("provider"))
         adapter_session = dict(session)
         adapter_session["session_id"] = session_id
 
+        # The id the provider handed over but storage has not confirmed. Tracked apart from
+        # `session`, because `update_provider_session_id` sets the id on the dict BEFORE it
+        # writes: a failed write left the dict looking persisted, and the post-run save
+        # below skipped exactly the id that needed it.
+        unsaved_session: dict = {}
+
         def persist_new_session(provider_session_id: str) -> None:
             adapter_session["provider_session_id"] = provider_session_id
-            if session_manager is not None:
+            if session_manager is None:
+                record_provider_session(session, provider_session_id)
+                return
+            try:
                 session_manager.update_provider_session_id(
                     session, provider_session_id
                 )
-            else:
-                record_provider_session(session, provider_session_id)
+                unsaved_session.clear()
+            except Exception as exc:  # noqa: BLE001 — retried after the run
+                unsaved_session["id"] = provider_session_id
+                unsaved_session["error"] = f"{type(exc).__name__}: {exc}"
 
         session_callback_bound = False
         try:
@@ -1136,6 +1183,7 @@ class Executor:
                 # which half.
                 call_meta["provider"] = route.get("provider")
                 call_meta["provider_command"] = route.get("provider_command")
+                call_meta["provider_boundary"] = provider_boundary(route.get("provider"))
                 self._last_call_meta = call_meta
                 # `_call_metas` deliberately keeps the RAW snapshots here. Expansion happens
                 # once, in `_record_usage`; expanding into the same attribute would feed the
@@ -1184,17 +1232,40 @@ class Executor:
         ) or adapter_session.get("provider_session_id") or session.get(
             "provider_session_id"
         )
-        if (
+        if unsaved_session or (
             result.get("ok")
             and provider_session_id
             and not session.get("provider_session_id")
         ):
+            provider_session_id = unsaved_session.get("id") or provider_session_id
             if session_manager is not None:
-                session_manager.update_provider_session_id(
-                    session, provider_session_id
-                )
+                try:
+                    session_manager.update_provider_session_id(
+                        session, provider_session_id
+                    )
+                    unsaved_session.clear()
+                except Exception as exc:  # noqa: BLE001 — surfaced on the result below
+                    unsaved_session["id"] = provider_session_id
+                    unsaved_session["error"] = f"{type(exc).__name__}: {exc}"
             else:
                 record_provider_session(session, provider_session_id)
+        if unsaved_session:
+            # Both writes failed. The answer stands — throwing away paid evidence would not
+            # bring the thread back — but the loss is named in its own field: no resume, no
+            # continuation, and the next call starts a fresh thread.
+            meta = result.setdefault("meta", {})
+            meta["session_persisted"] = False
+            meta["session_persist_error"] = unsaved_session.get("error")
+        # On the result, not only in the archive: the reader deciding how far to trust this
+        # evidence — or whether to look at `git status` — is the main agent, not doctor.
+        boundary = provider_boundary(route.get("provider")) if route.get("provider") else None
+        if boundary is not None:
+            result.setdefault("meta", {})["provider_boundary"] = boundary
+        if boundary is not None and boundary["writes"] == "unbounded":
+            result["meta"]["provider_write_warning"] = (
+                f"{route.get('provider')} can write to the project; nothing stopped it, "
+                "the working-tree guard only detects a write after the fact"
+            )
 
         redactions = (result.get("meta") or {}).get("redactions")
         self._audit_redactions(

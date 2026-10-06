@@ -16,6 +16,7 @@ from config.settings import (
     DEFAULT_STALL_THRESHOLD_SECONDS,
     JOB_DIR,
 )
+from core.workspace.workspace_paths import atomic_write_json
 from utils import osutil
 from utils.path_guard import safe_path_component
 
@@ -542,7 +543,7 @@ class JobManager:
                             "worker_pid": job.get("worker_pid"),
                             "next_action": (
                                 "Invoke the same runner command with the same session and task "
-                                "to resume through the saved OpenCode session."
+                                "to resume through the saved provider session."
                             ),
                         },
                     }
@@ -1114,11 +1115,10 @@ class JobManager:
                 return False
 
     def _write_side(self, path: Path, payload: dict) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp = path.with_suffix(".tmp")
-        with temp.open("w", encoding="utf-8") as file:
-            json.dump(payload, file, indent=2)
-        temp.replace(path)
+        # The shared primitive (unique temp name, `os.replace` retried while a reader holds
+        # the target on Windows). A fixed `<id>.tmp` plus a bare replace failed a real run
+        # with WinError 5 whenever `check.py` or a waiting runner was reading the record.
+        atomic_write_json(path, payload)
 
     @staticmethod
     def _read_side(path: Path) -> dict | None:
@@ -1137,12 +1137,7 @@ class JobManager:
             return json.load(file)
 
     def _save(self, job: dict) -> None:
-        path = self._path(job["job_id"])
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp = path.with_suffix(".tmp")
-        with temp.open("w", encoding="utf-8") as file:
-            json.dump(job, file, indent=2)
-        temp.replace(path)
+        atomic_write_json(self._path(job["job_id"]), job)
 
     def _acquire_session_lock(self, session_id: str, job_id: str) -> str:
         lock_path = self._lock_path(session_id)

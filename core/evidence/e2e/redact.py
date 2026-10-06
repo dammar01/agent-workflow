@@ -257,14 +257,23 @@ def scrub_literals(payload: object, env_values: dict[str, str]) -> tuple[object,
 _RESOLVED_STRUCTURAL_KEYS = frozenset({"step_id", "id", "claim_id", "cleans", "action", "type", "kind", "after_step"})
 
 
-def scrub_text_files(directory: Path, env_values: dict[str, str]) -> list[dict]:
+def scrub_text_files(
+    directory: Path, env_values: dict[str, str], failures: list[dict] | None = None
+) -> list[dict]:
     """Scrub player-written text artifacts in place: resolved values back to placeholders,
     then the shared secret scanner. Returns the scanner's hits for the audit trail.
 
-    Recursive: a subdirectory is not a place a secret can hide from this pass."""
+    Recursive: a subdirectory is not a place a secret can hide from this pass.
+
+    Fail-closed. A file that cannot be scrubbed is deleted, because an unscrubbed copy is
+    exactly what this pass exists to prevent; it used to be skipped and left on disk. What
+    could not be scrubbed — removed or not — is appended to `failures` as
+    `{"path", "removed", "error"}` so the caller can keep it out of the report."""
+    failed = failures if failures is not None else []
     try:
         paths = sorted(p for p in directory.rglob("*") if p.is_file() and p.suffix.lower() in TEXT_ARTIFACT_SUFFIXES)
-    except OSError:
+    except OSError as exc:
+        failed.append({"path": str(directory), "removed": False, "error": type(exc).__name__})
         return []
     hits_all: list[dict] = []
     for path in paths:
@@ -272,8 +281,17 @@ def scrub_text_files(directory: Path, env_values: dict[str, str]) -> list[dict]:
             text = path.read_bytes().decode("utf-8", errors="ignore")  # a bounded capture may cut a character
             clean, hits = redact_value(scrub_resolved(text, env_values))
             atomic_write_text(path, str(clean))
-        except OSError:
-            continue  # one unreadable file must not leave the rest unscrubbed
+        except OSError as exc:
+            # One unreadable file must not leave the rest unscrubbed, nor survive itself.
+            removed = True
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                removed = False
+            failed.append({"path": str(path), "removed": removed, "error": type(exc).__name__})
+            continue
         hits_all.extend(hits)
     return hits_all
 

@@ -101,6 +101,10 @@ PROVIDER_BUNDLES: dict[str, dict] = {
         # `install_project_config(project_root, tool_dir)`; how it enforces anything is
         # its own business.
         "install_module": "adapters.install.opencode_install",
+        # What this provider's second_agent can touch, as enforced — not as intended. See
+        # `provider_boundary` below. opencode's permission map denies write/edit/bash and the
+        # secret-file reads (dist/config/opencode/opencode.template.json).
+        "boundary": {"reads": "secrets_denied", "writes": "denied"},
     },
     "codex": {
         "home_dir": ".codex",
@@ -171,6 +175,10 @@ PROVIDER_BUNDLES: dict[str, dict] = {
             {"id": "gpt-5.4-mini", "efforts": ("low", "medium", "high", "xhigh")},
         ),
         "install_module": "adapters.install.codex_install",
+        # `--sandbox read-only` on every call, resumed calls included, stops writes. The
+        # secret-file deny passed alongside parses and stops nothing: codex reads through a
+        # shell the permission map never sees (adapters/providers/codex_adapter.py).
+        "boundary": {"reads": "unbounded", "writes": "sandboxed"},
     },
     "agy": {
         # agy keeps nothing under the user's home but `bin/` — no config directory, no
@@ -240,6 +248,9 @@ PROVIDER_BUNDLES: dict[str, dict] = {
             {"id": "gpt-oss-120b-medium", "efforts": ()},
         ),
         "install_module": "adapters.install.agy_install",
+        # Neither side is bounded (see the read-boundary note above). `agy_guard` diffs the
+        # working tree around each call, which DETECTS a write; nothing prevents one.
+        "boundary": {"reads": "unbounded", "writes": "unbounded"},
     },
 }
 
@@ -409,6 +420,23 @@ def bundle_for(provider: str) -> dict:
             f"no dist bundle declared for provider '{provider}'; "
             f"known: {', '.join(sorted(PROVIDER_BUNDLES))}"
         ) from None
+
+
+def provider_boundary(provider: str | None) -> dict:
+    """What `provider`'s second_agent is actually kept from, as `{"reads", "writes"}`.
+
+    reads:  `secrets_denied` (secret files refused) | `unbounded` (every project file).
+    writes: `denied` (permission map) | `sandboxed` (OS sandbox per call) | `unbounded`.
+
+    Declared per bundle so doctor and every delegated result read one statement of it. An
+    unknown provider reads as unbounded on both sides: a boundary nobody declared is not
+    one this runtime can vouch for.
+    """
+    declared = PROVIDER_BUNDLES.get(provider or "", {}).get("boundary") or {}
+    return {
+        "reads": declared.get("reads") or "unbounded",
+        "writes": declared.get("writes") or "unbounded",
+    }
 
 
 def provider_stable_version(provider: str) -> str | None:

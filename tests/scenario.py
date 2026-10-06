@@ -50,7 +50,10 @@ from tests.checks.facts import (
 )
 from tests.checks.runtime_guards import _test_runtime_guard_cleanup
 from tests.checks.task_telemetry import _test_task_telemetry
-from tests.checks.redaction import _test_redaction_boundary
+from tests.checks.redaction import (
+    _test_key_pattern_needs_a_left_boundary,
+    _test_redaction_boundary,
+)
 from tests.checks.verify_gaps import (
     _test_empty_section_is_not_a_finding,
     _test_quick_verify_gaps,
@@ -117,7 +120,16 @@ from tests.checks.bundle_sync import (
     _test_every_shipped_hook_has_both_os_flavours,
 )
 from tests.checks.stamp_version import _test_stamp_version_reads_versions_not_addresses
-from tests.checks.manifest import _test_manifest_matches_dist
+from tests.checks.manifest import (
+    _test_malformed_manifest_entry_fails_closed,
+    _test_manifest_matches_dist,
+)
+from tests.checks.codex_write_probe import _test_codex_sandbox_blocks_writes
+from tests.checks.session_persistence import (
+    _test_atomic_write_outlasts_a_held_file,
+    _test_provider_thread_id_is_never_lost_silently,
+    _test_result_names_the_provider_boundary,
+)
 from tests.checks.research import _test_research_records_follow_the_schema
 from tests.checks.workflow_layout import _test_workflow_layout
 from tests.checks.workspace_migration import _test_workspace_migration
@@ -137,6 +149,7 @@ from tests.checks.provider_sessions import _test_provider_threads_are_kept_per_p
 from tests.checks.statusline import _test_statusline_failed_calls_are_not_estimates
 from tests.checks.adapters import (
     _test_adapter_error_normalization,
+    _test_error_types_are_registered,
     _test_stdin_failure_reaches_call_meta,
     _test_adapter_redaction_is_shared,
 )
@@ -160,6 +173,7 @@ def run_tests() -> None:
     _test_every_shipped_hook_has_both_os_flavours()
     _test_stamp_version_reads_versions_not_addresses()
     _test_manifest_matches_dist()
+    _test_malformed_manifest_entry_fails_closed()
     _test_research_records_follow_the_schema()
     _test_workflow_layout()
     _test_workspace_migration()
@@ -176,11 +190,17 @@ def run_tests() -> None:
     _test_statusline_failed_calls_are_not_estimates()
     _test_provider_seam()
     _test_provider_threads_are_kept_per_provider()
+    _test_atomic_write_outlasts_a_held_file()
+    _test_provider_thread_id_is_never_lost_silently()
+    _test_result_names_the_provider_boundary()
+    _test_codex_sandbox_blocks_writes()
     _test_provider_selection()
     _test_agy_provider()
     _test_doctor_read_boundary_warning()
     _test_no_code_in_messages()
     _test_adapter_error_normalization()
+    _test_error_types_are_registered()
+    _test_key_pattern_needs_a_left_boundary()
     _test_adapter_redaction_is_shared()
     _test_stdin_failure_reaches_call_meta()
     _test_prompt_contract_blocks()

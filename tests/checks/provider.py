@@ -654,10 +654,12 @@ def _test_provider_selection() -> None:
 
 
 def _test_doctor_read_boundary_warning() -> None:
-    """codex and agy cannot bound what the second agent reads and get the full environment.
+    """codex and agy cannot bound what the second agent reads and get the full environment;
+    agy cannot bound what it writes either.
 
     Choosing one is trusting it, which is the user's call — so doctor warns on every run
-    instead of failing readiness, and says nothing of the kind for opencode."""
+    instead of failing readiness. Reads and writes are warned apart: codex's sandbox stops
+    writes, so it gets the read warning only; agy gets both; opencode neither."""
     from core.audit.diagnostics import run_doctor
     from core.runtime.state import ensure_workflow_workspace
     from core.workspace.workspace_paths import PROVIDER_CONFIG_NAME, read_json_file, workflow_paths
@@ -666,7 +668,11 @@ def _test_doctor_read_boundary_warning() -> None:
     try:
         ensure_workflow_workspace(root, os.getenv("AGENT_PATH"))
         config_path = workflow_paths(root)["workflow_dir"] / PROVIDER_CONFIG_NAME
-        for provider, expected in (("codex", "not_enforceable"), ("agy", "not_enforceable"), ("opencode", "enforceable")):
+        for provider, expected, writes in (
+            ("codex", "not_enforceable", "sandboxed"),
+            ("agy", "not_enforceable", "unbounded"),
+            ("opencode", "enforceable", "denied"),
+        ):
             config = read_json_file(config_path)
             config["provider"] = provider
             config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
@@ -674,10 +680,16 @@ def _test_doctor_read_boundary_warning() -> None:
             checks = read_json_file(Path(meta["doctor_report"]))["checks"]
             boundary = checks.get("second_agent_read_boundary") or {}
             warnings = [fix for fix in meta["recommended_fixes"] if fix.startswith("WARNING: second_agent provider")]
+            read_warnings = [fix for fix in warnings if "can read every file" in fix]
+            write_warnings = [fix for fix in warnings if "can WRITE" in fix]
             assert_true(boundary.get("status") == expected, f"{provider}: read boundary reported as {expected}: {boundary}")
+            assert_true(
+                (checks.get("second_agent_write_boundary") or {}).get("writes") == writes,
+                f"{provider}: write boundary reported as {writes}: {checks.get('second_agent_write_boundary')}",
+            )
             if expected == "not_enforceable":
                 assert_true(
-                    len(warnings) == 1 and f"'{provider}'" in warnings[0] and "`.env`" in warnings[0] and "/.provider" in warnings[0],
+                    len(read_warnings) == 1 and f"'{provider}'" in read_warnings[0] and "`.env`" in read_warnings[0] and "/.provider" in read_warnings[0],
                     f"{provider}: doctor warns that every file and env var is readable: {warnings}",
                 )
                 assert_true(
@@ -685,7 +697,18 @@ def _test_doctor_read_boundary_warning() -> None:
                     f"{provider}: a trusted provider is a warning, never an issue: {meta['issues']}",
                 )
             else:
-                assert_true(warnings == [], f"{provider}: no warning where the boundary holds: {warnings}")
+                assert_true(read_warnings == [], f"{provider}: no read warning where the boundary holds: {warnings}")
+            if writes == "unbounded":
+                assert_true(
+                    len(write_warnings) == 1 and f"'{provider}'" in write_warnings[0] and "/.provider" in write_warnings[0],
+                    f"{provider}: doctor warns that the second agent can write: {warnings}",
+                )
+            else:
+                assert_true(write_warnings == [], f"{provider}: no write warning where writes are stopped: {warnings}")
+            assert_true(
+                len(warnings) == len(read_warnings) + len(write_warnings),
+                f"{provider}: every provider warning is a read or a write warning: {warnings}",
+            )
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

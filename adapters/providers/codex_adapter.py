@@ -28,8 +28,14 @@ not a rename of it:
    out from under it. `config/providers.py` records that choice.
 
    That boundary covers writes and NOT reads, which is the opposite of what this paragraph
-   used to say. `--sandbox read-only` stops writes; codex's own `--help` scopes it to
-   "model-generated shell commands". Reads were supposed to be stopped by
+   used to say. `--sandbox read-only` stops SHELL writes only; codex's own `--help` scopes
+   it to "model-generated shell commands", and that is literal. Its file-edit tool
+   (`apply_patch`) is gated by the approval policy, not the sandbox: probed on codex-cli
+   0.154.0, Windows, a read-only call had its shell write denied and then created the file
+   through that tool. `approval_policy="never"` makes codex reject such a patch ("writing
+   is blocked by read-only sandbox"), so it rides every call, resumed ones included
+   (`_APPROVAL_ARGS`). `tests/checks/codex_write_probe.py` re-proves both writes on both
+   branches against the real CLI, opt-in. Reads were supposed to be stopped by
    `[permissions.<profile>.filesystem]`, passed on every call from `core/secret_patterns.py`
    — the same secret list opencode denies, in codex's dialect. It parses, and it stops
    nothing: probed against codex-cli 0.147.0, denying `**` and `**/*` for `:workspace_roots`
@@ -201,6 +207,15 @@ from adapters.shared.redaction import (  # noqa: E402
 )
 
 
+# `--sandbox read-only` confines shell commands only. codex's own file-edit tool
+# (`apply_patch`) is gated by the approval policy instead: a patch outside the writable
+# roots is REJECTED only under `never`, and otherwise falls to whatever the user's
+# config.toml or exec's default decides. Probed on codex-cli 0.154.0, Windows: without
+# this pair a read-only call created a file through that tool while its shell write was
+# denied. Passed on every call, resumed ones too, so no config file can loosen it.
+_APPROVAL_ARGS = ("-c", 'approval_policy="never"')
+
+
 class CodexAdapter:
     adapter = "codex"
 
@@ -330,7 +345,11 @@ class CodexAdapter:
             try:
                 self.on_session_created(thread_id)
             except Exception:
-                pass 
+                # The id is captured either way; a caller whose callback raises must not
+                # lose the run that produced it. The executor's callback does not raise: it
+                # keeps a failed write and retries it after the run, and names the loss on
+                # the result (`session_persisted: false`).
+                pass
 
         try:
             outcome = self._popen_capture(
@@ -673,6 +692,7 @@ class CodexAdapter:
                 "--skip-git-repo-check",
                 "-c",
                 f'sandbox_mode="{self.sandbox}"',
+                *_APPROVAL_ARGS,
                 *boundary,
             ]
         else:
@@ -686,6 +706,7 @@ class CodexAdapter:
                 "--skip-git-repo-check",
                 "--sandbox",
                 self.sandbox,
+                *_APPROVAL_ARGS,
                 *boundary,
             ]
             if cwd:

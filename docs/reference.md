@@ -166,6 +166,13 @@ Semua flag `install.py`:
 `AGENT_HOME` (env) mengganti `~` sebagai home target — dipakai test dan e2e installer untuk
 memasang ke HOME sementara.
 
+Drift bundle (`--check`, dan penolakan `--apply`) dihitung dua arah: file `dist/` yang hash-nya
+tak cocok atau tak tercatat di `dist/manifest.json`, **dan** entri manifest yang file sumbernya
+di `dist/config/` sudah tidak ada. `doctor` (`checks.bundle_integrity`) memvalidasi bentuk tiap
+entri manifest lebih dulu: entri yang bukan objek, tanpa `path`, atau tanpa `sha256` 64-hex membuat cek
+berhenti dengan `error` + `malformed` (indeks entri), yang `doctor` jadikan issue — bukan drift
+instalasi lokal.
+
 **Dry run adalah default, disengaja.** Script ini menulis ke config agent global — dibaca setiap project di mesin itu. Kesalahan di sini tidak terkurung dalam satu repo.
 
 Yang dilakukan `--apply`:
@@ -792,10 +799,15 @@ Saat `init`, source-nya adalah `config/second_agent.seed.json` bila ada, atau `c
 | | `opencode` | `codex` | `agy` |
 | --- | --- | --- | --- |
 | Boundary baca file rahasia | **ditegakkan** lewat `<project_root>/opencode.json` | **tidak ada** | **tidak ada** |
-| Sandbox tulis | ya | ya (`--sandbox read-only`) | **tidak** — tulis di working tree hanya *dideteksi* (`core/policy/agy_guard.py`), tidak dicegah |
+| Sandbox tulis | ya | ya (`--sandbox read-only` + `approval_policy="never"`) | **tidak** — tulis di working tree hanya *dideteksi* (`core/policy/agy_guard.py`), tidak dicegah |
 | Config boundary project-root | file, di-refresh tiap `init`/`upgrade` | tak ada layer-nya | tak ada layer-nya |
+| `boundary` (`config/providers.py`) | `reads: secrets_denied`, `writes: denied` | `reads: unbounded`, `writes: sandboxed` | `reads: unbounded`, `writes: unbounded` |
 
 `codex` dan `agy` sama-sama dilaporkan `doctor` sebagai `not_enforceable` dengan `trusted: true`: keduanya bisa membaca tiap file project dan menerima environment proses penuh — boundary-nya kewajiban agent, bukan penegakan runtime. Memilih `agy` juga butuh acknowledgement eksplisit (`requires_opt_in`); `/.provider` menolak menulisnya tanpa itu.
+
+Sisi tulis dilaporkan terpisah. `doctor` menulis `checks.second_agent_write_boundary` (`{provider, writes}`) dan, hanya untuk `writes: unbounded` (`agy`), satu `WARNING: second_agent provider '<p>' can WRITE ...` tambahan di `recommended_fixes` — tetap bukan issue. Setiap hasil delegated yang sampai ke tahap provider (sukses atau gagal) membawa `meta.provider_boundary` (`{reads, writes}`), dan untuk `agy` juga `meta.provider_write_warning`.
+
+**Codex: `--sandbox read-only` saja tidak menghentikan tulis.** Flag itu membatasi perintah shell. Tool edit file codex (`apply_patch`) diatur approval policy, bukan sandbox: diuji pada codex-cli 0.154.0 di Windows, panggilan read-only ditolak saat menulis lewat shell lalu berhasil membuat file lewat tool itu. Adapter karena itu mengirim `-c approval_policy="never"` di tiap panggilan, termasuk `exec resume`; dengan itu codex menolak patch ("writing is blocked by read-only sandbox"). Probe opt-in `WORKFLOW_CODEX_PROBE=1 python tests/run.py --only codex-write-probe` membuktikan ulang kedua jalur tulis di panggilan baru dan yang di-resume terhadap CLI sungguhan (memakai kuota codex).
 
 **Codex di Windows — sandbox OS-nya sendiri.** Sandbox Windows codex (backend `elevated`) bisa
 menolak memulai sesi: ``windows sandbox failed: elevated Windows sandbox requires effective
@@ -811,7 +823,7 @@ butuh backend `elevated`, dan memilih yang lebih lemah (`[windows] sandbox = "un
 proses) tercatat di `meta.provider_version`, di baris usage (`provider_version`), dan di
 `doctor` (`checks.provider_version`).
 
-Codex mengirim daftar deny yang sama sebagai flag `-c permissions.workflow.filesystem` di tiap panggilan, tetapi flag itu tidak menghentikan apa pun. Diuji terhadap codex-cli 0.147.0 mode `exec`: men-deny `**` dan `**/*` untuk `:workspace_roots` lalu meminta sebuah file di root itu tetap mengembalikan isinya, exit 0. Codex membaca dengan menjalankan shell, dan `--sandbox read-only` membatasi **tulis**, bukan baca.
+Codex mengirim daftar deny yang sama sebagai flag `-c permissions.workflow.filesystem` di tiap panggilan, tetapi flag itu tidak menghentikan apa pun. Diuji terhadap codex-cli 0.147.0 mode `exec`: men-deny `**` dan `**/*` untuk `:workspace_roots` lalu meminta sebuah file di root itu tetap mengembalikan isinya, exit 0. Codex membaca dengan menjalankan shell, dan `--sandbox read-only` (bersama `approval_policy="never"`, lihat di atas) membatasi **tulis**, bukan baca.
 
 Artinya second_agent codex bisa membaca tiap file di project yang kamu tunjuk, `.env` termasuk. `init` melaporkan ini sebagai `status: not_enforceable` dengan `permissions_enforced: 0`, dan `dist/config/codex/AGENTS.md` menyatakan ke agent-nya bahwa menghindari file rahasia adalah kewajibannya sendiri — instruksi, bukan penegakan.
 
@@ -1110,7 +1122,7 @@ agent-agnostic—caller lain boleh memakai runner blocking biasa.
 
 Kalau background task hilang atau pemanggilan terputus, panggil runner lagi dengan
 session, command, dan task yang identik. Runtime akan attach bila worker masih hidup.
-Jika worker sudah mati, job yang sama dipulihkan satu kali melalui OpenCode session lama
+Jika worker sudah mati, job yang sama dipulihkan satu kali melalui thread provider lama (opencode, codex, atau agy)
 dengan prompt continuation terstruktur. Kematian kedua menghasilkan
 `recovery_exhausted`, melepas lock, dan tidak memicu loop otomatis.
 
@@ -1130,8 +1142,10 @@ ditemukan. Dengan `--result` untuk job verify, `0` hanya berarti verdict `pass`;
 
 Kalau tak ada job yang cocok, hasil terakhir masih ada di `.workflow/data/sessions/<id>/runtime/response.last.md`. Yang sedang berjalan terlihat di `.workflow/current/session.json` dan `progress.jsonl`.
 
-Recovery bersifat best-effort, bukan process survival: jika session OpenCode lama tidak
+Recovery bersifat best-effort, bukan process survival: jika thread provider lama tidak
 pernah tercatat, runtime gagal sebagai `session_capture_failed` dan clean run diperlukan.
+Hasil yang membawa `meta.session_persisted: false` berarti thread itu tidak tersimpan —
+recovery maupun continuation untuknya tidak tersedia.
 Request berbeda pada session yang masih terkunci tetap ditolak sebagai
 `job_already_running`.
 

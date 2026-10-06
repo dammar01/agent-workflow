@@ -187,6 +187,26 @@ def _bundle_integrity(
     if not isinstance(files, list) or not isinstance(targets, dict):
         result["error"] = "manifest has no files/targets"
         return result
+    # Every entry is checked for shape before any is used. The loop below dereferences
+    # `entry.get` and compares `sha256`, so a non-dict entry raised out of doctor and an
+    # entry without a hash compared unequal and read as local drift — a broken manifest
+    # reported as an edited install. Neither is: the manifest itself cannot be trusted.
+    malformed = [
+        index
+        for index, entry in enumerate(files)
+        if not isinstance(entry, dict)
+        or not isinstance(entry.get("path"), str)
+        or not entry.get("path")
+        or not isinstance(entry.get("sha256"), str)
+        or not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"])
+    ]
+    if malformed:
+        result["malformed"] = malformed
+        result["error"] = (
+            f"manifest has {len(malformed)} malformed file entr"
+            f"{'y' if len(malformed) == 1 else 'ies'}"
+        )
+        return result
 
     home = os.path.expanduser("~")
     only_command = _installed_intent_mode()

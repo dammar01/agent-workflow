@@ -208,6 +208,11 @@ def _check_unstamped_dist_is_refused() -> None:
     tampered = {**manifest, "files": [f for f in manifest["files"] if f["path"] != "claude/skills/plan.md"]}
     assert_true(_bundle_stale(tampered) == ["claude/skills/plan.md"],
                 "a dist file the manifest does not describe is stale, and --apply refuses on it")
+    # The other direction: the manifest still vouches for a file dist/ no longer ships.
+    # The stale walk only visits sources that exist, so this passed both checks before.
+    ghost = {**manifest, "files": [*manifest["files"], {"path": "claude/skills/deleted.md", "sha256": "0" * 64}]}
+    assert_true(_bundle_stale(ghost) == ["claude/skills/deleted.md"],
+                "a manifest entry whose dist source was deleted is stale too")
 
 
 def _check_upgrade_points_at_the_running_build() -> None:

@@ -681,8 +681,16 @@ A heuristic selector miss keeps a bounded DOM probe instead of a screenshot. Whe
 scenario resolved any `${ENV}` value, no screenshot and no trace is taken: binary captures
 cannot be scrubbed afterwards. Resolved values are scrubbed from events and text artifacts
 (`.html .htm .txt .log .json .jsonl .md`, in any subdirectory of the run's `e2e/`)
-raw, URL-encoded, HTML- and JSON-escaped (values shorter than 4 characters excepted). A
-run over `settings.artifact_max_mb` loses traces, then screenshots, then HTML. The
+raw, URL-encoded, HTML- and JSON-escaped (values shorter than 4 characters excepted).
+Scrubbing is fail-closed: a text artifact that cannot be read or rewritten is deleted, and
+every such file (or a run directory that could not be listed) is named in
+`meta.e2e.artifacts_unscrubbed` (`{path, removed, error}`) and marked pruned with
+`pruned_reason: unscrubbed` ("withheld: could not be scrubbed; do not open" in the evidence),
+so the report and the reviewer never point at it. When anything was left behind (`removed:
+false` — a file that could be neither scrubbed nor deleted, or a directory that could not be
+listed), every artifact of that attempt is withheld, the attempt directory is named in
+`meta.e2e.artifacts_unsafe`, and the reviewer's evidence block says `artifacts: withheld ...`
+instead of the directory path. A run over `settings.artifact_max_mb` loses traces, then screenshots, then HTML. The
 directory is pruned with its run and never entered into `evidence.jsonl`.
 
 Browser knowledge (`core/evidence/e2e/knowledge.py`, `.workflow/e2e-knowledge.jsonl`) sits
@@ -782,6 +790,29 @@ a provider that can already read `.env`. What the runtime guarantees instead is 
 `/.doctor` reports `checks.second_agent_read_boundary` (`not_enforceable` + `trusted: true`,
 or `enforceable` for opencode) and one `WARNING: second_agent provider ...` entry in
 `recommended_fixes` — never an issue, so readiness is unaffected.
+
+Writes are a separate axis, declared per bundle as `boundary.writes` in `config/providers.py`
+and read through `provider_boundary()`: opencode `denied` (permission map), codex `sandboxed`,
+agy `unbounded`. codex's `sandboxed` takes TWO flags on every call, resumed ones included:
+`--sandbox read-only` (or `-c sandbox_mode=` on `exec resume`) confines shell commands, and
+`-c approval_policy="never"` makes codex reject an `apply_patch` outside the writable roots —
+without it, codex-cli 0.154.0 on Windows wrote a file through that tool under a read-only
+sandbox. `tests/checks/codex_write_probe.py` (opt-in, `WORKFLOW_CODEX_PROBE=1`) re-proves both
+write paths on both branches. `/.doctor` adds `checks.second_agent_write_boundary` and, for
+`unbounded` only, a second `WARNING: second_agent provider '<p>' can WRITE ...` entry. Every
+delegated result of a call that reached the provider step — `ok` or not — carries
+`meta.provider_boundary` (a call refused earlier, e.g. `session_capture_failed` at the
+preflight, started no provider and carries none) (`{reads, writes}`; also in the archived call
+meta, not in the usage row), plus `meta.provider_write_warning` when writes are unbounded.
+
+The provider thread id is persisted or its loss is named. Session records are written through
+`atomic_write_json` (unique temp name; `os.replace` retried on `PermissionError`, which Windows
+raises while any reader holds the target open). Before a provider is spawned the executor
+writes the session record once (`SessionManager.ensure_writable`); failure returns
+`session_capture_failed` with the task not started. codex and agy report their id mid-stream;
+a write that fails there is retried after the run, and if that fails too the result stays
+`ok` with `meta.session_persisted: false` and `meta.session_persist_error` — no resume and no
+continuation for that thread.
 
 opencode's prompt travels as a FILE: it is written to
 `sessions/<session>/runtime/opencode-prompt.md` and attached with `-f`, and argv carries one

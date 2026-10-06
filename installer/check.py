@@ -101,6 +101,31 @@ def _detect_project_root() -> Path | None:
     return None
 
 
+def _entries_by_path(manifest: dict) -> dict[str, dict]:
+    """Well-formed manifest entries by path. A malformed one is left out here and comes
+    back through `_orphaned_entries` as stale, instead of raising out of the check."""
+    return {
+        entry["path"]: entry
+        for entry in manifest.get("files", [])
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+    }
+
+
+def _orphaned_entries(manifest: dict) -> list[str]:
+    """Manifest keys whose dist/ source no longer exists.
+
+    The stale checks walk the sources that exist and look each one up in the manifest, so
+    a file deleted from dist/ without regenerating the manifest was never visited: the
+    manifest kept vouching for a file the bundle no longer ships, and both checks passed.
+    """
+    orphaned: list[str] = []
+    for entry in manifest.get("files", []):
+        key = entry.get("path") if isinstance(entry, dict) else None
+        if not isinstance(key, str) or not (DIST_CONFIG / key).is_file():
+            orphaned.append(str(key))
+    return orphaned
+
+
 def _bundle_stale(manifest: dict) -> list[str]:
     """Manifest keys whose dist/ file no longer matches, or that dist/ has but the manifest lacks.
 
@@ -108,7 +133,7 @@ def _bundle_stale(manifest: dict) -> list[str]:
     a dist/ edited without regenerating the manifest is exactly the half-finished state that
     must not reach ~/.claude.
     """
-    by_path = {f["path"]: f for f in manifest.get("files", [])}
+    by_path = _entries_by_path(manifest)
     stale: list[str] = []
     sources = [(source, key) for source, _dest, key in _targets()]
     settings_src = DIST_CONFIG / "claude" / "settings.template.json"
@@ -123,6 +148,7 @@ def _bundle_stale(manifest: dict) -> list[str]:
         entry = by_path.get(key)
         if not entry or _hash(source.read_text(encoding="utf-8")) != entry.get("sha256"):
             stale.append(key)
+    stale.extend(key for key in _orphaned_entries(manifest) if key not in stale)
     return stale
 
 
@@ -135,7 +161,7 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
     compare whole-file; managed targets (CLAUDE.md, AGENTS.md) compare only the marker block,
     since the rest of those files is legitimately the user's own content.
     """
-    by_path = {f["path"]: f for f in manifest.get("files", [])}
+    by_path = _entries_by_path(manifest)
     bundle_stale: list[str] = []
     installed_drift: list[str] = []
     installed_missing: list[str] = []
@@ -181,6 +207,7 @@ def _run_check(manifest: dict, project_root: Path | None = None) -> int:
                 installed_drift.append(key)
         elif installed != resolved:
             installed_drift.append(key)
+    bundle_stale.extend(key for key in _orphaned_entries(manifest) if key not in bundle_stale)
 
     only_command = _stored_only_command()
     settings_dest = HOME / ".claude" / "settings.json"

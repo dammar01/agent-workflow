@@ -28,6 +28,8 @@ from core.audit.bundle_integrity import (  # noqa: E402,F401
     _os_variant_skip,
     _select_intent_section,
 )
+from config.providers import bundled_providers as _bundled_providers  # noqa: E402
+from config.providers import provider_boundary as _provider_boundary  # noqa: E402
 from core.audit.mcp_scan import (  # noqa: E402,F401
     _classify_mcp,
     _mcp_config_candidates,
@@ -37,7 +39,9 @@ from core.audit.mcp_scan import (  # noqa: E402,F401
 
 # Providers whose install reports `not_enforceable`: no read boundary holds, and the adapter
 # passes the full environment. Selecting one means trusting it; doctor says so every run.
-_UNBOUNDED_READ_PROVIDERS = ("codex", "agy")
+_UNBOUNDED_READ_PROVIDERS = tuple(
+    name for name in _bundled_providers() if _provider_boundary(name)["reads"] == "unbounded"
+)
 
 
 def check_writable(path: Path) -> tuple[bool, str | None]:
@@ -545,6 +549,19 @@ def run_doctor(
             )
         elif active:
             checks["second_agent_read_boundary"] = {"provider": active, "status": "enforceable"}
+        if active:
+            # The write side, apart from the read side: codex reads everything but its
+            # sandbox stops writes; agy stops neither, and `agy_guard` only reports a write
+            # after it happened. Trusting a reader is not the same as trusting a writer.
+            writes = _provider_boundary(active)["writes"]
+            checks["second_agent_write_boundary"] = {"provider": active, "writes": writes}
+            if writes == "unbounded":
+                recommended_fixes.append(
+                    f"WARNING: second_agent provider '{active}' can WRITE to this project — "
+                    "no sandbox or permission map stops it, and the working-tree guard only "
+                    "detects a write after it happened. Review `git status` after delegated "
+                    "calls, or switch to codex/opencode with /.provider"
+                )
         if active:
             # Which provider CLI release this project runs, against the release this workflow
             # version was tested on. codex's Windows sandbox broke between releases (CASE-015);

@@ -24,7 +24,8 @@ Player event protocol (one JSON object per stdout line):
    "enforced": bool}   # console_error only: settings.fail_on_console_error
   {"type": "harness", "reason": str, "detail": str}
   {"type": "artifact", "kind": "html|screenshot|trace|skipped|error", "name": str|None,
-   "step": int|None, "detail": str|None, "bytes": int|None, "pruned": bool}
+   "step": int|None, "detail": str|None, "bytes": int|None, "pruned": bool,
+   "pruned_reason": "budget"|"unscrubbed"|None}
   {"type": "heartbeat"}
   {"type": "result", "status": "finished|aborted"}
 """
@@ -325,7 +326,7 @@ def build_report(events: list[dict], scenario: dict | None, *, run_meta: dict | 
                 }
             )
         elif kind == "artifact":
-            artifacts.append({key: event.get(key) for key in ("kind", "name", "step", "detail", "bytes", "pruned")})
+            artifacts.append({key: event.get(key) for key in ("kind", "name", "step", "detail", "bytes", "pruned", "pruned_reason")})
         elif kind == "harness":
             harness.append({"reason": event.get("reason") or "harness_error", "detail": event.get("detail") or ""})
         elif kind == "result":

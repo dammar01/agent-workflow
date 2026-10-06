@@ -195,7 +195,9 @@ def evidence_block(report: dict, *, artifacts: str | None = None, spec_notes: li
         lines.append("artifact_files:")
         for item in files:
             step = f", step {item['step']}" if item.get("step") else ""
-            if item.get("pruned"):
+            if item.get("pruned") and item.get("pruned_reason") == "unscrubbed":
+                note = " — withheld: could not be scrubbed; do not open"
+            elif item.get("pruned"):
                 note = " — pruned: over settings.artifact_max_mb"
             elif item.get("detail"):
                 note = f" — {_short(item.get('detail'))}"

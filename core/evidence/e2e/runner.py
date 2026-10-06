@@ -1070,13 +1070,48 @@ def run(
             )
         # Player-written files: text scrubbed exactly like the events were, then the run's
         # size budget. Both before the report names them, so what it lists is what exists.
-        redaction_hits += e2e_redact.scrub_text_files(final_dir, resolved_values)
+        scrub_failures: list[dict] = []
+        redaction_hits += e2e_redact.scrub_text_files(final_dir, resolved_values, scrub_failures)
         pruned = _enforce_artifact_budget(e2e_dir, int(config["artifact_max_mb"]))
-        if pruned:
-            e2e_meta["artifacts_pruned"] = sorted(set(e2e_meta.get("artifacts_pruned") or []) | set(pruned))
+        if scrub_failures:
+            # Named, and kept out of the report the same way a budget-pruned file is: the
+            # reviewer must never be pointed at a file this run could not scrub.
+            e2e_meta["artifacts_unscrubbed"] = [
+                *(e2e_meta.get("artifacts_unscrubbed") or []), *scrub_failures
+            ]
+            for failure in scrub_failures:
+                try:
+                    rel = Path(failure["path"]).relative_to(e2e_dir).as_posix()
+                except ValueError:
+                    continue
+                pruned = sorted(set(pruned or []) | {rel})
+        # A failure that left something behind — a file that could be neither scrubbed nor
+        # deleted, or a directory that could not even be listed — means this attempt holds
+        # files nobody scrubbed and whose names may not be known. No artifact of the
+        # attempt is offered to the report, by name or otherwise.
+        attempt_unsafe = any(not failure.get("removed") for failure in scrub_failures)
+        if attempt_unsafe:
+            e2e_meta["artifacts_unsafe"] = sorted(
+                {*(e2e_meta.get("artifacts_unsafe") or []), str(final_dir)}
+            )
+        if pruned or attempt_unsafe:
+            if pruned:
+                e2e_meta["artifacts_pruned"] = sorted(set(e2e_meta.get("artifacts_pruned") or []) | set(pruned))
             prefix = "" if final_dir == e2e_dir else f"{final_dir.relative_to(e2e_dir).as_posix()}/"
+            unscrubbed = {
+                Path(failure["path"]).name for failure in scrub_failures
+            }
             events = [
-                {**event, "pruned": True} if event.get("type") == "artifact" and f"{prefix}{event.get('name')}" in pruned else event
+                {
+                    **event,
+                    "pruned": True,
+                    "pruned_reason": "unscrubbed"
+                    if attempt_unsafe or event.get("name") in unscrubbed
+                    else "budget",
+                }
+                if event.get("type") == "artifact"
+                and (attempt_unsafe or f"{prefix}{event.get('name')}" in (pruned or []))
+                else event
                 for event in events
             ]
         report = build_report(
@@ -1220,8 +1255,15 @@ def run(
         )
 
     # ---- stage 3: hybrid review ---------------------------------------------------
+    # The reviewer reads the disk. A directory that still holds files nobody could scrub is
+    # not named to it at all: withholding the file names alone would leave the path to them.
+    artifacts_ref = (
+        "withheld: this attempt left unscrubbed files behind (meta.e2e.artifacts_unsafe)"
+        if str(final_dir) in (e2e_meta.get("artifacts_unsafe") or [])
+        else str(final_dir)
+    )
     block, block_hits = e2e_redact.redact_text(
-        evidence_block(report, artifacts=str(final_dir), spec_notes=parsed.get("uncertainties") or [])
+        evidence_block(report, artifacts=artifacts_ref, spec_notes=parsed.get("uncertainties") or [])
     )
     redaction_hits += block_hits
     redaction_hits += e2e_redact.write_text(e2e_dir / "evidence.md", block)
