@@ -1,4 +1,4 @@
-# agent-workflow v3.8.1
+# agent-workflow v3.8.2
 
 Runtime orkestrasi mandiri untuk alur kerja dua-agent. Tanpa dependency pihak ketiga.
 
@@ -102,7 +102,7 @@ git --version
 
 ---
 
-## Install (v3.8.1)
+## Install (v3.8.2)
 
 ### Anggota tim baru — urutan lengkap dari nol
 
@@ -831,7 +831,7 @@ Pakai `codex` bila project-nya memang tak menyimpan rahasia, atau bila kamu mene
 
 Sejak v3.7.1 posisi ini eksplisit: `codex` dan `agy` diperlakukan sebagai **trusted provider**. Selain tanpa batas baca, adapter keduanya meneruskan seluruh environment proses ke CLI provider (credential di env ikut terlihat). Itu diterima sebagai risiko, bukan diperbaiki dengan allowlist — allowlist bisa memutus auth CLI provider, dan provider yang sudah bisa membaca `.env` tak dijaga apa pun oleh env yang dipangkas. Sebagai gantinya risikonya selalu terlihat: `/.doctor` menulis cek `second_agent_read_boundary` dan satu `WARNING` di `recommended_fixes` tiap kali provider aktif `codex`/`agy` (bukan issue — readiness tetap READY), dan `/.provider` menyebutnya saat memilih.
 
-Kunci reliability (v3.8.1):
+Kunci reliability (v3.8.2):
 
 | Kunci | Default | Arti |
 | --- | --- | --- |
@@ -1149,7 +1149,7 @@ recovery maupun continuation untuknya tidak tersedia.
 Request berbeda pada session yang masih terkunci tetap ditolak sebagai
 `job_already_running`.
 
-### Liveness worker (v3.8.1)
+### Liveness worker (v3.8.2)
 
 PID yang hidup **tidak** berarti sedang bekerja. Worker karena itu melaporkan heartbeat sekaligus usia output stream, lalu job diklasifikasi tiga keadaan:
 

@@ -10,6 +10,7 @@ Release procedure: `RELEASE.md`.
 
 | Version | Notes | Theme |
 |---------|-------|-------|
+| 3.8.2 | [docs/releases/v3.8.2.md](docs/releases/v3.8.2.md) | Penutup sebelum feature freeze: codex tak lagi bisa menulis lewat tool edit di sandbox read-only; boundary baca/tulis per provider; thread provider tak hilang diam-diam; manifest dan scrub artefak gagal tertutup |
 | 3.8.1 | [docs/releases/v3.8.1.md](docs/releases/v3.8.1.md) | Export memeriksa nama project di semua panjang dan key per-project wajib label; gate meloloskan Read skill; selector terbukti berlaku lintas id di route dinamis; `tool_commit` dan versi provider tak lagi mengklaim yang tak terbukti |
 | 3.8.0 | [docs/releases/v3.8.0.md](docs/releases/v3.8.0.md) | Latensi terukur per komponen, network metadata dan selector terbukti di `/.verify-browser`, telemetry per task lewat hook `task-events`, `clean` membuang lock guard sesi mati, RQ jadi record YAML |
 | 3.7.3 | [docs/releases/v3.7.3.md](docs/releases/v3.7.3.md) | `/.verify-browser` DELEGATED di semua lapisan; **breaking:** selector `testid` → `e2e`; perbaikan draft, rem `repeat_failure`, dan polling player; secret literal ditambal per nilai; origin `scenario` + diagnosa terstruktur; research jadi YAML ber-skema; CHANGELOG jadi index; `bench/` dihapus |
