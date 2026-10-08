@@ -119,6 +119,10 @@ from tests.checks.registry import _test_every_check_is_registered  # noqa: E402
 from tests.checks.stamp_version import _test_stamp_version_reads_versions_not_addresses  # noqa: E402
 from tests.checks.manifest import _test_malformed_manifest_entry_fails_closed, _test_manifest_matches_dist  # noqa: E402
 from tests.checks.codex_write_probe import _test_codex_sandbox_blocks_writes  # noqa: E402
+from tests.checks.atomic_writers import (  # noqa: E402
+    _test_atomic_helpers_keep_their_contract,
+    _test_every_writer_outlasts_a_held_file,
+)
 from tests.checks.session_persistence import (  # noqa: E402
     _test_atomic_write_outlasts_a_held_file,
     _test_provider_thread_id_is_never_lost_silently,
@@ -161,6 +165,8 @@ SUITES: dict[str, tuple] = {
     "provider-seam": (_test_provider_seam, "adapter registry and provider resolution"),
     "provider-threads": (_test_provider_threads_are_kept_per_provider, "a provider thread is resumed only by the provider that issued it"),
     "atomic-write-held": (_test_atomic_write_outlasts_a_held_file, "a reader briefly holding a file does not lose an atomic write"),
+    "atomic-helpers": (_test_atomic_helpers_keep_their_contract, "atomic text/bytes helpers: newline, fsync, mode, no temp left on failure"),
+    "atomic-writers": (_test_every_writer_outlasts_a_held_file, "every temp-and-replace writer outlasts a held file and keeps its raise-or-swallow policy"),
     "session-persistence": (_test_provider_thread_id_is_never_lost_silently, "a provider thread id is kept, or its loss is named"),
     "provider-boundary": (_test_result_names_the_provider_boundary, "every delegated result names its provider's read/write boundary"),
     "codex-write-probe": (_test_codex_sandbox_blocks_writes, "opt-in (WORKFLOW_CODEX_PROBE=1): a real codex call cannot write under --sandbox read-only"),

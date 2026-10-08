@@ -1,7 +1,6 @@
 import hashlib
 import os
 import json
-import secrets
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -346,13 +345,10 @@ def set_cached_main_session_id(session_id: str, project_root=None) -> None:
     cache["updated_at"] = datetime.now(timezone.utc).isoformat()
     if project_root is not None:
         cache["project_root"] = str(Path(project_root).resolve())
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    temp = cache_path.with_suffix(cache_path.suffix + f".{secrets.token_hex(6)}.tmp")
-    with temp.open("w", encoding="utf-8") as file:
-        json.dump(cache, file, indent=2)
-        file.flush()
-        os.fsync(file.fileno())
-    temp.replace(cache_path)
+    # Lazy: workspace_paths imports this module for TOOL_VERSION.
+    from core.workspace.workspace_paths import atomic_write_text
+
+    atomic_write_text(cache_path, json.dumps(cache, indent=2), fsync=True)
 
 
 def validate_provider_config(loaded: dict) -> list[str]:

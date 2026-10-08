@@ -9,12 +9,11 @@ how a shortlist starts pointing at files that were never really related.
 """
 import hashlib
 import json
-import os
 import re
 import time
 from pathlib import Path
 
-from core.workspace.workspace_paths import workflow_paths
+from core.workspace.workspace_paths import atomic_write_text, workflow_paths
 from utils.osutil import process_alive
 
 GRAPH_DIRNAME = "graphify-out"
@@ -172,10 +171,8 @@ def _write_stale_cache(
 ) -> None:
     """Best-effort: a cache that cannot be written must not fail the call."""
     try:
-        path = _stale_cache_path(project_root)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-        tmp.write_text(
+        atomic_write_text(
+            _stale_cache_path(project_root),
             json.dumps(
                 {
                     "graph_mtime_ns": graph_mtime_ns,
@@ -183,9 +180,7 @@ def _write_stale_cache(
                     "verdict": verdict,
                 }
             ),
-            encoding="utf-8",
         )
-        os.replace(tmp, path)
     except OSError:
         pass
 

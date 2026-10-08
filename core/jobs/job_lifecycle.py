@@ -82,6 +82,17 @@ def submit(
     try:
         with _main().JOB_MANAGER.capacity_guard():
             active = _main().JOB_MANAGER.active_job_for_session(session_id)
+            if (
+                active
+                and active.get("request_hash") != expected_hash
+                and _main().JOB_MANAGER.release_dead_session_lock(
+                    session_id, active["job_id"]
+                )
+            ):
+                # A different request found the session held by a worker that is gone.
+                # Refusing it left the session blocked until someone ran `clean`; the old
+                # job is failed (reaped) instead, and this request proceeds as new.
+                active = None
             if active:
                 if active.get("request_hash") != expected_hash:
                     active_id = active["job_id"]

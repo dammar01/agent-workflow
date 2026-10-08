@@ -7,9 +7,9 @@ Runtime orkestrasi mandiri untuk alur kerja dua-agent. Tanpa dependency pihak ke
 Dua peran dipisah tegas:
 
 - **main_agent** — agent yang kamu pakai (Claude Code, Codex, Cursor, dll). Orchestrator, antarmuka user, dan **satu-satunya** yang boleh menulis file.
-- **second_agent** — OpenCode, pengumpul bukti **read-only**. Bukan jawaban akhir.
+- **second_agent** — provider terpilih (OpenCode, Codex, atau Agy), pengumpul bukti **read-only**. Bukan jawaban akhir. Batas tulis tiap provider berbeda; lihat [Security](security.md).
 
-Runtime ini duduk di antara keduanya: menerima command, merakit prompt terstruktur, menjalankan `opencode run`, memvalidasi bentuk output, menyimpan state per-sesi, lalu mengembalikan JSON contract yang stabil:
+Runtime ini duduk di antara keduanya: menerima command, merakit prompt terstruktur, menjalankan CLI provider terpilih (mis. `opencode run`), memvalidasi bentuk output, menyimpan state per-sesi, lalu mengembalikan JSON contract yang stabil:
 
 ```json
 { "ok": true, "content": "...", "meta": {} }
@@ -30,7 +30,7 @@ Prompt user
 → main.py await → JobManager → detached worker
 → Executor → Router
 → Graphify leads + fact store → PromptBuilder
-→ OpenCodeAdapter → second_agent
+→ adapter provider terpilih (OpenCode/Codex/Agy) → second_agent
 → sub-agent fan-out bila aktif
 → validasi contract + digest + penyimpanan evidence
 → await mengembalikan {ok, content, meta, digest?}
@@ -1147,7 +1147,11 @@ pernah tercatat, runtime gagal sebagai `session_capture_failed` dan clean run di
 Hasil yang membawa `meta.session_persisted: false` berarti thread itu tidak tersimpan —
 recovery maupun continuation untuknya tidak tersedia.
 Request berbeda pada session yang masih terkunci tetap ditolak sebagai
-`job_already_running`.
+`job_already_running`, kecuali worker job pemegang lock terbukti `dead` (PID hilang atau
+dipakai ulang proses lain). Dalam kasus itu job lama ditandai `failed` + `reaped`, lock
+sesi itu saja dilepas, dan request baru diproses sebagai job baru. Job yang sedang
+recovery (belum punya worker PID) dan worker yang hidup atau stalled tidak pernah diambil.
+Request identik tetap memakai jalur recovery di atas.
 
 ### Liveness worker (v3.8.2)
 

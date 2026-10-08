@@ -117,11 +117,12 @@ def _flush_receipt(complete: bool = False, allow_empty: bool = False) -> None:
     path = _RECEIPT_TARGET["path"]
     if path is None or (not _RECEIPT and not allow_empty):
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    # Unique temp per process: two installs sharing one backup name must not interleave
-    # into the same temp file before the rename.
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(
+    # Lazy, like install.py and installer/check.py: the runtime is only needed once an
+    # install actually writes.
+    from core.workspace.workspace_paths import atomic_write_text
+
+    atomic_write_text(
+        path,
         json.dumps(
             {
                 "schema_version": _RECEIPT_SCHEMA_VERSION,
@@ -132,9 +133,7 @@ def _flush_receipt(complete: bool = False, allow_empty: bool = False) -> None:
             indent=2,
         )
         + "\n",
-        encoding="utf-8",
     )
-    os.replace(tmp, path)
 
 
 def _file_sha256(path: Path) -> str | None:

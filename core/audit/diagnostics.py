@@ -17,8 +17,7 @@ from core.workspace.workspace_paths import (
 from utils import osutil
 from utils.osutil import provider_callable
 
-# Split out of this module; re-exported because core/workflow_runtime.py re-exports
-# them FROM here, and callers still reach them through that chain.
+# Split out of this module; re-exported for callers that still import them from here.
 from core.audit.bundle_integrity import (  # noqa: E402,F401
     _bundle_integrity,
     _expand_home,

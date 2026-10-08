@@ -47,6 +47,7 @@ from core.workspace.workspace_paths import (
     DATA_DIRNAME,
     WORKFLOW_DIRNAME,
     atomic_write_json,
+    atomic_write_text,
     is_legacy_layout,
     read_json_file,
 )
@@ -181,9 +182,7 @@ def _rewrite_evidence_paths(index: Path, old_root: Path, new_root: Path) -> int:
         lines.append(json.dumps(row, ensure_ascii=False))
     if not rewritten:
         return 0  # nothing to change: no rewrite, so a resumed run cannot trip on a locked file
-    tmp = index.with_name(f"{index.name}.{os.getpid()}.tmp")
-    tmp.write_text("".join(line + "\n" for line in lines), encoding="utf-8")
-    os.replace(tmp, index)
+    atomic_write_text(index, "".join(line + "\n" for line in lines))
     return rewritten
 
 

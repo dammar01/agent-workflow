@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "claude/CLAUDE.md",
-      "sha256": "b9caa5b68826fe922938a525686812fa16ca60e26e29168cc0f7e00288ea0a2e",
-      "bytes": 31091,
+      "sha256": "6b26162743eb6be6afd6147c50b4e48b10d913b5b52e31ed9d3c66aa35f906cb",
+      "bytes": 31228,
       "merge": "merge",
       "component": "prompt_bundle"
     },
@@ -126,8 +126,8 @@
     },
     {
       "path": "claude/skills/sweep.md",
-      "sha256": "7defe335d987002a72482da129503d983e177f2008a42bed855e7728bc87d8b0",
-      "bytes": 865,
+      "sha256": "0a78e51c32f648e536e0c8f10796ae9b2971ad30d199c581b3ae569b05306e12",
+      "bytes": 869,
       "merge": "replace",
       "component": "prompt_bundle"
     },

@@ -620,10 +620,10 @@ class JobManager:
 
         The lock is deliberately released by job state, not by a timer — a long delegated
         call must not have its lock stolen while it works. The gap that leaves: a worker
-        that DIES holds the lock forever, because get_result reports `worker_died` as
-        recoverable and never fails the record. Recovery needs the caller to resubmit the
-        identical request, and a caller who has moved on never will. Locks then accumulate
-        across sessions and every later delegated call on that session is refused.
+        that DIES keeps the lock, because get_result reports `worker_died` as recoverable
+        and never fails the record. The identical request recovers it, and since v3.8.2 a
+        DIFFERENT request on the same session releases it too (release_dead_session_lock),
+        but a caller who simply stops leaves it held until this runs.
 
         Only provably-finished owners are cleared: a missing record, a terminal status, or
         a worker PID that is gone. A live or merely silent worker is left alone — that is
@@ -632,48 +632,84 @@ class JobManager:
         released: list[dict] = []
         kept = 0
         for path in sorted(self.lock_dir.glob("*.lock")):
-            data = self._read_lock(path) or {}
-            job_id = data.get("job_id") or ""
-            job = self.get_job(job_id) if job_id else None
-            if job is None:
-                reason = "no_job_record"
-            elif job.get("status") not in {"pending", "running", "recovering"}:
-                reason = f"job_{job.get('status')}"
-            elif self.liveness(job) == DEAD:
-                reason = "worker_died"
-            else:
+            outcome = self._release_if_stale(path, "clean")
+            if outcome is None:
                 kept += 1
-                continue
-            if reason == "worker_died":
-                try:
-                    self.fail_job(
-                        job_id,
-                        "worker died and the session lock was released by clean",
-                        reaped=True,
-                    )
-                except OSError:
-                    # A job file that cannot be written stays as it is; clean still
-                    # releases the lock, which is what the caller asked for. Narrowed
-                    # from a bare Exception: a non-I/O failure here means fail_job itself
-                    # is broken, and clean silently continuing hid that.
-                    pass
-            if not path.exists():
-                released.append(
-                    {"session_id": path.stem, "job_id": job_id, "reason": reason}
-                )
-                continue
-            if self._release_lock_path(
-                path,
-                expected_job_id=data.get("job_id"),
-                expected_token=data.get("token"),
-                force=job is None,
-            ):
-                released.append(
-                    {"session_id": path.stem, "job_id": job_id, "reason": reason}
-                )
             else:
-                kept += 1
+                released.append(outcome)
         return {"released": released, "kept": kept}
+
+    def release_dead_session_lock(self, session_id: str, job_id: str) -> bool:
+        """Free one session for a new request when its job's worker is provably gone.
+
+        Narrower than `release_stale_session_locks` on purpose: only this session, only
+        the job the caller saw, and only a DEAD worker. A record mid-recovery has no
+        worker PID, so liveness cannot call it dead and it is never taken. Callers hold
+        `capacity_guard`, the same guard `claim_recovery` runs under, so an identical
+        request cannot be claiming the job while it is released. The old job is failed
+        (reaped), not recovered: the session moved on to a different request.
+        """
+        outcome = self._release_if_stale(
+            self._lock_path(session_id),
+            "a different request on the session",
+            dead_worker_only=True,
+            expected_job_id=job_id,
+        )
+        return outcome is not None
+
+    def _release_if_stale(
+        self,
+        path: Path,
+        released_by: str,
+        dead_worker_only: bool = False,
+        expected_job_id: str | None = None,
+    ) -> dict | None:
+        """Release the lock at `path` if its owner can never finish. None when kept.
+
+        `expected_job_id` pins the decision to the job the caller saw: the lock is read
+        once here and everything after — the liveness verdict, `fail_job`, the token-checked
+        release — follows that read, so a lock that changed hands is left alone instead of
+        failing a job the caller never looked at.
+        """
+        data = self._read_lock(path) or {}
+        job_id = data.get("job_id") or ""
+        if expected_job_id is not None and job_id != expected_job_id:
+            return None
+        job = self.get_job(job_id) if job_id else None
+        if job is None:
+            reason = "no_job_record"
+        elif job.get("status") not in {"pending", "running", "recovering"}:
+            reason = f"job_{job.get('status')}"
+        elif self.liveness(job) == DEAD:
+            reason = "worker_died"
+        else:
+            return None
+        if dead_worker_only and reason != "worker_died":
+            return None
+        if reason == "worker_died":
+            try:
+                self.fail_job(
+                    job_id,
+                    f"worker died and the session lock was released by {released_by}",
+                    reaped=True,
+                )
+            except OSError:
+                # A job file that cannot be written stays as it is; the lock is still
+                # released, which is what the caller asked for. Narrowed from a bare
+                # Exception: a non-I/O failure here means fail_job itself is broken, and
+                # silently continuing hid that.
+                pass
+        outcome = {"session_id": path.stem, "job_id": job_id, "reason": reason}
+        if not path.exists():
+            return outcome
+        if self._release_lock_path(
+            path,
+            expected_job_id=data.get("job_id"),
+            expected_token=data.get("token"),
+            force=job is None,
+        ):
+            return outcome
+        return None
 
     def prune_jobs(self, ttl_days: int = 7, keep_last: int = 50) -> dict:
         """Delete terminal jobs older than ttl_days, always keeping the newest keep_last."""

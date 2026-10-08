@@ -61,7 +61,13 @@ def now_iso() -> str:
 REPLACE_RETRY_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8)
 
 
-def _replace_with_retry(source: Path, target: Path) -> None:
+def replace_with_retry(source: Path, target: Path) -> None:
+    """`os.replace` that outlasts a reader holding `target` open on Windows.
+
+    Public for the one writer that cannot hand its bytes to `atomic_write_*`: e2e tagging
+    re-checks the target's identity between staging and the move, and that check has to
+    sit immediately before this call.
+    """
     for delay in REPLACE_RETRY_DELAYS:
         try:
             os.replace(source, target)
@@ -71,20 +77,78 @@ def _replace_with_retry(source: Path, target: Path) -> None:
     os.replace(source, target)
 
 
-def atomic_write_text(path: Path, content: str, encoding: str = "utf-8") -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_name(
+def _staging_path(path: Path) -> Path:
+    # Per-writer name: a fixed ".tmp" would let two concurrent savers clobber each other's
+    # staging file before the replace.
+    return path.with_name(
         f"{path.name}.{os.getpid()}.{threading.get_ident()}."
         f"{secrets.token_hex(8)}.tmp"
     )
+
+
+def _commit(path: Path, temp: Path) -> None:
     try:
-        temp.write_text(content, encoding=encoding)
-        _replace_with_retry(temp, path)
+        replace_with_retry(temp, path)
     finally:
         try:
             temp.unlink()
         except FileNotFoundError:
             pass
+
+
+def atomic_write_text(
+    path: Path,
+    content: str,
+    encoding: str = "utf-8",
+    *,
+    newline: str | None = None,
+    fsync: bool = False,
+) -> None:
+    """Write `content` to `path` whole or not at all.
+
+    `newline` is passed to `open` unchanged, so the default keeps the platform
+    translation every caller had before. `fsync` is opt-in: it costs a disk flush per
+    write, and only the writers that already paid for durability ask for it.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = _staging_path(path)
+    try:
+        with temp.open("w", encoding=encoding, newline=newline) as file:
+            file.write(content)
+            if fsync:
+                file.flush()
+                os.fsync(file.fileno())
+    except BaseException:
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    _commit(path, temp)
+
+
+def atomic_write_bytes(
+    path: Path, data: bytes, *, fsync: bool = False, mode: int | None = None
+) -> None:
+    """Binary twin of `atomic_write_text`. `mode`, when given, is applied to the staged
+    file before the move, so the result does not inherit the staging file's permissions."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = _staging_path(path)
+    try:
+        with temp.open("wb") as file:
+            file.write(data)
+            if fsync:
+                file.flush()
+                os.fsync(file.fileno())
+        if mode is not None:
+            os.chmod(temp, mode)
+    except BaseException:
+        try:
+            temp.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    _commit(path, temp)
 
 
 def atomic_write_json(path: Path, payload: dict) -> None:

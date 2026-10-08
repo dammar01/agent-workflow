@@ -601,7 +601,7 @@ if __name__ == "__main__":
         "--model",
         "-m",
         default=None,
-        help="OpenCode model override: provider/model_key",
+        help="model override for the selected second_agent provider (e.g. provider/model_key for OpenCode)",
     )
     parser.add_argument(
         "--job-id", default=None, help="job ID for status/result/worker"

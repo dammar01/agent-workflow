@@ -145,10 +145,11 @@ def write_ledger(targets: list[tuple[Path, Path, str]], apply: bool) -> None:
         sha = _file_sha256(dest)
         if sha and key.startswith(prefixes):
             files[str(dest)] = {"key": key, "sha256": sha}
-    LEDGER.parent.mkdir(parents=True, exist_ok=True)
-    tmp = LEDGER.with_name(f"{LEDGER.name}.tmp")
-    tmp.write_text(json.dumps({"schema": _LEDGER_SCHEMA, "files": files}, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(LEDGER)
+    from core.workspace.workspace_paths import atomic_write_text
+
+    atomic_write_text(
+        LEDGER, json.dumps({"schema": _LEDGER_SCHEMA, "files": files}, indent=2) + "\n"
+    )
 
 
 def shipped_hook_stems() -> set[str]:

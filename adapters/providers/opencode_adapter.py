@@ -16,7 +16,7 @@ from config.settings import (
 )
 from core.evidence.contract import make_error as _contract_make_error
 from core.evidence.contract import make_ok as _contract_make_ok
-from core.workspace.workspace_paths import detect_project_root
+from core.workspace.workspace_paths import atomic_write_text, detect_project_root
 from utils import osutil
 from utils.redact import redact, redact_value
 from utils.parser import ensure_text, first_non_empty
@@ -743,10 +743,7 @@ class OpenCodeAdapter:
         if hazards:
             return _unsafe_command_error(hazards, self._resolve_work_dir(work_dir))
         try:
-            prompt_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = prompt_path.with_name(f"{prompt_path.name}.{os.getpid()}.tmp")
-            tmp.write_text(prompt, encoding="utf-8")
-            os.replace(tmp, prompt_path)
+            atomic_write_text(prompt_path, prompt)
         except OSError as exc:
             return make_error(
                 "unknown",

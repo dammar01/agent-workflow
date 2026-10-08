@@ -1,5 +1,5 @@
 # Skill: sweep
-description: Local Git diff scan → impact report. Does not call OpenCode.
+description: Local Git diff scan → impact report. Does not call second_agent.
 
 ## Trigger
 /.sweep

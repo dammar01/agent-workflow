@@ -10,13 +10,13 @@ Raw per-run logs keep everything; this store keeps only the durable/recurring su
 """
 import hashlib
 import json
-import os
 import re
 from pathlib import Path
 
 from core.runtime.config_defaults import default_policies
 from core.workspace.workspace_paths import (
     _safe_component,
+    atomic_write_text,
     now_iso,
     read_json_file,
     workflow_paths,
@@ -391,17 +391,11 @@ def _dedupe(facts: list[dict], *, allow_line_proximity: bool = False) -> list[di
 
 def _save_facts(project_root: Path, facts: list[dict]) -> None:
     path = _facts_path(project_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
     facts = _dedupe(facts)[-MAX_FACTS:]
-    # Per-writer tmp name: a fixed ".tmp" would let two concurrent savers clobber each
-    # other's staging file before the atomic replace. The lock serialises the real writers,
-    # but this keeps the swap safe even if a save ever runs outside the lock.
-    tmp = path.with_suffix(f".{os.getpid()}.tmp")
-    tmp.write_text(
+    atomic_write_text(
+        path,
         "\n".join(json.dumps(f, ensure_ascii=False) for f in facts) + ("\n" if facts else ""),
-        encoding="utf-8",
     )
-    tmp.replace(path)
 
 
 def _recurrence_counts(
@@ -498,10 +492,7 @@ def _save_claim_cache(path: Path, cache: dict, live: set[str]) -> None:
     """
     try:
         pruned = {k: v for k, v in cache.items() if k in live}
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(pruned), encoding="utf-8")
-        os.replace(tmp, path)
+        atomic_write_text(path, json.dumps(pruned))
     except OSError:
         pass
 

@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 
 from config.providers import provider_stable_version
+from core.workspace.workspace_paths import atomic_write_text
 from utils import osutil
 
 _CACHE: dict[str, str | None] = {}
@@ -98,10 +99,7 @@ def _disk_store(key: str, version: str | None) -> None:
         prefix = key.rsplit("|", 2)[0] + "|"
         data = {k: v for k, v in data.items() if not k.startswith(prefix)}
         data[key] = {"version": version, "read_at": time.time()}
-        path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
-        os.replace(tmp, path)
+        atomic_write_text(path, json.dumps(data, indent=1))
     except Exception:
         pass
 

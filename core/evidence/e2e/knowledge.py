@@ -32,13 +32,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
 from core.evidence.e2e.redact import sanitize_endpoint
-from core.workspace.workspace_paths import now_iso, workflow_paths
+from core.workspace.workspace_paths import atomic_write_text, now_iso, workflow_paths
 from utils.owned_lock import OwnedFileLock
 
 FILENAME = "e2e-knowledge.jsonl"
@@ -92,12 +91,11 @@ def load(project_root: Path) -> list[dict]:
 
 def _save(project_root: Path, entries: list[dict]) -> None:
     path = _store_path(project_root)
-    path.parent.mkdir(parents=True, exist_ok=True)
     # Newest verification last, so the cap drops what has gone longest unproven.
     entries = sorted(entries, key=lambda e: str(e.get("last_verified") or e.get("first_seen") or ""))[-MAX_ENTRIES:]
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    tmp.write_text("".join(json.dumps(e, ensure_ascii=False, sort_keys=True) + "\n" for e in entries), encoding="utf-8")
-    os.replace(tmp, path)
+    atomic_write_text(
+        path, "".join(json.dumps(e, ensure_ascii=False, sort_keys=True) + "\n" for e in entries)
+    )
 
 
 def origin_of(base_url: str) -> str:
@@ -580,9 +578,9 @@ def write_sidecar(project_root: Path, session_id: str, base_url: str) -> int:
         "entries": entries,
         "proven": proven_selectors(project_root, base_url),
     }
-    tmp = runtime_dir / f"{SIDECAR_NAME}.{os.getpid()}.tmp"
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, runtime_dir / SIDECAR_NAME)
+    atomic_write_text(
+        runtime_dir / SIDECAR_NAME, json.dumps(payload, ensure_ascii=False, indent=2)
+    )
     return len(entries)
 
 

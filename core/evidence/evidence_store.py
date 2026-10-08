@@ -9,7 +9,12 @@ import time
 from pathlib import Path
 
 from core.evidence.fact_store import _anchor_hash, _FILELINE, current_anchor_line
-from core.workspace.workspace_paths import _safe_component, now_iso, workflow_paths
+from core.workspace.workspace_paths import (
+    _safe_component,
+    atomic_write_text,
+    now_iso,
+    workflow_paths,
+)
 from utils.redact import redact, redact_value
 
 EVIDENCE_FILENAME = "evidence.jsonl"
@@ -236,20 +241,8 @@ def _load(project_root: Path) -> list[dict]:
 
 
 def _save(project_root: Path, rows: list[dict]) -> None:
-    p = _path(project_root)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(
-        f"{p.name}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp"
-    )
     payload = "\n".join(json.dumps(r, ensure_ascii=False) for r in rows)
-    try:
-        tmp.write_text(payload + ("\n" if payload else ""), encoding="utf-8")
-        os.replace(tmp, p)
-    finally:
-        try:
-            tmp.unlink()
-        except FileNotFoundError:
-            pass
+    atomic_write_text(_path(project_root), payload + ("\n" if payload else ""))
 
 
 def _is_fresh(project_root: Path, entry: dict) -> bool:

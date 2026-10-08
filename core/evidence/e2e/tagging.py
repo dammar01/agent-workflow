@@ -30,6 +30,8 @@ import stat
 import tempfile
 from pathlib import Path
 
+from core.workspace.workspace_paths import replace_with_retry
+
 from utils import git
 
 TAG_ATTRIBUTE = "data-e2e"
@@ -316,7 +318,9 @@ def _replace_contents(target: Path, body: bytes, mode: int, identity: tuple | No
         # mkstemp makes the file private to this user; the template keeps the permissions
         # it had, or the tag would arrive with a mode change nobody asked for.
         os.chmod(temporary, mode)
-        os.replace(temporary, target)
+        # Not `atomic_write_bytes`: the identity check above has to sit immediately
+        # before the move, so this writer keeps its own staging and borrows only the retry.
+        replace_with_retry(Path(temporary), target)
     except OSError:
         _discard(None, temporary)
         raise

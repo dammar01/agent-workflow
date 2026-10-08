@@ -125,6 +125,10 @@ from tests.checks.manifest import (
     _test_manifest_matches_dist,
 )
 from tests.checks.codex_write_probe import _test_codex_sandbox_blocks_writes
+from tests.checks.atomic_writers import (
+    _test_atomic_helpers_keep_their_contract,
+    _test_every_writer_outlasts_a_held_file,
+)
 from tests.checks.session_persistence import (
     _test_atomic_write_outlasts_a_held_file,
     _test_provider_thread_id_is_never_lost_silently,
@@ -191,6 +195,8 @@ def run_tests() -> None:
     _test_provider_seam()
     _test_provider_threads_are_kept_per_provider()
     _test_atomic_write_outlasts_a_held_file()
+    _test_atomic_helpers_keep_their_contract()
+    _test_every_writer_outlasts_a_held_file()
     _test_provider_thread_id_is_never_lost_silently()
     _test_result_names_the_provider_boundary()
     _test_codex_sandbox_blocks_writes()
@@ -395,6 +401,41 @@ def run_tests() -> None:
             main.JOB_MANAGER.active_job_for_session("submit-session") is None,
             "recovery exhaustion must release the session lock",
         )
+
+        # 8. A different request frees a session whose worker is gone, instead of being
+        # refused until someone runs `clean`. The old job is failed, not recovered.
+        orphaned = main.submit("analyze", "long task", "dead-session", work_dir, None)
+        assert_true(orphaned["ok"], "submit must succeed")
+        main.JOB_MANAGER.set_worker_pid(orphaned["job_id"], 999999999)
+        moved_on = main.submit("analyze", "another task", "dead-session", work_dir, None)
+        assert_true(
+            moved_on["ok"] and moved_on["job_id"] != orphaned["job_id"],
+            f"a different request on a session whose worker died must proceed: {moved_on}",
+        )
+        old = main.JOB_MANAGER.get_job(orphaned["job_id"])
+        assert_true(
+            old["status"] == "failed" and old.get("reaped"),
+            f"the dead worker's job is failed and marked reaped: {old.get('status')}",
+        )
+        owner = main.JOB_MANAGER.active_job_for_session("dead-session")
+        assert_true(
+            owner and owner["job_id"] == moved_on["job_id"],
+            "the session lock now belongs to the new request",
+        )
+        # The lock changed hands: a release pinned to the old job must not touch the new
+        # owner, even when the new owner's worker is dead too.
+        main.JOB_MANAGER.set_worker_pid(moved_on["job_id"], 999999999)
+        assert_true(
+            not main.JOB_MANAGER.release_dead_session_lock("dead-session", orphaned["job_id"]),
+            "a release pinned to a job that no longer holds the lock is refused",
+        )
+        still = main.JOB_MANAGER.get_job(moved_on["job_id"])
+        assert_true(
+            still["status"] not in {"failed", "completed"}
+            and main.JOB_MANAGER.active_job_for_session("dead-session")["job_id"] == moved_on["job_id"],
+            "the current owner is neither failed nor unlocked by a stale release",
+        )
+        main.JOB_MANAGER.fail_job(moved_on["job_id"], "cleanup")
 
         queued = main.JOB_MANAGER.create_job(
             "explore", "inspect queued flow", "queued-session", work_dir, None

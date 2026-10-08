@@ -23,11 +23,15 @@ Everything here is best-effort. Observing a call must never be able to fail it.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 from pathlib import Path
 
-from core.workspace.workspace_paths import atomic_write_text, now_iso, workflow_paths
+from core.workspace.workspace_paths import (
+    atomic_write_bytes,
+    atomic_write_text,
+    now_iso,
+    workflow_paths,
+)
 
 TASK_PREVIEW_CHARS = 200
 MAX_PROGRESS_LINES = 2000
@@ -169,8 +173,6 @@ def e2e_finish(project_root: Path, session_id: str, e2e_dir: Path, final_dir: Pa
                 shutil.copyfile(source, target / name)
         shots = sorted(Path(final_dir).glob("step*.png"))
         if shots:
-            tmp = target / f"last.png.{os.getpid()}.tmp"
-            shutil.copyfile(shots[-1], tmp)
-            os.replace(tmp, target / "last.png")
+            atomic_write_bytes(target / "last.png", shots[-1].read_bytes())
     except Exception:
         pass
