@@ -62,7 +62,7 @@ evidence_notes: |
 
 implementation:
   version: exoma b0d4fc2
-  commits: [uncommitted]
+  commits: [71cf7b7]
   components:
     - pyproject.toml, uv.lock (new; Exoma git pin, PyYAML dev group)
     - core/, adapters/, config/, utils/, installer/, main.py, install.py, check.py, dist/ (removed)
