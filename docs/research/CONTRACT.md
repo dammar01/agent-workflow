@@ -89,7 +89,7 @@ research record whenever possible.
 ## 10. Historical reconstruction
 
 Historical records may be reconstructed from source code, git history, release history
-(`CHANGELOG.md` and `docs/releases/`, `prompt/` up to v3.7.2), existing documentation, and
+(`CHANGELOG.md` and the `docs/releases/` notes it links, `prompt/` up to v3.7.2; after 3.9.0, Exoma's own release history), existing documentation, and
 remembered observations.
 
 Reconstructed history must be marked as reconstructed when certainty is limited. Missing
@@ -291,4 +291,4 @@ The README inventory and [questions.md](questions.md) are generated from the rec
 questions.md. Prose goes in block scalars (`|`); a list item that starts with a backtick
 is quoted. The schema is part of this contract: changing a field or an enum bumps
 `schema_version` and is recorded as a `DEC`. PyYAML is a development dependency
-(`requirements-dev.txt`); the runtime never reads these records.
+(the `dev` group in `pyproject.toml`); the runtime never reads these records.

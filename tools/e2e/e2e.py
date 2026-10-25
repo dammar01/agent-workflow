@@ -1,10 +1,10 @@
-"""agent-workflow end-to-end checks.
+"""Staging end-to-end run against the pinned Exoma.
 
-    python tools/e2e/e2e.py           # local + integrity + installer
-    python tools/e2e/e2e.py --full    # also the delegated calls (spends quota)
+    python tools/e2e/e2e.py --full    # the delegated calls (spends quota)
 
-Check bodies live in tools/e2e/e2e_*.py; this module owns the CLI and the order they
-run in.
+Exoma's own suite covers the local, integrity, installer and promote checks; what
+staging adds is the real delegated run, against the exact commit pyproject.toml pins.
+Check bodies live in tools/e2e/e2e_*.py; this module owns the CLI.
 """
 
 import argparse
@@ -15,19 +15,15 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from tools.e2e.e2e_delegated import delegated_checks  # noqa: E402
-from tools.e2e.e2e_installer import installer_checks  # noqa: E402
-from tools.e2e.e2e_integrity import integrity_checks  # noqa: E402
-from tools.e2e.e2e_local import local_checks  # noqa: E402
-from tools.e2e.e2e_promote import promote_checks  # noqa: E402
-from tools.e2e.e2e_support import Report, SKIP, _json_from, _run_cli  # noqa: E402,F401
+from tools.e2e.e2e_support import Report, SKIP  # noqa: E402
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="agent-workflow end-to-end checks")
+    parser = argparse.ArgumentParser(description="agent-workflow staging end-to-end run")
     parser.add_argument(
         "--full",
         action="store_true",
-        help="also run delegated commands (minutes + real quota)",
+        help="run the delegated commands (minutes + real quota)",
     )
     parser.add_argument(
         "--session", default="e2e-session", help="session id for delegated runs"
@@ -35,10 +31,6 @@ def main() -> int:
     args = parser.parse_args()
 
     report = Report()
-    local_checks(report)
-    integrity_checks(report)
-    promote_checks(report)
-    installer_checks(report)
     if args.full:
         delegated_checks(report, args.session)
     else:

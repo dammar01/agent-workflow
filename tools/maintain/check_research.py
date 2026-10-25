@@ -15,7 +15,7 @@ and in CI — the contract is checked, not only written down.
   python tools/maintain/check_research.py --write-inventory   # regenerate the README table
                                                                # and docs/research/questions.md
 
-PyYAML is a development dependency (requirements-dev.txt), never a runtime one: research
+PyYAML is a development dependency (the dev group in pyproject.toml), never a runtime one: research
 records are not runtime input, so the runtime stays stdlib-only (tests/checks/deps.py).
 """
 from __future__ import annotations
@@ -550,7 +550,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--write-inventory", action="store_true", help="regenerate the README inventory table")
     args = parser.parse_args(argv)
     if yaml is None:
-        print("[check_research] PyYAML missing: pip install -r requirements-dev.txt", file=sys.stderr)
+        print("[check_research] PyYAML missing: uv sync (the dev group in pyproject.toml)", file=sys.stderr)
         return 2
     report = validate(strict=args.strict, git=args.git, drafts=args.drafts)
     generated = (

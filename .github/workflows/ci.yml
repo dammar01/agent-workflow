@@ -1,9 +1,8 @@
 name: ci
 
-# Every gate here already existed as a command someone had to remember to run. Two of them
-# were failing on the default branch when this workflow was first added — a stamp target
-# that had never been created and a stale manifest — which is the whole argument for the
-# file.
+# The research and staging checks, run against the Exoma commit pyproject.toml pins. The
+# runtime's own gates (version stamp, manifest, stdlib-only, unit, integrity, installer)
+# run in Exoma's CI, where a failure is fixed.
 on:
   push:
     branches: [main, dev]
@@ -25,10 +24,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Both, deliberately. The runtime ships a PowerShell runner and generates a POSIX
-        # one, the workspace checks shell out to whichever the platform has, and path
-        # handling differs where it matters most (locks, session dirs). A single-OS run
-        # would pass while half the product stayed untested.
+        # Both: the measurement harnesses read transcripts and spawn bash, and path
+        # handling differs between the two.
         os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
@@ -38,55 +35,21 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          # The runtime is pure stdlib with no dependency file to pin against, so the
-          # Python version is the only thing to hold steady. That claim is not left as
-          # folklore: the `deps` suite fails the build if shipped code ever imports
-          # something outside the stdlib, which is the point at which a lockfile WOULD
-          # be needed. A constraints file listing nothing would document the claim
-          # without testing it.
           python-version: '3.13'
 
-      - name: Bash for the hook launchers
-        # The hooks run as bash launchers on every OS (Git Bash on Windows), and
-        # tests/checks/hook_contract.py fails closed without one. `shell: bash` is Git Bash
-        # on windows-latest, so this step failing names the missing prerequisite instead
-        # of the suite failing later on an assertion.
-        shell: bash
+      - name: Pinned Exoma and development dependencies
+        # --locked: the run uses the Exoma commit uv.lock records, or fails when the
+        # lock no longer matches pyproject.toml.
         run: |
-          bash --version | head -n 1
-          for py in python3 python; do command -v "$py" >/dev/null && "$py" -c 'import sys; print(sys.executable, sys.version.split()[0])' || true; done
-
-      - name: Development dependencies
-        # Development only (requirements-dev.txt): PyYAML for the research-record check.
-        # The runtime stays stdlib-only — the `deps` step below still proves it, because the
-        # one tool that imports yaml does so under an ImportError guard.
-        run: python -m pip install -r requirements-dev.txt
+          python -m pip install uv
+          uv sync --locked
 
       - name: Research records follow their schema
         # --git: every commit a decision names exists in this repository.
-        run: python tools/maintain/check_research.py --git
+        run: uv run python tools/maintain/check_research.py --git
 
-      - name: Version stamp is in sync
-        run: python tools/maintain/stamp_version.py --check
-
-      - name: Manifest matches dist/
-        run: python tools/maintain/gen_manifest.py --check
-
-      - name: Runtime is stdlib-only
-        # Its own step rather than only inside the suite: this is the gate that decides
-        # whether the absence of a lockfile is still correct, and a reader scanning the
-        # job list should be able to see it hold.
-        run: python tests/run.py --only deps
-
-      - name: Unit and integration suites
-        # --keep-going so one failure does not hide the rest; the scenario suite is still
-        # internally sequential, so it stops at its own first assertion either way.
-        # --record writes the outcome to the workspace quality stream, so `--command
-        # report` can show a test pass rate over time rather than only the latest run.
-        run: python tests/run.py --keep-going --record .
-
-      - name: End-to-end (local + integrity + installer)
-        # Without --full: no provider CLI is invoked and no quota is spent. The delegated
-        # checks stay opt-in because they cost real money and need credentials this
-        # workflow deliberately does not hold.
-        run: python tools/e2e/e2e.py
+      - name: Research and staging suites
+        # --keep-going so one failure does not hide the rest. --record writes the outcome
+        # to the workspace quality stream, so `exoma --command report` can show a test pass
+        # rate over time rather than only the latest run.
+        run: uv run python tests/run.py --keep-going --record .

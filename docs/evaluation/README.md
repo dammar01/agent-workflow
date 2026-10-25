@@ -30,7 +30,7 @@ before returning) lengthens the wait; more procedural use shortens each wait but
 number of human interactions.
 
 This is a framing, not a measured formula: several of its terms (human attention in
-particular) have no instrumentation yet. Today `main.py --command report` gives aggregate
+particular) have no instrumentation yet. Today `exoma --command report` gives aggregate
 durations, reuse, and acceptance. How often a human prompted and corrected, and whether the
 work reached `main`, is counted after the fact from transcripts and Git
 ([real-use-benchmark.md](real-use-benchmark.md)); what the agents read and how often

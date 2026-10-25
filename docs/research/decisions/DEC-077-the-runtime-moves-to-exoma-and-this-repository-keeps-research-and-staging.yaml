@@ -1,0 +1,97 @@
+schema_version: 3
+id: DEC-077
+title: The runtime moves to Exoma, and this repository keeps research and staging against a pinned Exoma commit
+date: 2026-10-25
+status: accepted
+provenance:
+  type: direct
+  confidence: high
+  basis: maintainer decision; Exoma's development guide already assigns the two roles
+
+problem: |
+  Exoma began as a fork of agent-workflow 3.9.0 and became the released runtime (PyPI package
+  `exoma`, `python -m exoma`, package-local `_bundle`). This repository still carried a full
+  runtime copy (`core/`, `adapters/`, `config/`, `utils/`, `installer/`, `main.py`,
+  `install.py`, `check.py`, `dist/`), its tests, its release surface and its runtime
+  documentation. Two runtimes meant a measurement could run against code no user runs, and a
+  fix could land in the copy that is not shipped. A module-by-module audit found every root
+  module with an Exoma counterpart; the differences were the checkout-to-package migration.
+decision: |
+  This repository depends on Exoma through a git pin in `pyproject.toml` (resolved in
+  `uv.lock`) and carries no runtime copy. Removed: the runtime packages and entry points,
+  `dist/`, the runtime's unit, integration and product end-to-end checks, the version stamp
+  and manifest tooling, the release notes, and the runtime documentation (reference, runtime
+  contracts, architecture, installation, team guide, security, limitations), which Exoma
+  owns. Kept and migrated to `exoma.*` imports: the research and measurement harnesses
+  (`check_research`, `export_blind_sample`, `measure_real_use`, `measure_task_outcomes`,
+  `measure_graph_hook`, `replay_facts`) and the delegated staging run (`tools/e2e`). The suite
+  is the research, fact-replay and blind-sample checks plus a check that every harness
+  imports against the pin. No product version: `pyproject.toml` carries the required
+  placeholder `0`, and an experiment names the Exoma version it ran against in
+  `version_under_test`. Tracked records are unchanged.
+rationale: |
+  CHARTER §12 fields for the change:
+  Research question: does a delegated run measured here describe the runtime users run?
+  Hypothesis: with one runtime, pinned by commit, every measurement and staging result is
+  attributable to a named Exoma version.
+  Variable changed: where the runtime under study comes from (in-tree copy vs pinned package).
+  Experiment enabled: staging an Exoma release candidate (Exoma RELEASE.md step 6b) by moving
+  the pin and re-running the harnesses and the delegated run against it.
+  Expected measurement: per candidate, which harnesses import and which staging checks pass,
+  against the exact commit `uv.lock` records.
+  Why existing mechanisms are insufficient: the in-tree copy had no link to a released
+  version after the fork; `version_under_test` could name a version no package carries.
+  Complexity introduced: harnesses import Exoma internals, not a public API, so an Exoma
+  refactor can break them; `tests/checks/harnesses.py` names a broken one when the pin moves.
+
+alternatives:
+  - option: Vendor Exoma as a git submodule and import from its source tree
+    rejected_because: Staging would no longer exercise the installed package, which is what Exoma's staging step is meant to test.
+  - option: Keep the root runtime frozen under `legacy/`
+    rejected_because: The maintainer chose deletion; git history keeps the code, and a frozen copy invites imports from it.
+  - option: Keep both runtimes active
+    rejected_because: Exoma's development guide states this repository does not carry its own copy of the runtime.
+
+evidence: []
+evidence_notes: |
+  Divergence audit of `core/`, `adapters/`, `config/`, `utils/`, `installer/` against
+  `exoma/src/exoma` at the pinned commit (delegated explore, 2026-10-25): no module without a
+  counterpart. Exoma `docs/development.md` ("Two repositories, two jobs", "Staging a release
+  in agent-workflow"). After the change: `uv run python tests/run.py` passed its four suites
+  and `check_research.py` reported no error, against Exoma b0d4fc2.
+
+implementation:
+  version: exoma b0d4fc2
+  commits: [uncommitted]
+  components:
+    - pyproject.toml, uv.lock (new; Exoma git pin, PyYAML dev group)
+    - core/, adapters/, config/, utils/, installer/, main.py, install.py, check.py, dist/ (removed)
+    - tests/ (runtime checks removed; harnesses.py added; replay.py imports exoma)
+    - tools/maintain/ (stamp, manifest, extract, sync tools removed; harness imports moved to exoma)
+    - tools/e2e/ (product checks removed; the delegated run calls python -m exoma)
+    - .github/workflows/ci.yml, e2e-full.yml (uv sync --locked; research and staging checks only)
+    - README.md, RELEASE.md (staging procedure), CHANGELOG.md (closed at 3.9.0), CLAUDE.md, docs/README.md
+
+disposition:
+  implementation_status: implemented
+  validation_status: not_validated
+
+validation:
+  summary: |
+    not_validated. The suites pass against the pin; no candidate has been staged yet, and the
+    delegated run (`tools/e2e/e2e.py --full`) has not been run since the move.
+
+trade_offs:
+  better:
+    - one runtime; every measurement names the Exoma commit it ran against
+    - a runtime fix has one place to land
+  worse:
+    - harnesses depend on Exoma internals and can break on an Exoma refactor
+    - the product checks (local, integrity, installer, promote) run only in Exoma's CI
+limitations:
+  - The harness import check proves imports, not that a measurement computes the same figures after a pin move.
+  - tools/sim/sim_flows.py was outside the change's scope and still imports the removed runtime.
+revisit_when:
+  - an Exoma refactor breaks a harness the import check did not catch
+  - Exoma publishes a public API for the internals the harnesses read
+questions: [RQ-15]

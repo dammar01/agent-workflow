@@ -23,7 +23,7 @@ The calculation contract for every benchmark figure this project reports. The re
   does not match `build`). Under `per_project` and `by_project` every key must be a project
   label the tools write (`PA`, `Project AB`), so a folder name there is refused by shape
   (DEC-038). How to run them:
-  [Measure your own use](../team-guide/measure-your-use.md).
+  [Measure your own use](https://github.com/dammar01/Exoma/blob/main/docs/team-guide/measure-your-use.md).
 - The statistics differ between producers on purpose: unifying them would change figures
   already recorded (CASE-011, CASE-012). Each metric names its convention below.
 

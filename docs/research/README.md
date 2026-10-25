@@ -282,6 +282,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-069](decisions/DEC-069-the-bundle-ships-only-commands-the-runtime-or-research-needs-and-wrappers-come-from-skill-headers.yaml) | The bundle drops /.refactor, /.review and /.compress, and command wrappers are rendered from skill headers | accepted | implemented | not_validated | 8a88c2e |
 | [DEC-070](decisions/DEC-070-calls-name-the-facts-they-were-served-and-the-gate-logs-its-refusals.yaml) | Each delegated call archives the facts it was served, and the execution gate logs its refusals | accepted | implemented | observed | a87fbba |
 | [DEC-071](decisions/DEC-071-bash-launchers-stay-and-their-measured-cost-is-accepted.yaml) | The bash hook launchers stay, and their measured cost over PowerShell 5.1 is accepted | accepted | implemented | not_validated | 2e41ffc |
+| [DEC-077](decisions/DEC-077-the-runtime-moves-to-exoma-and-this-repository-keeps-research-and-staging.yaml) | The runtime moves to Exoma, and this repository keeps research and staging against a pinned Exoma commit | accepted | implemented | not_validated | uncommitted |
 | [EXP-008](experiments/EXP-008-quality-review-of-accepted-real-tasks.yaml) | Correctness and quality review of a sample of real tasks accepted on main (CASE-012) | completed | not_applicable | not_validated | — |
 | [EXP-011](experiments/EXP-011-hook-launcher-latency-bash-vs-powershell.yaml) | Hook call wall time, bash launcher vs PowerShell 5.1, on Windows | completed | not_applicable | not_validated | — |
 | [EXP-013](experiments/EXP-013-calibrate-fact-retrieval-on-recorded-tasks.yaml) | Calibrate fact retrieval on recorded tasks | completed | not_applicable | not_validated | — |
@@ -326,8 +327,9 @@ No `ARC-XXX` record exists yet: no historical decision has been reconstructed as
 - `docs/project-knowledge/` is where `promote-write` stores verified operational knowledge,
   and the runtime injects it into exploration and reasoning prompts. Research records never go there
   directly; see "Knowledge promotion" in [CONTRACT.md](CONTRACT.md).
-- `prompt/` holds historical release notes and prompt snapshots up to v3.7.2; later release
-  notes are in [docs/releases/](../releases/).
+- `prompt/` holds historical release notes and prompt snapshots up to v3.7.2; release
+  notes for 3.7.3 through 3.9.0 are at the [last commit that carried them](https://github.com/dammar01/agent-workflow/tree/dd61a68745f978ea68fd36c2227d45ccdf22004c/docs/releases); the runtime's
+  history after 3.9.0 is Exoma's.
 - Benchmark method is recorded as `H-XXX` + `EXP-XXX` records. The earlier frozen harness
   (`bench/`, SUT v3.4.5) was removed in 3.7.3 (DEC-011) without having produced results;
   see [docs/evaluation/benchmark.md](../evaluation/benchmark.md).

@@ -1,0 +1,22 @@
+[project]
+name = "agent-workflow"
+# Required by the [project] table, never bumped: this repository has no releases. Experiments
+# pin the Exoma version they ran against in their own `version_under_test`.
+version = "0"
+description = "Research and staging for Exoma: hypotheses, experiments, decision records, and the measurement and simulation harnesses a release candidate is exercised against."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+# The runtime under study. Staging a candidate means moving this pin to its commit
+# (RELEASE.md); a failure found here is fixed in Exoma, never patched in this repository.
+dependencies = [
+    "exoma @ git+https://github.com/dammar01/Exoma.git@b0d4fc2b40896ecb1f62ef7d12e5b13ee1234b1d",
+]
+
+[dependency-groups]
+# tools/maintain/check_research.py: research records are YAML (docs/research/schema.yaml).
+dev = ["PyYAML==6.0.3"]
+
+[tool.uv]
+# Not a package: nothing here is built or published.
+package = false

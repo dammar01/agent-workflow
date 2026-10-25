@@ -34,8 +34,8 @@ from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from core.audit.transcript import is_human_turn, project_slug  # noqa: E402
-from core.evidence.e2e.redact import redact_text  # noqa: E402
+from exoma.core.audit.transcript import is_human_turn, project_slug  # noqa: E402
+from exoma.core.evidence.e2e.redact import redact_text  # noqa: E402
 from tools.maintain import measure_task_outcomes as outcomes  # noqa: E402
 from tools.maintain.measure_real_use import read_transcript  # noqa: E402
 
@@ -159,7 +159,7 @@ def export_exp014(args) -> tuple[list, dict, dict]:
 def export_category(args, labels: dict) -> tuple[list, dict]:
     items, key = [], {}
     # measure_task_outcomes leaves the clone out by default; labels for it would go unused.
-    for project in _projects(args.projects_root, list(args.exclude) + ["agent-workflow"]):
+    for project in _projects(args.projects_root, list(args.exclude) + ["exoma", "agent-workflow"]):
         for f in _transcripts(project, args.transcripts):
             if os.path.basename(f) in labels:
                 continue
@@ -180,7 +180,7 @@ def export_category(args, labels: dict) -> tuple[list, dict]:
 def _outcome_args(args) -> argparse.Namespace:
     return argparse.Namespace(
         projects_root=args.projects_root, labels=args.labels, version=list(args.exp008_version),
-        transcripts=args.transcripts, exclude=list(args.exclude) + ["agent-workflow"],
+        transcripts=args.transcripts, exclude=list(args.exclude) + ["exoma", "agent-workflow"],
         solved_share=outcomes.SOLVED_SHARE, partial_share=outcomes.PARTIAL_SHARE,
         fix_hours=outcomes.FIX_WINDOW.total_seconds() / 3600, search_days=outcomes.SEARCH_WINDOW.days,
         idle_minutes=outcomes.IDLE_SECONDS / 60,

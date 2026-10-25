@@ -1,8 +1,8 @@
 name: e2e-full
 
-# The delegated path — a real second agent, a real call, real quota. Manual only: it costs
-# money on every run and needs a provider CLI plus credentials, neither of which belongs in
-# an automatic trigger. `ci.yml` covers everything that can be checked for free.
+# The staging run: a real second agent, a real call, real quota, against the Exoma commit
+# pyproject.toml pins. Manual only: it costs money on every run and needs a provider CLI
+# plus credentials, neither of which belongs in an automatic trigger.
 on:
   workflow_dispatch:
     inputs:
@@ -29,10 +29,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Pinned Exoma
+        run: |
+          python -m pip install uv
+          uv sync --locked
+
       - name: Report the provider that will answer
         # Fail early and legibly when the runner has no provider configured, rather than
         # halfway through a paid call.
-        run: python main.py --command doctor --work-dir . --pretty
+        run: uv run python -m exoma --command doctor --work-dir . --pretty
 
       - name: End-to-end including delegated calls
-        run: python tools/e2e/e2e.py --full --session "${{ inputs.session }}"
+        run: uv run python tools/e2e/e2e.py --full --session "${{ inputs.session }}"

@@ -204,7 +204,7 @@ def _test_research_records_follow_the_schema() -> None:
     try:
         import yaml
     except ImportError:
-        raise AssertionError("PyYAML missing: pip install -r requirements-dev.txt (a development dependency)")
+        raise AssertionError("PyYAML missing: uv sync (the dev group in pyproject.toml)")
     from tools.maintain import check_research
 
     code, out = _run_tool(check_research, [])

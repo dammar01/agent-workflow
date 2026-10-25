@@ -1,8 +1,9 @@
 # agent-workflow — repository development contract
 
-Applies only when developing this repository. It is not shipped: the global bundle
-installed into user projects is `dist/config/claude/CLAUDE.md`, and nothing here belongs
-in it.
+Applies only when developing this repository. This repository is research and staging;
+the runtime it studies is Exoma (https://github.com/dammar01/Exoma), pinned by commit in
+`pyproject.toml`. It carries no copy of the runtime: a runtime change, or a failure found
+while staging, is made in Exoma, never patched here. Nothing here ships to user projects.
 
 ## Research boundary
 
@@ -47,23 +48,23 @@ write there.
 
 Put content in the right layer (index: `docs/README.md`):
 
-- `docs/team-guide/` — how and when to use it, for developers. Links to the reference;
-  never copies command flags, config keys, provider security details, or storage layouts.
 - `docs/research/` — why: evidence, hypotheses, decisions, with provenance and status.
-- `docs/reference.md`, `docs/runtime-contracts.md`, `docs/architecture/` — exact behavior.
-  Authoritative: when another layer disagrees, fix the other layer.
+- `docs/evaluation/` — the controlled benchmark and observed real use, kept apart.
+- How the runtime behaves (reference, runtime contracts, architecture, installation, team
+  guide) is Exoma's documentation. Link there; never restate command flags, config keys,
+  provider security details, or storage layouts here.
 
-A behavior change updates the reference first, then any team-guide page that describes its
-use.
+## Staging surface
 
-## Release surface
-
-- Version lives only in `config/settings.py` `TOOL_VERSION`. Follow `RELEASE.md`; never
-  hand-edit a stamped banner or `dist/manifest.json`.
-- `README.md` carries the version only in its shields.io badge. Any other version string in
-  its prose, or in `docs/reference.md`, fails `tools/maintain/stamp_version.py --check`.
-- Release notes: `docs/releases/v<version>.md` plus one index row in `CHANGELOG.md` (the
-  index stays one line per version). Never create `prompt/v<version>/`; `prompt/` is a
+- No releases, no version stamp, no manifest: `pyproject.toml` `version = "0"` is required
+  by the `[project]` table and never bumped.
+- The runtime under study is the Exoma commit in `pyproject.toml`, resolved in `uv.lock`.
+  Moving it follows `RELEASE.md` (staging procedure); harnesses run through `uv run`.
+- Harnesses import Exoma internals (`exoma.core.*`, `exoma.utils.*`). A new harness goes in
+  `tests/checks/harnesses.py` `HARNESSES`, so a moved pin that breaks it fails by name.
+- An experiment pins the Exoma version it ran against in `version_under_test`; records that
+  ran before the move name an agent-workflow version and stay as they are.
+- `CHANGELOG.md` is the closed runtime history up to 3.9.0; it gains no rows. `prompt/` is a
   historical archive ending at v3.7.2.
 - Benchmark method is an `H` + `EXP` record in `docs/research/`; there is no `bench/`
   harness any more (removed in 3.7.3, DEC-011).
