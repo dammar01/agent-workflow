@@ -27,6 +27,7 @@ change lands there. This repository holds what studies it:
 | [docs/research/](docs/research/README.md) | Charter, contract, schema, and the tracked records: decisions (`DEC`), hypotheses (`H`), experiments (`EXP`), real cases (`CASE`), research questions (`RQ`) |
 | [docs/evaluation/](docs/evaluation/README.md) | The controlled benchmark and observed real use, kept apart |
 | [tools/maintain/](tools/maintain/) | The research tooling: record checker, real-use and task-outcome measurement, fact replay (EXP-013), blind-sample export, graph-hook timing |
+| [tools/sim/](tools/sim/) | Whole-pipeline flow simulation with a faked provider, no quota |
 | [tools/e2e/](tools/e2e/) | The staging run: real delegated calls against the pinned Exoma |
 | [tests/](tests/) | Checks for the records and the harnesses, including that every harness still imports against the pin |
 

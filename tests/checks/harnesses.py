@@ -21,6 +21,7 @@ HARNESSES = (
     "tools.maintain.measure_task_outcomes",
     "tools.maintain.replay_facts",
     "tools.e2e.e2e_delegated",
+    "tools.sim.sim_flows",
 )
 
 
