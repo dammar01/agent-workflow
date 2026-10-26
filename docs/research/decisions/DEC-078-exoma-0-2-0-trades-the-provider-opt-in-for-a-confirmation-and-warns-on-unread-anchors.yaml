@@ -67,7 +67,7 @@ evidence_notes: |
 
 implementation:
   version: exoma 0591dbd (0.2.0)
-  commits: [uncommitted]
+  commits: [66b8f54]
   components:
     - pyproject.toml, uv.lock (pin b0d4fc2 -> 0591dbd)
     - tools/e2e/e2e.py, tools/e2e/e2e_delegated.py (--provider, required --model, selected via exoma provider)
