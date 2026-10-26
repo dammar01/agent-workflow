@@ -1,6 +1,7 @@
 """Staging end-to-end run against the pinned Exoma.
 
-    python tools/e2e/e2e.py --full    # the delegated calls (spends quota)
+    python tools/e2e/e2e.py --full --model <id> [--provider opencode|codex|agy]
+                                      # the delegated calls (spends quota)
 
 Exoma's own suite covers the local, integrity, installer and promote checks; what
 staging adds is the real delegated run, against the exact commit pyproject.toml pins.
@@ -28,11 +29,17 @@ def main() -> int:
     parser.add_argument(
         "--session", default="e2e-session", help="session id for delegated runs"
     )
+    parser.add_argument(
+        "--provider", default="opencode", help="second agent for the delegated runs"
+    )
+    parser.add_argument(
+        "--model", help="model id the provider CLI accepts; required with --full"
+    )
     args = parser.parse_args()
 
     report = Report()
     if args.full:
-        delegated_checks(report, args.session)
+        delegated_checks(report, args.session, args.provider, args.model)
     else:
         report.record("delegated commands", SKIP, "opt-in via --full")
 

@@ -40,8 +40,11 @@ harnesses and the staging run all import or invoke that Exoma, never a copy in t
 4. **Delegated end-to-end run.** Real provider, real quota:
 
    ```
-   uv run python tools/e2e/e2e.py --full
+   uv run python tools/e2e/e2e.py --full --provider <opencode|codex|agy> --model <id>
    ```
+
+   The model is required: the seed Exoma ships leaves it unset, and the run refuses before
+   any call rather than failing at the provider.
 
    Skipping it means the candidate never ran a real delegated call here — say so in the
    report back to Exoma rather than leaving it implied.

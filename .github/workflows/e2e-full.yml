@@ -10,6 +10,13 @@ on:
         description: 'Session id for the delegated run'
         required: false
         default: 'e2e-dispatch'
+      provider:
+        description: 'Second agent for the delegated run'
+        required: false
+        default: 'opencode'
+      model:
+        description: 'Model id the provider CLI accepts (the shipped seed leaves it unset)'
+        required: true
       runner:
         description: 'Runner label. GitHub-hosted runners have no provider CLI installed — use a self-hosted runner that does.'
         required: false
@@ -40,4 +47,4 @@ jobs:
         run: uv run python -m exoma --command doctor --work-dir . --pretty
 
       - name: End-to-end including delegated calls
-        run: uv run python tools/e2e/e2e.py --full --session "${{ inputs.session }}"
+        run: uv run python tools/e2e/e2e.py --full --session "${{ inputs.session }}" --provider "${{ inputs.provider }}" --model "${{ inputs.model }}"

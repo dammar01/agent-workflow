@@ -1,0 +1,104 @@
+schema_version: 3
+id: DEC-078
+title: Exoma 0.2.0 replaces the provider opt-in with a confirmation, watches secret files, and warns when a plan reads none of its anchors
+date: 2026-10-26
+status: accepted
+provenance:
+  type: direct
+  confidence: medium
+  basis: maintainer interview 2026-10-26 (critical_interview) while staging the Exoma 0.2.0 candidate
+
+problem: |
+  The Exoma 0.2.0 candidate (commit 0591dbd, implementation in 88790f5) changed provider
+  selection, secret handling, evidence checking, Windows process spawning and the language of
+  the shipped instructions. The pin here moved from b0d4fc2 (0.1.0) to stage it before the tag.
+  The changes were made in Exoma; why each was made was recorded nowhere.
+decision: |
+  Recorded from the maintainer's answers, per change:
+  - Choosing codex or agy no longer needs an environment opt-in. The /.provider picker shows
+    the provider's read/write boundary and asks for confirmation; every other way of selecting
+    returns the same warning in `meta.warnings`. Nothing enforces it at runtime.
+  - doctor names the project files matching the secret patterns (ignored files included, names
+    only), and the agy guard compares their size and modification time, so a change to an
+    ignored `.env` is reported.
+  - A plan or analysis turn that opened none of the anchors its delegated run cites gets one
+    `[ANCHOR CHECK]` warning per run. It warns; it does not block.
+  - Delegated workers on Windows start with a hidden console in their own process group
+    instead of `DETACHED_PROCESS`, so a venv interpreter no longer flashes a window.
+  - Runtime variables are read as `EXOMA_<NAME>` with `AI_PROXY_<NAME>` as fallback; every
+    shipped instruction file is in English and carries no decision-record ids.
+rationale: |
+  Maintainer's reasons (interview, sanitized):
+  - Opt-in variable: it was a burden (forgotten, setups failing without a clear cause). The
+    maintainer knowingly traded a barrier for a notice and accepts the risk: a barrier that is
+    routinely bypassed protects nothing.
+  - Secret files: anticipation from mapping the threats, not an incident that happened.
+  - Anchor warning: prevention. The maintainer had not seen the main agent accept a delegated
+    digest without opening its sources; the warning is a safety net, not a response to an
+    observed failure.
+  - Console flash: a real disruption in daily use on Windows (see CASE-027 for the earlier
+    instance in the provider catalog read).
+  - English bundle without record ids: Exoma is released publicly; the instructions must be
+    usable by people outside this project. The maintainer expects little effect on how agents
+    follow the instructions; that expectation is not measured.
+  CHARTER §12 does not apply as a new architectural addition: no new component; the changes
+  harden or relabel existing mechanisms.
+
+alternatives:
+  - option: Keep the environment opt-in for codex and agy
+    rejected_because: The maintainer found it a setup burden that users bypassed or forgot.
+  - option: Block a plan or analysis that opened none of its anchors
+    rejected_because: No observed instance of the failure; a warning costs nothing when the anchors were legitimately not needed.
+  - option: Keep the shipped instructions in mixed Indonesian with record ids
+    rejected_because: Exoma is published for users outside this project.
+
+evidence: [CASE-027, DEC-077]
+evidence_notes: |
+  Exoma commits 88790f5 (feat: harden providers, EXOMA_ env, English bundle) and 0591dbd
+  (chore(release): v0.2.0); Exoma `docs/releases/v0.2.0.md`. Staging 2026-10-26 against
+  0591dbd: `tests/run.py --keep-going` passed its four suites, `check_research.py --git` OK.
+  The first `tools/e2e/e2e.py --full` failed one of three checks: `explore returns ok` with
+  `model_unset` — the staging run seeded a fresh `EXOMA_HOME` from Exoma's example config,
+  which leaves the opencode model unset, and opencode refuses a call without one. That refusal
+  predates 0.2.0; the harness never named a model. The harness now takes `--provider` and a
+  required `--model` and selects them through `exoma --command provider`. Re-run with codex
+  and gpt-5.6-luna: 7 of 7 checks passed (provider selected, explore ok with evidence markers
+  and its required fields, sweep ok).
+
+implementation:
+  version: exoma 0591dbd (0.2.0)
+  commits: [uncommitted]
+  components:
+    - pyproject.toml, uv.lock (pin b0d4fc2 -> 0591dbd)
+    - tools/e2e/e2e.py, tools/e2e/e2e_delegated.py (--provider, required --model, selected via exoma provider)
+    - .github/workflows/e2e-full.yml, RELEASE.md (provider and model inputs for the delegated run)
+
+disposition:
+  implementation_status: implemented
+  validation_status: not_validated
+
+validation:
+  summary: |
+    not_validated. The suites pass against the pin, and one delegated end-to-end run (codex,
+    gpt-5.6-luna) passed 7 of 7 checks; that run proves the delegated path works on 0.2.0, not
+    the reasons above. The opt-in trade-off, the secret-file watch and the anchor warning have
+    no observed use yet.
+
+trade_offs:
+  better:
+    - choosing codex or agy no longer fails on a forgotten variable
+    - a change to an ignored secret file is visible to the agy guard
+    - an unread-anchor synthesis is surfaced instead of silent
+    - no console flash for delegated workers on Windows
+  worse:
+    - provider choice outside the picker is guarded only by a warning in the output
+    - the shipped prompts changed language, a variable in agent behavior that was not measured
+limitations:
+  - The reasons are the maintainer's recollection at staging time, not measurements.
+  - The anchor warning counts only `Read`; a read through the shell is not seen.
+  - The English bundle's effect on instruction following is assumed small, not tested.
+revisit_when:
+  - a provider is selected outside the picker and writes or reads something the user did not expect
+  - the anchor warning fires often in real use, or a synthesis built on an unread digest is found wrong
+  - behavior under the English bundle differs from the Indonesian one on a comparable task
+questions: [RQ-10, RQ-07a]

@@ -15,10 +15,20 @@ from tools.e2e.e2e_support import (
 from exoma.utils.osutil import find_bash  # noqa: E402 - after e2e_support sets EXOMA_HOME
 
 
-def delegated_checks(report: Report, session_id: str) -> None:
-    """Real opencode calls. Minutes and real quota — only via --full."""
-    print("\n[DELEGATED] real opencode — costs quota")
+def delegated_checks(
+    report: Report, session_id: str, provider: str, model: str | None
+) -> None:
+    """Real provider calls. Minutes and real quota — only via --full."""
+    print(f"\n[DELEGATED] real {provider} — costs quota")
     from exoma.core.evidence.contract import REQUIRED_FIELDS
+
+    # The seed Exoma ships leaves the model unset, and an unset model is refused at call
+    # time (model_unset). Refuse here instead, before init and before any quota is spent.
+    if not model:
+        report.record(
+            "delegated commands", FAIL, "no model: pass --model (and --provider unless opencode)"
+        )
+        return
 
     project = Path(tempfile.mkdtemp(prefix="e2e-delegated-project-"))
     try:
@@ -35,6 +45,19 @@ def delegated_checks(report: Report, session_id: str) -> None:
             report.record(
                 "delegated commands", SKIP, "fresh workflow runner was not generated"
             )
+            return
+
+        # Selected the way /.provider applies a choice, so routes follow the model too.
+        code, output = _run_cli(
+            "--command", "provider", "--prompt", f"{provider}|{model}",
+            "--work-dir", str(project), "--pretty",
+        )
+        selected = _json_from(output)
+        if not report.check(
+            f"provider {provider} with {model} selected",
+            code == 0 and bool(selected) and selected.get("ok") is True,
+            str((selected or {}).get("content") or output.strip())[:200],
+        ):
             return
 
         # bash on every OS (Git Bash on Windows), as the skills call it. No bare `bash`
