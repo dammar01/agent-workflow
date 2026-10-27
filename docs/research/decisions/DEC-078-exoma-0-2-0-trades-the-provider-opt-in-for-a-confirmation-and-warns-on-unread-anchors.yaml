@@ -52,7 +52,7 @@ alternatives:
   - option: Keep the shipped instructions in mixed Indonesian with record ids
     rejected_because: Exoma is published for users outside this project.
 
-evidence: [CASE-027, DEC-077]
+evidence: [CASE-027, DEC-077, CASE-029]
 evidence_notes: |
   Exoma commits 88790f5 (feat: harden providers, EXOMA_ env, English bundle) and 0591dbd
   (chore(release): v0.2.0); Exoma `docs/releases/v0.2.0.md`. Staging 2026-10-26 against
@@ -64,6 +64,16 @@ evidence_notes: |
   required `--model` and selects them through `exoma --command provider`. Re-run with codex
   and gpt-5.6-luna: 7 of 7 checks passed (provider selected, explore ok with evidence markers
   and its required fields, sweep ok).
+  Platform of that staging (maintainer interview 2026-10-27): Windows only.
+  macOS staging 2026-10-27 against 0591dbd (macOS 26.6.2 arm64, system /bin/bash 3.2.57,
+  project venv Python 3.13, exoma 0.2.0 installed through pipx for the hooks):
+  `uv sync --locked` installed the pin; `tests/run.py --keep-going` passed its four suites;
+  `check_research.py --git` OK. `tools/sim/sim_flows.py`: 30 of 33 flows as expected. S7
+  (oversize task refused) and S10 (delegated verify pass) mismatched as they did before the
+  move (commit d0a31e5); the runtime declares the faked OpenCode transport uncapped and returns
+  exit 2 for an incomplete verify, so both are simulation expectations, not 0.2.0 failures.
+  S17 (upgrade rewrites only drifted scripts) mismatched only on macOS: CASE-029.
+  `tools/e2e/e2e.py --full --provider codex --model gpt-5.6-luna` under /bin/bash 3.2: 7 of 7.
 
 implementation:
   version: exoma 0591dbd (0.2.0)
@@ -82,7 +92,9 @@ validation:
     not_validated. The suites pass against the pin, and one delegated end-to-end run (codex,
     gpt-5.6-luna) passed 7 of 7 checks; that run proves the delegated path works on 0.2.0, not
     the reasons above. The opt-in trade-off, the secret-file watch and the anchor warning have
-    no observed use yet.
+    no observed use yet. The 2026-10-26 run was on Windows; a macOS staging on 2026-10-27
+    passed the same delegated checks (7 of 7) and found one macOS-only upgrade defect
+    (CASE-029). Neither run exercises the decision's reasons.
 
 trade_offs:
   better:

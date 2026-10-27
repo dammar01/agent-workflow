@@ -1,0 +1,66 @@
+schema_version: 3
+id: CASE-029
+title: On macOS, upgrade rewrites unchanged runner scripts because init and upgrade spell the project path differently through a symlink
+recorded_on: 2026-10-27
+visibility: public
+environment: maintainer_development
+repository_identity: undisclosed
+evidence_tier: creator_observation
+
+context: |
+  Staging the Exoma 0.2.0 pin on a macOS machine for the first time; every earlier staging ran
+  on Windows (DEC-078) and CI covers Linux and Windows only. On macOS, /var and /tmp are
+  symlinks to /private/var and /private/tmp, and the system temp directory lives under /var.
+task: |
+  Prove the pinned runtime on macOS with the staging checks: the repository suites, the
+  research check, the flow simulation and the delegated e2e run.
+workflow: |
+  `tools/sim/sim_flows.py` S17 runs `upgrade_workflow_workspace` three times on a temp project
+  created by init: once unchanged, once after bumping only `runtime_version`, once after
+  overwriting one runner. Since 0.2.0 upgrade regenerates a runner only when its generated text
+  differs from the file on disk; the expected counts are 0, 0, and more than 0.
+observation: |
+  The first, unchanged upgrade regenerated 2 scripts, `run.sh` and `inspect.sh`
+  (observed unchanged=2, version_bumped=0, drifted=1). The only difference in each was the
+  embedded project path: init had written `/private/var/folders/.../project`, upgrade wrote
+  `/var/folders/.../project`. Line endings, file mode and the version stamp were not involved.
+  The second upgrade then matched the first and regenerated nothing. Both spellings name the
+  same directory, so the scripts kept working; what breaks is the content gate, which reports
+  drift where there is none whenever a project is reached through a symlinked path.
+  Side observation: the simulation sets a temp `EXOMA_HOME`, but the generated `inspect.sh`
+  embedded the interpreter from the maintainer's own `~/.claude/hooks/python.path`, so the
+  simulation is not isolated from the user's home.
+
+evidence:
+  source: |
+    `uv run python tools/sim/sim_flows.py` on macOS 26.6.2, the S17 line
+    (`unchanged=2, version_bumped=0, drifted=1`), observed in each of 3 runs on 2026-10-27. The two path
+    differences were captured by wrapping `upgrade_workflow_workspace` to snapshot
+    `.workflow/run.*` and `.workflow/*.sh` before the first call and diff them after.
+  counted_by: maintainer
+  counted_on: 2026-10-27
+  notes: |
+    The same session's other staging checks passed (DEC-078 evidence notes). Which Exoma code
+    resolves the path at init and which keeps it as given at upgrade is inferred from the diff,
+    not read in the Exoma source.
+
+outcome: negative
+unexpected_behavior:
+  - upgrade reports script drift on an unchanged macOS workspace reached through /var
+  - the flow simulation reads the user's real hook interpreter pin despite a temp EXOMA_HOME
+limitations:
+  - Three runs on one macOS machine, each on the simulation's temp project; a project under a path with no symlink is not affected.
+  - The fix belongs in Exoma; this record names the symptom and the diff, not the line that causes it.
+related: [DEC-078, DEC-055]
+related_notes: |
+  DEC-078 staged 0.2.0, whose content-gated upgrade this observation touches. DEC-055 made the
+  runner bash with absolute paths on every OS; the paths are where the two spellings differ.
+
+implementation:
+  version: exoma 0591dbd (0.2.0)
+  feature: content-gated upgrade of the .workflow runner scripts
+
+disposition:
+  implementation_status: implemented
+  validation_status: observed
+questions: [RQ-13]

@@ -71,6 +71,17 @@ validation:
     Observed in the test suites on Windows 11 (Git Bash 5.2) and WSL Ubuntu. A machine keeps
     running the hooks it has installed until install.py --apply runs again; that install,
     and a real session through it, have not been observed yet.
+    Result added 2026-10-27, the first install and live session observed (on macOS, not on the
+    Windows machine above). Exoma 0.2.0 (0591dbd), system /bin/bash 3.2.57 with no other bash on
+    PATH: the generated .workflow/run.sh served tools/e2e/e2e.py --full (codex) with 7 of 7
+    checks; the eight installed hook launchers were byte-identical to the 0.2.0 bundle, were
+    named `bash "<home>/.claude/hooks/<hook>.sh"` in settings, and ran in a live Claude Code
+    session (SessionStart and UserPromptSubmit output seen; the gate passed the runner calls).
+    Only the paths that session and the e2e run took were exercised, not every branch; the
+    hook contract suite itself has not run under bash 3.2. Sources: tools/e2e/e2e.py output
+    (7 passed, 0 failed); `cmp` of each installed `~/.claude/hooks/*.sh` against the exoma 0.2.0
+    package's `_bundle/config/claude/hooks` (8 compared, 0 differ); the hook command lines in the
+    user settings file; the session's SessionStart binding and UserPromptSubmit hints.
   runs: []
 trade_offs:
   better:

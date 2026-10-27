@@ -18,3 +18,8 @@ notes: |
   write into another project only from that project's own session; commit blocks after a short
   answer that matches the agent's request are felt as friction several times a week. DEC-073 and
   DEC-075 (drafts) propose the changes; EXP-014 judged the gate's blocks.
+
+  Maintainer interview 2026-10-27 (critical_interview, sanitized summary; status unchanged): the
+  maintainer keeps a notice, not a confirmation, for codex and agy because a large paid vendor
+  carries the data it reads, and wants opencode, whose model the user may pick from anywhere, to
+  ask first and show the model. DEC-080 (draft) proposes it; DEC-078's own reasons are unchanged.
