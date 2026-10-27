@@ -74,12 +74,21 @@ implementation:
 
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 
 validation:
   summary: |
-    not_validated. The suites pass against the pin; no candidate has been staged yet, and the
-    delegated run (`tools/e2e/e2e.py --full`) has not been run since the move.
+    observed. The suites pass against the pin. When this decision was recorded no candidate had
+    been staged and the delegated run had not been run since the move.
+    Result added 2026-10-27: the Exoma 0.2.0 and 0.3.0 candidates were staged here against the
+    pin, each with the delegated run passing 7 of 7 on Windows and on macOS (DEC-078, DEC-081).
+    Delegated calls in real use from 2026-10-25, the day of the move (some may precede it that
+    day): 7 (`usage.jsonl`, 2026-10-25 and 2026-10-27), all ok. Across the maintainer's
+    projects, Exoma's per-user job metadata holds 156 completed jobs from 2026-10-25 to
+    2026-10-27 (analyze 34, plan 42, verify 63, explore 13, verify-browser 4), none with a
+    recovery attempt. Source: this repository's `.workflow/data/` telemetry and Exoma's job
+    metadata on the maintainer's machine (re-countable there only), window 2026-10-18 to
+    2026-10-27, counted 2026-10-27.
 
 trade_offs:
   better:
@@ -90,7 +99,7 @@ trade_offs:
     - the product checks (local, integrity, installer, promote) run only in Exoma's CI
 limitations:
   - The harness import check proves imports, not that a measurement computes the same figures after a pin move.
-  - tools/sim/sim_flows.py was outside the change's scope and still imports the removed runtime.
+  - tools/sim/sim_flows.py was outside the change's scope and still imported the removed runtime; d0a31e5 moved it onto exoma.
 revisit_when:
   - an Exoma refactor breaks a harness the import check did not catch
   - Exoma publishes a public API for the internals the harnesses read

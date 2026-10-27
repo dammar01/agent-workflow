@@ -49,11 +49,18 @@ implementation:
     - core/audit/diagnostics.py (doctor provider_version)
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
     The provider-seam suite passes on a simulated refusal. A real refusal has not been
     observed since the change.
+    Result added 2026-10-27 (creator_observation, maintainer_development): one usage row
+    from 2026-10-04 to 2026-10-27 carries `sandbox_unavailable`, so a real refusal failed
+    named; other error rows in that window carry other or no names and were not attributed.
+    Revised by DEC-034 and DEC-053. Raised to observed on the maintainer's decision
+    (interview 2026-10-27) that a revised record whose behavior ran in real use is raised
+    too. Source: this repository's `.workflow/data/` telemetry and Exoma's per-user job
+    metadata on the maintainer's machine (re-countable there only), counted 2026-10-27.
 trade_offs:
   better:
     - The failure names itself and its remedy; a bug report can quote the codex release.

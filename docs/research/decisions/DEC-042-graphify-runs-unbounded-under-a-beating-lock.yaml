@@ -57,11 +57,21 @@ implementation:
     - docs/reference.md, docs/runtime-contracts.md
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
     The graph-refresh suite passes on Windows and, with pwsh 7.4, on Linux. No real refresh
     longer than the old 600 s bound and no hung graphify have been observed since the change.
+    Result added 2026-10-27 (creator_observation, maintainer_development): `quality.jsonl` holds
+    48 `graph_refresh` rows from 2026-10-18 to 2026-10-25 (23 refreshed, 25 skipped_fresh), none
+    `timeout`; no hung refresh was reported. No longer-than-600 s refresh occurred, so the
+    unbounded wait itself was not stressed. No refresh row was written on 2026-10-26 or
+    2026-10-27, though edits were; why was not checked. Source: this repository's
+    `.workflow/data/` telemetry on the maintainer's machine (re-countable there only), window
+    2026-10-18 to 2026-10-27, counted 2026-10-27.
+    Maintainer interview 2026-10-27: the graph seems not to have been updated since the
+    runtime moved to Exoma on 2026-10-25, which matches the missing rows; not checked in
+    Exoma. The observed status rests on the refreshes up to 2026-10-25 only.
   runs:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"

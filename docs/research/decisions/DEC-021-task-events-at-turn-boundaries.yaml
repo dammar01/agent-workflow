@@ -49,11 +49,16 @@ implementation:
     - core/audit/task_telemetry.py (docstring)
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
     The task-telemetry and installer suites pass. Installed by the maintainer on 2026-10-04;
     no real session has been counted yet.
+    Result added 2026-10-27 (creator_observation, maintainer_development): 755 task events, all
+    version 2, on 9 days (`tasks.jsonl`); 58 commit events, every one with its paths; 45 session
+    head snapshots in `task-hook/`. Source: this repository's `.workflow/data/` telemetry on the
+    maintainer's machine (re-countable there only), window 2026-10-18 to 2026-10-27, counted
+    2026-10-27.
   runs:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"

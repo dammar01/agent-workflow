@@ -75,12 +75,18 @@ implementation:
 
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 
 validation:
   summary: |
     Unit tests pass. No delegated verify has yet been counted after the change; the share
     of verify rows derived `fail` with no tagged blocking finding is what to remeasure.
+    Result added 2026-10-27 (creator_observation, maintainer_development): 40 delegated verify
+    outputs since 2026-10-18 (`sessions/*/logs/*verify*/output.raw.md`), 39 of them with a
+    sentinel line; no verify row carries an `error_type`. The sentinel grammar ran in real use
+    without a parse failure. The remeasurement named above (clean verifies derived `fail`) was
+    not made. Source: this repository's `.workflow/data/` telemetry on the maintainer's machine
+    (re-countable there only), window 2026-10-18 to 2026-10-27, counted 2026-10-27.
   runs:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"

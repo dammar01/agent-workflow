@@ -42,10 +42,19 @@ implementation:
     - tests/checks/task_telemetry.py
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
     The task-telemetry, telemetry, and contracts suites pass. Not yet run on real use.
+    Result added 2026-10-27 (creator_observation, maintainer_development): 39 verify task events
+    carry `derived` (`tasks.jsonl`): pass 3, incomplete 25, fail 11. Tasks closed on a derived
+    pass 3 times. That pass rate is low enough to meet the first revisit_when item; whether the
+    completed tasks still describe real work was not judged. Source: this repository's
+    `.workflow/data/` telemetry on the maintainer's machine (re-countable there only), window
+    2026-10-18 to 2026-10-27, counted 2026-10-27.
+    Maintainer interview 2026-10-27: the verify verdicts that keep tasks open are usually
+    fair; the low pass rate is recorded as it stands, not taken as a closing rule that
+    misfires.
   runs:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"

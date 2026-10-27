@@ -44,10 +44,16 @@ implementation:
     - tests/checks/telemetry.py (verdict matrix, incomplete, timestamp order)
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
     Covered by unit checks only. Not yet recounted on real usage streams.
+    Result added 2026-10-27 (creator_observation, maintainer_development): 47 judged task
+    rows from 2026-10-09 to 2026-10-25 (fail 13, incomplete 31, pass 3); 8 sessions hold a
+    later judged round after a fail or incomplete one, counted as rework. The maintainer
+    judged the verdicts usually fair (interview 2026-10-27). Phase-based counting was not
+    compared. Source: this repository's `.workflow/data/` telemetry and Exoma's per-user job
+    metadata on the maintainer's machine (re-countable there only), counted 2026-10-27.
   runs:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"

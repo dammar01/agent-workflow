@@ -39,10 +39,16 @@ implementation:
     - dist/config/claude/hooks/*.sh (the launchers kept, unchanged by this decision)
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
-    not_validated. Accepted by the maintainer on 2026-10-23; rests on EXP-011's fifth pass only.
+    observed. Accepted by the maintainer on 2026-10-23; rests on EXP-011's fifth pass only.
+    Result added 2026-10-27 (creator_observation, maintainer_development): every hook in the
+    maintainer's sessions since the decision ran through the bash launchers on Windows; the task
+    hook wrote events on each day from 2026-10-23 to 2026-10-27 (`tasks.jsonl`). Hook call times
+    were not measured in this use. Source: this repository's `.workflow/data/` telemetry on the
+    maintainer's machine (re-countable there only), window 2026-10-18 to 2026-10-27, counted
+    2026-10-27.
 
 trade_offs:
   better: [one launcher per hook on every OS stays]

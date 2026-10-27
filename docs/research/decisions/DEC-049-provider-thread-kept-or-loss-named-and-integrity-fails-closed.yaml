@@ -65,11 +65,19 @@ implementation:
     - core/evidence/e2e/redact.py, runner.py, classify.py, normalize.py
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
     Unit and scenario checks simulate each failure; no real run has hit a persistence
     failure or an unscrubbable artifact since the change.
+    Result added 2026-10-27 (creator_observation, maintainer_development): 179 usage rows
+    from 2026-10-06 to 2026-10-27, all `provider_thread_changed=false`, 151 with
+    `provider_resumed=true`: the thread was kept. No persistence failure occurred, so the
+    named-loss and fail-closed paths were not exercised. Revised by DEC-050. Raised to
+    observed on the maintainer's decision (interview 2026-10-27) that a revised record whose
+    behavior ran in real use is raised too. Source: this repository's `.workflow/data/`
+    telemetry and Exoma's per-user job metadata on the maintainer's machine (re-countable
+    there only), counted 2026-10-27.
   runs:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"

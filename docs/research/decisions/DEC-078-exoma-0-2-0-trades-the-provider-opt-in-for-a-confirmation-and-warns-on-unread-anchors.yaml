@@ -95,6 +95,14 @@ validation:
     no observed use yet. The 2026-10-26 run was on Windows; a macOS staging on 2026-10-27
     passed the same delegated checks (7 of 7) and found one macOS-only upgrade defect
     (CASE-029). Neither run exercises the decision's reasons.
+    Result added 2026-10-27 (creator_observation, maintainer_development): 152 Exoma jobs
+    completed on Windows from 2026-10-26 to 2026-10-27 (job metadata) and the maintainer saw
+    no console window flash during them (interview 2026-10-27): the hidden-console worker
+    spawn holds in real use. The opt-in trade-off, the secret-file watch and the anchor
+    warning leave no telemetry row and still have no observed use, so the decision's reasons
+    stay unexercised. Source: this repository's `.workflow/data/` telemetry and Exoma's
+    per-user job metadata on the maintainer's machine (re-countable there only), counted
+    2026-10-27.
 
 trade_offs:
   better:

@@ -75,7 +75,7 @@ implementation:
 
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 
 validation:
   summary: |
@@ -86,6 +86,14 @@ validation:
     same events, and a failed commit or one without a saved HEAD records nothing. Not yet
     validated in real use: over a sample of the maintainer's tasks, report's open and
     completed tasks must match the maintainer's own account.
+    Result added 2026-10-27 (creator_observation, maintainer_development): 130 commit events
+    from 2026-10-04 to 2026-10-27 (`tasks.jsonl`, kind commit); 64 later derived rows are
+    fail or incomplete. The comparison with the maintainer's own account named above was not
+    made; the maintainer judged the verify verdicts usually fair. Revised by DEC-020 and
+    DEC-021. Raised to observed on the maintainer's decision (interview 2026-10-27) that a
+    revised record whose behavior ran in real use is raised too. Source: this repository's
+    `.workflow/data/` telemetry and Exoma's per-user job metadata on the maintainer's
+    machine (re-countable there only), counted 2026-10-27.
   runs:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"

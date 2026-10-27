@@ -38,10 +38,18 @@ implementation:
     - tests/checks/redaction.py, tests/run.py (redaction-boundary suite)
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
     Unit suite only. No delegated run has cited such a file name since the change.
+    Result added 2026-10-27 (creator_observation, maintainer_development):
+    `redactions.jsonl` holds 2 rows (2 items) on 2026-10-05, the day of the change (before
+    or after it was not checked), and later usage rows carry nonzero redaction counters. The
+    maintainer has never seen a real key, token or password shown in an agent answer, nor
+    plain text masked by mistake (interview 2026-10-27). Whether a file name like the one
+    that motivated the change was cited again was not checked. Source: this repository's
+    `.workflow/data/` telemetry and Exoma's per-user job metadata on the maintainer's
+    machine (re-countable there only), counted 2026-10-27.
   runs:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"

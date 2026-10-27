@@ -53,11 +53,16 @@ implementation:
     - docs/reference.md, docs/runtime-contracts.md
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
     The gate suites pass on Windows and, with pwsh 7.4, on Linux. The case that prompted it
     (a 210-line read) is still refused at 200 lines; no real session has used the lane yet.
+    Result added 2026-10-27 (creator_observation, maintainer_development): one session used the
+    lane, marker set 2026-10-18, both precision reads spent
+    (`sessions/*/runtime/delegated.reads`, count 2). Source: this repository's `.workflow/data/`
+    telemetry on the maintainer's machine (re-countable there only), window 2026-10-18 to
+    2026-10-27, counted 2026-10-27.
   runs:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"

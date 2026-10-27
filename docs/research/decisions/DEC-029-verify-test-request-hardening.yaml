@@ -64,11 +64,19 @@ implementation:
     - dist/config/claude/CLAUDE.md, dist/config/claude/skills/verify.md
 disposition:
   implementation_status: implemented
-  validation_status: not_validated
+  validation_status: observed
 validation:
   summary: |
     The suites above pass. No delegated verify has run through the verify lane in real use yet,
     and verify duration after DEC-025 has not been measured (draft experiment).
+    Result added 2026-10-27 (creator_observation, maintainer_development): 84 verify usage
+    rows from 2026-10-04 to 2026-10-27, 66 with `tests_requested=true` and 6 with
+    `tests_failed=1`: the verify lane ran the requested tests in real use. Verify duration
+    was not measured. Revised by DEC-032, DEC-033 and DEC-062. Raised to observed on the
+    maintainer's decision (interview 2026-10-27) that a revised record whose behavior ran in
+    real use is raised too. Source: this repository's `.workflow/data/` telemetry and
+    Exoma's per-user job metadata on the maintainer's machine (re-countable there only),
+    counted 2026-10-27.
   runs:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"

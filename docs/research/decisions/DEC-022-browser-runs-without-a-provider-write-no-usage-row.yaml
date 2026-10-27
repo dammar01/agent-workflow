@@ -50,6 +50,13 @@ disposition:
 validation:
   summary: |
     The e2e-routing, telemetry and usage-tokens suites pass. Not yet observed in real use.
+    Result added 2026-10-27 (creator_observation, maintainer_development): Exoma job
+    metadata records 4 completed `verify-browser` jobs on 2026-10-27 in another project; the
+    maintainer reports they ran to the end and matched what the browser showed (interview
+    2026-10-27). This repository's `usage.jsonl` has no `e2e_stage` row and that project's
+    usage rows were not counted, so the usage-row behavior this decision sets is not yet
+    observed. Source: this repository's `.workflow/data/` telemetry and Exoma's per-user job
+    metadata on the maintainer's machine (re-countable there only), counted 2026-10-27.
   runs:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"
