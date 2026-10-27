@@ -215,6 +215,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [CASE-027](real-cases/CASE-027-provider-catalog-flashes-console-windows-on-windows.yaml) | `/.provider` catalog read (`run.sh provider ''`) flashes CMD console windows on Windows | negative | implemented | observed | — |
 | [CASE-028](real-cases/CASE-028-real-use-of-3-8-x-context-split.yaml) | Real use of 3.8.2 — context kept out of the main agent, read back, and task outcomes | inconclusive | implemented | observed | bb89223 |
 | [CASE-029](real-cases/CASE-029-upgrade-rewrites-scripts-through-a-macos-symlinked-path.yaml) | On macOS, upgrade rewrites unchanged runner scripts because init and upgrade spell the project path differently through a symlink | negative | implemented | observed | — |
+| [CASE-031](real-cases/CASE-031-agy-as-main-agent-cannot-reach-the-runner-on-windows.yaml) | Under Agy as the main agent on Windows, the delegated runner cannot start and the agent explores the workflow's own files | negative | implemented | observed | — |
 | [DEC-001](decisions/DEC-001-verify-browser-delegated.yaml) | `/.verify-browser` is a delegated command | accepted | implemented | validated | dd70afd |
 | [DEC-004](decisions/DEC-004-data-e2e-only-test-attribute.yaml) | `data-e2e` is the only test attribute | accepted | implemented | observed | dd70afd |
 | [DEC-005](decisions/DEC-005-repeat-brake-releases-on-change.yaml) | The repeat brake releases on a project change and is remembered as knowledge | accepted | implemented | observed | dd70afd |

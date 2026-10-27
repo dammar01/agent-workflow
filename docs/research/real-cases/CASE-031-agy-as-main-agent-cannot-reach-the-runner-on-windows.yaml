@@ -1,0 +1,72 @@
+schema_version: 3
+id: CASE-031
+title: Under Agy as the main agent on Windows, the delegated runner cannot start and the agent explores the workflow's own files
+recorded_on: 2026-10-27
+visibility: public
+environment: maintainer_development
+repository_identity: undisclosed
+evidence_tier: creator_observation
+
+context: |
+  First real use of Agy as the main agent after staging Exoma 0.3.0 (DEC-081), which adds Agy
+  as a second host. Exoma calibrated Agy's hook contract on Agy 1.4.7, on Windows, in print
+  mode only; interactive use, Agy's approval mode and its Windows sandbox were not exercised.
+task: |
+  Run Agy interactively in a project with the workflow installed and work through it as with
+  Claude Code, up to the first delegated command.
+workflow: |
+  Exoma 0.3.0 (9c31d2a) installed on the machine with `exoma install --apply`; the host files
+  were in place (`~/.gemini/GEMINI.md` with the `EXOMA-HOST` block, the `exoma` entry in
+  `~/.gemini/config/hooks.json`). Agy 1.4.8, interactive, with Agy's auto mode on. The
+  maintainer stopped the session at the first runner failure and reported the observations.
+observation: |
+  1. No workflow command is registered in Agy; commands exist only as text the model reads.
+  2. In auto mode Agy still asked permission for every bash and similar shell call.
+  3. Agy went into the `~/.claude` folder.
+  4. Agy inspected the workflow's own tooling directly, notably the Agy host hook wrapper.
+  5. The delegated runner never started. The model reported three failures:
+     a. `bash` from Agy's shell resolved to the WSL launcher in `C:\Windows\system32`, which
+        rejected the Windows project path (`No such file or directory`).
+     b. Calling Git Bash by its absolute path failed under Agy's Windows sandbox:
+        `fatal error - NtCreateDirectoryObject: 0xC0000022`.
+     c. Calling `python -m exoma` directly was refused writing the job store:
+        `PermissionError: [WinError 5] Access is denied: '<home>\AppData\Local\exoma\storage\jobs'`.
+  `~/.gemini/exoma-hook-errors.log` did not exist after the session: the host hook logged no
+  error, so none of the above passed through the hook's fail-open path.
+
+evidence:
+  source: |
+    Maintainer's notes from the session, pasted into the staging session on 2026-10-27; the
+    error strings are quoted from the model's report in those notes. The absence of the hook
+    error log and the presence of both host files were checked on the same machine afterwards.
+  counted_by: maintainer
+  counted_on: 2026-10-27
+  notes: |
+    One session, stopped at the first runner failure. Whether the pre-flight marker was armed
+    when Agy read the workflow's files (observations 3 and 4) was not captured, so it is not
+    known whether those reads were allowed by the gate or happened with no gate armed. The
+    causes in 5a-5c are the model's report, not traced in the Exoma or Agy source.
+
+outcome: negative
+unexpected_behavior:
+  - the delegated runner cannot start from Agy on Windows (WSL bash on PATH, MSYS2 refused by the sandbox, job store outside the sandbox's writable area)
+  - Agy's auto mode still prompts for each shell call with the workflow installed
+  - the main agent spends its turn reading the workflow's own instructions and hooks
+limitations:
+  - One session on one Windows machine, Agy 1.4.8 (calibrated on 1.4.7).
+  - "No guard decision was exercised: the session ended before any write, commit or delegated call reached a gate."
+  - The marker state during observations 3 and 4 is unknown.
+related: [DEC-081]
+related_notes: |
+  DEC-081 staged the host this observation exercises. The draft CASE-030 is the print-mode
+  calibration of Agy's hook contract that the host follows; the draft H-025 asks whether the
+  guards hold under Agy and could not be tested in this session.
+
+implementation:
+  version: exoma 9c31d2a (0.3.0)
+  feature: Agy as the main-agent host
+
+disposition:
+  implementation_status: implemented
+  validation_status: observed
+questions: [RQ-10]
