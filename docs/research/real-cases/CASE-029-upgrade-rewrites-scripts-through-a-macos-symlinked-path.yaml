@@ -43,6 +43,10 @@ evidence:
     The same session's other staging checks passed (DEC-078 evidence notes). Which Exoma code
     resolves the path at init and which keeps it as given at upgrade is inferred from the diff,
     not read in the Exoma source.
+    Result added 2026-10-27: on exoma 9c31d2a (0.3.0), whose commit f0c598a embeds the resolved
+    project root in run.sh and inspect.sh, the same simulation on the same machine reports
+    S17 `unchanged=0, version_bumped=0, drifted=1` (one run; DEC-081 evidence notes). Whether
+    the simulation still reads the user's hook interpreter pin was not checked.
 
 outcome: negative
 unexpected_behavior:
@@ -51,10 +55,11 @@ unexpected_behavior:
 limitations:
   - Three runs on one macOS machine, each on the simulation's temp project; a project under a path with no symlink is not affected.
   - The fix belongs in Exoma; this record names the symptom and the diff, not the line that causes it.
-related: [DEC-078, DEC-055]
+related: [DEC-078, DEC-055, DEC-081]
 related_notes: |
   DEC-078 staged 0.2.0, whose content-gated upgrade this observation touches. DEC-055 made the
   runner bash with absolute paths on every OS; the paths are where the two spellings differ.
+  DEC-081 staged 0.3.0, which carries Exoma's fix for this observation.
 
 implementation:
   version: exoma 0591dbd (0.2.0)
