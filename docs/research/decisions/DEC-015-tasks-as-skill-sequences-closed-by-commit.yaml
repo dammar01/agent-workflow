@@ -89,7 +89,8 @@ validation:
     Result added 2026-10-27 (creator_observation, maintainer_development): 130 commit events
     from 2026-10-04 to 2026-10-27 (`tasks.jsonl`, kind commit); 64 later derived rows are
     fail or incomplete. The comparison with the maintainer's own account named above was not
-    made; the maintainer judged the verify verdicts usually fair. Revised by DEC-020 and
+    made; the maintainer first judged the verify verdicts usually fair, then, shown the
+    reasons, judged incomplete to appear too often (CASE-032). Revised by DEC-020 and
     DEC-021. Raised to observed on the maintainer's decision (interview 2026-10-27) that a
     revised record whose behavior ran in real use is raised too. Source: this repository's
     `.workflow/data/` telemetry and Exoma's per-user job metadata on the maintainer's

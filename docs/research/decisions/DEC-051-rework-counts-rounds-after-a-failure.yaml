@@ -51,7 +51,8 @@ validation:
     Result added 2026-10-27 (creator_observation, maintainer_development): 47 judged task
     rows from 2026-10-09 to 2026-10-25 (fail 13, incomplete 31, pass 3); 8 sessions hold a
     later judged round after a fail or incomplete one, counted as rework. The maintainer
-    judged the verdicts usually fair (interview 2026-10-27). Phase-based counting was not
+    first judged the verdicts usually fair, then, shown the reasons, judged incomplete to
+    appear too often (interview 2026-10-27, CASE-032). Phase-based counting was not
     compared. Source: this repository's `.workflow/data/` telemetry and Exoma's per-user job
     metadata on the maintainer's machine (re-countable there only), counted 2026-10-27.
   runs:

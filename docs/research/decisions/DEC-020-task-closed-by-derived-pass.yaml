@@ -42,7 +42,7 @@ implementation:
     - tests/checks/task_telemetry.py
 disposition:
   implementation_status: implemented
-  validation_status: observed
+  validation_status: not_validated
 validation:
   summary: |
     The task-telemetry, telemetry, and contracts suites pass. Not yet run on real use.
@@ -52,9 +52,11 @@ validation:
     completed tasks still describe real work was not judged. Source: this repository's
     `.workflow/data/` telemetry on the maintainer's machine (re-countable there only), window
     2026-10-18 to 2026-10-27, counted 2026-10-27.
-    Maintainer interview 2026-10-27: the verify verdicts that keep tasks open are usually
-    fair; the low pass rate is recorded as it stands, not taken as a closing rule that
-    misfires.
+    Maintainer interview 2026-10-27: first judged the verdicts that keep tasks open usually
+    fair. Shown why they end as they do (CASE-032: every incomplete verify in this repository
+    had the reviewer's own DONE, and the verdict fell only on its not_verified items), the
+    maintainer judged incomplete to appear too often. The low pass rate therefore meets the
+    first revisit_when item as a reported problem, and the record stays not_validated.
   runs:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"

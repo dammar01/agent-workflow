@@ -9,7 +9,7 @@ what_exists: |
   fail-closed verdict from the review's required sections, checks and gaps, and runs the tests
   the main agent chose (DEC-025, DEC-033); it does not judge the review's reasoning. `syntax`
   mode proves only that files parse.
-records: [CASE-009, DEC-018, CASE-014, DEC-022, DEC-025, DEC-029, CASE-017, DEC-033, CASE-023, DEC-062]
+records: [CASE-009, DEC-018, CASE-014, DEC-022, DEC-025, DEC-029, CASE-017, DEC-033, CASE-023, DEC-062, CASE-032]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.
@@ -20,3 +20,9 @@ notes: |
   maintainer combines an automatic check with their own final call, trusts a passing report except
   for important or UI work, accepts self-review for small changes with a real lint or build, and
   often reviews large changes in a fresh session, an independent pass in practice.
+
+  Maintainer interview 2026-10-27 (critical_interview, sanitized summary; status unchanged): shown
+  that incomplete verifies carry the reviewer's own DONE and fall only on its not_verified items
+  (CASE-032), the maintainer judged incomplete to appear too often. Only a check the reviewer can
+  only estimate should keep a task open; live execution not run is not a reason when the change
+  was tried locally, since deployment is the user's responsibility.

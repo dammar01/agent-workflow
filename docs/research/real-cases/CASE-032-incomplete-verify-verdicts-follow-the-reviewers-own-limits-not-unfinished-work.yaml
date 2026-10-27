@@ -1,0 +1,94 @@
+schema_version: 3
+id: CASE-032
+title: Delegated verify ends incomplete whenever the reviewer lists anything it could not prove, even when it judged the work done and the runtime tests passed
+recorded_on: 2026-10-27
+visibility: public
+environment: maintainer_development
+repository_identity: undisclosed
+evidence_tier: creator_observation
+
+context: |
+  A task closes only on a derived `pass` (DEC-020). The runtime derives the verify verdict
+  fail-closed from the review's sections, its gaps and the runtime tests (DEC-025, DEC-033).
+  Real-use telemetry showed few passes: in this repository 7 of 86 verifies since 2026-10-01.
+  The maintainer had judged the verdicts "usually fair" without seeing why they ended as they
+  did.
+task: |
+  Find why delegated verifies end `incomplete` or `fail` in real use, and ask the maintainer
+  whether those outcomes match the state of the work.
+workflow: |
+  Verify usage rows since 2026-10-01 were joined by prompt id to the reviewer's own output for
+  the same call, in this repository and in six other projects of the maintainer (anonymized
+  project-1 to project-6). The runtime verdict, the reviewer's own verdict (`DONE` or `NEEDS
+  FIX`), the reviewer's `not_verified` items and the test fields were compared. The `not_verified`
+  items of the incomplete rows were classified, one primary reason per row. The maintainer was
+  then interviewed with sanitized examples.
+observation: |
+  This repository, 86 verifies with a verdict:
+  - pass 7: reviewer DONE, `not_verified` empty, tests requested, none failed.
+  - incomplete 49: reviewer DONE in all 49 and `not_verified` non-empty in all 49; in 37 the
+    runtime ran at least one requested test with none failed, in 12 no test ran (none requested,
+    or a request with no command).
+  - fail 30: reviewer NEEDS FIX in 27, DONE in 3; 6 rows with a failed runtime test.
+  Primary reason of the 49 incomplete: a gap the reviewer declared 26 (for example a plan
+  revision not available locally, private transcripts not readable, a privacy scan that is only
+  heuristic), tests or live runs not executed 22 (the reviewer is read-only), a verification-gap
+  warning 1.
+  Six other projects: pass 15, fail 148, incomplete 295. The reviewer said DONE in 269 of the
+  270 incomplete rows whose output was found; 25 rows had no output. Their `not_verified` items
+  were mostly live execution (application, browser login, database) not run, test results the
+  reviewer says it did not see, a test command refused by the shell allowlist, and measurements
+  the reviewer cannot make. The reviewer cannot see runtime test results by design: the runtime
+  runs the requested tests after the review returns (DEC-025). Where no test ran, the gap is
+  real: the maintainer expects some of these changes simply had no test.
+  After an incomplete verify the same session ran another verify in 96 chains, 360 rounds in
+  all, at most 15 in one session; 9 chains ended in pass.
+  Maintainer interview 2026-10-27, after the examples:
+  - whether such a result means the work is done depends on what is listed;
+  - of the listed kinds, only a check the reviewer can only estimate should keep a task open.
+    Live execution not run is not a reason when the change was tried locally: deployment is the
+    user's responsibility, and the code agent's job ends at a local change checked locally;
+  - the maintainer had not noticed the reviewer missing runtime test results, and expects that
+    in some of those cases no test existed;
+  - the incomplete verdict appears too often; this replaces the earlier "usually fair";
+  - the re-verify rounds should be checked one by one before judging whether they were worth it.
+
+evidence:
+  source: |
+    `.workflow/data/usage.jsonl` verify rows with `recorded_at` from 2026-10-01, joined by
+    `prompt_id` to `sessions/*/logs/*_verify_*/output.raw.md` (first `verdict:` line and the
+    `not_verified:` section), in this repository and in each other project's `.workflow/data/`,
+    found through the `work_dir` of Exoma's per-user job metadata. The primary-reason split is
+    the second agent's classification of the same rows. The interview answers are the
+    maintainer's, given in the staging session on 2026-10-27.
+  counted_by: maintainer
+  counted_on: 2026-10-27
+  notes: |
+    Re-countable on the maintainer's machine only; the other projects are private and are not
+    named. Re-verify chains are grouped by session, not by task, so one session holding several
+    tasks can overcount them. The other projects' figures come from the second agent's count and
+    were not recounted by the main agent; this repository's figures were.
+
+outcome: negative
+unexpected_behavior:
+  - a reviewer verdict of DONE with green runtime tests still derives incomplete when any not_verified item is listed
+  - the reviewer, which by design runs before the runtime tests, lists their results as not verified; whether that item alone derives incomplete when the runtime tests then pass was not read in the source
+  - re-verifying after an incomplete verdict rarely ends in pass (9 of 96 chains in six projects)
+limitations:
+  - One maintainer's projects and sessions, since 2026-10-01.
+  - The primary reason per row is an analytic choice; many rows list several items.
+  - Which Exoma code derives incomplete from a non-empty not_verified section was inferred from the joined data, not read in the source.
+  - Whether the re-verify rounds were worth their cost is open; the maintainer asked to check them first.
+related: [DEC-020, DEC-025, DEC-033]
+related_notes: |
+  DEC-020 closes a task only on a derived pass; DEC-025 and DEC-033 shape how the runtime derives
+  it. This case is real-use evidence on how often that derivation lands on incomplete and why.
+
+implementation:
+  version: the runtime in use from 2026-10-01 to 2026-10-27 (this repository's own runtime until the move on 2026-10-25, Exoma after)
+  feature: derived verify verdict and task closure on pass
+
+disposition:
+  implementation_status: implemented
+  validation_status: observed
+questions: [RQ-11]
