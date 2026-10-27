@@ -6,12 +6,12 @@ status: unanswered
 what_exists: |
   An allocation exists (explore, decompose, decide, execute, verify, remember) but has not
   been evaluated.
-records: [CASE-013, DEC-023, DEC-032, DEC-039, DEC-043, DEC-045, CASE-018, DEC-046, CASE-019, DEC-048, CASE-020, DEC-056, CASE-022, DEC-059, DEC-060, DEC-061, DEC-067, DEC-068, DEC-069, DEC-070, H-022, EXP-014, DEC-078]
+records: [CASE-013, DEC-023, DEC-032, DEC-039, DEC-043, DEC-045, CASE-018, DEC-046, CASE-019, DEC-048, CASE-020, DEC-056, CASE-022, DEC-059, DEC-060, DEC-061, DEC-067, DEC-068, DEC-069, DEC-070, H-022, EXP-014, DEC-078, DEC-081]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.
 
-  Draft records: SYN-002, DEC-002, DEC-073, DEC-074, DEC-075 (drafts).
+  Draft records: SYN-002, DEC-002, DEC-073, DEC-074, DEC-075, H-025 (drafts).
 
   Maintainer interview 2026-10-23 (critical_interview, sanitized summary; status unchanged): the
   maintainer wants the agent to ask, with a reason, before going beyond what was agreed, and to
@@ -23,3 +23,9 @@ notes: |
   maintainer keeps a notice, not a confirmation, for codex and agy because a large paid vendor
   carries the data it reads, and wants opencode, whose model the user may pick from anywhere, to
   ask first and show the model. DEC-080 (draft) proposes it; DEC-078's own reasons are unchanged.
+
+  Maintainer interview 2026-10-27, Exoma 0.3.0 staging (critical_interview, sanitized summary;
+  status unchanged): Agy becomes a second host for the main agent as the first step toward a
+  main agent not tied to one harness, with limited quota and access to Claude as a practical
+  reason. The maintainer wants to learn whether the allocation survives a change of host
+  (H-025, draft) and left the fail-open rule for a broken hook open for review (DEC-081).

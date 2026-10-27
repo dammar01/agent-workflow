@@ -1,0 +1,109 @@
+schema_version: 3
+id: DEC-081
+title: Exoma 0.3.0 adds Agy as a second primary-agent host, a first step toward a main agent that is not tied to one harness
+date: 2026-10-27
+status: accepted
+provenance:
+  type: direct
+  confidence: medium
+  basis: maintainer interview 2026-10-27 (critical_interview) while staging the Exoma 0.3.0 candidate
+
+problem: |
+  The Exoma 0.3.0 candidate (commit 9c31d2a; implementation in 95cecc7 and f0c598a) lets Agy
+  hold the main-agent role, with the same guards Claude Code has (write root and scope, commit
+  approval, user approvals, intent marker, execution-result claim). Until 0.2.0 those guards ran
+  only under Claude Code and Agy was used only as a second agent. The pin here moved from
+  0591dbd (0.2.0) to stage it, the same day 0.2.0 finished staging on macOS. Why the host was
+  added, and why the pin moved without using 0.2.0 longer, was recorded nowhere.
+decision: |
+  Recorded from the maintainer's answers:
+  - The pin moves to 0.3.0 because Agy as a primary host is what the maintainer wants to use
+    now; the macOS path fix and the e2e harness fix that ship with it were not the reason.
+  - Agy is the first candidate in a planned move toward a main agent that does not depend on
+    one harness. The guard decisions move into one shared policy module that both hosts call;
+    each host keeps only its own payload and output handling.
+  - Every error in the Agy hook answers allow, because Agy reads an empty answer as deny and
+    fails the tool when a hook fails; a Claude hook that cannot import the shared module exits
+    0. The maintainer did not accept this trade-off at the interview: it is open for review,
+    not settled.
+rationale: |
+  Maintainer's reasons (interview, sanitized):
+  - What the maintainer wants to learn: whether the allocation of responsibility (what the
+    runtime guards, what the human approves) still holds when the main agent changes; and,
+    separately, a plain need to work from Agy.
+  - Why the second-agent role alone was not enough: the planned direction is a host-agnostic
+    main agent, and the maintainer's quota and access to Claude are limited, so a second host
+    is needed in practice, not only in principle.
+  - When the maintainer would call it a failure: if under Agy the guards often let a write or
+    commit through that should have stopped, or often block legitimate work, the host-agnostic
+    direction itself is reviewed; other candidates (codex named) are still analysed. The
+    attempt stops only if Claude Code itself breaks and no other host remains.
+  CHARTER §12 (a new component: a second host and a shared policy module):
+  - Research question: RQ-10 — does the allocation survive a change of main agent.
+  - Hypothesis: H-025 (draft).
+  - Variable changed: the host running the main agent (Claude Code or Agy), guards held equal.
+  - Experiment enabled: the same guarded tasks run under both hosts.
+  - Expected measurement: guard blocks judged legitimate or false, and missed blocks, per host;
+    none recorded yet.
+  - Why existing mechanisms are insufficient: the guards existed only as Claude Code hooks; with
+    Agy as second agent only, no host comparison is possible.
+  - Complexity introduced: a second hook contract (agy-host.py), a shared policy module, install
+    and uninstall into ~/.gemini, and a fail-open rule on a host whose failure mode differs.
+
+alternatives:
+  - option: Keep Agy as a second agent only and stay on 0.2.0
+    rejected_because: The maintainer wants to work from Agy now and plans a host-agnostic main agent; quota and access to Claude are limited.
+  - option: Fail closed in the Agy hook (deny on error)
+    rejected_because: Not chosen in Exoma — Agy fails the tool when a hook fails, so a broken hook would stop all work. The maintainer marked the chosen fail-open rule for review.
+
+evidence: [CASE-029, DEC-078]
+evidence_notes: |
+  Exoma commits 95cecc7 (feat(host): add Agy as a second primary-agent host), f0c598a (fix:
+  harden Agy install/uninstall, release 0.3.0) and 9c31d2a (fix(e2e): name provider and model
+  for --full runs); Exoma `docs/releases/v0.3.0.md`. The Agy hook contract the adapter follows
+  was measured live on Agy 1.4.7 in a scratch workspace; that measurement is the draft CASE-030.
+  f0c598a also embeds the resolved project root in the generated run.sh and inspect.sh, which
+  Exoma names as the fix for CASE-029; it has not been re-run on macOS.
+  Staging 2026-10-27 on Windows against 9c31d2a: `uv lock` moved exoma 0.2.0 (0591dbd7) to
+  0.3.0 (9c31d2a3); `uv sync --locked` installed it. `tests/run.py --keep-going` passed its four
+  suites; `check_research.py --git` OK once a local draft that reused the id CASE-029 was
+  renumbered (a draft-only collision; CI has no drafts).
+  `tools/e2e/e2e.py --full --provider codex --model gpt-5.6-luna`: 7 of 7 (provider selected,
+  explore ok with evidence markers and its required fields, sweep ok).
+
+implementation:
+  version: exoma 9c31d2a (0.3.0)
+  commits: [2c9d3ae]
+  components:
+    - pyproject.toml, uv.lock (pin 0591dbd -> 9c31d2a)
+
+disposition:
+  implementation_status: implemented
+  validation_status: not_validated
+
+validation:
+  summary: |
+    not_validated. The suites and one delegated end-to-end run (codex, gpt-5.6-luna, 7 of 7)
+    pass against the pin on Windows; they exercise the second-agent path, not Agy as a host.
+    Agy has held the main-agent role only in Exoma's automated tests and the scratch
+    measurement; no real task has run under it yet (the maintainer plans one). The macOS path
+    fix has not been re-run on macOS (planned before the tag). This staging ran on Windows only.
+
+trade_offs:
+  better:
+    - the guards no longer depend on one harness; the main agent can run from Agy
+    - one policy module holds the guard decisions instead of three hooks each holding their own
+  worse:
+    - a broken hook lets work through unguarded on both hosts
+    - a second hook contract, with different empty-answer and failure semantics, must be kept calibrated
+    - install and uninstall now touch ~/.gemini
+limitations:
+  - The reasons are the maintainer's answers at staging time, not measurements.
+  - The fail-open rule is recorded as open for review, not as accepted.
+  - Agy's hook contract was calibrated on one release (1.4.7); a later release may change it.
+revisit_when:
+  - the first real task under Agy shows a guard that leaked or blocked legitimate work
+  - a broken hook is found to have let a write or commit through
+  - the macOS upgrade re-run still rewrites unchanged scripts
+  - Agy changes how it reads hook answers
+questions: [RQ-10]
