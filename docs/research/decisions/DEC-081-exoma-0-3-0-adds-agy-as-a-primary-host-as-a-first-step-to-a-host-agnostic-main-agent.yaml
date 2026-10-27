@@ -92,8 +92,8 @@ validation:
   summary: |
     not_validated. The suites and one delegated end-to-end run (codex, gpt-5.6-luna, 7 of 7)
     pass against the pin on Windows; they exercise the second-agent path, not Agy as a host.
-    Agy has held the main-agent role only in Exoma's automated tests and the scratch
-    measurement; no real task has run under it yet (the maintainer plans one). The first
+    Agy has held the main-agent role in Exoma's automated tests, the scratch measurement and
+    one real session (below), which ended before any guard decision. The first
     staging ran on Windows only. A macOS staging on 2026-10-27 passed the same checks (7 of 7
     delegated) and the flow simulation no longer reports drift on an unchanged workspace, so
     the CASE-029 fix holds on macOS in one run on the simulation's temp project. Neither run
