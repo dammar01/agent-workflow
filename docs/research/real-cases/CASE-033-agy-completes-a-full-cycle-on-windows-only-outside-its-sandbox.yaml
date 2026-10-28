@@ -1,0 +1,123 @@
+schema_version: 3
+id: CASE-033
+title: Under Agy on Windows a full explore-plan-execute-verify cycle completes only outside Agy's sandbox, and the Agy hook blocks the verify test request
+recorded_on: 2026-10-28
+visibility: sanitized
+environment: maintainer_development
+repository_identity: undisclosed
+evidence_tier: creator_observation
+confidentiality_note: |
+  The project is a private front-end application. Its name, file names, feature and code are
+  left out; only the workflow's behaviour is kept.
+
+context: |
+  Second real use of Agy as the main agent, after the Exoma pin moved to 5df83fa, whose
+  installer routes Agy's runner through Git Bash by absolute path and installs Agy's
+  permission rules by default. CASE-031 stopped at the first runner failure on 9c31d2a.
+task: |
+  A small front-end change: give one screen, in its desktop and mobile variants, a reply
+  feature other screens already had. Three files changed; the type check passed.
+workflow: |
+  Exoma 5df83fa (0.3.0) installed with `exoma install --apply`; Agy 1.4.8 interactive on
+  Windows 11, started with `--dangerously-skip-permission`.
+  The maintainer ran explore, plan (one blocking question answered through Agy's question
+  tool, then plan-record at proceed), `/.execute -y`, and `/.verify`, in one Agy session.
+observation: |
+  The cycle completed: explore, plan and verify each dispatched one delegated job (codex),
+  plan-record recorded the plan, execute-begin and execute-end opened and closed the
+  execution, and the plan's three files were the only project files edited. Frictions:
+  1. The first `.workflow/run.sh` call failed with
+     `NtCreateDirectoryObject(\BaseNamedObjects\msys-2.0S5-...): 0xC0000022` (exit 1), the
+     same failure as CASE-031 5b; the identical call retried with the sandbox bypassed
+     succeeded, and every later runner call ran that way.
+  2. The project's own tools failed the same way until retried: the type checker through a
+     symlinked Node install (`EPERM: operation not permitted, readlink`) and `git status`
+     (`fatal: unknown error occurred while reading the configuration files`, the global
+     `.gitconfig` denied); a `Test-Path` on the personal memory file in the home directory
+     was denied.
+  3. The first turns ran under a session id the model made itself
+     (`main_<project>_<date>_093636_1001`) because it found no session binding; at
+     `/.execute -y` the hook bound `main_<project>_<date>_093636672_<hex>`, a different id with
+     the same start time. The model wrote and recorded the plan again under the bound id;
+     plan-record through run.sh succeeded there.
+  4. `run.sh execute-begin '' <session>` then returned `execute_no_plan`, and
+     `run.sh execute-end '' <session>` later returned `execution_not_active`. The model
+     called `python -m exoma --command execute-begin/end --session <id>` directly and both
+     succeeded. Agy's shell is Windows PowerShell 5.1.
+  5. Under `/.verify` the Agy hook refused the write of the session's `verify/tests.json`
+     (`[EXECUTION GATE] /.verify is a delegated command: the next step is the runner, not
+     write_file.`). The runner then reported `not_verified: tests: main_agent wrote no test
+     request for this verify`; the reviewer's own verdict was DONE and the runtime verdict
+     `incomplete`. The model's `[VERIFICATION]` block showed `verdict: DONE`, did not show
+     `incomplete`, and offered `/.commit` as the next step.
+  6. Five of sixteen edits to project files failed (`target content not found in the
+     file`); the model retried with single-line targets. Its report blames CRLF line endings.
+  7. After a runner call had already returned, the model twice wrote that the runner was
+     running in the background and that it would wait.
+
+evidence:
+  source: |
+    The Agy session transcript and the session report Agy generated at its end, both pasted
+    by the maintainer into the staging session on 2026-10-28; error strings and counts are
+    read from the transcript. Items 4 and 5 were checked against the installed Exoma 5df83fa
+    source; item 4 was also reproduced on the same machine.
+  counted_by: maintainer
+  counted_on: 2026-10-28
+  notes: |
+    Item 4: the project's generated run.sh matches the 5df83fa template and skips `--prompt`
+    for an empty task, so run.sh is not at fault, as the model's report claimed. From Windows
+    PowerShell 5.1, `& bash.exe -c '...' x 'execute-begin' '' 'sess'` delivers two arguments,
+    not three: the empty string is dropped. run.sh therefore read the session id as the task
+    and fell back to the session `default`, where no plan or execution exists. run.sh refuses
+    `default` only for delegated commands, so plan-record, execute-begin and execute-end fail
+    or succeed quietly against the wrong session. The execute skill's `execute-begin ''`
+    form is the one the Claude bundle documents; under Claude Code it goes through Git Bash,
+    where the empty argument survives.
+    Item 5 is confirmed in the source: the Agy host hook's pre-flight block
+    (`hosts/claude/hooks/agy-host.py`, `pre_tool_use`) treats every write as gathering while a
+    delegated marker exists and has no verify exemption, whereas the Claude gate
+    (`intent-gate-check.py`) lets a Write of the session's `verify/tests.json` through under a
+    verify marker. The same Agy block has no precision-read or test-selection `git diff`
+    exemption either.
+    Items 1, 2, 3 and 6 are not traced in the Exoma or Agy source. Whether the bypass in item 1
+    was chosen by the model per call is taken from its report; the transcript does not show the
+    tool's sandbox argument. Whether the job-store write of CASE-031 5c recurs inside the
+    sandbox was not observed. The session ran with `--dangerously-skip-permission`, so whether
+    Agy still prompts for each shell call (CASE-031 observation 2) could not be observed.
+
+outcome: mixed
+unexpected_behavior:
+  - the delegated runner still cannot run inside Agy's Windows sandbox on 5df83fa; the cycle depends on bypassing the sandbox per call
+  - the Agy host hook blocks the verify test request the verify skill asks for, so every delegated verify under Agy ends incomplete
+  - the model ran its first turns under a session id it made itself, so the recorded plan had to be recorded again under the hook's id
+  - an empty task argument is dropped by Windows PowerShell 5.1, so run.sh's local commands run against the session `default` without an error naming it
+  - the main agent relayed a runtime `incomplete` verify as DONE and offered a commit
+limitations:
+  - One session on one Windows machine, one small front-end task.
+  - Two frictions were traced in the source; the rest are as the transcript shows them, with causes from the model's report.
+  - Agy's permission prompts were skipped for the whole session, so no approval behaviour was observed.
+related: [CASE-031, DEC-081, CASE-032]
+related_notes: |
+  CASE-031 is the first Agy session on 9c31d2a, stopped before the runner; this one reaches
+  the runner but only outside the sandbox. DEC-081 staged the host. CASE-032 counts verifies
+  that end incomplete on the reviewer's own limits; item 5 is a further cause specific to the
+  Agy host.
+  Direction discussed with the maintainer in the staging session, not implemented or tested:
+  bash stays the only runner contract, and the contract stops depending on what the host's
+  outer shell passes through. Under Claude Code the Bash tool is Git Bash and no other shell
+  stands in front of run.sh; under Agy on Windows the hook itself tells the model to call
+  `& '<git>/bin/bash.exe' '<root>/.workflow/run.sh' ...` from PowerShell 5.1, so the empty
+  argument is lost before bash runs. Proposed in Exoma: a non-empty "no task" marker (such as
+  `-`) in place of `''`; run.sh refusing the session `default` for every command, so a shifted
+  argument fails by name; optionally the Agy hook refusing a runner call that contains `''`.
+  The sandbox failure in item 1 is a separate problem the argument change does not touch.
+
+implementation:
+  version: exoma 5df83fa (0.3.0)
+  feature: Agy as the main-agent host
+  commits_note: pin moved in agent-workflow a2b4a71
+
+disposition:
+  implementation_status: implemented
+  validation_status: observed
+questions: [RQ-10, RQ-11]

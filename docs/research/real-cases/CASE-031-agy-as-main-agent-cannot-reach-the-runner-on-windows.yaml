@@ -46,6 +46,10 @@ evidence:
     when Agy read the workflow's files (observations 3 and 4) was not captured, so it is not
     known whether those reads were allowed by the gate or happened with no gate armed. The
     causes in 5a-5c are the model's report, not traced in the Exoma or Agy source.
+    Result added 2026-10-28: on exoma 5df83fa (0.3.0) a second Agy session on the same machine
+    reached the runner and completed a full cycle, but only with Agy's sandbox bypassed per
+    call; inside the sandbox 5b recurred unchanged (CASE-033). 5a did not recur; 5c was not
+    reported, and observation 2 could not recur because permissions were skipped.
 
 outcome: negative
 unexpected_behavior:
