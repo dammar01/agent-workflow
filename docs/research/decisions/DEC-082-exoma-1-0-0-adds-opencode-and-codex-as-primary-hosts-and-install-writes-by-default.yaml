@@ -1,0 +1,111 @@
+schema_version: 3
+id: DEC-082
+title: Exoma 1.0.0 adds OpenCode and Codex as primary-agent hosts and install writes by default
+date: 2026-11-01
+status: accepted
+provenance:
+  type: direct
+  confidence: medium
+  basis: maintainer interview 2026-11-01 (critical_interview) while staging the Exoma 1.0.0 candidate
+
+problem: |
+  The pin here moved from Exoma 3f9f2b7 (0.3.0) to 2888b15 (1.0.0). Between them Exoma
+  da87cec lets OpenCode and Codex hold the main-agent role next to Claude Code and Agy, adds
+  Claude Code as a second agent, makes `exoma install` write without `--apply` and take the
+  host as an argument (`both` removed), and renames the OpenCode subagents from wf-* to exm-*
+  (6600ebc). Why the pin moved to a breaking release, and why each change was made, was
+  recorded nowhere.
+decision: |
+  Recorded from the maintainer's answers:
+  - The pin moves to 1.0.0 to try other main agents and so that the runtime can be used in
+    general, without requiring Claude Code as the main agent. This continues the direction
+    DEC-081 started with Agy.
+  - Claude Code as a second agent is feature completeness, not a planned role-swap
+    comparison. It was completed now because the maintainer has been authorised to have
+    supervised new users (interns) run experiments and real tasks with the runtime, and wanted
+    the host set complete before that starts.
+  - `exoma install` writes by default because the package is already installed with pip or uv
+    first, so a second confirming step was redundant. No incident prompted it.
+  - The risk of a new user installing into the wrong directory, now that install writes at
+    once, is handled by supervising the first install, not by a runtime safeguard.
+  - The delegated end-to-end run is required before the new users start.
+rationale: |
+  Maintainer's reasons (interview, sanitized):
+  - What the maintainer wants: a main agent that is not tied to one harness, which also lets
+    new users work from whichever host they have access to.
+  - When the maintainer would call it a failure, and what follows: if OpenCode or Codex as main
+    agent often ignores the rules (when to delegate, when to stop and ask), the runtime's
+    automatic guards are tightened rather than relying on the model to comply, and rather than
+    rewriting instructions per host or restricting use to Claude Code.
+  CHARTER §12 (two more hosts on the shared policy module of DEC-081):
+  - Research question: RQ-10 — does the allocation survive a change of main agent.
+  - Hypothesis: H-025 (draft), widened from Agy to OpenCode and Codex.
+  - Variable changed: the host running the main agent, guards held equal.
+  - Experiment enabled: the same guarded tasks under four hosts; real tasks by supervised new
+    users (EXP-018, draft).
+  - Expected measurement: guard blocks judged legitimate or false, and missed blocks, per host;
+    none recorded yet.
+  - Why existing mechanisms are insufficient: with Claude Code and Agy only, new users without
+    access to either cannot run the main agent.
+  - Complexity introduced: two more host adapters (codex-host.py, opencode-host.py and its
+    plugin), a Claude second-agent seed, per-host second-agent seeds, and a legacy wf-* cleanup
+    on upgrade.
+
+alternatives:
+  - option: Stay on 0.3.0 (Claude Code and Agy as hosts)
+    rejected_because: The maintainer wants a runtime usable without Claude Code as main agent before new users start; Agy alone did not cover that.
+  - option: Keep `exoma install --apply` as the confirming step
+    rejected_because: The package install already is the explicit step; the maintainer found the second confirmation redundant. Wrong-directory installs are covered by supervising the first install.
+  - option: Rewrite the rules per host, or restrict use to Claude Code, if a new host ignores them
+    rejected_because: The maintainer chose to tighten the runtime's automatic guards instead, so that compliance does not depend on the model.
+
+evidence: [DEC-081, CASE-033]
+evidence_notes: |
+  Exoma commits 7d6f544, ae1fe7d (0.3.0 release notes: the delegated --full run was deferred for
+  lack of provider credit), 6600ebc (rename wf-* to exm-*), da87cec (feat!: release 1.0.0 with
+  OpenCode and Codex hosts) and 2888b15 (test(update): compare resolved paths in the self-update
+  check on Windows short-name temp dirs); Exoma `docs/releases/v1.0.0.md`.
+  Staging 2026-11-01 on Windows against 2888b15: `uv lock` moved exoma 0.3.0 (3f9f2b7f) to
+  1.0.0 (2888b159); `uv sync --locked` installed it. `tests/run.py --keep-going` passed its four
+  suites; `check_research.py --git` OK (131 records, 0 warnings).
+  `tools/e2e/e2e.py --full --provider codex --model gpt-5.6-luna`: 7 of 7 (provider selected,
+  explore ok with evidence markers and its required fields, sweep ok). This ran after the pin
+  commit and before this record.
+
+implementation:
+  version: exoma 2888b15 (1.0.0)
+  commits: [881ef2b]
+  components:
+    - pyproject.toml, uv.lock (pin 3f9f2b7 -> 2888b15)
+
+disposition:
+  implementation_status: implemented
+  validation_status: not_validated
+
+validation:
+  summary: |
+    not_validated. The suites and one delegated end-to-end run (codex, gpt-5.6-luna, 7 of 7)
+    pass against the pin on Windows. That run exercises the second-agent path with Claude Code
+    as main agent; it does not exercise OpenCode, Codex or Agy as main agent, Claude Code as a
+    second agent, or the writing install. The decision's reason (usable without Claude Code as
+    main agent) is untested until a real task runs under another host.
+    The 0.3.0 release this replaces shipped without its delegated --full run (Exoma ae1fe7d);
+    this pin did not skip it.
+
+trade_offs:
+  better:
+    - the main agent can run from four hosts, so access to one harness no longer gates use
+    - install is one step after the package install
+  worse:
+    - four host adapters, each with its own hook contract, must be kept calibrated
+    - an install in the wrong directory writes there at once; only supervision guards it
+    - the breaking install change and the wf-* rename touch existing users on upgrade
+limitations:
+  - The reasons are the maintainer's answers at staging time, not measurements.
+  - One delegated run on one provider and model, on Windows only; no macOS staging yet.
+  - Whether new users' results will be recorded apart from the maintainer's is undecided.
+revisit_when:
+  - the first real task under OpenCode or Codex as main agent shows a rule ignored, a guard leak or a false block
+  - a new user installs into the wrong directory
+  - the upgrade cleanup removes an edited wf-* file or keeps a stale one
+questions: [RQ-10]
