@@ -49,7 +49,9 @@ implementation:
     - core/audit/task_telemetry.py (docstring)
 disposition:
   implementation_status: implemented
-  validation_status: observed
+  validation_status: validated
+  validated_by: maintainer
+  validated_on: 2026-11-01
 validation:
   summary: |
     The task-telemetry and installer suites pass. Installed by the maintainer on 2026-10-04;
@@ -64,6 +66,18 @@ validation:
       job_id: "local suite check 2026-10-21"
       description: "`python tests/run.py --keep-going --record . --only task-telemetry --only hook-launchers` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
       clean: false
+    - date: 2026-11-01
+      job_id: "session main_agent-workflow_20261101_163310423_c63b"
+      description: "Maintainer session on this repository, Windows: five commits (881ef2b, 7949e41, aeccd6b, b43b64d, b8888b8), each recorded once in `tasks.jsonl` as a version-2 commit event with its paths; seven skill events and eight edit events in the same session; no manual workaround."
+      clean: true
+  uses: 10
+  consistent: true
+  maintainer_decision: |
+    2026-11-01, critical interview: kept. The maintainer never found a commit missing from the
+    log or recorded with the wrong files.
+  measurements:
+    - source: "this repository's `.workflow/data/tasks.jsonl`, rows dated 2026-11-01 (and the 2026-10-18..2026-10-27 window counted 2026-10-27)"
+      value: "5 of 5 session commits recorded with paths; 58 commit events with paths in the earlier window"
 trade_offs:
   better:
     - No hook run on Read or Bash; a turn pays two runs plus one per edit.

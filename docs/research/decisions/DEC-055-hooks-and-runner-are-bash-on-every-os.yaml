@@ -65,7 +65,9 @@ implementation:
     - docs/reference.md, docs/runtime-contracts.md, docs/installation.md, docs/team-guide/troubleshooting.md, README.md
 disposition:
   implementation_status: implemented
-  validation_status: observed
+  validation_status: validated
+  validated_by: maintainer
+  validated_on: 2026-11-01
 validation:
   summary: |
     Observed in the test suites on Windows 11 (Git Bash 5.2) and WSL Ubuntu. A machine keeps
@@ -82,7 +84,22 @@ validation:
     (7 passed, 0 failed); `cmp` of each installed `~/.claude/hooks/*.sh` against the exoma 0.2.0
     package's `_bundle/config/claude/hooks` (8 compared, 0 differ); the hook command lines in the
     user settings file; the session's SessionStart binding and UserPromptSubmit hints.
-  runs: []
+    Result added 2026-11-01, the Windows install and a live session observed: the user
+    settings name all nine hook commands as `"<Git Bash>/bin/bash.exe" "<home>/.claude/hooks/<hook>.sh"`
+    (SessionStart, UserPromptSubmit x2, PreToolUse x2, PostToolUse, Stop x3); in one maintainer
+    session they bound the session, recorded task events,
+    and the generated `.workflow/run.sh` served two delegated calls (analyze, explore) through
+    the Bash tool, both ok. The gate's PowerShell branch was not exercised.
+  runs:
+    - date: 2026-11-01
+      job_id: "session main_agent-workflow_20261101_163310423_c63b"
+      description: "Windows 11, Git Bash: nine bash hook launchers ran for a whole session; two delegated calls through `.workflow/run.sh` ok; five /.commit runs passed the execution gate; no hook error, no manual workaround."
+      clean: true
+  uses: 2
+  consistent: true
+  maintainer_decision: |
+    2026-11-01, critical interview: kept. Since the hooks moved to bash on Windows the maintainer
+    has seen no hook fail to run, no unexplained block and no check silently skipped.
 trade_offs:
   better:
     - One source of logic per hook and one runner flavour; no string rewrite between shells.
