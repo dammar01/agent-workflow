@@ -1,0 +1,69 @@
+schema_version: 3
+id: CASE-034
+title: Codex as Exoma main host cannot submit a delegated job when the global job guard is outside its writable workspace
+recorded_on: 2026-11-01
+visibility: sanitized
+environment: maintainer_development
+repository_identity: agent-workflow
+evidence_tier: creator_observation
+confidentiality_note: |
+  The local Windows user name and session identifier are omitted. The Exoma error
+  classification is retained to make the failure traceable.
+
+context: |
+  Codex was used as the main host on Windows with filesystem access restricted to a
+  workspace-write root at this repository. Installed Exoma was 1.0.0. EXOMA_HOME was
+  unset and LOCALAPPDATA pointed to the user's AppData/Local directory.
+task: |
+  Analyze this project and simulate Codex as its host using the Exoma analyze workflow.
+workflow: |
+  The main host invoked .workflow/run.sh through the absolute Git Bash executable,
+  with an explicit non-default session ID and an analyze task.
+observation: |
+  The call exited 1 before any second-agent evidence was produced. Its JSON response
+  was ok:false, error_type:job_submit_error, error:PermissionError, with content
+  reporting [Errno 13] Permission denied on the global jobs/.capacity.guard file
+  under the user's AppData/Local/exoma/storage directory. The response advised
+  checking that the job store is writable. The guard file existed and was readable.
+
+  Source trace: Exoma's settings.py selects LOCALAPPDATA/exoma when EXOMA_HOME is
+  unset; JobManager.capacity_guard opens jobs/.capacity.guard through
+  _exclusive_file_guard; osutil.open_lock_file uses a+b; job_lifecycle.submit catches
+  the resulting OSError and returns job_submit_error. The job store is outside the
+  session's writable workspace.
+evidence:
+  source: |
+    Codex session transcript from 2026-11-01: the .workflow/run.sh analyze invocation
+    and its JSON error response. Read-only inspection of installed Exoma 1.0.0 source:
+    config/settings.py _data_dir and JOB_DIR, core/jobs/job_manager.py capacity_guard
+    and _exclusive_file_guard, utils/osutil.py open_lock_file, and
+    core/jobs/job_lifecycle.py submit. The session permission profile names only this
+    repository and temporary directories as writable roots; Test-Path confirmed the
+    guard file existed.
+  counted_by: main agent
+  counted_on: 2026-11-01
+  notes: |
+    The permission boundary explains the error with high confidence, but Windows ACLs
+    and endpoint security were not independently tested. An alternate EXOMA_HOME
+    location was identified in source, not tried in this session.
+
+outcome: negative
+unexpected_behavior:
+  - A Codex host with workspace-write access cannot submit delegated Exoma work when Exoma keeps its job lock under the default per-user data directory.
+  - The analysis hard gate stops work after this proxy failure, so host simulation cannot continue through the delegated path in this session.
+limitations:
+  - One Windows Codex session, one analyze attempt, one installed Exoma version.
+  - No retry with a writable EXOMA_HOME or elevated filesystem permission was performed.
+  - No second-agent call or downstream host gate was exercised.
+related: [CASE-031, CASE-033, DEC-081]
+related_notes: |
+  CASE-031 observed a similar job-store denial under Agy on Windows. This case
+  isolates the Codex host path: Git Bash launched successfully, and submission
+  failed at the global capacity guard before the worker could start.
+implementation:
+  version: exoma 1.0.0
+  feature: delegated job submission from Codex as main host
+disposition:
+  implementation_status: implemented
+  validation_status: observed
+questions: [RQ-10]
