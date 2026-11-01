@@ -77,7 +77,9 @@ implementation:
     - docs/limitations.md, docs/reference.md, README.md, docs/team-guide/whats-included.md
 disposition:
   implementation_status: implemented
-  validation_status: observed
+  validation_status: validated
+  validated_by: maintainer
+  validated_on: 2026-11-01
 validation:
   summary: |
     sync_skills, sync_intent_map, gen_manifest and stamp_version checks pass on the working
@@ -93,6 +95,24 @@ validation:
       job_id: "local suite check 2026-10-21"
       description: "`python tests/run.py --keep-going --record . --only bundle-sync --only installer-stale --only contracts --only graph-refresh` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
       clean: false
+    - date: 2026-11-01
+      job_id: "session main_agent-workflow_20261101_163310423_c63b"
+      description: "Maintainer session on this repository, Windows: /.commit five times, one delegated analyze and one delegated explore through `.workflow/run`, all from the shipped command set, ok, with no missing command and no manual workaround."
+      clean: true
+  uses: 10
+  consistent: true
+  maintainer_decision: |
+    2026-11-01, critical interview: kept. Since the removal the maintainer never needed the
+    refactor, review or compress command; refactors went through explore then plan. The
+    maintainer draws the line by scope: a cleanup that can affect behavior takes the full path
+    (plan, execute with approval, verify); a narrow cleanup in an area the maintainer points at
+    exactly (for example removing comments in one file) is done without a plan, as the
+    small-fix exception allows. This is read as the boundary of "a refactor goes through /.plan
+    like any change", not as a use against it; the wording here does not name that boundary
+    (the draft DEC-074 covers small fixes).
+  measurements:
+    - source: "this repository's `.workflow/data/` telemetry (`tasks.jsonl`), window 2026-10-18..2026-10-27, counted 2026-10-27, plus the 2026-11-01 session above"
+      value: "shipped commands used on 9 of the days in the window plus 2026-11-01; no missing command reported"
 trade_offs:
   better:
     - The command list explains each command and its arguments.
@@ -106,4 +126,5 @@ limitations:
   - A word-start drive letter still matches a one-letter word followed by a colon and a path-like token.
 revisit_when:
   - A measured need for a behavior-preserving change path that /.plan cannot express.
+  - A narrow cleanup done without a plan turns out to have changed behavior.
 questions: [RQ-10]
