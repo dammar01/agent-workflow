@@ -74,7 +74,9 @@ implementation:
 
 disposition:
   implementation_status: implemented
-  validation_status: observed
+  validation_status: validated
+  validated_by: maintainer
+  validated_on: 2026-11-01
 
 validation:
   summary: |
@@ -89,6 +91,27 @@ validation:
     recovery attempt. Source: this repository's `.workflow/data/` telemetry and Exoma's job
     metadata on the maintainer's machine (re-countable there only), window 2026-10-18 to
     2026-10-27, counted 2026-10-27.
+    Result added 2026-11-01: five pin moves since the split (66b8f54, 2c9d3ae, a2b4a71, 74affed,
+    881ef2b, re-countable with `git log -- pyproject.toml`), each with the suites passing. At
+    a2b4a71 Exoma moved its bundle to `hosts/<name>/` and the task-outcome harness was changed
+    to read the intent map there. The harness reads that file at import
+    (`measure_task_outcomes.py`), and the harness check present since the split asserts it
+    exists, so the suite fails by name on that move; how it was noticed at the time was not
+    recorded and the maintainer does not recall. It is counted as the import check working as
+    designed, not as a use pointing the other way.
+  runs:
+    - date: 2026-11-01
+      job_id: "staging exoma 2888b15"
+      description: "Pin moved 3f9f2b7 -> 2888b15 (1.0.0, breaking release) on Windows: `uv lock`, `uv sync --locked`, `tests/run.py --keep-going` four suites pass, `check_research.py --git` OK, `tools/e2e/e2e.py --full --provider codex --model gpt-5.6-luna` 7 of 7; no change in this repository was needed and none was made (DEC-082)."
+      clean: true
+  uses: 5
+  consistent: true
+  maintainer_decision: |
+    2026-11-01, critical interview: kept. The maintainer reports that since the move no fix was
+    made inside this repository to make a candidate pass; runtime fixes went to Exoma.
+  measurements:
+    - source: "git log -- pyproject.toml in this repository, 2026-10-25..2026-11-01"
+      value: "5 pin moves after the split; delegated run 7 of 7 recorded for 0.2.0, 0.3.0, 5df83fa and 2888b15"
 
 trade_offs:
   better:
