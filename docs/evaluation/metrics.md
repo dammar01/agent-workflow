@@ -95,6 +95,19 @@ labels file maps a transcript file name to its category: `{"<session>.jsonl": "f
 | `real_use.active_minutes@1` | minutes per session | `nearest_rank` | Sum of gaps between consecutive transcript timestamps no longer than --idle-minutes (default 15). | sessions | - |
 | `real_use.delegated_call@2` | prompt answered by a provider | `count` | Distinct prompt_id (else correlation_id) among a session's usage rows that name a provider. A usage row belongs to one session: the earliest-starting transcript that binds its MAIN_SESSION_ID (@1 joined it to every such transcript; identical on all data recorded up to 2026-10-04, where no id was bound twice). Its `delegated_runtime` block is per row, not per command. | - | - |
 
+`delegated_runtime.verify_tests` is a diagnostic block, not a registered metric: the runtime
+test commands on `/.verify` usage rows. A browser review, also recorded as `verify` but with
+`e2e_stage: run`, is left out; rows written before `e2e_stage` existed cannot be told apart.
+Its counts are command outcomes, not test cases. `run_vs_reused` splits them per row into
+`executed` (`tests_run - tests_reused`: every outcome not reused, a command that could not
+start included) and `reused`
+(an earlier `run.sh test` pass taken instead of a run: passed, 0 s; Exoma f52cb96 onwards),
+summed only over rows whose pair is valid. A row without `tests_reused`, or with null, is
+`rows_unknown`, never zero reuse; zero seconds is not read as reuse. `commands_run`,
+`commands_failed` and `seconds` each carry their own `rows_known`/`rows_unknown`, with a null
+total when no row recorded the field. Test time stays outside `duration_seconds`, and test
+reuse is a different quantity from `runtime.evidence_reuse_rate`.
+
 ### Task outcomes (`tools/maintain/measure_task_outcomes.py`)
 
 | ID | Unit | Statistic | Definition | Denominator | Missing data |

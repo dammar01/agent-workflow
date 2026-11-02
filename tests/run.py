@@ -19,6 +19,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from tests.checks.blind_sample import _test_blind_sample  # noqa: E402
 from tests.checks.harnesses import _test_harnesses_import_against_the_pin  # noqa: E402
+from tests.checks.real_use import _test_real_use_verify_tests  # noqa: E402
 from tests.checks.replay import _test_fact_replay  # noqa: E402
 from tests.checks.research import _test_research_records_follow_the_schema  # noqa: E402
 
@@ -27,7 +28,8 @@ SUITES: dict[str, tuple] = {
     "harnesses": (_test_harnesses_import_against_the_pin, "every research and staging harness imports against the pinned Exoma"),
     "research": (_test_research_records_follow_the_schema, "research records are YAML the schema accepts; every rule the check claims is refused on a broken fixture"),
     "fact-replay": (_test_fact_replay, "EXP-013 replay: one-token and weighted arms over archived calls, facts learned later kept out, store untouched"),
-    "blind-sample": (_test_blind_sample, "blind-judge export: gate blocks read from transcripts, EXP-008 strata, the key kept apart, category labels merged"),
+    "real-use": (_test_real_use_verify_tests, "real-use harness: verify test commands split into run and reused, rows older than tests_reused kept unknown"),
+    "blind-sample": (_test_blind_sample,"blind-judge export: gate blocks read from transcripts, EXP-008 strata, the key kept apart, category labels merged"),
 }
 
 

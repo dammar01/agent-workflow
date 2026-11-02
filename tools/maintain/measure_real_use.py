@@ -29,10 +29,14 @@ Per session it counts:
   duration       wall clock first..last record, and active time (gaps over --idle-minutes
                  dropped)
 
+Over the delegated rows, `delegated_runtime.verify_tests` splits the runtime test commands of
+`/.verify` into run and reused (`verify_tests`); rows older than the `tests_reused` field
+read as unknown, not as zero reuse.
+
 Read-only. Prints one JSON object of counts and distributions. Project names are replaced by
 letters unless --show-names is given; prompt text is printed only with --sample-rebuttals,
-which is for the local terminal and must never be committed or shared. Not part of the test
-suite. Any user of the workflow can run it over their own projects; `--export <file>` writes
+which is for the local terminal and must never be committed or shared. Running it is not
+part of the test suite; `tests/checks/real_use.py` checks its aggregation on synthetic rows. Any user of the workflow can run it over their own projects; `--export <file>` writes
 the same figures as a file that may be shared, refused if it would carry a path or a project
 name (and never combined with --show-names or --sample-rebuttals).
 
@@ -215,6 +219,61 @@ def dist(values: list[float]) -> dict:
             "p25": q(.25), "median": q(.5), "p75": q(.75), "p90": q(.9), "max": round(v[-1], 1)}
 
 
+def _count(value) -> int | None:
+    """A recorded count: a non-negative int (a bool is not one), else None."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def _known_sum(values: list) -> dict:
+    """Total over the rows that recorded a value; `total` is None when none did."""
+    known = [v for v in values if v is not None]
+    return {"total": round(sum(known), 1) if known else None,
+            "rows_known": len(known), "rows_unknown": len(values) - len(known)}
+
+
+def verify_tests(usage: list[dict]) -> dict:
+    """The runtime tests on `/.verify` usage rows, run apart from reused.
+
+    Counts are command outcomes (one per requested test command), not test cases. From
+    Exoma f52cb96 a row carries `tests_reused`: the part of `tests_run` taken from an earlier
+    `run.sh test` pass instead of run again (passed, 0 s). A row without it, or with null,
+    predates the field or recorded nothing: its split is unknown, never zero reuse. The split
+    is summed per row over rows whose pair is valid (both counts, reused <= run), so known
+    reuse is never subtracted from a total that includes older rows.
+
+    A browser review is recorded as `command: "verify"` too, with `e2e_stage: "run"`; it is
+    left out, as Exoma's own report does. Rows written before `e2e_stage` existed cannot be
+    told apart and stay in. `executed` is every outcome not reused, a command that could not
+    start (`error`) included: an attempt, not a launched process.
+    """
+    rows = [r for r in usage if r.get("command") == "verify" and r.get("e2e_stage") is None]
+    requested = Counter("unknown" if not isinstance(r.get("tests_requested"), bool)
+                        else "yes" if r["tests_requested"] else "no" for r in rows)
+    executed = reused = pairs = 0
+    for r in rows:
+        ran, from_pass = _count(r.get("tests_run")), _count(r.get("tests_reused"))
+        if ran is not None and from_pass is not None and from_pass <= ran:
+            pairs += 1
+            executed += ran - from_pass
+            reused += from_pass
+    seconds = [r["tests_seconds"] if isinstance(r.get("tests_seconds"), (int, float))
+               and not isinstance(r.get("tests_seconds"), bool) and r["tests_seconds"] >= 0 else None
+               for r in rows]
+    return {
+        "rows": len(rows),
+        "requested": {k: requested.get(k, 0) for k in ("yes", "no", "unknown")},
+        "commands_run": _known_sum([_count(r.get("tests_run")) for r in rows]),
+        "commands_failed": _known_sum([_count(r.get("tests_failed")) for r in rows]),
+        "seconds": _known_sum(seconds),
+        "run_vs_reused": {
+            "rows_known": pairs, "rows_unknown": len(rows) - pairs,
+            "executed": executed if pairs else None,
+            "reused": reused if pairs else None,
+            "reused_share": round(reused / (executed + reused), 3) if executed + reused else None,
+        },
+    }
+
+
 def load_usage(path: str) -> list[dict]:
     rows = []
     if os.path.exists(path):
@@ -358,6 +417,7 @@ def main() -> int:
                                "median_seconds": dist([r["duration_seconds"] for r in rs
                                                        if isinstance(r.get("duration_seconds"), (int, float))]).get("median")}
                            for c, rs in sorted(by_cmd.items(), key=lambda kv: -len(kv[1]))},
+            "verify_tests": verify_tests(usage),
         },
         "per_project": {
             label: {"sessions": sum(1 for s in sessions if s["project"] == label),
