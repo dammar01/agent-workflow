@@ -16,7 +16,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "exoma", git = "https://github.com/dammar01/Exoma.git?rev=be340f996f02c38a08c322ad189828f60a633612" }]
+requires-dist = [{ name = "exoma", git = "https://github.com/dammar01/Exoma.git?rev=cc53426260c7342d0b9f3b59b1a7ffecf3305cac" }]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pyyaml", specifier = "==6.0.3" }]
@@ -24,7 +24,7 @@ dev = [{ name = "pyyaml", specifier = "==6.0.3" }]
 [[package]]
 name = "exoma"
 version = "1.0.0"
-source = { git = "https://github.com/dammar01/Exoma.git?rev=be340f996f02c38a08c322ad189828f60a633612#be340f996f02c38a08c322ad189828f60a633612" }
+source = { git = "https://github.com/dammar01/Exoma.git?rev=cc53426260c7342d0b9f3b59b1a7ffecf3305cac#cc53426260c7342d0b9f3b59b1a7ffecf3305cac" }
 
 [[package]]
 name = "pyyaml"
