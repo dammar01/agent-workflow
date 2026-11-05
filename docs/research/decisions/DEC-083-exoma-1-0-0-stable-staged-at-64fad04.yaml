@@ -11,7 +11,8 @@ provenance:
 problem: |
   Exoma cut its 1.0.0 stable release at 64fad04 (`build(release): cut 1.0.0 stable release`).
   Its release notes list staging in agent-workflow (Exoma RELEASE.md step 6b) as not yet run on
-  that candidate. The pin here was 4ed5a2b, the 1.0.0b1 candidate. Six pin moves since DEC-082
+  that candidate. The pin here was 4ed5a2b, whose tree is version 1.0.0; the 1.0.0b1 stamp
+  (4a8f6a0) and tag (f4b3ac9) came after it. Six pin moves since DEC-082
   (2888b15) were committed here with no record: 46b5256 (339a9f4), f52cb96 (5754326), ce76c0e
   (ed731fa), be340f9 (98f1a4d), cc53426 (e5ae8cd) and 4ed5a2b (433d12d). Two Exoma commits after
   4ed5a2b change behavior: de217f8 (host adapters refuse writes to the gate escape files, gate
@@ -49,6 +50,10 @@ evidence_notes: |
   `USAGE_FILENAME`, `load_relevant`) are all still defined at 64fad04. CASE-034 is documented in
   Exoma's 1.0.0 notes as a known limitation (`job_store_not_writable`, a `writable_roots` grant,
   doctor `checks.job_store_writable`, `EXOMA_HOME`), not fixed in code.
+  Re-countable with: `git ls-remote --tags https://github.com/dammar01/Exoma.git` (tags);
+  GitHub API `repos/dammar01/Exoma/actions/runs?head_sha=64fad04f444e013f96165478d7f8a501017f2ae7`
+  (CI); `git log --oneline 4ed5a2b..64fad04` and `git diff --stat 4ed5a2b 64fad04` in an Exoma
+  clone (commits, files); `git show 64fad04:src/exoma/core/evidence/fact_store.py` (names).
   Staging here, Windows, 2026-11-05: `uv lock` moved exoma 1.0.0 (4ed5a2b3) to 1.0.0 (64fad04f);
   `uv sync --locked` installed it. `tests/run.py --keep-going` passed its five suites (harnesses,
   research, fact-replay, real-use, blind-sample). `check_research.py --git` and `--drafts` passed.
@@ -61,7 +66,7 @@ evidence_notes: |
 
 implementation:
   version: exoma 64fad04 (1.0.0)
-  commits: [uncommitted]
+  commits: [9caa13b]
   components:
     - pyproject.toml, uv.lock (pin 4ed5a2b -> 64fad04)
     - tests/checks/harnesses.py (tools.sim.install_matrix added to HARNESSES)
