@@ -1,0 +1,101 @@
+schema_version: 3
+id: DEC-083
+title: Exoma 1.0.0 stable is staged at 64fad04, closing six unrecorded pin moves since 2888b15
+date: 2026-11-05
+status: accepted
+provenance:
+  type: observed
+  confidence: high
+  basis: staging run 2026-11-05 on Windows, requested by the maintainer to prepare the Exoma v1.0.0 tag
+
+problem: |
+  Exoma cut its 1.0.0 stable release at 64fad04 (`build(release): cut 1.0.0 stable release`).
+  Its release notes list staging in agent-workflow (Exoma RELEASE.md step 6b) as not yet run on
+  that candidate. The pin here was 4ed5a2b, the 1.0.0b1 candidate. Six pin moves since DEC-082
+  (2888b15) were committed here with no record: 46b5256 (339a9f4), f52cb96 (5754326), ce76c0e
+  (ed731fa), be340f9 (98f1a4d), cc53426 (e5ae8cd) and 4ed5a2b (433d12d). Two Exoma commits after
+  4ed5a2b change behavior: de217f8 (host adapters refuse writes to the gate escape files, gate
+  skips are logged, short citations certify only on a unique path) and 67727e7 (installer: pipx
+  and uv e2e install, python probe, Agy interpreter fallback, pipx-aware update).
+decision: |
+  The pin moves to Exoma 64fad04f444e013f96165478d7f8a501017f2ae7 (1.0.0) through the
+  RELEASE.md staging procedure, with the delegated run on Codex gpt-6-sol, the same provider and
+  model as the run in Exoma's 1.0.0 release notes. `tools.sim.install_matrix` (dce0f0b) joins
+  the harness import check, so a later pin move that breaks it fails by name. This record also
+  covers the six earlier pin moves listed above.
+rationale: |
+  The stable tag needs the staging gate on the exact tagged tree, not on the 1.0.0b1 candidate:
+  the two later commits touch the hooks and the installer. RELEASE.md makes staging commit-only
+  here, so the record states what ran and what did not rather than patching anything.
+  The release gate is tests, smoke, e2e and safe real use; research validation is not part of it
+  (RELEASE.md).
+
+alternatives:
+  - option: Tag 1.0.0 on the evidence gathered at 4ed5a2b
+    rejected_because: de217f8 and 67727e7 change hook and installer behavior after that candidate; staging must run on the tree that is tagged.
+  - option: Skip the delegated --full run to save provider quota
+    rejected_because: RELEASE.md step 4 requires it before reporting back, and the maintainer chose to run it.
+  - option: Leave install_matrix out of the harness import check
+    rejected_because: it reads the pin (`--source pinned`) and imports cleanly; leaving it out lets a pin move break it unseen.
+
+evidence: [DEC-077, DEC-082, CASE-034]
+evidence_notes: |
+  Exoma side, read from a clone of github.com/dammar01/Exoma on 2026-11-05: 64fad04 is on
+  origin/main; `pyproject.toml` version 1.0.0; remote tags v0.1.0, v0.2.0, v0.3.0, v1.0.0b1
+  (f4b3ac9), no v1.0.0 yet; the `ci` workflow on 64fad04 completed with success (GitHub API,
+  per-OS jobs not inspected). 4ed5a2b..64fad04 is five commits, 47 files. The fact_store names
+  the harnesses call (`relevance`, `_policy_float`, `MIN_RELEVANCE_SCORE`, `_policy_limit`,
+  `_newest_first`, `_dedupe`, `_load_facts`, `_anchors_placeable`, `_facts_path`, `ingest`,
+  `USAGE_FILENAME`, `load_relevant`) are all still defined at 64fad04. CASE-034 is documented in
+  Exoma's 1.0.0 notes as a known limitation (`job_store_not_writable`, a `writable_roots` grant,
+  doctor `checks.job_store_writable`, `EXOMA_HOME`), not fixed in code.
+  Staging here, Windows, 2026-11-05: `uv lock` moved exoma 1.0.0 (4ed5a2b3) to 1.0.0 (64fad04f);
+  `uv sync --locked` installed it. `tests/run.py --keep-going` passed its five suites (harnesses,
+  research, fact-replay, real-use, blind-sample). `check_research.py --git` and `--drafts` passed.
+  `tools/e2e/e2e.py --full --provider codex --model gpt-6-sol`: 7 of 7 (provider selected,
+  explore ok with evidence markers and its required fields, sweep ok).
+  Non-gate check: `python -m tools.sim.sim_flows` gives 31 of 33 as expected; S7 (oversize task
+  refused before delegation) and S10 (delegated verify pass) mismatch. The same two mismatch
+  against 4ed5a2b in an isolated environment, so they are not introduced by 64fad04; their cause
+  was not investigated here.
+
+implementation:
+  version: exoma 64fad04 (1.0.0)
+  commits: [uncommitted]
+  components:
+    - pyproject.toml, uv.lock (pin 4ed5a2b -> 64fad04)
+    - tests/checks/harnesses.py (tools.sim.install_matrix added to HARNESSES)
+
+disposition:
+  implementation_status: implemented
+  validation_status: not_validated
+
+validation:
+  summary: |
+    not_validated. The suites, the research check and one delegated run (Codex gpt-6-sol, 7 of 7)
+    pass against 64fad04 on Windows. The delegated run exercises Claude Code as main agent with
+    Codex as second agent; it does not exercise the writing install, the pipx path changed in
+    67727e7, or another host as main agent. The maintainer's real use on 64fad04 had not run when
+    this was recorded. Whether the six earlier pin moves ran the suites before their commits was
+    not recorded at the time.
+  runs:
+    - date: 2026-11-05
+      job_id: "staging exoma 64fad04"
+      description: "Pin moved 4ed5a2b -> 64fad04 (1.0.0 stable) on Windows: `uv lock`, `uv sync --locked`, `tests/run.py --keep-going` five suites pass, `check_research.py --git` and `--drafts` OK, `tools/e2e/e2e.py --full --provider codex --model gpt-6-sol` 7 of 7; no runtime change needed in this repository."
+      clean: true
+
+trade_offs:
+  better:
+    - the stable tag has a staging record on the exact tree it names
+    - the install matrix harness is guarded against the pin like the others
+  worse:
+    - the six earlier pin moves are covered after the fact, with no per-move result
+limitations:
+  - One delegated run, one provider and model, on Windows only; no Linux or macOS staging here.
+  - Real use on 64fad04 is outside this record; the release gate stays open until it runs.
+  - sim_flows S7 and S10 mismatch on both pins; until explained, that harness is not evidence for those two flows.
+revisit_when:
+  - real use on 64fad04 shows a regression from de217f8 or 67727e7
+  - sim_flows S7 or S10 is traced to a runtime defect rather than a stale expectation
+  - Exoma tags v1.0.0 on a commit other than 64fad04
+questions: [RQ-15]
