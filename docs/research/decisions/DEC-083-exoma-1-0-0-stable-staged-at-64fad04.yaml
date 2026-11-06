@@ -63,6 +63,15 @@ evidence_notes: |
   refused before delegation) and S10 (delegated verify pass) mismatch. The same two mismatch
   against 4ed5a2b in an isolated environment, so they are not introduced by 64fad04; their cause
   was not investigated here.
+  Result added 2026-11-06: both were stale sim expectations, not runtime defects. S7 assumed the
+  old static 3000-char cap; the opencode file transport is uncapped unless
+  `EXOMA_MAX_TASK_CHARS_NO_ARGV` sets a cap (`exoma/core/prompt/prompt_builder.py` `_transport_cap`,
+  `_no_ceiling`). S10 wrote no `verify/tests.json`, so the runtime added a `tests:` gap and the
+  verdict stayed incomplete (`exoma/core/evidence/contract.py`, verdict rule: pass only with no
+  warnings). The fixture in `tools/sim/sim_flows.py` now sets the cap to 3000 for S7 only and
+  writes an allowlisted green test for S10; `python -m tools.sim.sim_flows` against 64fad04 on
+  Windows gives 33 of 33 as expected (S7 kept 3000/12018 and refused; S10 verdict pass, runtime
+  test passed, exit 0; S10b still fail, exit 2).
 
 implementation:
   version: exoma 64fad04 (1.0.0)
@@ -98,7 +107,7 @@ trade_offs:
 limitations:
   - One delegated run, one provider and model, on Windows only; no Linux or macOS staging here.
   - Real use on 64fad04 is outside this record; the release gate stays open until it runs.
-  - sim_flows S7 and S10 mismatch on both pins; until explained, that harness is not evidence for those two flows.
+  - sim_flows S7 and S10 mismatch on both pins; until explained, that harness is not evidence for those two flows. (Explained 2026-11-06 as stale expectations and fixed in the fixture; see evidence_notes.)
 revisit_when:
   - real use on 64fad04 shows a regression from de217f8 or 67727e7
   - sim_flows S7 or S10 is traced to a runtime defect rather than a stale expectation

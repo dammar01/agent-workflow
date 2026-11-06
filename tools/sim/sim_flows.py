@@ -44,6 +44,7 @@ clean_output = OpenCodeAdapter.clean_output
 extract_session_id = OpenCodeAdapter.extract_session_id
 from exoma import check  # noqa: E402
 from exoma import cli as main  # noqa: E402
+from exoma.core.prompt import prompt_builder  # noqa: E402
 
 ROWS = []
 
@@ -417,8 +418,17 @@ def simulate():
         )
 
         # --- S7 task truncation ----------------------------------------------
+        # File and stdin transports (opencode, codex) carry no task cap by default; a cap
+        # applies only when EXOMA_MAX_TASK_CHARS_NO_ARGV sets one. That value is read at
+        # import and bound into prompt_builder, so the flow sets the module global for this
+        # call: it checks the refusal path under a policy cap, not the uncapped default.
         huge = "analyse this dump " + ("x" * 12000)
-        truncated = main.run("analyze", huge, "sim-session", work_dir)
+        saved_cap = prompt_builder.DEFAULT_MAX_TASK_CHARS_NO_ARGV
+        prompt_builder.DEFAULT_MAX_TASK_CHARS_NO_ARGV = 3000
+        try:
+            truncated = main.run("analyze", huge, "sim-session", work_dir)
+        finally:
+            prompt_builder.DEFAULT_MAX_TASK_CHARS_NO_ARGV = saved_cap
         meta = truncated.get("meta", {})
         record(
             "S7",
@@ -459,20 +469,40 @@ def simulate():
         )
 
         # --- S10 verify delegated: pass and fail --------------------------------
+        # A pass needs a test request the runtime ran green: without verify/tests.json the
+        # runtime records a `tests:` gap and the verdict stays incomplete.
         config["commands"]["verify_mode"] = "delegated"
+        config["commands"]["verify_test_commands"] = [f'"{sys.executable}"']
         write_config(project, config)
+        tests_request = (
+            workflow_paths(project, "verify-pass-session")["session_dir"] / "verify" / "tests.json"
+        )
+        tests_request.parent.mkdir(parents=True, exist_ok=True)
+        tests_request.write_text(
+            json.dumps(
+                {
+                    "commands": [f'"{sys.executable}" -c "pass"'],
+                    "reason": "sim: one allowlisted command that exits 0",
+                }
+            ),
+            encoding="utf-8",
+        )
         adapter.body_for["verify"] = VERIFY_PASS
         adapter.default_body = VERIFY_PASS
         vpass = main.run(
             "verify", "confirm the change landed", "verify-pass-session", work_dir
         )
+        vmeta = vpass.get("meta", {})
+        test_outcomes = (vmeta.get("runtime_tests") or {}).get("outcomes") or []
+        test_status = test_outcomes[0].get("status") if test_outcomes else None
         record(
             "S10",
             "delegated verify pass",
-            "meta.verdict=pass, exit code 0",
-            f"verdict={vpass.get('meta', {}).get('verdict')}, "
+            "meta.verdict=pass, runtime test passed, exit code 0",
+            f"verdict={vmeta.get('verdict')}, test={test_status}, "
             f"exit={main._verify_exit_code('verify', vpass, 'verify')}",
-            vpass.get("meta", {}).get("verdict") == "pass"
+            vmeta.get("verdict") == "pass"
+            and test_status == "passed"
             and main._verify_exit_code("verify", vpass, "verify") == 0,
         )
 
