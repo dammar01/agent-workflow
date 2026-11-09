@@ -61,6 +61,31 @@ evidence_notes: |
   `check_research.py --git` and `--drafts` passed. `python -m tools.sim.sim_flows` gives 33 of
   33 as expected, S7 and S10 included. The pin commit 0c5ea79 was made before this record;
   the metrics page sync is in 8d66976, the commit that adds this record.
+  Result added 2026-11-09: the delegated run (RELEASE.md step 4) was made on 1071c2f, Windows.
+  `tools/e2e/e2e.py --full --provider codex --model gpt-6-sol`: 7 of 7. The harness then gained
+  a run over every provider the pin ships (5a519f1), and `--full --all` with codex=gpt-6-sol,
+  claude=haiku, opencode=opencode/mimo-v2.6-flash-free and agy=gemini-3.1-pro-low gave 24 of
+  25: claude, codex and opencode 7 of 7 each; agy failed `explore returns ok` with error_type
+  `unknown` (provider selection and the local sweep passed). The harness keeps only the
+  error_type, so the cause was not recorded. Rerun with agy=gemini-3.8-flash-low: 7 of 7, on
+  the same adapter code, which points at the model rather than b44ac31's agy adapter
+  (inference, not traced). Claude as second agent passed explore with evidence markers and the
+  required fields.
+  Result added 2026-11-09 (maintainer): the agy CLI does not support gemini-3.1-pro-low and
+  does support gemini-3.8-flash-low, which confirms the model as the cause. The agy shortlist
+  in the pinned Exoma (`exoma/config/providers.py`, agy `models`) lists gemini-3.6 and 3.5
+  flash and gemini-3.1-pro high and low, and no gemini-3.8 entry, so a model taken from the
+  shortlist failed while the supported one counts as off-menu. Whether the other shortlisted
+  agy models are still supported was not checked. The unsupported model reached the harness as
+  error_type `unknown`, with no next_action naming the model. Off-menu ids used in these runs:
+  codex gpt-6-sol (the codex shortlist names gpt-5.6-*) and agy gemini-3.8-flash-low; claude
+  haiku and opencode opencode/mimo-v2.6-flash-free are on their shortlists. The maintainer
+  reported no issue with the codex run or the agy rerun.
+  Correction 2026-11-09: "The delegated end-to-end run (RELEASE.md step 4) was not made" in
+  decision, "No delegated run was made on this pin" in validation.summary and "(inference, not
+  traced)" above describe the state before these results and are superseded by them. `clean`
+  is read for staging harness runs as in DEC-083: the agy rerun is a new run with a new model
+  parameter, not a hand-edited request, so the failed run stays recorded as not clean.
 
 implementation:
   version: exoma 1071c2f (1.0.0, untagged)
@@ -79,11 +104,27 @@ validation:
     not_validated. The suites, the research check and sim_flows pass against 1071c2f on Windows.
     No delegated run was made on this pin, so no provider call has exercised b44ac31's adapter
     and hook changes here. Real use on 1071c2f has not run.
+    Result added 2026-11-09: one explore call per provider (agy, claude, codex, opencode) passed
+    on 1071c2f after agy's model was changed (see evidence_notes and runs). Each call was short,
+    so the shortened output drain in b44ac31 was not stressed, and Codex auto-review was off.
+    Still not_validated: no real use on 1071c2f.
   runs:
     - date: 2026-11-09
       job_id: "staging exoma 1071c2f"
       description: "Pin moved 64fad04 -> 1071c2f on Windows: `uv lock`, `uv sync --locked`, `tests/run.py --keep-going` five suites pass, `check_research.py --git` and `--drafts` OK, `python -m tools.sim.sim_flows` 33 of 33; delegated e2e not run, so the staging run is not clean under CONTRACT.md §14; no runtime change needed in this repository."
       clean: false
+    - date: 2026-11-09
+      job_id: "e2e codex 1071c2f"
+      description: "`tools/e2e/e2e.py --full --provider codex --model gpt-6-sol` on Windows: 7 of 7 (provider selected, explore ok with evidence markers and its required fields, sweep ok); gpt-6-sol is off the bundled codex shortlist; the maintainer reported no issue."
+      clean: true
+    - date: 2026-11-09
+      job_id: "e2e all providers 1071c2f"
+      description: "`tools/e2e/e2e.py --full --all` on Windows with codex=gpt-6-sol, claude=haiku, opencode=opencode/mimo-v2.6-flash-free, agy=gemini-3.1-pro-low: 24 of 25; claude, codex, opencode 7 of 7 each; agy explore returned error_type unknown, cause not recorded."
+      clean: false
+    - date: 2026-11-09
+      job_id: "e2e agy 1071c2f"
+      description: "`tools/e2e/e2e.py --full --model agy=gemini-3.8-flash-low` on Windows: 7 of 7; the model the agy CLI supports, off the bundled agy shortlist; the maintainer reported no issue."
+      clean: true
 
 trade_offs:
   better:
@@ -93,12 +134,15 @@ trade_offs:
     - Python 3.10 can no longer run the harnesses here
     - provider_calls figures from registry version 1 and version 2 are not comparable where reuse rows exist
 limitations:
-  - No delegated run on 1071c2f; the provider adapter and hook changes in b44ac31 are unexercised here.
+  - "No delegated run on 1071c2f; the provider adapter and hook changes in b44ac31 are unexercised here. (Run 2026-11-09: one short explore call per provider passed, agy after a model change; see evidence_notes. A long output that stresses the shortened drain, and Codex auto-review, are still unexercised.)"
   - Windows only; no Linux or macOS staging here.
   - The b44ac31 hook and adapter diff was read at file level, not reviewed line by line.
   - The version string 1.0.0 covers both 64fad04 and 1071c2f; a record citing "1.0.0" without a commit is ambiguous from here on.
+  - The bundled agy model shortlist in the pinned Exoma is stale (gemini-3.1-pro-low is listed and unsupported by the agy CLI, gemini-3.8-flash-low is supported and not listed); to be reported to Exoma, not fixed here.
+  - An unsupported agy model surfaces as error_type unknown with no next_action naming the model; to be reported to Exoma.
 revisit_when:
   - a delegated run or real use on 1071c2f shows a regression from b44ac31
   - Exoma tags a release at or after 1071c2f, or bumps the version string
   - a figure is compared across metrics registry versions 1 and 2
+  - Exoma updates the agy model shortlist or classifies an unsupported provider model
 questions: [RQ-15]
