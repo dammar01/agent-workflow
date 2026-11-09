@@ -60,11 +60,11 @@ evidence_notes: |
   its five suites (harnesses, research, fact-replay, real-use, blind-sample);
   `check_research.py --git` and `--drafts` passed. `python -m tools.sim.sim_flows` gives 33 of
   33 as expected, S7 and S10 included. The pin commit 0c5ea79 was made before this record;
-  the metrics page sync is the second commit listed under implementation.
+  the metrics page sync is in 8d66976, the commit that adds this record.
 
 implementation:
   version: exoma 1071c2f (1.0.0, untagged)
-  commits: [0c5ea79, uncommitted]
+  commits: [0c5ea79, 8d66976]
   components:
     - pyproject.toml (pin 64fad04 -> 1071c2f; requires-python >=3.10 -> >=3.11)
     - uv.lock (exoma resolved at 1071c2f; Python 3.10 wheels dropped)
