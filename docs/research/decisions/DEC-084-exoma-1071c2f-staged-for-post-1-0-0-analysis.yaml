@@ -1,0 +1,104 @@
+schema_version: 3
+id: DEC-084
+title: Exoma 1071c2f is staged for post-1.0.0 analysis; it drops Python 3.10 with the version string unchanged
+date: 2026-11-09
+status: accepted
+provenance:
+  type: observed
+  confidence: medium
+  basis: staging run 2026-11-09 on Windows, requested by the maintainer to analyse the Exoma commits after the v1.0.0 tag
+
+problem: |
+  The pin was 64fad04 (DEC-083). Exoma's v1.0.0 tag points at efcc941, a docs-only commit on
+  top of 64fad04 (one file), so the tagged runtime is 64fad04's; DEC-083's revisit trigger
+  "Exoma tags v1.0.0 on a commit other than 64fad04" fired in that narrow sense only. After the
+  tag, four runtime commits landed on Exoma main: b44ac31 (Codex review context, runtime
+  hardening; 78 files touching the Claude hooks, the three provider adapters, audit, metrics,
+  telemetry and verify), 8586826 and 4453638 (tests only), and 1071c2f (drop Python 3.10). The
+  version string stays 1.0.0 and 1071c2f carries no tag, so "Exoma 1.0.0" no longer names one
+  behavior. The changes could not be studied against this repository's harnesses without moving
+  the pin.
+decision: |
+  The pin moves to Exoma 1071c2f9462134304fb11be0459e9e4a76267058 (version string 1.0.0,
+  untagged) through RELEASE.md steps 2 and 3, for analysis rather than as a release candidate.
+  `requires-python` here rises from >=3.10 to >=3.11, the minimum that resolves the pin. The
+  delegated end-to-end run (RELEASE.md step 4) was not made. `docs/evaluation/metrics.md` is
+  brought to the registry the pin ships (registry version 2, `runtime.provider_call@2`).
+rationale: |
+  The harness import check, the research suites and sim_flows only say something about the
+  runtime they import, so the post-tag commits are measured by pinning them, not by reading a
+  diff alone. Python 3.10 cannot resolve 1071c2f, and CI here runs 3.13 only, so the floor move
+  costs nothing this repository uses. The record states the skipped step instead of leaving it
+  implied (RELEASE.md step 4).
+
+alternatives:
+  - option: Keep the pin at 64fad04 and read the 64fad04..1071c2f diff from an Exoma clone only
+    rejected_because: a diff shows what changed, not whether the harnesses, sim_flows and the research suites still hold against it.
+  - option: Append the move to DEC-083 as an added result
+    rejected_because: DEC-083 is frozen and names 9caa13b; a new pin is a new decision, not a result of the old one (CONTRACT.md §15).
+  - option: Move the pin without a record
+    rejected_because: DEC-083 had to cover six pin moves committed with no record; this repeats that gap.
+
+evidence: [DEC-083]
+evidence_notes: |
+  Exoma side, read from a local clone of github.com/dammar01/Exoma on 2026-11-09:
+  `git rev-list -n1 v1.0.0` gives efcc941; `git ls-remote --tags origin` lists v1.0.0
+  (peeled efcc941) and v1.0.0b1; no tag contains 1071c2f. 64fad04..1071c2f is five commits,
+  99 files, +4522/-480; efcc941 changes one docs file. Behavior changes read from the diff:
+  `requires-python` and `MIN_PYTHON` move to 3.11 with the install, cli and check guards and
+  the hook launchers (1071c2f); the metrics registry moves to version 2, where
+  `runtime.provider_call` no longer counts usage rows marked as reused evidence or an avoided
+  provider call; task telemetry drops rows whose fields have the wrong type; a verify test
+  request must give `commands` as a list of strings and a non-empty reason for an empty list;
+  Codex auto-review is added as an opt-in tested on CLI 0.163.0 (b44ac31). The hook and
+  provider adapter changes in b44ac31 were not reviewed line by line.
+  Re-countable with: `git log --oneline 64fad04..1071c2f`, `git diff --stat 64fad04 1071c2f`,
+  `git show --stat <commit>` per commit, `git rev-list -n1 v1.0.0` in an Exoma clone.
+  Staging here, Windows, 2026-11-09: `uv lock` refused the pin while `requires-python` was
+  >=3.10 (exoma 1.0.0 depends on Python>=3.11); with >=3.11 it moved exoma 1.0.0 (64fad04f)
+  to 1.0.0 (1071c2f9), and `uv sync --locked` installed it. `tests/run.py --keep-going` passed
+  its five suites (harnesses, research, fact-replay, real-use, blind-sample);
+  `check_research.py --git` and `--drafts` passed. `python -m tools.sim.sim_flows` gives 33 of
+  33 as expected, S7 and S10 included. The pin commit 0c5ea79 was made before this record;
+  the metrics page sync is the second commit listed under implementation.
+
+implementation:
+  version: exoma 1071c2f (1.0.0, untagged)
+  commits: [0c5ea79, uncommitted]
+  components:
+    - pyproject.toml (pin 64fad04 -> 1071c2f; requires-python >=3.10 -> >=3.11)
+    - uv.lock (exoma resolved at 1071c2f; Python 3.10 wheels dropped)
+    - docs/evaluation/metrics.md (registry version 2; runtime.provider_call@2 definition)
+
+disposition:
+  implementation_status: implemented
+  validation_status: not_validated
+
+validation:
+  summary: |
+    not_validated. The suites, the research check and sim_flows pass against 1071c2f on Windows.
+    No delegated run was made on this pin, so no provider call has exercised b44ac31's adapter
+    and hook changes here. Real use on 1071c2f has not run.
+  runs:
+    - date: 2026-11-09
+      job_id: "staging exoma 1071c2f"
+      description: "Pin moved 64fad04 -> 1071c2f on Windows: `uv lock`, `uv sync --locked`, `tests/run.py --keep-going` five suites pass, `check_research.py --git` and `--drafts` OK, `python -m tools.sim.sim_flows` 33 of 33; delegated e2e not run, so the staging run is not clean under CONTRACT.md §14; no runtime change needed in this repository."
+      clean: false
+
+trade_offs:
+  better:
+    - the commits after the v1.0.0 tag are measured against this repository's harnesses
+    - the metrics page names the registry version the pin ships
+  worse:
+    - Python 3.10 can no longer run the harnesses here
+    - provider_calls figures from registry version 1 and version 2 are not comparable where reuse rows exist
+limitations:
+  - No delegated run on 1071c2f; the provider adapter and hook changes in b44ac31 are unexercised here.
+  - Windows only; no Linux or macOS staging here.
+  - The b44ac31 hook and adapter diff was read at file level, not reviewed line by line.
+  - The version string 1.0.0 covers both 64fad04 and 1071c2f; a record citing "1.0.0" without a commit is ambiguous from here on.
+revisit_when:
+  - a delegated run or real use on 1071c2f shows a regression from b44ac31
+  - Exoma tags a release at or after 1071c2f, or bumps the version string
+  - a figure is compared across metrics registry versions 1 and 2
+questions: [RQ-15]

@@ -1,7 +1,8 @@
 # Metrics
 
 The calculation contract for every benchmark figure this project reports. The registry in
-`core/audit/metrics.py` is the source; this page renders it, and a test keeps the two in step.
+`core/audit/metrics.py` of the pinned Exoma is the source and this page renders it; nothing in
+this repository checks the page against the registry.
 
 - **Cite a figure as `<id>@<version>`**, for example `outcome.solved@1`. A change to how a metric
   is computed bumps its version; the old figure keeps meaning what it meant.
@@ -27,7 +28,7 @@ The calculation contract for every benchmark figure this project reports. The re
 - The statistics differ between producers on purpose: unifying them would change figures
   already recorded (CASE-011, CASE-012). Each metric names its convention below.
 
-Registry version: **1**.
+Registry version: **2**.
 
 ## Running the tools
 
@@ -74,7 +75,7 @@ labels file maps a transcript file name to its category: `{"<session>.jsonl": "f
 | ID | Unit | Statistic | Definition | Denominator | Missing data |
 | --- | --- | --- | --- | --- | --- |
 | `runtime.command@1` | command | `count` | A delegated command: usage rows grouped by prompt_id (a continuation is one); a row without prompt_id is its own command. Report key `calls`/`commands`. | - | Rows of a provider-less browser run (no prompt_id, provider or tokens; CASE-014) are dropped before counting. |
-| `runtime.provider_call@1` | provider invocation | `count` | One usage row. Report key `provider_calls`. | - | As runtime.command. |
+| `runtime.provider_call@2` | provider invocation | `count` | One usage row, excluding rows marked as reused evidence or an avoided provider call (legacy reuse-only flags included). Continuations count per invocation. Report key `provider_calls`. | - | As runtime.command. |
 | `runtime.cost_tokens@1` | tokens | `sum` | Input plus output per row: the provider's actual count when present, else characters // 4. Cached input and reasoning are inside these counts, never added. Report key `cost`. | - | `token_source` says which rows were estimated. |
 | `runtime.accepted_task@1` | correlation_id | `count` | A correlation id (plan chain or derived task id) with at least one verify row whose derived verdict is pass. Report key `accepted_tasks`. | correlation ids with at least one judged verify | Never-verified ids are outside the denominator, not counted as failures. |
 | `runtime.first_pass_correctness@1` | correlation_id | `rate` | Share of judged correlation ids whose first judged verify passed. | correlation ids with at least one judged verify | As runtime.accepted_task. |
