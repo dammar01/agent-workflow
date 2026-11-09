@@ -40,7 +40,15 @@ harnesses and the staging run all import or invoke that Exoma, never a copy in t
 4. **Delegated end-to-end run.** Real provider, real quota:
 
    ```
-   uv run python tools/e2e/e2e.py --full --provider <opencode|codex|agy> --model <id>
+   uv run python tools/e2e/e2e.py --full --provider <opencode|codex|agy|claude> --model <id>
+   ```
+
+   One provider is the gate; running every provider the pin ships is recommended, since a
+   pin can change each adapter. The model is per provider, so that run takes pairs, and a
+   provider left without one fails before any call:
+
+   ```
+   uv run python tools/e2e/e2e.py --full --all --model opencode=<id>,codex=<id>,agy=<id>,claude=<id>
    ```
 
    The model is required: the seed Exoma ships leaves it unset, and the run refuses before

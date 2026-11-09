@@ -22,11 +22,14 @@ def delegated_checks(
     print(f"\n[DELEGATED] real {provider} — costs quota")
     from exoma.core.evidence.contract import REQUIRED_FIELDS
 
+    # Every row names its provider, so a multi-provider run reads unambiguously.
+    tag = f"{provider}: "
+
     # The seed Exoma ships leaves the model unset, and an unset model is refused at call
     # time (model_unset). Refuse here instead, before init and before any quota is spent.
     if not model:
         report.record(
-            "delegated commands", FAIL, "no model: pass --model (and --provider unless opencode)"
+            tag + "delegated commands", FAIL, "no model: pass --model (and --provider unless opencode)"
         )
         return
 
@@ -43,7 +46,7 @@ def delegated_checks(
         script = project / ".workflow" / "run.sh"
         if code != 0 or not script.exists():
             report.record(
-                "delegated commands", SKIP, "fresh workflow runner was not generated"
+                tag + "delegated commands", SKIP, "fresh workflow runner was not generated"
             )
             return
 
@@ -54,7 +57,7 @@ def delegated_checks(
         )
         selected = _json_from(output)
         if not report.check(
-            f"provider {provider} with {model} selected",
+            f"{tag}provider {provider} with {model} selected",
             code == 0 and bool(selected) and selected.get("ok") is True,
             str((selected or {}).get("content") or output.strip())[:200],
         ):
@@ -65,7 +68,7 @@ def delegated_checks(
         bash = find_bash()
         if not bash:
             report.record(
-                "delegated commands", FAIL, "no bash found (Git Bash on Windows): the runner cannot start"
+                tag + "delegated commands", FAIL, "no bash found (Git Bash on Windows): the runner cannot start"
             )
             return
 
@@ -86,10 +89,10 @@ def delegated_checks(
             )
             payload = _json_from(result.stdout or "")
             if payload is None:
-                report.record(f"{command} returns JSON", FAIL, "no JSON in output")
+                report.record(f"{tag}{command} returns JSON", FAIL, "no JSON in output")
                 continue
             if not report.check(
-                f"{command} returns ok",
+                f"{tag}{command} returns ok",
                 payload.get("ok") is True,
                 str(payload.get("meta", {}).get("error_type", "")),
             ):
@@ -98,16 +101,16 @@ def delegated_checks(
 
             if contract == "evidence":
                 report.check(
-                    f"{command} carries evidence markers",
+                    f"{tag}{command} carries evidence markers",
                     any(m in content for m in ("[evidence]", "[digest]", "grounded:")),
                 )
                 for field in REQUIRED_FIELDS.get(command, ()):
                     report.check(
-                        f"{command} has required field '{field}'", field in content
+                        f"{tag}{command} has required field '{field}'", field in content
                     )
             else:
                 report.check(
-                    f"{command} reports changed files",
+                    f"{tag}{command} reports changed files",
                     any(
                         k in content
                         for k in ("changed", "diff", "modified", "no changes")
