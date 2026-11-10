@@ -38,12 +38,15 @@ results:
     Run of record, with the committed tool (tool_commit a87fbba (+dirty: the working tree held unrelated uncommitted edits, the replay tool itself was committed), inputs 4745 files sha256 7ba73d8e07d363e4): 1576 calls across 14 projects,
     108503 candidate offers. one-token served 2440 facts, 521 cited: injection_rate 0.022,
     served_fact_use_rate 0.214. weighted served 2898, 586 cited: injection_rate 0.027,
-    served_fact_use_rate 0.202. No call carried served_facts yet (recorded arm empty).
+    served_fact_use_rate 0.202. The recorded arm contains 3 calls, 12 served facts and 3 cited facts.
     A first run the same day with the uncommitted tool (1573 calls) gave the same figures to
     the third decimal except one-token use 0.212.
     Exploratory, not pre-registered: split at DEC-066's commit (2026-10-21), calls answered
     after one-token facts (1482) give one-token 0.214 / weighted 0.203; calls answered after
     weighted facts (91) give 0.192 / 0.195. Injection is higher for weighted in both eras.
+    Factual correction 2026-11-10: the committed artifact with the tool/input provenance above
+    contains that recorded arm; the earlier empty-arm sentence was incorrect. The two main
+    replay arms, their figures and the rejected outcome are unchanged.
   data_source: tools/maintain/replay_facts.py over the maintainer's projects, 2026-10-23; inputs are private (archived calls and fact stores), the output stays on the maintainer's machine
   figures:
     - {metric: replay.injection_rate@1, arm: one-token, value: "0.022 (2440 / 108503)"}
@@ -56,6 +59,9 @@ interpretation: |
   the direction: where answers had seen weighted facts, the two use rates are level. The per-role
   limit (4 for reasoning under DEC-066, 3 under the one-token rule) was tested afterwards as
   H-023 in EXP-016.
+
+  2026-11-10 maintainer disposition and closure: The maintainer accepts rejection under the original replay criteria: weighted retrieval injects more facts and its citation-use share is lower. The completed experiment and corrected recorded-arm description are accepted within the counterfactual corpus and citation-proxy method. Validated describes acceptance of the evaluation and rejected result, not superiority of weighted retrieval or a causal downstream quality effect. Active review of H-021/EXP-013 is closed; no experiment rerun is requested for this conclusion. Reopen when: New calls with recorded served facts, a different retrieval policy, or a downstream-quality experiment can test a materially different claim.
+
 threats_to_validity:
   - Small store; a single maintainer's task phrasing
   - Citation is a proxy for use
@@ -67,5 +73,7 @@ related: [DEC-066]
 
 disposition:
   implementation_status: not_applicable
-  validation_status: not_validated
+  validation_status: validated
+  validated_by: maintainer
+  validated_on: 2026-11-10
 questions: [RQ-06]

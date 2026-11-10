@@ -1,0 +1,164 @@
+{
+  "schema": "exoma-research-regression-cases-v1",
+  "created_at": "2026-11-10T06:55:17.295657+00:00",
+  "parser_cases": [
+    {
+      "id": "P01",
+      "kind": "validator",
+      "input": "none",
+      "expected": "pass"
+    },
+    {
+      "id": "P02",
+      "kind": "validator",
+      "input": "none.",
+      "expected": "pass"
+    },
+    {
+      "id": "P03",
+      "kind": "validator",
+      "input": "tidak ada",
+      "expected": "pass"
+    },
+    {
+      "id": "P04",
+      "kind": "validator",
+      "input": "none - clean",
+      "expected": "pass"
+    },
+    {
+      "id": "P05",
+      "kind": "validator",
+      "input": "none; all clean",
+      "expected": "pass"
+    },
+    {
+      "id": "P06",
+      "kind": "validator",
+      "input": "none - caller X fails",
+      "expected": "fail"
+    },
+    {
+      "id": "P07",
+      "kind": "validator",
+      "input": "[severity:high] [origin:introduced] [scope_relation:in_scope] caller fails [fixture.py:1]",
+      "expected": "fail"
+    },
+    {
+      "id": "P08",
+      "kind": "validator",
+      "input": "none.\n  caller X fails [fixture.py:1]",
+      "expected": "fail"
+    },
+    {
+      "id": "P09",
+      "kind": "validator",
+      "input": "none (caller X fails)",
+      "expected": "fail"
+    },
+    {
+      "id": "P10",
+      "kind": "validator",
+      "input": "none\n  caller X fails [fixture.py:1]",
+      "expected": "fail"
+    },
+    {
+      "id": "P11",
+      "kind": "normalizer",
+      "input": "none.\n  caller X fails [fixture.py:1]",
+      "expected": "blocking_findings nonempty"
+    },
+    {
+      "id": "P12",
+      "kind": "normalizer",
+      "input": "none\n  caller X fails [fixture.py:1]",
+      "expected": "blocking_findings nonempty"
+    }
+  ],
+  "gate_cases": [
+    {
+      "id": "G01",
+      "scenario": "session authorization isolation",
+      "expected": "authorized A allowed, B refused"
+    },
+    {
+      "id": "G02",
+      "scenario": "unapproved real-action string control",
+      "expected": "refused"
+    },
+    {
+      "id": "G03",
+      "scenario": "harmless quoted mention",
+      "command_as_data": "python -c \"print('git commit')\"",
+      "expected": "allowed; this is not an executed version-control action"
+    },
+    {
+      "id": "G04",
+      "scenario": "existing directory scope",
+      "expected": "matches"
+    }
+  ],
+  "main_agent_authority_cases_spec_only": [
+    {
+      "id": "A01",
+      "given": {
+        "second_agent": "incomplete",
+        "runtime": "incomplete",
+        "main_agent_final": "DONE",
+        "reasoning": "main agent assessed gaps and accepts scoped result"
+      },
+      "expected": "completed under maintainer-directed policy; retain all evidence",
+      "status": "specification only; current runtime integration not tested"
+    },
+    {
+      "id": "A02",
+      "given": {
+        "second_agent": "DONE",
+        "runtime": "pass",
+        "main_agent_final": "NEEDS FIX"
+      },
+      "expected": "do not close based solely on reviewer/runtime",
+      "status": "specification only"
+    },
+    {
+      "id": "A03",
+      "given": {
+        "second_agent": "DONE",
+        "runtime": "pass",
+        "main_agent_final": null
+      },
+      "expected": "do not fabricate a main-agent final judgement",
+      "status": "specification only"
+    },
+    {
+      "id": "A04",
+      "given": {
+        "second_agent": "incomplete",
+        "main_agent_final": "DONE",
+        "reasoning": "review findings considered and retained or disregarded with rationale"
+      },
+      "expected": "main-agent final decision authoritative; reviewer remains auditable",
+      "status": "specification only"
+    }
+  ],
+  "gate_integration_cases_spec_only": [
+    {
+      "id": "I01",
+      "scenario": "Matching answer to a prior action request, with unrelated prompt in between",
+      "status": "No live approval state or integration exercised; existing DEC073 proposal boundary retained."
+    },
+    {
+      "id": "I02",
+      "scenario": "User approves an analysed extra file while an execution is active",
+      "status": "No scope-extension mechanism claimed; needs Exoma-native integration test if owner implements DEC075."
+    }
+  ],
+  "expectation_policy": "Keep desired fail-closed assertions and authorization controls. Do not change expected failures to pass for cosmetic green results.",
+  "compatibility_note": "Parenthetical/plain-none continuation allowances are legacy documented behavior; evaluate compatibility deliberately in Exoma, not as a newly introduced regression.",
+  "native_suite": {
+    "parser": 12,
+    "gate": 4,
+    "total": 16,
+    "command_strings_are_data_only": true
+  }
+}

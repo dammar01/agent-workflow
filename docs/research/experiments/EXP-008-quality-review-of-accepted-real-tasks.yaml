@@ -75,6 +75,9 @@ interpretation: |
   cause the user reported, yet still counted as correct but poor under the rubric's verdict;
   root cause and verdict disagree there. The clean-fixed gap rests on 8 fixed tasks and is
   one or two verdicts wide.
+
+  2026-11-10 maintainer disposition and closure: The maintainer accepts the supported outcome under the original rubric and reviewed sample. Validation is partial: the accepting maintainer was also the reviewer, some labels came from an agent aware of the hypothesis, and Q017's root-cause judgement disagrees with its correctness verdict. This does not establish acceptance on main as an independently validated general proxy for task success. Active review of H-014/EXP-008 is closed; no experiment rerun is requested for this conclusion. Reopen when: Acceptance-on-main is proposed as a stronger/general correctness proxy, or an independently reviewed sample contradicts the recorded result.
+
 threats_to_validity:
   - The reviewer accepted the same work; the review is not independent.
   - 6 of 23 items (Q018 in part, Q019-Q023) were labelled by the agent after the maintainer stopped the interview; the agent knew H-014's direction.
@@ -89,5 +92,7 @@ related: [CASE-012, CASE-009]
 
 disposition:
   implementation_status: not_applicable
-  validation_status: not_validated
+  validation_status: partially_validated
+  validated_by: maintainer
+  validated_on: 2026-11-10
 questions: [RQ-02]

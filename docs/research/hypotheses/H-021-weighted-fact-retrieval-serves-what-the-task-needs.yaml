@@ -31,6 +31,7 @@ success_criteria:
 
 experiments: [EXP-013]
 limitations:
+  - "2026-11-10 maintainer disposition and closure: The maintainer accepts rejection under the original replay criteria: weighted retrieval injects more facts and its citation-use share is lower. The completed experiment and corrected recorded-arm description are accepted within the counterfactual corpus and citation-proxy method. Validated describes acceptance of the evaluation and rejected result, not superiority of weighted retrieval or a causal downstream quality effect. Active review of H-021/EXP-013 is closed; no experiment rerun is requested for this conclusion. Reopen when: New calls with recorded served facts, a different retrieval policy, or a downstream-quality experiment can test a materially different claim."
   - "EXP-013 (2026-10-23, 1576 replayed calls): weighted injection_rate 0.027 vs one-token 0.022, served_fact_use_rate 0.202 vs 0.214; both rejection clauses hold. The replay is counterfactual on today's store; see EXP-013 threats."
   - "Pre-registration: Thresholds proposed by the agent and frozen on 2026-10-23, before the replay runner existed or any replay ran (proposed-by-agent, maintainer-approved as a rule, values not reviewed). Between the two criteria, or below 30 calls, the outcome is inconclusive."
   - Whether a fact was used is judged from the answer text, which depends on how the second agent cites
@@ -38,5 +39,7 @@ related_decisions: [DEC-066]
 
 disposition:
   implementation_status: not_applicable
-  validation_status: not_validated
+  validation_status: rejected
+  validated_by: maintainer
+  validated_on: 2026-11-10
 questions: [RQ-06]

@@ -108,10 +108,18 @@ validation:
     decision, and the pattern it describes. Since the change no streak has reached the limit
     and no job record carries `repeat_released`, so neither a signature-narrowed brake nor a
     `runtime_changed` release has happened in real use — observed, not validated.
+
+    Result added 2026-11-10 (designed fixture; not clean direct use), Exoma pin 1071c2f: closure group repeat recorded status pass, 10/10 registered checks meeting expectations. Source: docs/research-drafts/_data/research-closure-2026-11-10/runs/20261110T010132779372Z/repeat/result.json; parent result-manifest.json and protocol.json identify the run and method. State was seeded and preflight/provider execution was stubbed. Actual project and runtime release branches ran, but this is not an ordinary browser workflow or a real runtime upgrade. No validation authority or disposition label is changed.
+
   runs:
     - date: 2026-09-28
       job_id: "job_20260928_031504_658555"
       description: "App failure recorded with signature v1 and runtime identity; streak 1; cleared by a later pass."
+      clean: false
+
+    - date: 2026-11-10
+      job_id: "closure-20261110T010132779372Z-repeat"
+      description: "designed-fixture; status pass; 10/10 expected checks; docs/research-drafts/_data/research-closure-2026-11-10/runs/20261110T010132779372Z/repeat/result.json. State was seeded and preflight/provider execution was stubbed. Actual project and runtime release branches ran, but this is not an ordinary browser workflow or a real runtime upgrade. No manual real-use or clean-run claim."
       clean: false
 
 trade_offs:

@@ -1,0 +1,83 @@
+{
+  "date": "2026-11-10",
+  "created_at": "2026-11-10T06:55:17.295657+00:00",
+  "user_directives": [
+    {
+      "item": 1,
+      "decision": "Prepare exact parser issue/reproducer handoff for maintainer repair in Exoma",
+      "state": "explicitly requested",
+      "runtime_repair_here": false
+    },
+    {
+      "item": 2,
+      "decision": "Maintainer re-evaluation 2026-11-10: final task-closure authority is the main_agent. A final main_agent DONE may accept or disregard second_agent incomplete findings after main-agent reasoning. Preserve second-agent judgement and runtime-derived verdict as separate evidence; neither substitutes automatically for the main-agent final decision. Earlier telemetry declared DONE came from the reviewer, not a captured main-agent final verdict. This revises the intended acceptance policy; implementation/evaluation of that revised policy is not established by this statement. Historical verdicts/counts and current validation labels remain unchanged.",
+      "state": "explicit maintainer policy re-evaluation accepted as instruction",
+      "implementation_proven": false,
+      "historical_relabelling": false
+    },
+    {
+      "item": 3,
+      "decision": "Provide version-specific gate regression evidence and portable tests in research repo for user application in Exoma",
+      "state": "destination explicitly selected by user",
+      "latest_upstream_fix_claimed": false,
+      "native_integration_proven": false
+    },
+    {
+      "item": 4,
+      "decision": "Record new dated decisions and recheck results in existing research records",
+      "state": "Recorded in the existing research records under maintainer authorization"
+    }
+  ],
+  "schema_or_runtime_policy_modified": false,
+  "validation_labels_changed": false,
+  "new_hypotheses": [],
+  "new_product_features": [],
+  "scientific_closure_status": "No additional research package declared closed by this documentation work.",
+  "record_updates": [
+    {
+      "record": "DEC-018",
+      "path": "docs/research/decisions/DEC-018-verify-none-sentinel-grammar.yaml",
+      "change": "new dated observations",
+      "historical_status": "accepted",
+      "historical_outcome": null,
+      "validation_status": "observed"
+    },
+    {
+      "record": "DEC-020",
+      "path": "docs/research/decisions/DEC-020-task-closed-by-derived-pass.yaml",
+      "change": "new dated observations",
+      "historical_status": "accepted",
+      "historical_outcome": null,
+      "validation_status": "not_validated"
+    },
+    {
+      "record": "EXP-014",
+      "path": "docs/research/experiments/EXP-014-count-execute-gate-blocks-in-real-use.yaml",
+      "change": "new dated observations",
+      "historical_status": "completed",
+      "historical_outcome": "inconclusive",
+      "validation_status": "not_validated"
+    },
+    {
+      "record": "H-022",
+      "path": "docs/research/hypotheses/H-022-runtime-gates-cut-execute-violations-without-false-blocks.yaml",
+      "change": "factual denominator clarification and method-separated follow-up",
+      "historical_status": "closed",
+      "historical_outcome": "inconclusive",
+      "validation_status": "not_validated"
+    }
+  ],
+  "record_updates_status": "implemented",
+  "validated_by_or_validated_on_added": false,
+  "publication": {
+    "source_sha256": "a91ac81e0030ddff6d86a36fad2a6ee385cb9c0d422b62726414f39b7ab4d7cb",
+    "omitted": [
+      "pre-edit record bytes and base64",
+      "protected-file maps",
+      "local session and plan identifiers",
+      "local working-tree metadata",
+      "internal verification ledger and artifact paths"
+    ],
+    "limit": "This is a selected decision excerpt. The original local audit ledger is retained unchanged; native Exoma integration remains unverified."
+  }
+}

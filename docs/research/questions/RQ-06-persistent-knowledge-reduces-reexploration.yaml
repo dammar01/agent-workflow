@@ -26,3 +26,5 @@ notes: |
   served more facts and fewer were cited); H-023 and EXP-016 traced the excess to the
   per-role limit. DEC-070 records served facts per call so later replays need not be
   counterfactual. DEC-072 (draft) proposes the limit change.
+
+  2026-11-10 maintainer closure: H-021 is rejected and EXP-013 is validated as the completed evaluation with that rejected outcome; H-023/EXP-016 is validated only for the equal-cap replay claim. Both active disposition reviews are closed. New recorded-served-facts or downstream-quality work is a separate question; persistent knowledge benefit remains unanswered and DEC-072 is not implemented by this closure.

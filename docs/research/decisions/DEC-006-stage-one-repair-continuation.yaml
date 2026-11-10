@@ -49,9 +49,9 @@ implementation:
 
 disposition:
   implementation_status: implemented
-  validation_status: observed
+  validation_status: validated
   validated_by: maintainer
-  validated_on: 2026-09-28
+  validated_on: 2026-11-09
 
 validation:
   summary: |
@@ -68,6 +68,23 @@ validation:
     Real use on the maintainer's private web project (2026-09-28): the repair recovered a draft to `ready` once (job named below).
     The task for that draft had been amended by hand after the previous draft failed, so the
     recovery is observed, not a clean validation.
+
+    Result added 2026-11-09 from preserved artifacts of job `job_20261027_110538_607011`
+    (2026-10-27): the initial spec arrived but failed validation because three claims lacked
+    assertions. Exactly one automatic continuation quoted that feedback and requested a
+    complete corrected section. The replacement spec was accepted as `ready` with no
+    validation errors. No human task amendment is visible between invocation and result;
+    the intervening user-role events are tool results and a task notification.
+    Both provider calls report `resumed: true`, `thread_changed: false`, complete output,
+    and successful exit. This supports thread continuity, but immutable per-call thread IDs
+    and the historical Exoma runtime revision were not recovered. The recorded provider
+    version, `codex-cli 0.163.0`, is not an Exoma runtime version.
+
+    Maintainer re-evaluation on 2026-11-09: accepted validated for the bounded one-repair
+    behavior, using the named artifact measurement below rather than asserting a clean run.
+    The three documented uses consistently exercise repair; their different recovery outcomes
+    do not contradict the decision, which explicitly permits a still-invalid result after
+    one repair. This establishes neither a recovery rate nor complete browser verification.
   runs:
     - date: 2026-09-27
       job_id: job_20260927_145604_584464
@@ -77,6 +94,28 @@ validation:
       job_id: "job_20260928_031335_236446"
       description: "Draft on the maintainer's private web project: one repair fixed `expect_url` given a selector and the draft became ready (quality row repair_recovered true). The task had been amended by hand after the previous draft, so not a clean run."
       clean: false
+    - date: 2026-10-27
+      job_id: job_20261027_110538_607011
+      description: "Preserved initial output, repair feedback, corrected output, and runner result show exactly one automatic repair from an invalid spec to ready with no validation errors. No human task amendment is visible during the job. Per-call thread IDs and the historical runtime revision were not recovered; this run is not asserted clean, and validation uses the named measurement below. Later browser attempts did not establish complete verification."
+      clean: false
+  uses: 3
+  consistent: true
+  maintainer_decision: |
+    2026-11-09, critical interview: accepted validated after reviewing the three documented
+    uses and the preserved automatic recovery on 2026-10-27. Retain exactly one feedback-driven
+    repair, then stop if the corrected spec remains invalid. Acceptance is limited to this
+    behavior in the maintainer's use, with the provenance and sampling limitations below;
+    it is not a claim that every repair succeeds or that browser verification passes.
+  measurements:
+    - source: |
+        Maintainer-local Claude session `5021f532-507f-424d-a8fc-bbb3a1aeee3a.jsonl`, lines
+        624-638 (2026-10-27), job `job_20261027_110538_607011`. Its line-numbered runner result
+        identifies the private project's session log directory. Within that directory:
+        `20261027_110539_839194_e2e_spec_301f59ca/output.raw.md` and `call.meta.json`;
+        `20261027_110622_167015_e2e_spec_e7d32cf5/prompt.md`, `output.raw.md`, and `call.meta.json`.
+        Read the initial spec, validator feedback, replacement spec, both call metadata files,
+        and the runner result together; count stages rather than distinct usage prompt IDs.
+      value: "One selected historical job: 1 initial call, 1 automatic repair call; repair attempted and recovered; corrected draft ready with 0 validation errors; both calls resumed without a reported thread change. These are event counts, not a population recovery-rate estimate."
 
 trade_offs:
   better:
@@ -87,6 +126,9 @@ trade_offs:
 limitations:
   - Only one repair; drafts with many independent errors may need more.
   - Grounding errors (missing `source_refs`) need evidence the model may not have gathered.
+  - "The 2026-11-09 evaluation is creator observation over three selected historical uses, not a controlled comparison or a recovery-rate estimate; the 2026-09-28 task had been amended manually."
+  - "For the 2026-10-27 job, thread continuity is supported by resumed/unchanged-thread metadata, not immutable thread IDs attached to each call. The historical Exoma runtime version and source revision could not be recovered; the job-level storage files are missing."
+  - "The recountable source is preserved in the maintainer's private conversation and project logs, not shipped with this repository. Successful spec recovery does not establish a successful browser run or complete verification."
 
 revisit_when:
   - A recount after real use still shows few `ready` drafts, or repairs mostly failing; then reconsider the spec format itself rather than the repair.

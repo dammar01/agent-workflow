@@ -222,7 +222,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-001](decisions/DEC-001-verify-browser-delegated.yaml) | `/.verify-browser` is a delegated command | accepted | implemented | validated | dd70afd |
 | [DEC-004](decisions/DEC-004-data-e2e-only-test-attribute.yaml) | `data-e2e` is the only test attribute | accepted | implemented | observed | dd70afd |
 | [DEC-005](decisions/DEC-005-repeat-brake-releases-on-change.yaml) | The repeat brake releases on a project change and is remembered as knowledge | accepted | implemented | observed | dd70afd |
-| [DEC-006](decisions/DEC-006-stage-one-repair-continuation.yaml) | A stage-1 spec that fails validation gets one repair in the same thread | accepted | implemented | observed | dd70afd |
+| [DEC-006](decisions/DEC-006-stage-one-repair-continuation.yaml) | A stage-1 spec that fails validation gets one repair in the same thread | accepted | implemented | validated | dd70afd |
 | [DEC-007](decisions/DEC-007-poll-waits-inside-playwright.yaml) | The browser player's poll waits inside Playwright, not beside it | accepted | implemented | validated | dd70afd |
 | [DEC-008](decisions/DEC-008-app-repeat-streak-keyed-by-failure-signature.yaml) | An app repeat streak is keyed by failure signature, and a runtime change releases it | accepted | implemented | observed | dd70afd |
 | [DEC-009](decisions/DEC-009-literal-credentials-scrubbed-by-lookup.yaml) | Literal credentials in the task, draft and request are found by value and put back to placeholders | accepted | implemented | observed | c584748 |
@@ -293,16 +293,16 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-082](decisions/DEC-082-exoma-1-0-0-adds-opencode-and-codex-as-primary-hosts-and-install-writes-by-default.yaml) | Exoma 1.0.0 adds OpenCode and Codex as primary-agent hosts and install writes by default | accepted | implemented | not_validated | 881ef2b |
 | [DEC-083](decisions/DEC-083-exoma-1-0-0-stable-staged-at-64fad04.yaml) | Exoma 1.0.0 stable is staged at 64fad04, closing six unrecorded pin moves since 2888b15 | accepted | implemented | not_validated | 9caa13b |
 | [DEC-084](decisions/DEC-084-exoma-1071c2f-staged-for-post-1-0-0-analysis.yaml) | Exoma 1071c2f is staged for post-1.0.0 analysis; it drops Python 3.10 with the version string unchanged | accepted | implemented | not_validated | 0c5ea79, 8d66976 |
-| [EXP-008](experiments/EXP-008-quality-review-of-accepted-real-tasks.yaml) | Correctness and quality review of a sample of real tasks accepted on main (CASE-012) | completed | not_applicable | not_validated | — |
-| [EXP-011](experiments/EXP-011-hook-launcher-latency-bash-vs-powershell.yaml) | Hook call wall time, bash launcher vs PowerShell 5.1, on Windows | completed | not_applicable | not_validated | — |
-| [EXP-013](experiments/EXP-013-calibrate-fact-retrieval-on-recorded-tasks.yaml) | Calibrate fact retrieval on recorded tasks | completed | not_applicable | not_validated | — |
+| [EXP-008](experiments/EXP-008-quality-review-of-accepted-real-tasks.yaml) | Correctness and quality review of a sample of real tasks accepted on main (CASE-012) | completed | not_applicable | partially_validated | — |
+| [EXP-011](experiments/EXP-011-hook-launcher-latency-bash-vs-powershell.yaml) | Hook call wall time, bash launcher vs PowerShell 5.1, on Windows | completed | not_applicable | validated | — |
+| [EXP-013](experiments/EXP-013-calibrate-fact-retrieval-on-recorded-tasks.yaml) | Calibrate fact retrieval on recorded tasks | completed | not_applicable | validated | — |
 | [EXP-014](experiments/EXP-014-count-execute-gate-blocks-in-real-use.yaml) | Count execute-gate blocks and their legitimacy in real use | completed | not_applicable | not_validated | — |
-| [EXP-016](experiments/EXP-016-replay-weighted-retrieval-at-limit-three.yaml) | Replay EXP-013 with the weighted arm capped at three facts for every role | completed | not_applicable | not_validated | — |
-| [H-014](hypotheses/H-014-work-accepted-on-main-is-mostly-correct.yaml) | Work that entered main in real use is mostly correct and of acceptable quality | closed | not_applicable | not_validated | — |
-| [H-019](hypotheses/H-019-bash-launcher-no-slower-than-powershell-hooks.yaml) | On Windows, the bash launcher of a hook (Git Bash + Python) costs no more wall time than its PowerShell 5.1 flavour | closed | not_applicable | not_validated | — |
-| [H-021](hypotheses/H-021-weighted-fact-retrieval-serves-what-the-task-needs.yaml) | Weighted, stopword-aware fact retrieval serves the facts a task needs and drops the rest | closed | not_applicable | not_validated | — |
+| [EXP-016](experiments/EXP-016-replay-weighted-retrieval-at-limit-three.yaml) | Replay EXP-013 with the weighted arm capped at three facts for every role | completed | not_applicable | validated | — |
+| [H-014](hypotheses/H-014-work-accepted-on-main-is-mostly-correct.yaml) | Work that entered main in real use is mostly correct and of acceptable quality | closed | not_applicable | partially_validated | — |
+| [H-019](hypotheses/H-019-bash-launcher-no-slower-than-powershell-hooks.yaml) | On Windows, the bash launcher of a hook (Git Bash + Python) costs no more wall time than its PowerShell 5.1 flavour | closed | not_applicable | rejected | — |
+| [H-021](hypotheses/H-021-weighted-fact-retrieval-serves-what-the-task-needs.yaml) | Weighted, stopword-aware fact retrieval serves the facts a task needs and drops the rest | closed | not_applicable | rejected | — |
 | [H-022](hypotheses/H-022-runtime-gates-cut-execute-violations-without-false-blocks.yaml) | Runtime execute gates cut violations without false blocks that interrupt legitimate work | closed | not_applicable | not_validated | — |
-| [H-023](hypotheses/H-023-per-role-limit-explains-weighted-over-injection.yaml) | DEC-066's per-role limit, not its scoring, is why the weighted rule serves more facts than the one-token rule | closed | not_applicable | not_validated | — |
+| [H-023](hypotheses/H-023-per-role-limit-explains-weighted-over-injection.yaml) | DEC-066's per-role limit, not its scoring, is why the weighted rule serves more facts than the one-token rule | closed | not_applicable | validated | — |
 | [LIT-001](literature/LIT-001-raven-harness-of-harnesses.yaml) | Raven: The Harness of Harnesses for Composable Agentic Intelligence | — | not_applicable | not_validated | — |
 | [LIT-002](literature/LIT-002-the-extended-mind.yaml) | The Extended Mind | — | not_applicable | not_validated | — |
 <!-- research-inventory:end -->
@@ -330,6 +330,28 @@ abstraction that this project does not follow, recorded from its verified arXiv 
 abstract. Papers remembered during earlier research were not recorded because their metadata
 was not available ([logs/2026-09-26.md](logs/2026-09-26.md), "Deliberately not recorded").
 No `ARC-XXX` record exists yet: no historical decision has been reconstructed as one.
+
+## Accepted research closures (2026-11-10)
+
+The maintainer accepted the following bounded dispositions. These five review packages
+leave the active closure backlog. Their limitations and reopening conditions remain in
+the records; reopening needs new evidence or a changed claim, not a demand that every
+historical result generalise. Hypothesis outcome and validation of its experiment remain
+separate: a validated experiment may reject its hypothesis.
+
+| Review package | Accepted disposition | Remaining boundary |
+| --- | --- | --- |
+| DEC-002 / SYN-002 | Administrative alignment closed; historical DEC-002 archived; replacement SYN-002 remains a draft | Two-role optimality remains open under RQ-10/RQ-16 |
+| [H-014](hypotheses/H-014-work-accepted-on-main-is-mostly-correct.yaml) / [EXP-008](experiments/EXP-008-quality-review-of-accepted-real-tasks.yaml) | partially_validated; supported outcome retained | Original rubric/sample only; reviewer and labelling limitations |
+| [H-019](hypotheses/H-019-bash-launcher-no-slower-than-powershell-hooks.yaml) / [EXP-011](experiments/EXP-011-hook-launcher-latency-bash-vs-powershell.yaml) | Hypothesis rejected; completed experiment validated; rejected outcome retained | Fifth pass on one Windows machine; no automatic launcher reversal |
+| [H-021](hypotheses/H-021-weighted-fact-retrieval-serves-what-the-task-needs.yaml) / [EXP-013](experiments/EXP-013-calibrate-fact-retrieval-on-recorded-tasks.yaml) | Hypothesis rejected; completed experiment validated; rejected outcome retained | Counterfactual replay/citation proxy; recorded-arm correction retained |
+| [H-023](hypotheses/H-023-per-role-limit-explains-weighted-over-injection.yaml) / [EXP-016](experiments/EXP-016-replay-weighted-retrieval-at-limit-three.yaml) | validated; supported outcome retained | Equal-cap replay only; neither optimal cap nor downstream quality established |
+
+Open follow-ups are separate: DEC-018's parser counterexamples in Exoma, the closure
+harness timeout/crash cleanup proof and preflight metadata note, operational validation
+of the remaining DEC candidates, H-004/H-005, and the broader unanswered research questions.
+The earlier patch verification remains incomplete; acceptance of these research results
+does not repair the parser or turn fixture evidence into ordinary-use evidence.
 
 ## Relationship to other documentation
 

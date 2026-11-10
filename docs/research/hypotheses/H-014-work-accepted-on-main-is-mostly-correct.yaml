@@ -35,6 +35,7 @@ success_criteria:
 
 experiments: [EXP-008]
 limitations:
+  - "2026-11-10 maintainer disposition and closure: The maintainer accepts the supported outcome under the original rubric and reviewed sample. Validation is partial: the accepting maintainer was also the reviewer, some labels came from an agent aware of the hypothesis, and Q017's root-cause judgement disagrees with its correctness verdict. This does not establish acceptance on main as an independently validated general proxy for task success. Active review of H-014/EXP-008 is closed; no experiment rerun is requested for this conclusion. Reopen when: Acceptance-on-main is proposed as a stronger/general correctness proxy, or an independently reviewed sample contradicts the recorded result."
   - "EXP-008 (2026-10-24, 20 solved tasks): reviewed_correct_share 1.00 (20 / 20, Wilson 95% [0.84, 1.00]); clean 1.92 vs fixed 1.75 mean quality score. Maintainer labels alone: 15 / 15, Wilson [0.80, 1.00]."
   - "Pre-registration: threshold 0.80 fixed by the maintainer on 2026-10-24, before any label was written."
   - The reviewer is the maintainer who accepted the work; acceptance and review share one person's judgement. The result sits at the ceiling (no task judged incorrect).
@@ -45,5 +46,7 @@ related_decisions: []
 
 disposition:
   implementation_status: not_applicable
-  validation_status: not_validated
+  validation_status: partially_validated
+  validated_by: maintainer
+  validated_on: 2026-11-10
 questions: [RQ-02]

@@ -23,5 +23,18 @@ notes: |
   across users requires their consent and sanitization under CONTRACT.md section 5; nothing in
   the runtime collects it.
 
-  Draft records: H-005. DEC-015 (tracked, commit 2dd7d7e) records tasks as skill sequences
+  Draft records: H-005 and EXP-019 (synthetic host-trigger and installed-guard pilot).
+
+  Maintainer decision, 2026-11-09: operational edge-case handling may be validated when the
+  trigger and expected handling are reproducible, the condition is a bounded edge case,
+  normal operation on the tested runtime is preserved, and no related issue is found in
+  examined sessions with established matching versions. EXP-019 records this post-pilot
+  policy. Follow-up on 2026-11-10 (Asia/Jakarta) completed the provenance search: 336
+  independent candidates, no complete ordinary-use control with established target-revision
+  identity, and one version-established staging session whose later ordinary host JSON
+  error recovered. The historical ordinary-runtime identity remains unresolved. Neither
+  operational absence nor the separate runtime-only diagnosis claim is established, and
+  this question remains unanswered.
+
+  DEC-015 (tracked, commit 2dd7d7e) records tasks as skill sequences
   and their outcome in `tasks.jsonl`, from the runtime and a PostToolUse hook.

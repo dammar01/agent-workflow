@@ -74,10 +74,18 @@ validation:
     strongest first (role > label > e2e), so the runs so far matched `label`. It becomes
     validated on a clean run where a draft reaches the `e2e` candidate naturally (an element
     with no role or label) and the run passes.
+
+    Result added 2026-11-10 (designed fixture; not clean direct use), Exoma pin 1071c2f: closure group browser recorded status pass, 8/8 registered checks meeting expectations. Source: docs/research-drafts/_data/research-closure-2026-11-10/runs/20261110T010132779372Z/browser/result.json; parent result-manifest.json and protocol.json identify the run and method. A real Chromium fixture exercised the e2e locator and fallback; ordinary-use application evidence and maintainer validation remain separate. No validation authority or disposition label is changed.
+
   runs:
     - date: 2026-09-28
       job_id: "job_20260928_034916_758883"
       description: "Draft proposed an `e2e` candidate for the login email field (no `testid` anywhere); accepted by the validator. The run matched candidate 0 (`label`), so the `e2e` locator was not exercised."
+      clean: false
+
+    - date: 2026-11-10
+      job_id: "closure-20261110T010132779372Z-browser"
+      description: "real-browser-designed-fixture; status pass; 8/8 expected checks; docs/research-drafts/_data/research-closure-2026-11-10/runs/20261110T010132779372Z/browser/result.json. A real Chromium fixture exercised the e2e locator and fallback; ordinary-use application evidence and maintainer validation remain separate. No manual real-use or clean-run claim."
       clean: false
 
 trade_offs:

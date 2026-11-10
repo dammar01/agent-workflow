@@ -1,0 +1,56 @@
+EXOMA HANDOFF - PARSER, GATE REGRESSIONS, AND MAIN-AGENT CLOSURE AUTHORITY
+Prepared: 2026-11-10T06:55:17.295657+00:00
+Scope: source repair/testing by the maintainer in Exoma. No installed runtime was patched here.
+
+1. PARSER ISSUES
+Run: python -B test_exoma_research_regressions.py --policy-file PATH/TO/workflow_policy.py
+Use Exoma's existing development environment/source revision; no auto-install is requested.
+The native test file is self-contained; JSON contains matching fixtures and specification-only cases.
+
+Three main-validator inputs currently produce pass/exit0 instead of preserving the finding:
+- none. followed by newline and caller X fails [fixture.py:1]
+- none (caller X fails)
+- none followed by newline and caller X fails [fixture.py:1]
+The E2E normalizer drops blocking_findings for the last multiline form.
+Both inspected parser installations: 8/12 and 8/12 expectations met.
+See recheck-results.json for individual inputs, actual values and exact source hashes.
+
+Source repair targets:
+- core/evidence/contract.py::_section_items: continuation lines without a leading list marker are ignored.
+- core/evidence/contract.py::_NoneSentinel.fullmatch: free parenthetical notes without tag fields remain empty sentinels.
+- core/evidence/e2e/normalize.py::_is_none_item: a continuing item can be discarded from its first plain-none line.
+The last two allowances are documented legacy behavior; they are not all introduced regressions.
+Preserve legitimate neutral forms and refusal of real findings. Do not weaken fixture expectations to hide counterexamples.
+
+2. GATE REGRESSION EVIDENCE
+Three policies inspected: active Codex hook, project dependency bundle, active global bundle.
+On each: session isolation control, unauthorized-action refusal, directory scope control meet expectations.
+On each: a harmless quoted textual mention still triggers commit_unapproved.
+All command text was passed as data to pure policy functions; no version-control action was executed.
+Marker freshness was mocked; no approval marker/token was created, changed or deleted.
+Matching-answer retention and approved scope extension are separate integration specifications,
+not claimed to be implemented or verified by these four unit controls.
+
+3. MAINTAINER DECISION - FINAL MAIN-AGENT AUTHORITY
+Maintainer re-evaluation 2026-11-10: final task-closure authority is the main_agent. A final main_agent DONE may accept or disregard second_agent incomplete findings after main-agent reasoning. Preserve second-agent judgement and runtime-derived verdict as separate evidence; neither substitutes automatically for the main-agent final decision. Earlier telemetry declared DONE came from the reviewer, not a captured main-agent final verdict. This revises the intended acceptance policy; implementation/evaluation of that revised policy is not established by this statement. Historical verdicts/counts and current validation labels remain unchanged.
+Proposed authority scenarios are in regression-cases.json. They do not invent an existing API.
+The current event stream stores reviewer declaration and runtime derivation; it does not
+separately establish the main_agent final verdict. Do not convert 13 reviewer DONEs into 13 main-agent completions.
+Implementation/integration of the revised closure rule must be done and tested in Exoma.
+
+4. VERSION AND TEST LIMITS
+Source identity hashes are in recheck-results.json. Project and active-global execution/task sources
+are not identical; package version labels alone are insufficient identity proof.
+No Exoma source checkout was available here. Latest upstream and full host integration were not checked.
+The portable native suite was syntax-checked, not executed here. Actual evidence comes from local
+in-memory probes of the installed functions, recorded separately.
+After applying fixes in Exoma, run the native suite and the relevant existing Exoma suites,
+record target revision/hook identity and results, and keep session/no-approval/scope controls green.
+
+5. RESEARCH RECORDING
+DEC-018: bounded recheck observations; no validation upgrade.
+DEC-020: explicit maintainer direction plus raw historical/newer telemetry kept separately.
+H-022/EXP-014: historical denominator clarified as 7 total = 6 judged + 1 unclear;
+new unit follow-up is not added to that field-study denominator.
+Five earlier accepted closures and previous B01/P4 artifacts are unchanged.
+No new blanket research closure or automatic validation is implied.

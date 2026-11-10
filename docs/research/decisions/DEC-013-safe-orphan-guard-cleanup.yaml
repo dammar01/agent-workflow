@@ -68,6 +68,9 @@ validation:
     process taking the guard during clean keeps it (Windows and POSIX); clean twice removes
     nothing the second time. Real use: after clean in this workspace, guards remain only for
     live sessions (baseline 83, CASE-007).
+
+    Result added 2026-11-10 (designed fixture; not clean direct use), Exoma pin 1071c2f: closure group guards recorded status pass, 5/5 registered checks meeting expectations. Source: docs/research-drafts/_data/research-closure-2026-11-10/runs/20261110T010132779372Z/guards/result.json; parent result-manifest.json and protocol.json identify the run and method. Windows fixture sessions and a separate lock-holding process only; no production cleanup and no POSIX generalization. No validation authority or disposition label is changed.
+
   runs:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"
@@ -76,6 +79,11 @@ validation:
     - date: 2026-10-23
       job_id: "maintainer decision 2026-10-23"
       description: "No new run: the real-use account already in this record's validation is taken as the observation. Not clean in the CONTRACT.md sense. The maintainer decided observed on 2026-10-23."
+      clean: false
+
+    - date: 2026-11-10
+      job_id: "closure-20261110T010132779372Z-guards"
+      description: "designed-fixture; status pass; 5/5 expected checks; docs/research-drafts/_data/research-closure-2026-11-10/runs/20261110T010132779372Z/guards/result.json. Windows fixture sessions and a separate lock-holding process only; no production cleanup and no POSIX generalization. No manual real-use or clean-run claim."
       clean: false
 
 trade_offs:

@@ -31,6 +31,7 @@ success_criteria:
 
 experiments: [EXP-011]
 limitations:
+  - "2026-11-10 maintainer disposition and closure: The maintainer accepts rejection by the frozen fifth-pass rule: graph-refresh exceeds the 1.25 ratio margin. The completed experiment and its bounded conclusion are accepted; validated describes that evaluation, not the rejected latency claim. One machine, the no-op/fail-open payload and the exploratory history of the margin remain limitations. This does not reverse the Bash launcher decision. Active review of H-019/EXP-011 is closed; no experiment rerun is requested for this conclusion. Reopen when: A decision depends on launcher latency on another machine or heavy hook payload, or a changed launcher/runtime needs a new comparison."
   - "EXP-011 fifth pass (2026-10-23, n=30 interleaved): graph-refresh median .sh/.ps1 = 1.256, over the 1.25 margin; the other five hooks 0.99-1.18. Rejected by the frozen rule, narrowly and on one hook."
   - "Pre-registration: Margin 1.25 × (non-inferiority) set by the maintainer on 2026-10-23, before the fifth pass. It replaces \"no slower\" in supported_when, so the two criteria are complementary and the outcome is binary. The margin was chosen with the fourth pass visible (graph-refresh 0.476/0.365 = 1.30 ×); only the fifth pass decides the outcome, earlier passes do not."
   - Measured on one Windows machine; Python startup and antivirus scanning vary by machine.
@@ -40,5 +41,7 @@ related_decisions: [DEC-021, DEC-030]
 
 disposition:
   implementation_status: not_applicable
-  validation_status: not_validated
+  validation_status: rejected
+  validated_by: maintainer
+  validated_on: 2026-11-10
 questions: [RQ-07a, RQ-13]

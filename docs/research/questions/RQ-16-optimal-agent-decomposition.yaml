@@ -33,3 +33,7 @@ notes: |
   trusted and re-checked in a new session. The main value is not having to write detailed
   instructions; quality is only part of it. Orchestration effort fell a lot (0-1 corrections on a
   recent medium feature).
+
+  2026-11-10 administrative consolidation: SYN-002 (draft) now describes secondary evidence gathering and initial reasoning, followed by main-agent deep reasoning, decisions and execution under two fixed roles. Historical DEC-002 and the original SYN-002 are archived with reasons in the local closure manifest. This closes description drift only; effectiveness, optimality, independent verification and learning remain separate research questions. No question status or validation authority is changed.
+
+  2026-11-10 maintainer closure: the DEC-002/SYN-002 administrative alignment task is closed and leaves the active review backlog. SYN-002 remains the draft description of the accepted direction. This question remains unanswered; comparative effectiveness and optimality belong to a separate evaluation, not to reopening historical description alignment.

@@ -65,11 +65,19 @@ validation:
   summary: |
     `check_research.py --git` passes on 38 records and the research suite rejects every new rule
     on a broken fixture. Not yet used beyond this change.
+
+    Result added 2026-11-10 (designed fixture; not clean direct use), Exoma pin 1071c2f: closure group research recorded status pass, 19/19 registered checks meeting expectations. Source: docs/research-drafts/_data/research-closure-2026-11-10/runs/20261110T010132779372Z/research/result.json; parent result-manifest.json and protocol.json identify the run and method. Designed corpus acceptance/rejection, not proof that DEC-017/019 meet their own direct-use validation predicates. No validation authority or disposition label is changed.
+
   runs:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"
       description: "`python tests/run.py --keep-going --record . --only research` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
       clean: false
+    - date: 2026-11-10
+      job_id: "closure-20261110T010132779372Z-research"
+      description: "designed-fixture; status pass; 19/19 expected checks; docs/research-drafts/_data/research-closure-2026-11-10/runs/20261110T010132779372Z/research/result.json. Designed corpus acceptance/rejection, not proof that DEC-017/019 meet their own direct-use validation predicates. No manual real-use or clean-run claim."
+      clean: false
+
 trade_offs:
   better:
     - A question's status says one thing, and an answered one points to a proven record and a decision.

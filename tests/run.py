@@ -22,14 +22,22 @@ from tests.checks.harnesses import _test_harnesses_import_against_the_pin  # noq
 from tests.checks.real_use import _test_real_use_verify_tests  # noqa: E402
 from tests.checks.replay import _test_fact_replay  # noqa: E402
 from tests.checks.research import _test_research_records_follow_the_schema  # noqa: E402
+from tests.checks.research_closure import _test_research_closure_harness, _measure_research_closure  # noqa: E402
 
 
 SUITES: dict[str, tuple] = {
     "harnesses": (_test_harnesses_import_against_the_pin, "every research and staging harness imports against the pinned Exoma"),
     "research": (_test_research_records_follow_the_schema, "research records are YAML the schema accepts; every rule the check claims is refused on a broken fixture"),
+    "research-closure": (_test_research_closure_harness, "closure evidence fails closed for missing, failed or unproven cases"),
     "fact-replay": (_test_fact_replay, "EXP-013 replay: one-token and weighted arms over archived calls, facts learned later kept out, store untouched"),
     "real-use": (_test_real_use_verify_tests, "real-use harness: verify test commands split into run and reused, rows older than tests_reused kept unknown"),
     "blind-sample": (_test_blind_sample,"blind-judge export: gate blocks read from transcripts, EXP-008 strata, the key kept apart, category labels merged"),
+}
+
+# Measurements launch a local browser and helper processes; never include them in CI's
+# default suite. Their result is evidence about the pin, not a requirement to patch it here.
+EXPLICIT_SUITES = {
+    "research-closure-measure": (_measure_research_closure, "OPT-IN: designed closure fixtures against the pinned Exoma"),
 }
 
 
@@ -58,15 +66,16 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    available = {**SUITES, **EXPLICIT_SUITES}
 
     if args.list:
-        width = max(len(name) for name in SUITES)
-        for name, (_, description) in SUITES.items():
+        width = max(len(name) for name in available)
+        for name, (_, description) in available.items():
             print(f"  {name.ljust(width)}  {description}")
         return 0
 
     selected = args.only or list(SUITES)
-    unknown = [name for name in selected if name not in SUITES]
+    unknown = [name for name in selected if name not in available]
     if unknown:
         print(f"unknown suite(s): {', '.join(unknown)}", file=sys.stderr)
         print("run with --list to see the names", file=sys.stderr)
@@ -74,7 +83,7 @@ def main() -> int:
 
     failures: list[tuple[str, BaseException]] = []
     for name in selected:
-        run, _ = SUITES[name]
+        run, _ = available[name]
         started = time.monotonic()
         try:
             run()

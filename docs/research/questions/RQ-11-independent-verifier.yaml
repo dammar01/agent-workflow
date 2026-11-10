@@ -26,3 +26,5 @@ notes: |
   (CASE-032), the maintainer judged incomplete to appear too often. Only a check the reviewer can
   only estimate should keep a task open; live execution not run is not a reason when the change
   was tried locally, since deployment is the user's responsibility.
+
+  2026-11-10 administrative consolidation: SYN-002 (draft) now describes secondary evidence gathering and initial reasoning, followed by main-agent deep reasoning, decisions and execution under two fixed roles. Historical DEC-002 and the original SYN-002 are archived with reasons in the local closure manifest. This closes description drift only; effectiveness, optimality, independent verification and learning remain separate research questions. No question status or validation authority is changed.

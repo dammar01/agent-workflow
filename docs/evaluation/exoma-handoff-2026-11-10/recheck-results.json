@@ -1,0 +1,643 @@
+{
+  "recheck_id": "local-source-recheck-20261110",
+  "captured_at": "2026-11-10T06:55:17.295657+00:00",
+  "method": {
+    "parser": "Exact installed source dependency closure evaluated in memory, no package initializer/import, harness/browser/provider execution or file writes.",
+    "gates": "Actual source functions with mocked marker freshness; commands are strings only; no approval token/marker or active gate state written.",
+    "telemetry": "Own-repository structured event projection by date and final verify command; no client transcripts or main-agent-final labels inferred."
+  },
+  "environment": {
+    "python": "3.13.11",
+    "platform": "win32"
+  },
+  "source_identity": [
+    {
+      "installation": "project_pin",
+      "module": "core/evidence/contract.py",
+      "sha256": "ec1cdc6b246eb0963588a32faf6910c69e4a9fd296f0e0e6a6ba1c113170c6d4",
+      "bytes": 50981
+    },
+    {
+      "installation": "project_pin",
+      "module": "core/evidence/e2e/normalize.py",
+      "sha256": "8ae9b3cf5073857bdbb139d29b315715a3e97e14fa508dd0a8a69d2900c8a5b9",
+      "bytes": 25277
+    },
+    {
+      "installation": "project_pin",
+      "module": "core/runtime/execution.py",
+      "sha256": "7280968c0fd806add91448667ecbe0204e97bd68d30d3ba45d2443760e79ec47",
+      "bytes": 19552
+    },
+    {
+      "installation": "project_pin",
+      "module": "core/audit/task_telemetry.py",
+      "sha256": "bd6d4c419182207956edc1e1eb2c08695a9544a6405c0f7fa7ec5ec8f67aa13d",
+      "bytes": 8656
+    },
+    {
+      "installation": "active_global",
+      "module": "core/evidence/contract.py",
+      "sha256": "ec1cdc6b246eb0963588a32faf6910c69e4a9fd296f0e0e6a6ba1c113170c6d4",
+      "bytes": 50981
+    },
+    {
+      "installation": "active_global",
+      "module": "core/evidence/e2e/normalize.py",
+      "sha256": "8ae9b3cf5073857bdbb139d29b315715a3e97e14fa508dd0a8a69d2900c8a5b9",
+      "bytes": 25277
+    },
+    {
+      "installation": "active_global",
+      "module": "core/runtime/execution.py",
+      "sha256": "7bfd62678a7a4333c633585bf0979082da444d3a5f0e395258e504181b9dbaaf",
+      "bytes": 14133
+    },
+    {
+      "installation": "active_global",
+      "module": "core/audit/task_telemetry.py",
+      "sha256": "d5d91c9504032f3c0d2b80b8f15bea644f0cc54e22d500ff19c1e2873c170322",
+      "bytes": 7633
+    },
+    {
+      "installation": "active_codex",
+      "module": "workflow_policy.py",
+      "sha256": "027311ed5b271c48d7505d19897d89f42dad0e8da6b764d3378bc0bb5b329908",
+      "bytes": 43511
+    },
+    {
+      "installation": "project_bundle",
+      "module": "workflow_policy.py",
+      "sha256": "ee1982c8e66448818c73f7d8ae819a9f99187c5faced884272050198abe488d3",
+      "bytes": 48478
+    },
+    {
+      "installation": "active_global_bundle",
+      "module": "workflow_policy.py",
+      "sha256": "02a62a7894077a10a6a6fd51c210ce2bd3c09285bab2e6c33f78a1497d217184",
+      "bytes": 42555
+    }
+  ],
+  "parser": [
+    {
+      "installation": "project_pin",
+      "cases": [
+        {
+          "id": "P01",
+          "kind": "validator",
+          "input": "none",
+          "expected": "pass",
+          "actual": {
+            "verdict": "pass",
+            "exit": 0
+          },
+          "expectation_met": true
+        },
+        {
+          "id": "P02",
+          "kind": "validator",
+          "input": "none.",
+          "expected": "pass",
+          "actual": {
+            "verdict": "pass",
+            "exit": 0
+          },
+          "expectation_met": true
+        },
+        {
+          "id": "P03",
+          "kind": "validator",
+          "input": "tidak ada",
+          "expected": "pass",
+          "actual": {
+            "verdict": "pass",
+            "exit": 0
+          },
+          "expectation_met": true
+        },
+        {
+          "id": "P04",
+          "kind": "validator",
+          "input": "none - clean",
+          "expected": "pass",
+          "actual": {
+            "verdict": "pass",
+            "exit": 0
+          },
+          "expectation_met": true
+        },
+        {
+          "id": "P05",
+          "kind": "validator",
+          "input": "none; all clean",
+          "expected": "pass",
+          "actual": {
+            "verdict": "pass",
+            "exit": 0
+          },
+          "expectation_met": true
+        },
+        {
+          "id": "P06",
+          "kind": "validator",
+          "input": "none - caller X fails",
+          "expected": "fail",
+          "actual": {
+            "verdict": "fail",
+            "exit": 2
+          },
+          "expectation_met": true
+        },
+        {
+          "id": "P07",
+          "kind": "validator",
+          "input": "[severity:high] [origin:introduced] [scope_relation:in_scope] caller fails [fixture.py:1]",
+          "expected": "fail",
+          "actual": {
+            "verdict": "fail",
+            "exit": 2
+          },
+          "expectation_met": true
+        },
+        {
+          "id": "P08",
+          "kind": "validator",
+          "input": "none.\n  caller X fails [fixture.py:1]",
+          "expected": "fail",
+          "actual": {
+            "verdict": "pass",
+            "exit": 0
+          },
+          "expectation_met": false
+        },
+        {
+          "id": "P09",
+          "kind": "validator",
+          "input": "none (caller X fails)",
+          "expected": "fail",
+          "actual": {
+            "verdict": "pass",
+            "exit": 0
+          },
+          "expectation_met": false
+        },
+        {
+          "id": "P10",
+          "kind": "validator",
+          "input": "none\n  caller X fails [fixture.py:1]",
+          "expected": "fail",
+          "actual": {
+            "verdict": "pass",
+            "exit": 0
+          },
+          "expectation_met": false
+        },
+        {
+          "id": "P11",
+          "kind": "normalizer",
+          "input": "none.\n  caller X fails [fixture.py:1]",
+          "expected": "blocking_findings nonempty",
+          "actual": {
+            "blocking_findings": [
+              "none.\n  caller X fails [fixture.py:1]"
+            ],
+            "escalations": [],
+            "notes": [],
+            "checks_run": [
+              "read fixture.py:1"
+            ],
+            "not_verified": []
+          },
+          "expectation_met": true
+        },
+        {
+          "id": "P12",
+          "kind": "normalizer",
+          "input": "none\n  caller X fails [fixture.py:1]",
+          "expected": "blocking_findings nonempty",
+          "actual": {
+            "blocking_findings": [],
+            "escalations": [],
+            "notes": [],
+            "checks_run": [
+              "read fixture.py:1"
+            ],
+            "not_verified": []
+          },
+          "expectation_met": false
+        }
+      ],
+      "case_count": 12,
+      "expectations_met": 8,
+      "expectations_failed": 4,
+      "scope_gap_probe": {
+        "clean": "pass",
+        "explicit_out_of_scope_gap": "incomplete"
+      }
+    },
+    {
+      "installation": "active_global",
+      "cases": [
+        {
+          "id": "P01",
+          "kind": "validator",
+          "input": "none",
+          "expected": "pass",
+          "actual": {
+            "verdict": "pass",
+            "exit": 0
+          },
+          "expectation_met": true
+        },
+        {
+          "id": "P02",
+          "kind": "validator",
+          "input": "none.",
+          "expected": "pass",
+          "actual": {
+            "verdict": "pass",
+            "exit": 0
+          },
+          "expectation_met": true
+        },
+        {
+          "id": "P03",
+          "kind": "validator",
+          "input": "tidak ada",
+          "expected": "pass",
+          "actual": {
+            "verdict": "pass",
+            "exit": 0
+          },
+          "expectation_met": true
+        },
+        {
+          "id": "P04",
+          "kind": "validator",
+          "input": "none - clean",
+          "expected": "pass",
+          "actual": {
+            "verdict": "pass",
+            "exit": 0
+          },
+          "expectation_met": true
+        },
+        {
+          "id": "P05",
+          "kind": "validator",
+          "input": "none; all clean",
+          "expected": "pass",
+          "actual": {
+            "verdict": "pass",
+            "exit": 0
+          },
+          "expectation_met": true
+        },
+        {
+          "id": "P06",
+          "kind": "validator",
+          "input": "none - caller X fails",
+          "expected": "fail",
+          "actual": {
+            "verdict": "fail",
+            "exit": 2
+          },
+          "expectation_met": true
+        },
+        {
+          "id": "P07",
+          "kind": "validator",
+          "input": "[severity:high] [origin:introduced] [scope_relation:in_scope] caller fails [fixture.py:1]",
+          "expected": "fail",
+          "actual": {
+            "verdict": "fail",
+            "exit": 2
+          },
+          "expectation_met": true
+        },
+        {
+          "id": "P08",
+          "kind": "validator",
+          "input": "none.\n  caller X fails [fixture.py:1]",
+          "expected": "fail",
+          "actual": {
+            "verdict": "pass",
+            "exit": 0
+          },
+          "expectation_met": false
+        },
+        {
+          "id": "P09",
+          "kind": "validator",
+          "input": "none (caller X fails)",
+          "expected": "fail",
+          "actual": {
+            "verdict": "pass",
+            "exit": 0
+          },
+          "expectation_met": false
+        },
+        {
+          "id": "P10",
+          "kind": "validator",
+          "input": "none\n  caller X fails [fixture.py:1]",
+          "expected": "fail",
+          "actual": {
+            "verdict": "pass",
+            "exit": 0
+          },
+          "expectation_met": false
+        },
+        {
+          "id": "P11",
+          "kind": "normalizer",
+          "input": "none.\n  caller X fails [fixture.py:1]",
+          "expected": "blocking_findings nonempty",
+          "actual": {
+            "blocking_findings": [
+              "none.\n  caller X fails [fixture.py:1]"
+            ],
+            "escalations": [],
+            "notes": [],
+            "checks_run": [
+              "read fixture.py:1"
+            ],
+            "not_verified": []
+          },
+          "expectation_met": true
+        },
+        {
+          "id": "P12",
+          "kind": "normalizer",
+          "input": "none\n  caller X fails [fixture.py:1]",
+          "expected": "blocking_findings nonempty",
+          "actual": {
+            "blocking_findings": [],
+            "escalations": [],
+            "notes": [],
+            "checks_run": [
+              "read fixture.py:1"
+            ],
+            "not_verified": []
+          },
+          "expectation_met": false
+        }
+      ],
+      "case_count": 12,
+      "expectations_met": 8,
+      "expectations_failed": 4,
+      "scope_gap_probe": {
+        "clean": "pass",
+        "explicit_out_of_scope_gap": "incomplete"
+      }
+    }
+  ],
+  "gates": [
+    {
+      "installation": "active_codex",
+      "cases": [
+        {
+          "id": "G01",
+          "scenario": "session authorization isolation",
+          "expected": "authorized A allowed, B refused",
+          "actual": {
+            "distinct_paths": true,
+            "authorized_allowed": true,
+            "other_session_refused": true
+          },
+          "expectation_met": true
+        },
+        {
+          "id": "G02",
+          "scenario": "unapproved real-action string control",
+          "expected": "refused",
+          "actual_rule": "commit_unapproved",
+          "expectation_met": true
+        },
+        {
+          "id": "G03",
+          "scenario": "harmless quoted mention",
+          "command_as_data": "python -c \"print('git commit')\"",
+          "expected": "allowed; this is not an executed version-control action",
+          "actual_rule": "commit_unapproved",
+          "expectation_met": false
+        },
+        {
+          "id": "G04",
+          "scenario": "existing directory scope",
+          "expected": "matches",
+          "actual": true,
+          "expectation_met": true
+        }
+      ],
+      "case_count": 4,
+      "expectations_met": 3,
+      "expectations_failed": 1
+    },
+    {
+      "installation": "project_bundle",
+      "cases": [
+        {
+          "id": "G01",
+          "scenario": "session authorization isolation",
+          "expected": "authorized A allowed, B refused",
+          "actual": {
+            "distinct_paths": true,
+            "authorized_allowed": true,
+            "other_session_refused": true
+          },
+          "expectation_met": true
+        },
+        {
+          "id": "G02",
+          "scenario": "unapproved real-action string control",
+          "expected": "refused",
+          "actual_rule": "commit_unapproved",
+          "expectation_met": true
+        },
+        {
+          "id": "G03",
+          "scenario": "harmless quoted mention",
+          "command_as_data": "python -c \"print('git commit')\"",
+          "expected": "allowed; this is not an executed version-control action",
+          "actual_rule": "commit_unapproved",
+          "expectation_met": false
+        },
+        {
+          "id": "G04",
+          "scenario": "existing directory scope",
+          "expected": "matches",
+          "actual": true,
+          "expectation_met": true
+        }
+      ],
+      "case_count": 4,
+      "expectations_met": 3,
+      "expectations_failed": 1
+    },
+    {
+      "installation": "active_global_bundle",
+      "cases": [
+        {
+          "id": "G01",
+          "scenario": "session authorization isolation",
+          "expected": "authorized A allowed, B refused",
+          "actual": {
+            "distinct_paths": true,
+            "authorized_allowed": true,
+            "other_session_refused": true
+          },
+          "expectation_met": true
+        },
+        {
+          "id": "G02",
+          "scenario": "unapproved real-action string control",
+          "expected": "refused",
+          "actual_rule": "commit_unapproved",
+          "expectation_met": true
+        },
+        {
+          "id": "G03",
+          "scenario": "harmless quoted mention",
+          "command_as_data": "python -c \"print('git commit')\"",
+          "expected": "allowed; this is not an executed version-control action",
+          "actual_rule": "commit_unapproved",
+          "expectation_met": false
+        },
+        {
+          "id": "G04",
+          "scenario": "existing directory scope",
+          "expected": "matches",
+          "actual": true,
+          "expectation_met": true
+        }
+      ],
+      "case_count": 4,
+      "expectations_met": 3,
+      "expectations_failed": 1
+    }
+  ],
+  "telemetry": {
+    "source": ".workflow/data/tasks.jsonl",
+    "cutoff": "2026-11-10T06:55:17.295657+00:00",
+    "windows": [
+      {
+        "name": "historical",
+        "start_inclusive": "2026-10-18",
+        "end_exclusive": "2026-10-28",
+        "verify_events": 39,
+        "duplicate_session_prompt_keys": 0,
+        "reviewer_declared": {
+          "NEEDS FIX": 11,
+          "DONE": 28
+        },
+        "runtime_derived": {
+          "fail": 11,
+          "incomplete": 25,
+          "pass": 3
+        },
+        "main_agent_final_verdict_count": null,
+        "main_agent_final_verdict_reason": "Stream does not separately capture final main-agent judgement; reviewer DONE cannot substitute."
+      },
+      {
+        "name": "recent",
+        "start_inclusive": "2026-10-28",
+        "end_exclusive": "2026-11-10T06:55:17.295657+00:00",
+        "verify_events": 15,
+        "duplicate_session_prompt_keys": 0,
+        "reviewer_declared": {
+          "DONE": 13,
+          "NEEDS FIX": 2
+        },
+        "runtime_derived": {
+          "incomplete": 12,
+          "fail": 2,
+          "pass": 1
+        },
+        "main_agent_final_verdict_count": null,
+        "main_agent_final_verdict_reason": "Stream does not separately capture final main-agent judgement; reviewer DONE cannot substitute."
+      }
+    ]
+  },
+  "native_tests": {
+    "file": "test_exoma_research_regressions.py",
+    "syntax_checked": true,
+    "case_count": 16,
+    "executed_here": false,
+    "integrated_in_exoma": false,
+    "latest_upstream_checked": false
+  },
+  "future_authority_spec": [
+    {
+      "id": "A01",
+      "given": {
+        "second_agent": "incomplete",
+        "runtime": "incomplete",
+        "main_agent_final": "DONE",
+        "reasoning": "main agent assessed gaps and accepts scoped result"
+      },
+      "expected": "completed under maintainer-directed policy; retain all evidence",
+      "status": "specification only; current runtime integration not tested"
+    },
+    {
+      "id": "A02",
+      "given": {
+        "second_agent": "DONE",
+        "runtime": "pass",
+        "main_agent_final": "NEEDS FIX"
+      },
+      "expected": "do not close based solely on reviewer/runtime",
+      "status": "specification only"
+    },
+    {
+      "id": "A03",
+      "given": {
+        "second_agent": "DONE",
+        "runtime": "pass",
+        "main_agent_final": null
+      },
+      "expected": "do not fabricate a main-agent final judgement",
+      "status": "specification only"
+    },
+    {
+      "id": "A04",
+      "given": {
+        "second_agent": "incomplete",
+        "main_agent_final": "DONE",
+        "reasoning": "review findings considered and retained or disregarded with rationale"
+      },
+      "expected": "main-agent final decision authoritative; reviewer remains auditable",
+      "status": "specification only"
+    }
+  ],
+  "gate_integration_spec_only": [
+    {
+      "id": "I01",
+      "scenario": "Matching answer to a prior action request, with unrelated prompt in between",
+      "status": "No live approval state or integration exercised; existing DEC073 proposal boundary retained."
+    },
+    {
+      "id": "I02",
+      "scenario": "User approves an analysed extra file while an execution is active",
+      "status": "No scope-extension mechanism claimed; needs Exoma-native integration test if owner implements DEC075."
+    }
+  ],
+  "new_model_experiments": 0,
+  "installed_source_modified": false,
+  "research_validation_changed": false,
+  "limitations": [
+    "Not a full host integration or latest-upstream verification.",
+    "Quoted-mention defect remains in inspected code; per-session mock-based controls do not prove every approval flow.",
+    "Twelve parser cases are synthetic fixtures, not field failure prevalence.",
+    "No historical event is relabelled under the new maintainer direction."
+  ],
+  "publication": {
+    "source_sha256": "5db33c022c4099f75e9c15f50527ca533812fe0d889e5cdc216669de330a0bfc",
+    "omitted": [
+      "local session and plan identifiers",
+      "absolute local source protection paths",
+      "per-event telemetry projections"
+    ],
+    "limit": "Aggregates and source identities are historical probe evidence, not a rerun or proof of a later Exoma fix. Raw source telemetry remains local."
+  }
+}

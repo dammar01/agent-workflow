@@ -45,6 +45,9 @@ interpretation: |
   0.214): the weighted scoring does not pick facts the answer uses more often. The gap is
   small (41 facts over 1576 calls); the result says the limit explains the excess, not
   that weighted retrieval is better.
+
+  2026-11-10 maintainer disposition and closure: The maintainer accepts the supported claim under the frozen rule: weighted retrieval capped at three has no higher injection rate on the same replay corpus than the one-token arm. Validation is confined to that cap comparison; it does not establish superior scoring, an optimal cap, independent replication of EXP-013 or improved task outcomes. DEC-072 remains a separate proposed implementation. Active review of H-023/EXP-016 is closed; no experiment rerun is requested for this conclusion. Reopen when: Recorded served-facts evidence, another cap value or a changed retrieval policy is used to justify a new operational decision.
+
 threats_to_validity:
   - Counterfactual store and answers written after seeing whichever set their version served (EXP-013)
   - One limit value; a limit of 2 or a floor change is not tested
@@ -53,5 +56,7 @@ related: [EXP-013, DEC-066]
 
 disposition:
   implementation_status: not_applicable
-  validation_status: not_validated
+  validation_status: validated
+  validated_by: maintainer
+  validated_on: 2026-11-10
 questions: [RQ-06]

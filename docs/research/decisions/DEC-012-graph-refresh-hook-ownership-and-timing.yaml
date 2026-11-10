@@ -123,6 +123,9 @@ validation:
     graph-refresh suite passes for the .ps1 and the .sh flavour's python on Windows. Not yet
     shown: a real Claude Code turn letting the worker outlive the hook, and the bash wrapper
     on POSIX.
+
+    Result added 2026-11-10 (designed fixture; not clean direct use), Exoma pin 1071c2f: closure group graph recorded status pass, 11/11 registered checks meeting expectations. Source: docs/research-drafts/_data/research-closure-2026-11-10/runs/20261110T010132779372Z/graph/result.json; parent result-manifest.json and protocol.json identify the run and method. Packaged hook and worker ran with a finite graphify stub. This measures lifecycle, not real graphify performance or an actual host turn; DEC-042 supplies current heartbeat/no-timeout context. No validation authority or disposition label is changed.
+
   runs:
     - date: 2026-09-29
       job_id: "measure_graph_hook --force-stale --wait-refresh, two projects"
@@ -135,6 +138,11 @@ validation:
     - date: 2026-09-29
       job_id: "job_20260929_150634_399054"
       description: "Delegated re-verify after the fix: the race is closed; the reply's blocking section held one entry reading none, which the runtime counted as NEEDS FIX. Full offline suite passed locally."
+      clean: false
+
+    - date: 2026-11-10
+      job_id: "closure-20261110T010132779372Z-graph"
+      description: "designed-fixture; status pass; 11/11 expected checks; docs/research-drafts/_data/research-closure-2026-11-10/runs/20261110T010132779372Z/graph/result.json. Packaged hook and worker ran with a finite graphify stub. This measures lifecycle, not real graphify performance or an actual host turn; DEC-042 supplies current heartbeat/no-timeout context. No manual real-use or clean-run claim."
       clean: false
 
 trade_offs:

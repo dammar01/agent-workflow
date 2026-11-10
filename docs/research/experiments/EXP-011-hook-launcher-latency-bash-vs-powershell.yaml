@@ -76,6 +76,9 @@ interpretation: |
   fourth pass: the bash launcher with the shared dispatcher costs a little more than
   PowerShell 5.1 did. The `.ps1` flavour is already retired (2e41ffc), so the result
   prices that retirement rather than reversing it.
+
+  2026-11-10 maintainer disposition and closure: The maintainer accepts rejection by the frozen fifth-pass rule: graph-refresh exceeds the 1.25 ratio margin. The completed experiment and its bounded conclusion are accepted; validated describes that evaluation, not the rejected latency claim. One machine, the no-op/fail-open payload and the exploratory history of the margin remain limitations. This does not reverse the Bash launcher decision. Active review of H-019/EXP-011 is closed; no experiment rerun is requested for this conclusion. Reopen when: A decision depends on launcher latency on another machine or heavy hook payload, or a changed launcher/runtime needs a new comparison.
+
 threats_to_validity:
   - The margin was chosen with the fourth pass visible (H-019 limitations); the fifth pass alone decides.
   - One machine, one run of 30 per hook; a rerun could land graph-refresh on either side of 1.25.
@@ -87,5 +90,7 @@ related: [DEC-021, DEC-030]
 
 disposition:
   implementation_status: not_applicable
-  validation_status: not_validated
+  validation_status: validated
+  validated_by: maintainer
+  validated_on: 2026-11-10
 questions: [RQ-07a, RQ-13]

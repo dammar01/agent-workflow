@@ -11,7 +11,7 @@ notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
   recorded before 3.7.3.
 
-  Draft records: SYN-002, DEC-002, DEC-073, DEC-074, DEC-075, H-025, EXP-018 (drafts).
+  Draft records: SYN-002, DEC-073, DEC-074, DEC-075, H-025, EXP-018 (drafts).
 
   Maintainer interview 2026-10-23 (critical_interview, sanitized summary; status unchanged): the
   maintainer wants the agent to ask, with a reason, before going beyond what was agreed, and to
@@ -29,3 +29,7 @@ notes: |
   main agent not tied to one harness, with limited quota and access to Claude as a practical
   reason. The maintainer wants to learn whether the allocation survives a change of host
   (H-025, draft) and left the fail-open rule for a broken hook open for review (DEC-081).
+
+  2026-11-10 administrative consolidation: SYN-002 (draft) now describes secondary evidence gathering and initial reasoning, followed by main-agent deep reasoning, decisions and execution under two fixed roles. Historical DEC-002 and the original SYN-002 are archived with reasons in the local closure manifest. This closes description drift only; effectiveness, optimality, independent verification and learning remain separate research questions. No question status or validation authority is changed.
+
+  2026-11-10 maintainer closure: the DEC-002/SYN-002 administrative alignment task is closed and leaves the active review backlog. SYN-002 remains the draft description of the accepted direction. This question remains unanswered; comparative effectiveness and optimality belong to a separate evaluation, not to reopening historical description alignment.
