@@ -41,6 +41,17 @@ results:
     outside the plan the maintainer had meant to include (1). Every write into another project
     was judged a legitimate block, including writes the maintainer bypassed on purpose for an
     experiment. The hook's own log (DEC-070) held one refusal on 2026-10-23, not judged here.
+
+    Follow-up 2026-11-10: local pure-source unit controls, active_codex 3/4; project_bundle 3/4;
+    active_global_bundle 3/4. Session-scoped authorization, refusal without approval and an existing
+    directory-scope match meet expectations; a harmless quoted command mention still produces a false
+    refusal in all three inspected policies. Marker freshness was mocked and no command/token/active gate
+    state was executed or mutated. This is a method-separated regression follow-up, not additional
+    real-use events in EXP-014; the historical 7 total/6 judged denominator and inconclusive outcome
+    remain. Source identities/results:
+    docs/research-drafts/_data/research-closure-2026-11-10/remaining/exoma-handoff-2026-11-10/recheck-results.json.
+    Latest upstream and full host integration were not verified.
+
   data_source: tools/maintain/export_blind_sample.py over the maintainer's transcripts, judged in an interview on 2026-10-23; items, key and labels stay on the maintainer's machine
   figures:
     - {metric: false_block_rate, arm: hybrid before 416cf71, value: "0.333 (7 / 21 unique events)"}
@@ -60,6 +71,7 @@ threats_to_validity:
   - The unit changed after part of the labels were known (deviation from pre-registration)
   - Seven untimestamped items placed in an era by inference
   - Interview questions about some items were reworded after the maintainer asked for plain wording; two early items were asked again
+  - "2026-11-10 source-function regression follow-up is not a repetition of the original field study and must not be pooled with its event counts; installed source hashes do not establish latest-upstream or full-host repair."
 outcome: inconclusive
 related: [DEC-067]
 

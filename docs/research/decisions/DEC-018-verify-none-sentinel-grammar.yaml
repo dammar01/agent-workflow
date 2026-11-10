@@ -87,10 +87,35 @@ validation:
     without a parse failure. The remeasurement named above (clean verifies derived `fail`) was
     not made. Source: this repository's `.workflow/data/` telemetry on the maintainer's machine
     (re-countable there only), window 2026-10-18 to 2026-10-27, counted 2026-10-27.
+
+    Result added 2026-11-10 (designed fixture; not clean direct use), Exoma pin 1071c2f: closure group parser recorded status fail, 8/12 registered checks meeting expectations. Source: docs/research-drafts/_data/research-closure-2026-11-10/runs/20261110T010132779372Z/parser/result.json; parent result-manifest.json and protocol.json identify the run and method. Existing parenthetical/plain-none continuation limits are reproduced. Main validator continuation handling is also measured; no product fix was applied. No validation authority or disposition label is changed. Counterexamples retained: none. /   caller X fails [fixture.py:1]; none (caller X fails); none /   caller X fails [fixture.py:1]; browser normalizer preserves none /   caller X fails [fixture.py:1].
+
+
+    Result added 2026-11-10 (local pure-source recheck; not clean direct use): project_pin 8/12;
+    active_global 8/12. The same three validator false-passes and one normalizer omission remain in the
+    inspected installed source functions. The source dependency closure was evaluated in memory without
+    importing Exoma, running the closure harness, executing providers or modifying installed files.
+    Source hashes, per-case actual values and method limits:
+    docs/research-drafts/_data/research-closure-2026-11-10/remaining/exoma-handoff-2026-11-10/recheck-results.json.
+    Parenthetical and plain-none continuation allowances include documented legacy behavior; not every
+    counterexample is an introduced regression. A portable native Exoma unittest was prepared as handoff
+    but not run or integrated here. No latest-upstream repair, validation upgrade or outcome change is
+    claimed.
+
   runs:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"
       description: "`python tests/run.py --keep-going --record . --only verify-empty-section --only verify-gaps` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
+      clean: false
+
+    - date: 2026-11-10
+      job_id: "closure-20261110T010132779372Z-parser"
+      description: "designed-fixture; status fail; 8/12 expected checks; docs/research-drafts/_data/research-closure-2026-11-10/runs/20261110T010132779372Z/parser/result.json. Existing parenthetical/plain-none continuation limits are reproduced. Main validator continuation handling is also measured; no product fix was applied. No manual real-use or clean-run claim."
+      clean: false
+
+    - date: 2026-11-10
+      job_id: "local-source-recheck-20261110-parser"
+      description: "Local source-function probes: project_pin 8/12; active_global 8/12; synthetic 12-case census, no package initialization/real use. Source: docs/research-drafts/_data/research-closure-2026-11-10/remaining/exoma-handoff-2026-11-10/recheck-results.json. Native tests are handoff only; no runtime patch."
       clean: false
 
 trade_offs:

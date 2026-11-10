@@ -31,9 +31,10 @@ success_criteria:
 
 experiments: [EXP-014]
 limitations:
-  - "EXP-014 (2026-10-23): 6 judged unique events for the gate as it ships (4 false blocks, 2 legitimate, 1 unclear), below the 20 the rule needs; inconclusive. Before 416cf71: 7 of 21 false. The unit changed to unique events after part of the labels were known."
+  - "EXP-014 (2026-10-23): 7 unique events total in the historical post-416cf71 cohort: 6 judged (4 false blocks, 2 legitimate) and 1 unclear, below the 20 the rule needs; inconclusive. Before 416cf71: 7 of 21 false. The unit changed to unique events after part of the labels were known."
   - "Pre-registration: Thresholds proposed by the agent and frozen on 2026-10-23, before any block was recorded (proposed-by-agent). Between 0.10 and 0.25, or below 20 labelled blocks, the outcome is inconclusive. The \"violations fall\" half of the statement has no pre-gate baseline and is not_measured by EXP-014; these criteria test only the false-block half."
   - The hooks do not record their own blocks; counting them needs either telemetry or transcripts
+  - "Follow-up 2026-11-10: local pure-source unit controls, active_codex 3/4; project_bundle 3/4; active_global_bundle 3/4. Session-scoped authorization, refusal without approval and an existing directory-scope match meet expectations; a harmless quoted command mention still produces a false refusal in all three inspected policies. Marker freshness was mocked and no command/token/active gate state was executed or mutated. This is a method-separated regression follow-up, not additional real-use events in EXP-014; the historical 7 total/6 judged denominator and inconclusive outcome remain. Source identities/results: docs/research-drafts/_data/research-closure-2026-11-10/remaining/exoma-handoff-2026-11-10/recheck-results.json. Latest upstream and full host integration were not verified."
 related_decisions: [DEC-067]
 
 disposition:

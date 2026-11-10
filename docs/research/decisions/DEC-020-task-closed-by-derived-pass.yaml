@@ -57,11 +57,39 @@ validation:
     had the reviewer's own DONE, and the verdict fell only on its not_verified items), the
     maintainer judged incomplete to appear too often. The low pass rate therefore meets the
     first revisit_when item as a reported problem, and the record stays not_validated.
+
+    Maintainer re-evaluation 2026-11-10: the main_agent owns final task-closure reasoning. Its final DONE
+    may accept or disregard second_agent incomplete findings after analysis; reviewer findings and
+    runtime-derived verdict remain separate evidence. This revisits the earlier derived-pass-only policy
+    as the intended acceptance direction, not as a claim that a revised runtime has been implemented.
+    Local recount preserves the original 39 verify events (3 pass, 25 incomplete, 11 fail; 28 reviewer DONE).
+    The newer window from 2026-10-28 to the captured 2026-11-10 cutoff has 15 verify events: 13 reviewer
+    DONE; runtime 1 pass, 12 incomplete, 2 fail. These declarations are the reviewer's, not separately
+    captured final main-agent verdicts; no main-agent completion count or task-success rate is inferred.
+    Current validator probes also show that an explicitly out-of-scope not_verified item can derive
+    incomplete from a clean DONE. Source/method/cutoff:
+    docs/research-drafts/_data/research-closure-2026-11-10/remaining/exoma-handoff-2026-11-10/recheck-results.json.
+    Historical verdicts, the older implementation history and not_validated remain unchanged.
+
+  maintainer_decision: |
+    Maintainer re-evaluation 2026-11-10: final task-closure authority is the main_agent. A final
+    main_agent DONE may accept or disregard second_agent incomplete findings after main-agent reasoning.
+    Preserve second-agent judgement and runtime-derived verdict as separate evidence; neither substitutes
+    automatically for the main-agent final decision. Earlier telemetry declared DONE came from the
+    reviewer, not a captured main-agent final verdict. This revises the intended acceptance policy;
+    implementation/evaluation of that revised policy is not established by this statement. Historical
+    verdicts/counts and current validation labels remain unchanged.
+
   runs:
     - date: 2026-10-21
       job_id: "local suite check 2026-10-21"
       description: "`python tests/run.py --keep-going --record . --only task-telemetry --only telemetry` passed on Windows 11, inside a 52-suite local run that all passed. Implementation check only: no live Claude, provider or browser session, so it is not direct use and not a clean run in the CONTRACT.md sense."
       clean: false
+    - date: 2026-11-10
+      job_id: "local-source-recheck-20261110-verdicts"
+      description: "Read-only own-repository telemetry recount and pure validator gap probe; not a clean direct-use run. Original 39 events and newer 15 retained; main-agent final verdict not independently captured. Source: docs/research-drafts/_data/research-closure-2026-11-10/remaining/exoma-handoff-2026-11-10/recheck-results.json."
+      clean: false
+
 trade_offs:
   better:
     - A completed task is one the runtime verified, whether or not it was committed.
@@ -72,6 +100,7 @@ trade_offs:
 limitations:
   - A verify that passes on a task with no edits closes nothing; read-only checks stay read_only.
   - A commit that includes files of both an open and a completed task joins the open one only.
+  - "2026-11-10: the maintainer's revised final-main_agent authority is an explicit policy direction; implementation/integration and capture of a distinct final main-agent verdict are not established. Reviewer DONE and runtime pass do not substitute for that new field."
 revisit_when:
   - The derived pass rate stays so low that completed tasks no longer describe real work.
   - Deploy becomes observable and the maintainer wants it as the closing signal.
