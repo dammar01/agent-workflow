@@ -12,11 +12,11 @@ While you work, the status line reports two numbers:
 Second Agent <tokens> / <calls> calls | Saved <tokens>
 ```
 
-**Second Agent** is everything the delegate read and wrote. **Saved** is the part of that
-which never entered the primary agent's context window: the delegate's fresh input (input
-minus cache read) plus its reasoning, as the status line computes it. The real-use
-benchmark reports the net figure — that fresh input less the answers that came back, without
-reasoning — which runs about 3% below the badge
+**Second Agent** counts the delegate's input and output, including cache reads where reported.
+**Saved** is a status-line arithmetic proxy: fresh input (input minus cache read) plus reasoning.
+It does not measure tokens that would otherwise have entered the primary agent's context. The real-use
+benchmark reports a token-difference proxy — that fresh input less the answers that came back, without
+reasoning — which was about 3% below the badge in that historical dataset
 ([real-use-benchmark.md](real-use-benchmark.md#main-agent-context)). The snapshot below is
 older and counted "Saved" from the digest (answer minus digest), a much smaller quantity;
 its figures are not comparable with either.
@@ -32,10 +32,10 @@ gitignores `.workflow/`), so these numbers cannot be recomputed from the reposit
 | Usage rows (one per provider invocation) | 112 |
 | Tokens handled by the second agent | 61,939,405 (≈ 62.0M) |
 | ↳ of which cache reads | 58,468,608 |
-| Kept out of the primary context ("Saved") | 3,203,403 (≈ 3.2M) |
+| Historical "Saved" badge proxy | 3,203,403 (≈ 3.2M) |
 | Evidence produced by the second agent | 836,812 chars |
 | Digest handed to the primary agent | 92,192 chars |
-| Share that entered the primary context | 11.0% — 9.1× smaller |
+| Digest / produced-evidence character ratio | 11.0% — 9.1× smaller |
 | Mix by command | `verify` 49, `explore` 30, `analyze` 17, `plan` 16 |
 
 What real work produced — tasks that reached `main`, fixes, prompts, and main-agent context
@@ -56,7 +56,8 @@ original breakdown is not in the repository, so this cannot be confirmed here.
 - **Cache reads are counted, not netted off.** A call that re-read 200k cached tokens still
   handled 200k tokens. That is why the second-agent figure is large and "Saved" is the
   smaller, stricter one.
-- **"Saved" is telemetry, not a comparison.** It measures how much text the digest contract
-  kept out of the window. It does not say what the same work would have cost without the
-  runtime, because nobody ran it that way.
+- **"Saved" is telemetry, not a comparison.** In this older snapshot it describes the
+  answer/digest payload difference. The current badge uses fresh input plus reasoning;
+  neither formula measures counterfactual main-agent context occupancy or what the same
+  work would have cost without the runtime.
 - **One machine, one operator, uncontrolled tasks.** Do not generalize these numbers.

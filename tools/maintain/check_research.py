@@ -25,6 +25,7 @@ import datetime as _dt
 import re
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 
 try:
@@ -33,6 +34,8 @@ except ImportError:  # a development tool; the runtime never imports it
     yaml = None
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 RESEARCH = REPO_ROOT / "docs" / "research"
 DRAFTS = REPO_ROOT / "docs" / "research-drafts"
 SCHEMA = RESEARCH / "schema.yaml"

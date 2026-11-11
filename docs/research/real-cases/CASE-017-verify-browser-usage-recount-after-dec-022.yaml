@@ -44,6 +44,15 @@ evidence:
     on 2026-10-04.
   counted_by: main agent
   counted_on: 2026-10-04
+  notes: |
+    Recheck (2026-11-11), before the 2026-10-04T06:26:00 fix cutoff: reproduced 382 e2e_run
+    quality rows, 174 reviewed rows, complete same-project prompt-ID joins for all 174,
+    and 19 with more provider invocations than stage counts. The 209 historical
+    provider-less rows also reproduce. Available prefix usage is 2029, not the original
+    2045; original cohort identity and immediate post-fix snapshot are not established.
+    Per-token equality was not rechecked, and later runs do not replace the historical
+    no-real-run-yet observation. Synthetic and field proof remain separate.
+    Method and sanitized results: the private historical-cohort recount report (2026-11-11; local inputs and report are not shipped in the public checkout).
 outcome: positive
 unexpected_behavior:
   - The status line does not drop the old provider-less rows the way `report` does; for a session that still holds them it shows one extra call per row.

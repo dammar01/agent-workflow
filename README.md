@@ -8,9 +8,11 @@ Hypotheses, experiments, decision records, and the measurement harnesses that st
 delegating work from a primary coding agent to a secondary one is worth its cost.
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 
-**[Research records](docs/research/README.md)** · [Evaluation](docs/evaluation/README.md) · [Staging](RELEASE.md) · [Exoma](https://github.com/dammar01/Exoma)
+**[Use Exoma](https://github.com/dammar01/Exoma/tree/main/docs)** · [Read the evidence](docs/evaluation/README.md) · [Stage a runtime revision](RELEASE.md) · [Research records](docs/research/README.md)
+
+Public results and their limits: [evaluation](docs/evaluation/README.md).
 
 </div>
 
@@ -29,7 +31,7 @@ change lands there. This repository holds what studies it:
 | [tools/maintain/](tools/maintain/) | The research tooling: record checker, real-use and task-outcome measurement, fact replay (EXP-013), blind-sample export, graph-hook timing |
 | [tools/sim/](tools/sim/) | Whole-pipeline flow simulation with a faked provider, no quota |
 | [tools/e2e/](tools/e2e/) | The staging run: real delegated calls against the pinned Exoma |
-| [tests/](tests/) | Checks for the records and the harnesses, including that every harness still imports against the pin |
+| [tests/](tests/) | Default record and active-harness checks against the pin |
 
 Exoma began as a fork of agent-workflow 3.9.0. Code flows one way from there: this
 repository depends on Exoma ([pyproject.toml](pyproject.toml) pins one commit) and carries no
@@ -44,17 +46,21 @@ still worth its tokens, latency, human intervention, and coordination. The bound
 [docs/research/CHARTER.md](docs/research/CHARTER.md).
 
 Measured on the maintainer's real use: 97 coding tasks from 167 Claude Code sessions on nine
-private projects (Laravel, Next.js and Python codebases), over the two most used stable
-releases. A task is solved when the code its session left behind entered `main`, and clean when the
+private projects (Laravel, Next.js and Python codebases), on historical releases 3.6.0 and
+3.7.3. A task is solved when the code its session left behind entered `main`, and clean when the
 developer did not change that code again within 24 hours.
 
-| Delegated calls per task | Tasks | Solved | Clean | Prompts (median) | Active time (median) | Main-agent final context | Context kept out of the main agent |
+| Delegated calls per task | Tasks | Solved | Clean | Prompts (median) | Session activity (median) | Main-agent final context | Token-difference proxy (median) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 0 | 15 | 8 (53%) | 8 | 5 | 19 min | 108k | 0 |
 | 1–2 | 20 | 14 (70%) | 12 | 6 | 33 min | 152k | 170k |
 | 3–5 | 28 | 23 (82%) | 15 | 9 | 53 min | 201k | 671k |
 | 6+ | 34 | 23 (68%) | 12 | 16.5 | 101 min | 354k | 1.4M |
 | **All** | **97** | **68 (70%)** | **47 (48%)** | **9** | **53 min** | **210k** | **574k** |
+
+Session activity sums transcript timestamp gaps under the stated inactivity cutoff. The
+token-difference proxy is delegate fresh input minus returned answers. These figures do
+not measure active human work time, time saved, or counterfactual main-agent context avoided.
 
 Features were solved in 46 of 68 tasks and bugs in 19 of 26. Larger tasks drew more calls,
 so the table shows where delegation was used, not what it caused; it is one developer, with
@@ -73,12 +79,13 @@ coding agent better.
 
 ```bash
 uv sync                                        # the pinned Exoma plus PyYAML
-uv run python tests/run.py                     # records and harnesses
+uv run python tests/run.py                     # default record and active-harness checks
 uv run python tools/maintain/check_research.py --git
-uv run python tools/e2e/e2e.py --full          # staging: real delegated calls, spends quota
+uv run python tools/e2e/e2e.py --full --provider codex --model <id>  # staging: spends quota
 ```
 
-Staging a candidate Exoma commit, step by step: [RELEASE.md](RELEASE.md).
+Replace `<id>` with a model supported by the selected provider. Staging a candidate Exoma
+commit, including other providers, step by step: [RELEASE.md](RELEASE.md).
 [ci.yml](.github/workflows/ci.yml) runs the record check and the suites on Linux and Windows
 against the pinned commit, spending no provider quota;
 [e2e-full.yml](.github/workflows/e2e-full.yml) is manual because it calls a real secondary

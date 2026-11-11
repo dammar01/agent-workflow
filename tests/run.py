@@ -1,6 +1,6 @@
 """Test entry point for the research and staging checks.
 
-    python tests/run.py                    # every suite
+    python tests/run.py                    # default record and active-harness suites
     python tests/run.py --list             # what can be run on its own
     python tests/run.py --only research
     python tests/run.py --keep-going       # report every failure, not just the first
@@ -26,7 +26,7 @@ from tests.checks.research_closure import _test_research_closure_harness, _measu
 
 
 SUITES: dict[str, tuple] = {
-    "harnesses": (_test_harnesses_import_against_the_pin, "every research and staging harness imports against the pinned Exoma"),
+    "harnesses": (_test_harnesses_import_against_the_pin, "active research and staging harnesses import against the pinned Exoma"),
     "research": (_test_research_records_follow_the_schema, "research records are YAML the schema accepts; every rule the check claims is refused on a broken fixture"),
     "research-closure": (_test_research_closure_harness, "closure evidence fails closed for missing, failed or unproven cases"),
     "fact-replay": (_test_fact_replay, "EXP-013 replay: one-token and weighted arms over archived calls, facts learned later kept out, store untouched"),
@@ -34,8 +34,8 @@ SUITES: dict[str, tuple] = {
     "blind-sample": (_test_blind_sample,"blind-judge export: gate blocks read from transcripts, EXP-008 strata, the key kept apart, category labels merged"),
 }
 
-# Measurements launch a local browser and helper processes; never include them in CI's
-# default suite. Their result is evidence about the pin, not a requirement to patch it here.
+# Measurements launch a local browser and helper processes; keep these explicit too.
+# Measurement results concern the pin, not a requirement to patch it here.
 EXPLICIT_SUITES = {
     "research-closure-measure": (_measure_research_closure, "OPT-IN: designed closure fixtures against the pinned Exoma"),
 }
@@ -47,7 +47,7 @@ def main() -> int:
         "--only",
         action="append",
         metavar="NAME",
-        help="run just this suite; repeatable. Default runs every suite.",
+        help="run just this suite; repeatable. Without --only, run default suites only.",
     )
     parser.add_argument("--list", action="store_true", help="print suite names and exit")
     parser.add_argument(

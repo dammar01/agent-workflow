@@ -6,9 +6,12 @@ status: unanswered
 what_exists: |
   Delegated verify uses the configured secondary agent, which is the one that explored unless
   the provider is switched. The runtime does more than check the verdict's shape: it derives a
-  fail-closed verdict from the review's required sections, checks and gaps, and runs the tests
+  verdict intended to fail closed from the review's required sections, checks and gaps, and runs the tests
   the main agent chose (DEC-025, DEC-033); it does not judge the review's reasoning. `syntax`
   mode proves only that files parse.
+  Historical parser counterexamples are recorded in DEC-018. Identity-specific source
+  regressions for newer pins do not retroactively change those results or prove independent
+  review effectiveness; the current source staging boundary is documented through RQ-15.
 records: [CASE-009, DEC-018, CASE-014, DEC-022, DEC-025, DEC-029, CASE-017, DEC-033, CASE-023, DEC-062, CASE-032, CASE-033]
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first

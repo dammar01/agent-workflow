@@ -68,6 +68,11 @@ evidence:
     named. Re-verify chains are grouped by session, not by task, so one session holding several
     tasks can overcount them. The other projects' figures come from the second agent's count and
     were not recounted by the main agent; this repository's figures were.
+    Recheck (2026-11-11): reproduced this repository's verdict totals for October 1-27,
+    86 rows = 7 pass + 49 incomplete + 30 fail. This check did not repeat reviewer-text
+    reason classification, reconstruct the six anonymized comparator projects, or
+    evaluate the value of re-verify chains. Verdict totals alone do not establish those
+    interpretations. Method: the private historical-cohort recount report (2026-11-11; local inputs and report are not shipped in the public checkout).
 
 outcome: negative
 unexpected_behavior:

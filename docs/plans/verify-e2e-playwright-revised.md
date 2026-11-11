@@ -1,10 +1,12 @@
 # Revision Plan: Playwright-Based `verify_mode=e2e`
 
-Status: **Phases 1–4 implemented (1 and 4 verified by `/.verify`; 2 and 3 pass the local suite + Chromium smoke, not yet `/.verify`); Phase 5 tooling exists; Phase 0/5 evaluation awaits a real project dataset** — details in §1.2 and §1.3  
+Historical status: **Phases 1–4 implemented (1 and 4 verified by `/.verify`; 2 and 3 pass the local suite + Chromium smoke, not yet `/.verify`); Phase 5 tooling exists; Phase 0/5 evaluation awaits a real project dataset** — details in §1.2 and §1.3
 Date: 2026-09-14 (status last updated 2026-09-14, after implementation batches 1–8)  
 Project: `dammar01/agent-workflow`
 
-> **Historical note (2026-09-15).** This document records the initial design based on `verify_mode=e2e` and the `commands.e2e` block. The final implementation differs: browser verification is an explicit `/.verify-browser` command that **does not read `config.json`** — all per-run settings live in the session request, and `e2e` is not a `verify_mode` value. The contract in force is in `docs/runtime-contracts.md` §/.verify-browser, including the `allow_side_effects` + `allowed_mutation_paths` write guard that does not exist in this plan. The mentions of `verify_mode=e2e`, `commands.e2e.*`, and `meta.verify_mode = "e2e"` below are left as a decision trail, not as instructions.
+> **Current navigation (2026-11-11).** This is a historical design and implementation snapshot. Its configuration claims, source paths, verification labels, and "uncommitted" status describe September 2026, not the current runtime. Current behavior and installation are documented in [Exoma](https://github.com/dammar01/Exoma/tree/main/docs); public research findings and limits are in [evaluation](../evaluation/README.md).
+
+> **Historical note (2026-09-15).** This document records the initial design based on `verify_mode=e2e` and the `commands.e2e` block. The implementation at that time instead used an explicit `/.verify-browser` command and session-request settings. Its then-current reference was `docs/runtime-contracts.md` §/.verify-browser, including the `allow_side_effects` + `allowed_mutation_paths` write guard. That reference moved with the runtime to Exoma. Configuration and write-guard details below are preserved as a decision trail, not current instructions.
 
 ## 1. Decision summary
 

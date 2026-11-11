@@ -40,7 +40,7 @@ relationship_notes: |
   (net value of external exploration, and context allocation) and RQ-16 (decomposition).
 limitations:
   - The full text was checked on 2026-10-25 against a copy of the published version downloaded from JSTOR. The maintainer read it briefly and discussed it with an LLM; the claims above were checked against the text by page, not taken from that discussion.
-  - The DOI is the one the maintainer supplied; it is not printed on the copy read.
+  - "Historical source limit: the maintainer-supplied DOI was not printed on the copy read. On 2026-11-10 the Crossref DOI registry independently confirmed title, authors, Analysis 58(1), pages 7-19 and DOI 10.1093/analys/58.1.7; this resolves bibliographic identity, not empirical applicability."
   - The paper concerns human cognition and is a philosophical argument, not an empirical result. It establishes nothing about language models, about whether a second agent improves a task, or about cost.
   - Its criteria are for ascribing belief; mapping them onto a main agent's use of a digest is this project's analogy, not the paper's.
   - Critiques of the thesis (for example the coupling-constitution objection) are in other literature that has not been read or recorded.

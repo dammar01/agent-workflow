@@ -3,6 +3,13 @@
 `agent-workflow` is research and staging for [Exoma](https://github.com/dammar01/Exoma). Its
 documentation answers why and how well; what the runtime does is Exoma's documentation.
 
+Start with the page that matches your task:
+
+- **Install or use Exoma:** [official runtime documentation](https://github.com/dammar01/Exoma/tree/main/docs).
+- **Assess the evidence:** [evaluation](evaluation/README.md), including measurement limits.
+- **Check research status:** [record inventory](research/README.md#record-inventory) and [research questions](research/questions.md).
+- **Stage a runtime revision:** [staging guide](../RELEASE.md).
+
 | Layer | Answers | Audience | Where |
 | --- | --- | --- | --- |
 | **Research** | Why was it built this way? What evidence and hypotheses stand behind it? | Maintainers, researchers, reviewers of design decisions | [research/](research/README.md) |
@@ -11,6 +18,13 @@ documentation answers why and how well; what the runtime does is Exoma's documen
 
 Staging a candidate Exoma commit here: [RELEASE.md](../RELEASE.md). The runtime's release
 history up to 3.9.0: [CHANGELOG.md](../CHANGELOG.md).
+
+The [Exoma regression handoff](evaluation/exoma-handoff-2026-11-10/README.md) preserves the
+public parser/gate recheck and synthetic fixtures; it does not establish a later
+runtime fix or real-task effectiveness.
+
+Internal campaign administration, review packets and deferred experiments remain local
+research drafts. The public record retains sanitized findings, methods and their limits.
 
 ## Rules between layers
 

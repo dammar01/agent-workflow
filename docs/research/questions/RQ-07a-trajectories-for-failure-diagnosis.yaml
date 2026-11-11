@@ -38,3 +38,9 @@ notes: |
 
   DEC-015 (tracked, commit 2dd7d7e) records tasks as skill sequences
   and their outcome in `tasks.jsonl`, from the runtime and a PostToolUse hook.
+
+  Recording correction (2026-11-11): the absence statements above describe their historical
+  era. The current Exoma runtime persists plan content, a plan_id and execution binding;
+  the plan-linked intervention census consumes successful historical receipts. This corrects
+  the recording inventory, not the unanswered claim that trajectories enable reliable
+  failure diagnosis. Objective linkage and comparative diagnosis evidence remain incomplete.

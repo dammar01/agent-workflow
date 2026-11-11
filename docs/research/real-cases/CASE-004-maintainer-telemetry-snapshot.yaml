@@ -57,6 +57,14 @@ evidence:
     figures from other sources (evidence, facts, call metadata, jobs, quality rows, recurrence
     cache) were not re-counted and are removed.
 
+    Recount added 2026-11-11: independent arithmetic over the same first 255 lines
+    reproduces all four latency rows, 238 prompt-id work units, the 59 fail / 38
+    incomplete / one missing-verdict verify distribution, zero accepted rows and
+    zero reuse/call-avoided flags. Source prefix hash, method and comparisons are
+    in the private bounded-source recount report (2026-11-11; local inputs and report are not shipped in the public checkout). This
+    confirms bounded descriptive counts without establishing causal or general
+    effectiveness, changing the historical outcome, or granting new validation.
+
 outcome: inconclusive
 
 unexpected_behavior:

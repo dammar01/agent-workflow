@@ -67,6 +67,14 @@ evidence:
     Rows, not commands, for verify: a continuation writes one row per provider invocation,
     so a verify that continued is counted twice. No row records why a verdict was
     `incomplete`; the not_verified cause is shown for the recording session only.
+    Recheck (2026-11-11): the currently available dated streams contain 835 rows in the
+    shared CASE-014 window, with one fewer incomplete than its historical 836. A posthoc
+    split at 2026-09-30T07:43:18 isolates 16 late rows whose verdict distribution exactly
+    matches the published CASE-009 to CASE-014 delta. This is a candidate census-time
+    explanation, not proof of the original cutoff or fourteen-project manifest. Both
+    current prefixes still lack one incomplete. The historical census is retained;
+    exploration/reasoning reuse and reviewer-text classifications were not recounted.
+    Method and sanitized results: the private historical-cohort recount report (2026-11-11; local inputs and report are not shipped in the public checkout).
 
 outcome: negative
 unexpected_behavior:

@@ -54,6 +54,13 @@ evidence:
   notes: |
     `storage/` is git-ignored, so the files exist only on that machine. The directory keeps
     growing; later jobs are not part of this record.
+    Source availability recheck (2026-11-11): a bounded search found the cutoff job's
+    one-byte claim guard but no corresponding job JSON. The guard has no command,
+    phase, draft status/error or session metadata and cannot reproduce the 199/39/16
+    census. The 534 dated guards are not an eligible-job count. Available primary
+    project/global job JSON contains no eligible September browser metadata. The
+    historical observation is retained, without a new raw-source validation claim.
+    Search boundaries: the private bounded-source recount report (2026-11-11; local inputs and report are not shipped in the public checkout).
 
 outcome: negative
 

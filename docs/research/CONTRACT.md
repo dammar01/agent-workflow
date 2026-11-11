@@ -204,6 +204,11 @@ not in its status. An `answered` question lists at least one `validated` record 
 a `decision` block: the date, the method (`critical_interview`), and a sanitized summary of
 the maintainer's decision, never a transcript (§4, §5).
 
+Supporting reports and agent-authored proposals do not grant scientific acceptance.
+A later decision or a change in publication scope does not prove that every original
+predicate was evaluated or retired. Preserve original outcomes, limitations and
+maintainer decisions; missing data remains missing evidence.
+
 ## 15. Tracked records and drafts
 
 A record is tracked in `docs/research/` only when it describes something that was carried
@@ -226,6 +231,12 @@ are drafts. Drafts live in `docs/research-drafts/` with the same subfolders. Tha
 is git-ignored: it is the maintainer's local working area, not part of a release. Tracked
 records refer to a draft by its ID in plain text, never by a link or an ID field. A draft
 returns to `docs/research/` when it has been carried out and its result is recorded in it.
+
+Internal campaign administration, review packets, supporting projections and deferred
+experiment tooling may be preserved in the local draft archive with original-path mappings
+and source hashes. Their publication status does not change a canonical record's scientific
+disposition. Public records identify private-source evidence and its reproducibility limits
+without linking to ignored files.
 
 A research question (`RQ`) is tracked as soon as it is asked: a question is never carried
 out, so it has nothing to wait for. Its `records` name tracked records only, and the drafts

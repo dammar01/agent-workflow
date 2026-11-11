@@ -111,6 +111,7 @@ trade_offs:
     - The rank rule has two exceptions; validator, store and prompt carry more paths.
     - A proven or e2e selector passes without checking the element's accessible name.
 limitations:
+  - "Documentation clarification (2026-11-11): the original planned validation paragraph mentions fingerprint-based withholding, but the documented implementation explicitly omits application fingerprints. That historical clause is unmet and cannot be counted as validation. Existing selector ranking, demotion and retirement component evidence does not establish that clause or a clean field run. The original decision, validation text and observed disposition are retained."
   - Knowledge is per origin; the same app on another host starts without it.
   - The citation check is a regex reading of the line, as in tagging, not a parser; markup built inside a string in a template can still read as an element.
 revisit_when:

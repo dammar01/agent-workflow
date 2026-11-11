@@ -4,9 +4,14 @@ question: "Does objective-level delegation reduce human orchestration overhead?"
 date: 2026-09-29
 status: unanswered
 what_exists: |
-  No run-time human-attention instrumentation. `tools/maintain/measure_real_use.py` counts it
-  after the fact from Claude Code transcripts and usage rows: prompts and corrections per
-  session, landed edits, and active time (CASE-011, the 3.7.3 baseline).
+  No direct run-time human-attention measurement. `tools/maintain/measure_real_use.py`
+  retrospectively counts prompts, corrections and landed edits, and derives session activity
+  from adjacent transcript timestamp gaps (CASE-011, the 3.7.3 baseline). The historical
+  active-time label is a session-activity proxy, not measured human work minutes.
+  Clarification (2026-11-11): the user-defined burden endpoint counts questions, directions,
+  rejections and reasoning corrections across sessions/projects. The current intervention
+  census measures these structural events and calibrates semantic labels; objective linkage,
+  full semantic coverage and a treatment comparison remain incomplete.
   `tools/maintain/measure_task_outcomes.py` adds, per coding task, whether the work reached
   main and needed a fix within 24 hours, and the kinds of follow-up prompts it took
   (CASE-012: 97 tasks, 9 projects). There is no arm without the workflow, so the question's

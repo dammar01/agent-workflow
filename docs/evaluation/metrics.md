@@ -1,6 +1,6 @@
 # Metrics
 
-The calculation contract for every benchmark figure this project reports. The registry in
+The calculation contract for historical benchmark figures this project reports. The registry in
 `core/audit/metrics.py` of the pinned Exoma is the source and this page renders it; nothing in
 this repository checks the page against the registry.
 
@@ -30,6 +30,50 @@ this repository checks the page against the registry.
 
 Registry version: **2**.
 
+## Reading historical labels
+
+- **Session activity** (`real_use.active_minutes@1`) sums transcript timestamp gaps under
+  the inactivity cutoff. It does not measure active human work time or time saved.
+- **Token-difference proxy** (`outcome.context_saved@2`, historically "context saved") is
+  delegate fresh input minus returned answers, floored at zero. It includes delegate
+  overhead and assumes an unobserved main-agent reading pattern.
+- The current **Saved badge** uses fresh input plus reasoning. The older digest-based
+  snapshot uses answer-minus-digest instead; these formulas cannot be compared directly.
+- **Digest payload reduction** (`runtime.context_avoided@1`) describes the answer/digest
+  size difference. It does not establish what the primary agent would otherwise have read.
+
+Display labels clarify these limits; metric IDs, versions, formulas and historical values
+retain their original definitions below.
+
+## Supplementary human-intervention measurement
+
+The local human-intervention study defines `plan-linked-human-events-v1`, a separate
+retrospective method owned by this repository. It is not a new version of a metric in the pinned Exoma registry and does not
+relabel CASE-011 or CASE-012. Its producer is `tools/maintain/research_closure.py`.
+
+- A candidate planned-work unit is normalized project root plus a successful receipt's
+  `plan_id`. Revisions, executions and transcript sessions remain distinguishable. Several
+  plans can serve one user objective; continuity across sessions/projects needs evidence.
+- Event UUIDs deduplicate archive/fork copies. Identical text and shared `promptId` do not
+  prove duplicate human events. Structured question submissions and individual answer
+  fields are counted separately from ordinary human messages.
+- Plan-record prompt ancestry is distinguished from provisional assignment to the latest
+  observed plan in a session. Unlinked events remain unknown, not proven no-plan work.
+- Agent questions, human answers, workflow commands and administrative commands are separate
+  counts. Automatic tool errors and subagent context are not human refusals.
+  Explicit runtime-attributed human tool-denial receipts are retained as their own event;
+  this structural count differs from contextual rejection labels in ordinary messages.
+- Additional direction, rejection and correction of agent reasoning are contextual AI
+  labels with an explicit rubric and source evidence. A request for evidence is not
+  automatically a correction. AI labels are not independent human ground truth.
+- `real_use.active_minutes@1` below sums timestamp gaps. It does not measure active human
+  working minutes. Interaction counts supplement the original human-time and quality
+  obligations; they do not establish saved minutes or a causal effect.
+
+The detailed study packet, candidate-plan rows, sources, packet keys, exact quoted
+evidence and raw model responses remain local research drafts. This method description
+does not imply that those inputs or intermediate reports ship in the public checkout.
+
 ## Running the tools
 
 All three read only; each prints one JSON object. Run them from the clone.
@@ -38,7 +82,7 @@ All three read only; each prints one JSON object. Run them from the clone.
 # Real use of one version over every project under a folder (real_use.*)
 python tools/maintain/measure_real_use.py --projects-root <folder> --version 3.8.0
 
-# Coding outcomes: what reached main, fixes within 24 h, context saved (outcome.*)
+# Coding outcomes: what reached main, fixes within 24 h, token-difference proxy (outcome.*)
 python tools/maintain/measure_task_outcomes.py --projects-root <folder> --labels <labels.json> --version 3.8.0
 
 # The same, also written to a file that may be shared (refused if it would carry a path or a project name)
@@ -85,6 +129,16 @@ labels file maps a transcript file name to its category: `{"<session>.jsonl": "f
 | `runtime.fact_lifecycle@1` | command | `sum` | Facts offered (candidates), served (injected), dropped as stale or below the relevance floor, and added or refused at ingest, summed per exploration/reasoning command. Report key `facts`. | commands whose final row carries fact counts | Commands recorded before the fact fields are counted as unrecorded_commands, never as zeros. |
 | `runtime.context_avoided@1` | tokens | `sum` | (answer characters - digest characters) // 4 on the row carrying the digest. Report key `premium_context_avoided`. | - | Rows without a digest contribute nothing. |
 | `runtime.workflow_task@1` | event run in one MAIN_SESSION_ID | `count` | Events from a session's first event to a verify whose derived verdict is pass after an edit (DEC-020). States completed, open, read_only, unknown. | - | Events without a session are `unknown`; events before DEC-020 carry no derived verdict and stay open. |
+
+`runtime.workflow_task@1` and `runtime.accepted_task@1` describe the historical
+runtime-derived pass rules above. The dated maintainer direction in
+[DEC-020](../research/decisions/DEC-020-task-closed-by-derived-pass.yaml) gives the main agent
+final task-closure authority; it does not redefine these metric versions or relabel their
+historical counts. Reviewer `DONE`, runtime-derived verdict, and final main-agent judgement
+are separate evidence. The [recheck handoff](exoma-handoff-2026-11-10/README.md) does not
+establish capture or implementation of the revised authority, or a main-agent success rate.
+Record dispositions and follow-up questions are indexed in the
+[research records](../research/README.md#record-inventory).
 
 ### Real use (`tools/maintain/measure_real_use.py`)
 

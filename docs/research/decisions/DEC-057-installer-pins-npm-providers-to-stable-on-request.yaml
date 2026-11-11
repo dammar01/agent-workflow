@@ -98,6 +98,7 @@ trade_offs:
     - An update is not undone by --rollback; the pin-back is a printed command
     - agy is still pinned by hand
 limitations:
+  - "Historical source recovery (2026-11-11): the journal from 2026-10-18T11:34:33Z records actual successful Codex 0.154.0 to 0.163.0 and OpenCode 1.18.34 to 1.19.3 updates with version readback and pin-back commands. Active/backup copies have the same SHA256 and count as one journal/installer invocation. The earlier no-applied-update statement is superseded for this endpoint. The journal does not prove all update branches, pin-back execution, repeated installer use or a new maintainer validation decision. Public receipt: source-reconciliation/results.json historical_receipt_recovery."
   - Ownership detection assumes npm's default global layout; a custom prefix with shims elsewhere reads as not npm's and is skipped
   - A stable_version bumped before the new release is tested would be pinned by this flag as well
 revisit_when:

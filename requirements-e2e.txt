@@ -1,6 +1,5 @@
-# Optional extra: browser verification through the explicit /.verify-browser command
-# (not a verify_mode value; config.json is not read for it).
-# Installed only by `python install.py --apply --with-e2e`, which then runs
-# `python -m playwright install chromium`. The core runtime stays stdlib-only
-# (tests/checks/deps.py); nothing else in this repository needs this file.
+# Browser dependency pin retained from the historical runtime.
+# Current browser verification, installation, and configuration belong to Exoma;
+# follow its documentation linked from docs/README.md.
+# This file does not install Exoma or its browser binaries.
 playwright==1.60.0

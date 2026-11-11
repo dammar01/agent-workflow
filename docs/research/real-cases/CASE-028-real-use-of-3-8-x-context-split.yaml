@@ -84,6 +84,16 @@ evidence:
     same file; nothing was re-run. The 3.8.1 figures come from `by_version."3.8.1"` and the
     3.8.1 rows of `behave_all.json`.
 
+    Recount added 2026-11-11: the named archived aggregates reproduce 25 sessions,
+    123 runs, 67 whole reads, 777 gathering calls and 766 after the first run.
+    gather_pre (251) and gather_exec (526) partition before/after the first edit;
+    gather_after_run overlaps those phases and must not be added as a disjoint group.
+    The archived outcome block still has 13 tasks, while tasks_detail.json has 15.
+    Source hashes and arithmetic are recorded in
+    the private bounded-source recount report (2026-11-11; local inputs and report are not shipped in the public checkout). Original
+    changing transcripts/Git inputs were not rerun. The frame discrepancy and all
+    causal/metric limitations remain; no outcome or validation upgrade is made.
+
 outcome: inconclusive
 unexpected_behavior:
   - "`behave_all.json` has a `digest_only` field that is 0 in every session, but `behave_all.py` only initialises it and never sets it; it is not a measurement. Whether any run was used from its digest alone is therefore not counted."

@@ -92,10 +92,19 @@ team observations can make a record `observed`, never `validated`. `validated`,
 `partially_validated`, and `rejected` need a designed evaluation — a `controlled_experiment`
 or an `independent_evaluation` — measured against the record's success criteria.
 
-One exception, defined in CONTRACT.md §14 and nowhere else: a decision (`DEC-XXX`) becomes
-`validated` on a clean maintainer direct-use run of the decided behavior. That evidence stays
-`creator_observation`: it shows the decision works in the maintainer's use, not that it
-generalises. The exception does not extend to hypotheses, cases, or any other record type.
+One exception, defined in CONTRACT.md §14 and nowhere else: since schema version 3, a
+decision (`DEC-XXX`) needs all four predicates to become `validated`: two or more uses, consistent
+behavior, an explicit maintainer decision, and a measurement. The measurement is a clean
+direct-use run as defined by the contract, or a named, re-countable source and its figure.
+A clean run alone is insufficient. Only the maintainer sets `validated_by` and `validated_on`.
+This remains `creator_observation`: it shows the decision works in the maintainer's use,
+not that it generalises. Hypotheses still require an experiment; the DEC exception does not
+extend to cases or other record types.
+
+The [record inventory](README.md#record-inventory) and [RQ index](questions.md) summarize
+the public dispositions. Acceptance of a bounded audit, an experiment's outcome,
+implementation validation and an RQ answer are recorded separately. Detailed campaign
+administration remains local and does not grant validation authority.
 
 ## Principles
 

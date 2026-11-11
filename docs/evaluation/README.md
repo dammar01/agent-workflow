@@ -1,14 +1,31 @@
 # Evaluation
 
-How well `agent-workflow` works, and under which conditions. Two kinds of material live
-here, and they must not be read as the same kind of evidence:
+Evidence about Exoma and its historical `agent-workflow` releases, with the scope and
+limitations needed to interpret it. Start with the real-use report and its metric definitions;
+use the research inventory for record status. Controlled plans and observations have
+separate boundaries:
 
 | Document | Kind | What it can support |
 | --- | --- | --- |
-| [benchmark.md](benchmark.md) | Where controlled studies are recorded (`H` + `EXP`); the earlier `bench/` harness was removed in 3.7.3 without results | Nothing yet: no controlled study has a result |
-| [real-use-benchmark.md](real-use-benchmark.md) | Real coding tasks from one developer's sessions on nine private projects, graded by what reached `main` | How often real work was accepted and fixed, and what it cost in prompts, time, and context; not that the workflow caused it |
-| [observed-usage.md](observed-usage.md) | Uncontrolled telemetry from one machine | How much text the digest contract kept out of the primary context in practice |
+| [benchmark.md](benchmark.md) | Controlled repository-level benchmark plans (`H` + `EXP`); the earlier `bench/` harness was removed in 3.7.3 without results | No controlled repository-level benchmark result yet; bounded launcher/retrieval results are indexed in the research records |
+| [real-use-benchmark.md](real-use-benchmark.md) | Real coding tasks from one developer's sessions on nine private projects, graded by what reached `main` | Acceptance, later edits, prompts, timestamp-derived session activity, final context and a token-difference proxy; no causal effect or measured human-time saving |
+| [observed-usage.md](observed-usage.md) | Uncontrolled telemetry from one machine | Recorded delegate and digest payload sizes; historical and current badge formulas are distinguished |
 | [metrics.md](metrics.md) | The calculation contract: every figure's ID, version, method, denominator and missing-data rule | How a figure on the other pages was computed, and whether two figures measure the same thing |
+| [Exoma regression handoff](exoma-handoff-2026-11-10/README.md) | Historical installed-source parser/gate rechecks and portable regression fixtures | Counterexamples in the inspected source; neither a native Exoma integration result nor real-task effectiveness |
+| [Research inventory](../research/README.md#record-inventory) and [questions](../research/questions.md) | Public record dispositions, accepted bounded results and unanswered questions | Experiment outcome, implementation validation and RQ answers remain separate |
+
+## Current evidence boundary
+
+The public reports describe one maintainer's historical use and several bounded fixture,
+launcher and retrieval studies. They do not establish causal workflow effectiveness,
+an optimal delegation count or current deployment behavior. Accepted bounded results
+retain the sample, rubric and platform limits recorded in the research inventory.
+
+Detailed campaign reviews, calibration preparation and administrative completion reports
+are local research drafts. Private transcripts, source captures and per-event material
+are required to reproduce some recounts; the public checkout contains their sanitized
+findings and method descriptions, not those inputs. Moving supporting material to local
+drafts does not change a record's outcome or scientific validation.
 
 ## Net value
 

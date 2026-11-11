@@ -31,13 +31,16 @@ relationship_notes: |
   The paper was found on 2026-10-05, after every mechanism in this repository was implemented;
   it is the origin of none of them.
 limitations:
+  - "Chronology correction (2026-11-11): the relationship_notes statement that every repository mechanism predates discovery is too broad; DEC-067 records a later mechanism on 2026-10-20. The pre-discovery independence statement applies only to mechanisms already present when Raven was found on 2026-10-05. No literature causation is inferred for later work without evidence. The original relationship statement is retained as historical text, with this explicit correction; conceptual alignment is not effectiveness evidence."
   - Verified against the arXiv API metadata and the v1 abstract on 2026-10-05; the full text, its theorems and its experimental setup have not been read.
   - "Correction (2026-10-25): the maintainer gave the full text to an LLM and studied it through that discussion; the maintainer did not read it directly. The claims above still rest only on the abstract and were not checked against the full text."
-  - Its gains are reported against state-of-the-art agent systems on its own tasks, not against a single agent at matched cost, so they establish nothing yet about the marginal-return threshold RQ-16 asks about.
+  - "Source correction (2026-11-10): targeted review of v1 sections 2 and 7.3 found explicit assumptions for composition and shared-backbone quality/cost comparisons. The earlier blanket statement that cost comparisons were absent was too broad. These comparisons still do not identify this project's RQ-16 marginal delegation threshold."
+  - "Follow-up source mapping (2026-11-11): sections 3, 5 and 6 were also checked for the Host Agent, EverOS and Skill Forge descriptions. This targeted mapping does not constitute a complete independent paper audit or replication. Historical abstract-only checks above retain their original dates."
 notes: |
   My interpretation, not a claim the paper makes: its shared-budget sufficient conditions are
   the nearest point of contact with RQ-16 and could give a testable contrast for H-016 once the
-  full text is read.
+  applicable conditions are tested here. Targeted source verification and its limits are
+  recorded in a private literature-source verification note (2026-11-11; the local report is not shipped in the public checkout).
 
 disposition:
   implementation_status: not_applicable

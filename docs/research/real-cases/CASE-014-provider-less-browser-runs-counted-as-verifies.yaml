@@ -53,6 +53,13 @@ evidence:
     The recount finds 836 verify rows in the window where CASE-009 counted 820 on 2026-09-30;
     the 16-row difference was not traced. CASE-009 is therefore not corrected in place: its
     figures stand as counted, and this record gives the split.
+    Recheck (2026-11-11): current streams reproduce all 197 provider-less rows and the
+    166/19/12 split, all without duration. Current totals are 835 (19 pass, 444 incomplete,
+    280 fail, 92 without verdict), with a delegated remainder of 638. One historical
+    incomplete is not accounted for; the original fourteen-project snapshot is unavailable.
+    Sixteen late September 30 rows reproduce the inter-census verdict delta, but the
+    posthoc split does not prove the original cutoff. No original total is overwritten.
+    Method and sanitized results: the private historical-cohort recount report (2026-11-11; local inputs and report are not shipped in the public checkout).
 
 outcome: negative
 unexpected_behavior:

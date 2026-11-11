@@ -88,7 +88,7 @@ validation:
     not made. Source: this repository's `.workflow/data/` telemetry on the maintainer's machine
     (re-countable there only), window 2026-10-18 to 2026-10-27, counted 2026-10-27.
 
-    Result added 2026-11-10 (designed fixture; not clean direct use), Exoma pin 1071c2f: closure group parser recorded status fail, 8/12 registered checks meeting expectations. Source: docs/research-drafts/_data/research-closure-2026-11-10/runs/20261110T010132779372Z/parser/result.json; parent result-manifest.json and protocol.json identify the run and method. Existing parenthetical/plain-none continuation limits are reproduced. Main validator continuation handling is also measured; no product fix was applied. No validation authority or disposition label is changed. Counterexamples retained: none. /   caller X fails [fixture.py:1]; none (caller X fails); none /   caller X fails [fixture.py:1]; browser normalizer preserves none /   caller X fails [fixture.py:1].
+    Result added 2026-11-10 (designed fixture; not clean direct use), Exoma pin 1071c2f: closure group parser recorded status fail, 8/12 registered checks meeting expectations. Source: Private parser closure-run report captured 2026-11-10; local inputs and report are not shipped in the public checkout; parent result-manifest.json and protocol.json identify the run and method. Existing parenthetical/plain-none continuation limits are reproduced. Main validator continuation handling is also measured; no product fix was applied. No validation authority or disposition label is changed. Counterexamples retained: none. /   caller X fails [fixture.py:1]; none (caller X fails); none /   caller X fails [fixture.py:1]; browser normalizer preserves none /   caller X fails [fixture.py:1].
 
 
     Result added 2026-11-10 (local pure-source recheck; not clean direct use): project_pin 8/12;
@@ -96,7 +96,7 @@ validation:
     inspected installed source functions. The source dependency closure was evaluated in memory without
     importing Exoma, running the closure harness, executing providers or modifying installed files.
     Source hashes, per-case actual values and method limits:
-    docs/research-drafts/_data/research-closure-2026-11-10/remaining/exoma-handoff-2026-11-10/recheck-results.json.
+    private installed-source probe report (2026-11-10); sanitized findings are in docs/evaluation/exoma-handoff-2026-11-10/recheck-results.json.
     Parenthetical and plain-none continuation allowances include documented legacy behavior; not every
     counterexample is an introduced regression. A portable native Exoma unittest was prepared as handoff
     but not run or integrated here. No latest-upstream repair, validation upgrade or outcome change is
@@ -110,13 +110,26 @@ validation:
 
     - date: 2026-11-10
       job_id: "closure-20261110T010132779372Z-parser"
-      description: "designed-fixture; status fail; 8/12 expected checks; docs/research-drafts/_data/research-closure-2026-11-10/runs/20261110T010132779372Z/parser/result.json. Existing parenthetical/plain-none continuation limits are reproduced. Main validator continuation handling is also measured; no product fix was applied. No manual real-use or clean-run claim."
+      description: "designed-fixture; status fail; 8/12 expected checks; Private parser closure-run report captured 2026-11-10; local inputs and report are not shipped in the public checkout. Existing parenthetical/plain-none continuation limits are reproduced. Main validator continuation handling is also measured; no product fix was applied. No manual real-use or clean-run claim."
       clean: false
 
     - date: 2026-11-10
       job_id: "local-source-recheck-20261110-parser"
-      description: "Local source-function probes: project_pin 8/12; active_global 8/12; synthetic 12-case census, no package initialization/real use. Source: docs/research-drafts/_data/research-closure-2026-11-10/remaining/exoma-handoff-2026-11-10/recheck-results.json. Native tests are handoff only; no runtime patch."
+      description: "Local source-function probes: project_pin 8/12; active_global 8/12; synthetic 12-case census, no package initialization/real use. Source: private installed-source probe report (2026-11-10); sanitized findings are in docs/evaluation/exoma-handoff-2026-11-10/recheck-results.json. Native tests are handoff only; no runtime patch."
       clean: false
+
+  measurements:
+    - source: "private historical-verify recount report (2026-11-11; local inputs and report are not shipped in the public checkout); read-only usage/raw-output join, measured 2026-11-11, recorded-at UTC window 2026-10-18 inclusive to 2026-10-28 exclusive"
+      value: >-
+        47 recorded verify rows join to 39 original output identities. There are 39 distinct
+        final-verdict rows (11 fail, 25 incomplete, 3 pass) and eight rows without a verdict.
+        Ten fail rows contain blocking tag fields. The remaining fail has a neutral
+        parenthetical blocking marker but also a recorded failed runtime test; it is not
+        a sentinel-only false failure. Zero neutral-marker/no-error/no-failed-test false-fail
+        candidates were found by the declared lexical classifier. This does not adjudicate
+        every finding's semantics or prove no false passes. The earlier 40-output census
+        uses a different unreconciled snapshot/selection and is retained unchanged. No
+        clean-use, consistency or maintainer-acceptance predicate is inferred from this count.
 
 trade_offs:
   better:

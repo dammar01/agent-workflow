@@ -37,7 +37,10 @@ main branch:
 | No change | The session left no code change |
 
 Entering `main` means the developer accepted the work. It does not mean the work is correct;
-a quality review of a sample is planned as EXP-008.
+the completed [EXP-008](../research/experiments/EXP-008-quality-review-of-accepted-real-tasks.yaml)
+reviews a sample under a bounded rubric. Its partial validation retains reviewer-independence
+and sampling limitations; it does not turn this observational cohort into independently
+verified correctness or a causal workflow benchmark.
 
 ## Results
 
@@ -49,17 +52,17 @@ a quality review of a sample is planned as EXP-008.
 | Solved, fixed within 24 h | 21 | 19 | 2 |
 | Partial / not in main / no change | 13 / 9 / 7 | 11 / 5 / 6 | 2 / 4 / 1 |
 | Prompts per task (median) | 9 | 11 | 8 |
-| Active time per task (median) | 53 min | 61 min | 41 min |
+| Timestamp-derived session activity per task (median) | 53 min | 61 min | 41 min |
 | Delegated calls per task (median) | 4 | 5 | 3 |
 | Main-agent final context (median) | 210k | 246k | 170k |
-| Context saved: tokens kept from entering the main agent (median) | 574k | 636k | 531k |
+| Token-difference proxy (historically "context saved"), median | 574k | 636k | 531k |
 
 The 3.6.0 period was dominated by large features built over many consecutive sessions, so
 the difference between the two columns is not attributed to the release.
 
 ### By category
 
-| Category | Tasks | Solved | Clean | Fixed 24 h | Prompts | Active |
+| Category | Tasks | Solved | Clean | Fixed 24 h | Prompts | Session activity |
 | --- | --- | --- | --- | --- | --- | --- |
 | Feature | 68 | 46 (68%) | 31 (46%) | 15 | 10 | 64 min |
 | Bug | 26 | 19 (73%) | 14 (54%) | 5 | 9 | 37 min |
@@ -70,7 +73,7 @@ the difference between the two columns is not attributed to the release.
 82 of 97 tasks delegated to the second agent. A call is one prompt a provider answered;
 verify-browser's spec and review stages each count as one.
 
-| Calls | Tasks | Solved | Clean | Fixed 24 h | Prompts | Active | Final context | Saved |
+| Calls | Tasks | Solved | Clean | Fixed 24 h | Prompts | Session activity | Final context | Token-difference proxy |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 0 | 15 | 8 (53%) | 8 | 0 | 5 | 19 min | 108k | 0 |
 | 1–2 | 20 | 14 (70%) | 12 | 2 | 6 | 33 min | 152k | 170k |
@@ -106,25 +109,27 @@ count is a lower bound.
 | Final context, median / p90 | 210k / 491k | 246k / 519k | 170k / 339k |
 | Largest context in any task | 694k | 660k | 694k |
 | Sessions compacted | 3 | 2 | 1 |
-| **Context saved**, median / p90 | **574k** / 1.8M | 636k / 1.8M | 531k / 1.6M |
-| Context saved, total | 78.7M | 52.4M | 26.3M |
-| Context saved ÷ final context (median) | 2.4× | 2.1× | 2.8× |
+| **Token-difference proxy**, median / p90 | **574k** / 1.8M | 636k / 1.8M | 531k / 1.6M |
+| Token-difference proxy, total | 78.7M | 52.4M | 26.3M |
+| Token-difference proxy ÷ final context (median) | 2.4× | 2.1× | 2.8× |
 | Read fresh by the second agent / returned to the main agent (median) | 583k / 9k | 652k / 13k | 539k / 8k |
 | Status line `Saved` (adds reasoning), median / total | 609k / 81.3M | 661k / 54.2M | 547k / 27.2M |
-| Digest saving (lower bound), median / total | 8.0k / 929k | 8.5k / 643k | 6.7k / 285k |
+| Digest payload reduction (recorded lower bound), median / total | 8.0k / 929k | 8.5k / 643k | 6.7k / 285k |
 
-**Context saved** is the number of tokens delegation kept from entering the main agent:
+**Context saved** is the historical label for a token-difference proxy, not measured
+primary-agent context avoided:
 what the second agent read fresh (input minus cache read), less the answers that came back
 to the main agent. Per task it was a median 2.4 times the main agent's whole final window,
 by category 638k for features and 291k for bugs, and 1.4M for tasks with 6 or more calls.
 It assumes the main agent would have read what the second agent read, and it includes the
 second agent's own fixed overhead per call (its system prompt and instructions, which the
-runtime does not separate), so it overstates the reduction somewhat. The status line's
+runtime does not separate), so it cannot be treated as a measured context reduction. The status line's
 `Saved` badge differs in two ways: it adds the second agent's reasoning, which is output
 rather than tokens entering the main agent, and it does not subtract the answers that came
 back. Together they make the badge about 3% higher.
 
-The **digest saving** is the lower bound: the part of the second agent's answer the digest
+The **digest payload reduction** is the recorded lower bound on the answer/digest size
+difference: the part of the second agent's answer the digest
 stood in for (`premium_context_avoided_tokens`, answer minus digest). The runtime
 under-records it — since 2026-09-15 verify-browser's spec and review stages skip the digest
 step of the main delegated path, so about 14% is missing from the local streams. The figures
@@ -135,7 +140,7 @@ reviews.
 
 ## Projects
 
-| Project | Kind | Stack | Size (source / test files) | Tasks | Solved | Clean | Saved (median) |
+| Project | Kind | Stack | Size (source / test files) | Tasks | Solved | Clean | Token-difference proxy (median) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | A | Frontend of a multi-tenant work-management SaaS | Next.js 16, React 19 | ~570 / 29 | 29 | 19 (66%) | 14 | 763k |
 | B | API backend of the same SaaS | Laravel 12 | ~920 / 138 | 23 | 20 (87%) | 14 | 855k |
@@ -159,20 +164,27 @@ Per session rather than per task, all 69 sessions of 3.7.3 (coding and not), fro
 | --- | --- | --- |
 | Prompts the developer sent | 7 | 17 |
 | Prompts before the first edit, sessions that changed code | 4 | 7 |
-| Active time (gaps over 15 min dropped) | 32.6 min | 98.5 min |
+| Session activity (timestamp gaps over 15 min dropped) | 32.6 min | 98.5 min |
 | Files changed, sessions that changed code (49 of 69) | 5 | 19 |
 | Lines added / removed, same sessions | 215 / 25 | 1,275 / 170 |
 | Delegated calls | 2 | 8 |
 | Delegated call duration | 110 s | 499 s |
 
 Corrections: 15% of follow-ups in a hand-labelled sample of 80 (95% interval 8.8–24%).
-Delegated ok rate 1.000 over 309 calls; no verify verdict was `pass` (as in CASE-009).
+Delegated ok rate 1.000 over 309 usage rows (222 answered delegated calls); no verify verdict was `pass` (as in CASE-009).
 
 ## What these figures support
 
 They support: in daily use on these projects, 70% of coding work reached `main` and 48%
-without a fix within a day, at a median of 9 prompts and 53 active minutes per task, while
-delegation kept a median 574k tokens per task from entering the main agent.
+without a fix within a day, at a median of 9 prompts and 53 minutes of timestamp-derived
+session activity per task. The historical fresh-input-minus-returned-output proxy has a
+median of 574k tokens per task; this does not measure counterfactual context occupancy.
+
+Measurement clarification (2026-11-11): the recorded activity sums adjacent transcript
+timestamp gaps with the stated inactivity cutoff. It is neither measured active human
+work time nor a measure of time saved. Token differences include delegate overhead and
+assume a counterfactual main-agent reading pattern that was not observed. Original figures,
+cohorts and formulas are retained.
 
 They do not support: that the workflow raises any of these rates (there is no run without
 it), that delegation improves outcomes (delegated tasks are larger), a comparison with

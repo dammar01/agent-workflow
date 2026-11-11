@@ -1,4 +1,4 @@
-"""Every research and staging harness imports against the pinned Exoma.
+"""Active research and staging harnesses import against the pinned Exoma.
 
 The harnesses reach into Exoma's internals (fact_store, metrics, transcript, osutil), not a
 public API, so an Exoma refactor can break an experiment without any Exoma test failing.

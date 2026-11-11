@@ -4,13 +4,22 @@ This directory documents the research, reasoning, experimentation, and design ev
 behind `agent-workflow`.
 
 It does not archive private conversations or confidential project data. It records the
-**generalizable reasoning and evidence** that can be safely shared as part of the
+**reasoning and bounded evidence** that can be safely shared as part of the
 open-source project.
 
 How significant changes must be recorded: [CONTRACT.md](CONTRACT.md). The record format:
 [schema.yaml](schema.yaml), checked by `tools/maintain/check_research.py`.
 How the project treats evidence and AI-assisted reasoning: [methodology.md](methodology.md).
 The research boundary, adopted 2026-10-05: [CHARTER.md](CHARTER.md).
+Start with [evaluation](../evaluation/README.md) for public results and measurement limits,
+the [record inventory](#record-inventory) for dispositions, or [questions.md](questions.md)
+for the remaining research questions.
+Install/use instructions are maintained in
+[Exoma's documentation](https://github.com/dammar01/Exoma/tree/main/docs).
+The public corpus contains 135 records. Internal campaign administration, supporting
+decisions and deferred experiments are kept as local drafts. Publication scope is separate
+from scientific disposition: existing outcomes, validation and maintainer decisions remain
+in the records. A structural check does not establish scientific completion.
 
 ## Current thesis and positioning
 
@@ -45,14 +54,15 @@ how many are worth their cost.
 - **Human orchestration** (RQ-02; charter CQ6 and the human part of CQ4): whether delegation
   reduces intervention, moves it, or adds it through coordination and correction.
 - **Latency** (RQ-13; the charter's L and the runtime part of CQ4): externalization costs extra
-  execution and waiting (maintainer latency: CASE-004, a draft).
+  execution and waiting (maintainer latency:
+  [CASE-004](real-cases/CASE-004-maintainer-telemetry-snapshot.yaml), tracked observational evidence).
 - **Persistent knowledge** (RQ-06): stored repository knowledge may reduce repeated
   exploration.
 
 ### Architecture the experiments run on
 
-`agent-workflow` is an external harness, a control plane, for coding agents. It separates
-repository-oriented work from the primary agent's reasoning and implementation. Semantic
+The runtime studied here, Exoma, is an external harness, a control plane, for coding agents.
+It separates repository-oriented work from the primary agent's reasoning and implementation. Semantic
 reasoning stays with the model; deterministic software handles state, policy, contracts,
 provenance, and execution control. The secondary agent is an evidence-producing specialist,
 not an equally trusted second brain.
@@ -312,14 +322,18 @@ above); no `SYN-XXX` record is tracked yet.
 
 ### Drafts
 
-Proposed hypotheses, planned experiments, syntheses, and decisions without a result are
-kept in `docs/research-drafts/` (same subfolders). That directory is git-ignored and exists
-only on the maintainer's machine; tracked records mention draft IDs as plain text, never as
+Local working records, including proposals, experiment preparation, syntheses, and results
+awaiting review, are kept in `docs/research-drafts/` (same subfolders). That directory is
+git-ignored and exists only on the maintainer's machine; tracked records mention draft IDs as plain text, never as
 links. A draft moves back here only when it has been carried out and has a recorded result.
-Drafts currently held (2026-10-24), all YAML: H-004, H-005, H-008..H-013, H-015..H-018 and
-H-020 (each naming its research question; H-016 is the charter's CH1), EXP-004..EXP-007,
-EXP-009, EXP-010, EXP-012 and EXP-015, DEC-002, DEC-063 and DEC-072..DEC-076, SYN-002 and
-SYN-003. CASE-002 and CASE-004 were tracked on 2026-10-24 with their draft references kept as
+Drafts currently held (2026-11-10), all YAML: H-004, H-005, H-008..H-013, H-015..H-018,
+H-020 and H-025 (each naming its research question; H-016 is the charter's CH1),
+EXP-004..EXP-007, EXP-009, EXP-010, EXP-012, EXP-015 and EXP-018..EXP-020,
+DEC-063 and DEC-072..DEC-076, SYN-002..SYN-004, and CASE-030.
+EXP-019 records an inconclusive pilot; EXP-020 is prepared but has no experimental results.
+Historical DEC-002 is archived; its replacement SYN-002 remains a draft. The accepted
+bounded results below remain separate from the local experimental backlog.
+CASE-002 and CASE-004 were tracked on 2026-10-24 with their draft references kept as
 plain text, and H-014 with EXP-008 once the review recorded its result.
 H-001..H-003, H-006, H-007, EXP-001..EXP-003, CASE-001, CASE-003, SYN-001 and DEC-003 are
 kept in `docs/research-drafts/_archive/`, which the check does not read. Drafts use the
@@ -347,11 +361,13 @@ separate: a validated experiment may reject its hypothesis.
 | [H-021](hypotheses/H-021-weighted-fact-retrieval-serves-what-the-task-needs.yaml) / [EXP-013](experiments/EXP-013-calibrate-fact-retrieval-on-recorded-tasks.yaml) | Hypothesis rejected; completed experiment validated; rejected outcome retained | Counterfactual replay/citation proxy; recorded-arm correction retained |
 | [H-023](hypotheses/H-023-per-role-limit-explains-weighted-over-injection.yaml) / [EXP-016](experiments/EXP-016-replay-weighted-retrieval-at-limit-three.yaml) | validated; supported outcome retained | Equal-cap replay only; neither optimal cap nor downstream quality established |
 
-Open follow-ups are separate: DEC-018's parser counterexamples in Exoma, the closure
-harness timeout/crash cleanup proof and preflight metadata note, operational validation
-of the remaining DEC candidates, H-004/H-005, and the broader unanswered research questions.
-The earlier patch verification remains incomplete; acceptance of these research results
-does not repair the parser or turn fixture evidence into ordinary-use evidence.
+At the acceptance checkpoint, follow-ups included DEC-018's parser counterexamples,
+closure-harness cleanup/preflight evidence, operational DEC validation, H-004/H-005 and
+unanswered research questions. The [record inventory](#record-inventory) and
+[questions.md](questions.md) retain the public dispositions; detailed campaign follow-up
+remains local. Audit, repair and effectiveness are separate. The earlier patch verification
+was incomplete; acceptance of those research results does not turn fixture evidence into
+ordinary-use evidence.
 
 ## Relationship to other documentation
 
