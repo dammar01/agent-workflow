@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "record": "DEC-086",
+  "executed_on": "2026-11-10",
+  "published_on": "2026-11-11",
+  "source_revision": "a965cf20bce03015cdf0f56952eb6c45e30cbfa4",
+  "source_dirty": false,
+  "platform": "win32",
+  "provenance": {
+    "kind": "sanitized restatement of private execution records; not a new run",
+    "sources": ["private DEC-086 dated 2026-11-10", "private runtime-source-checks.json"],
+    "source_checks_sha256": "360194032a02f1e2f87c4c4cbc5f07677bdae8fd2c675e741d038220c4f03470",
+    "raw_outputs_public": false
+  },
+  "regression_packet": {
+    "path": "test_exoma_research_regressions.py",
+    "sha256": "c30485a992e7d646ce8875bbf50e80eec3ef3045b801b518e5449299815d7dd3",
+    "inventory": "regression-cases.json",
+    "inventory_sha256": "fda861facc6ef4e1251c0ca155353469ae570c866a28ff989446b4a730aaca39"
+  },
+  "execution": {
+    "import_binding": "Unmodified checkout at source_revision, with its src directory first on PYTHONPATH.",
+    "portable_command": "python -B test_exoma_research_regressions.py --policy-file <source>/src/exoma/_bundle/config/hosts/claude/hooks/workflow_policy.py",
+    "native_command": "python -B tests/run.py --only <suite>",
+    "native_command_directory": "Exoma source checkout; suite names are the native check names below."
+  },
+  "portable_result": {
+    "check": "portable-claude",
+    "tests_run": 16,
+    "failures": 0,
+    "policy_host": "claude",
+    "result_basis": "Aggregate result reported in private DEC-086; case-to-method mapping derived from the public inventory and unchanged test script, not individual execution logs.",
+    "case_to_test_method": {
+      "P01": "ParserRegressions.test_validator_plain_none",
+      "P02": "ParserRegressions.test_validator_period_none",
+      "P03": "ParserRegressions.test_validator_indonesian_none",
+      "P04": "ParserRegressions.test_validator_neutral_dash",
+      "P05": "ParserRegressions.test_validator_neutral_semicolon",
+      "P06": "ParserRegressions.test_validator_finding_after_dash",
+      "P07": "ParserRegressions.test_validator_tagged_finding",
+      "P08": "ParserRegressions.test_validator_period_continuation",
+      "P09": "ParserRegressions.test_validator_problem_parenthetical",
+      "P10": "ParserRegressions.test_validator_plain_continuation",
+      "P11": "ParserRegressions.test_normalizer_period_continuation_preserves_finding",
+      "P12": "ParserRegressions.test_normalizer_plain_continuation_preserves_finding",
+      "G01": "GateRegressions.test_authorization_is_scoped_to_session",
+      "G02": "GateRegressions.test_unapproved_action_still_refused",
+      "G03": "GateRegressions.test_quoted_mention_is_not_an_action",
+      "G04": "GateRegressions.test_existing_directory_scope_still_matches"
+    }
+  },
+  "checks": [
+    {
+      "check": "portable-claude",
+      "exit_code": 0,
+      "elapsed_seconds": 0.155,
+      "output_sha256": "75f04ee1c84675d80745dbb820732d3a0ade13b7672ee0b8ead275eb6127f419",
+      "policy_sha256": "e178bff512ce2c0294f23f7020b9b3e71fe1e980e602c2422b417899321cb4f8"
+    },
+    {
+      "check": "codex-host",
+      "exit_code": 0,
+      "elapsed_seconds": 15.427,
+      "output_sha256": "34971050c96ca7e2803a37ca559312ee06c737e9cb398cc594ca23cd60137af9"
+    },
+    {
+      "check": "execution-chain",
+      "exit_code": 0,
+      "elapsed_seconds": 4.495,
+      "output_sha256": "88247c93d960379e2195dc80d95c0ba49d0591df848c583d89b76dd6e330ecf5"
+    },
+    {
+      "check": "verify-runtime-tests",
+      "exit_code": 1,
+      "elapsed_seconds": 4.681,
+      "output_sha256": "9780de69a27859eb77c0d263bad1fc2113dee5ec74427aa170a57c6e53496909"
+    },
+    {
+      "check": "verify-reuse",
+      "exit_code": 0,
+      "elapsed_seconds": 58.022,
+      "output_sha256": "8d26629d74c7c1d06e5a230a02e384db9fcdd3741f4bba0a4ca262bf9b3a6734"
+    },
+    {
+      "check": "metrics-contract",
+      "exit_code": 0,
+      "elapsed_seconds": 1.947,
+      "output_sha256": "b7a4427c6277d1484a8308e79a2f3022ebf9c2213651d1422d419264f3cd9ab4"
+    },
+    {
+      "check": "verify-runtime-tests-fixture-recheck",
+      "exit_code": 0,
+      "elapsed_seconds": 10.043,
+      "output_sha256": "ddccc0db70a5dad54b656d9164cc5fa8298dbb16115ae22e6efee5cbb0f7066f",
+      "amendment": "Unset AGENT_HOME override and bind HOME/USERPROFILE to disposable home so the suite can exercise its own temporary-home fixture. Initial failure retained; no runtime/source/expectation edit."
+    }
+  ],
+  "coverage": {
+    "real_provider_e2e": "not established for source_revision by this receipt",
+    "deployed_hooks": "not verified by this receipt; source and isolated fixture checks only",
+    "remote_ci_conclusion": "not independently verified for this publication",
+    "authority_and_approval_integration_cases": "specification-only scenarios remain outside the portable suite"
+  },
+  "limits": [
+    "Designed native regressions and isolated integration fixtures; no live provider, deployment parity, field effectiveness or maintainer validation.",
+    "Only the Claude bundle has workflow_policy.py in this source revision; no separate portable run was claimed for the other host adapters.",
+    "Output hashes identify private logs; the logs are not included, and hashes alone do not independently verify their contents.",
+    "Historical 1071c2f staging and provider results are not evidence for source_revision."
+  ]
+}

@@ -1,0 +1,83 @@
+schema_version: 3
+id: DEC-086
+title: Exoma a965cf20 has source-specific staging evidence with provider and deployment gaps retained
+date: 2026-11-11
+status: accepted
+provenance:
+  type: observed
+  confidence: medium
+  basis: Public restatement of the 2026-11-10 private exact-source execution records; no new runtime test run.
+
+problem: |
+  pyproject.toml and uv.lock select Exoma a965cf20bce03015cdf0f56952eb6c45e30cbfa4,
+  but DEC-084 records staging and provider results for 1071c2f. The public regression
+  handoff acknowledges a later private source run without publishing its outcomes.
+  Readers cannot apply the older staging results to the current source revision.
+decision: |
+  Publish the sanitized current-source receipt at
+  docs/evaluation/exoma-handoff-2026-11-10/a965cf20-results.json and explain its scope
+  in that directory's README. Retain DEC-084 and the original installed-source probes
+  as historical evidence. Keep the current pin's provider E2E and deployed-hook status
+  explicitly unverified by the available records.
+rationale: |
+  Source identity, research-harness CI, native source regressions, real-provider E2E
+  and deployed-hook verification establish different things. Publishing the existing
+  bounded source results closes the documentation gap without inheriting old results
+  or treating successful CI as proof of every acceptance gate.
+alternatives:
+  - option: Reuse DEC-084 as evidence for the current pin
+    rejected_because: Its suites and provider calls identify 1071c2f, a different source revision.
+  - option: Publish the complete private campaign packet
+    rejected_because: A sanitized result receipt suffices; private inputs and campaign administration remain local.
+evidence: [DEC-084, DEC-018, DEC-020]
+evidence_notes: |
+  The private 2026-11-10 DEC-086 and runtime-source-checks.json record an unmodified
+  a965cf20 checkout on Windows with its src directory first on PYTHONPATH. The
+  portable Claude-policy run completed 16 tests with zero failures, covering the
+  P01-P12 parser and G01-G04 gate inventory. The published receipt maps IDs to test
+  methods; the result is aggregate, not a newly recovered per-case execution log.
+  codex-host, execution-chain, verify-reuse and metrics-contract returned exit 0.
+  verify-runtime-tests initially returned 1 because AGENT_HOME hid its temporary-home
+  fixture. A disposable HOME/USERPROFILE recheck without AGENT_HOME returned 0 with
+  no source or assertion changes. Both attempts and their output hashes are retained.
+  The original source-check receipt SHA-256 is
+  360194032a02f1e2f87c4c4cbc5f07677bdae8fd2c675e741d038220c4f03470.
+  Raw outputs remain private; their hashes identify the recorded outputs but do not
+  make them publicly reproducible. This publication does not rerun the suites or
+  independently verify a remote CI conclusion. Default CI coverage is described in
+  .github/workflows/ci.yml and tests/run.py; portable regressions are separate.
+implementation:
+  version: Exoma a965cf20 (version string 1.0.0)
+  commits: [e61126fb0068b0f287a62edc76b5e425d394218c, uncommitted]
+  components:
+    - pyproject.toml and uv.lock (existing exact runtime pin)
+    - docs/evaluation/exoma-handoff-2026-11-10/README.md
+    - docs/evaluation/exoma-handoff-2026-11-10/a965cf20-results.json
+    - docs/research/questions/RQ-15-research-traceability.yaml and generated indexes
+    - RELEASE.md and documentation entry pages
+disposition:
+  implementation_status: implemented
+  validation_status: not_validated
+validation:
+  summary: |
+    The available records report successful designed source regressions on a965cf20.
+    No source-bound real-provider E2E or directly verified deployed-hook receipt is
+    supplied here. Repeated use, host trust/loading, live approval behavior and
+    maintainer scientific acceptance remain separate; this publication does not
+    upgrade validation status.
+trade_offs:
+  better:
+    - Readers can distinguish the current pin's reported native results from historical staging.
+    - Failed attempts, fixture corrections and missing provider/deployment evidence remain explicit.
+  worse:
+    - Sanitized aggregate results and output hashes cannot replace the private raw execution logs.
+limitations:
+  - Source execution was on Windows; the portable gate run covered the Claude policy only.
+  - Test-method mappings identify coverage; no per-case raw output is published.
+  - A successful ordinary CI run does not prove the separate portable suite, live providers or deployed hooks.
+  - No current-pin real-provider E2E or deployed-host verification is established by this receipt.
+  - Main-agent authority and approval integration scenarios in the handoff remain specification-only.
+revisit_when:
+  - The runtime pin changes or a source-bound result contradicts these recorded outcomes.
+  - A real-provider E2E or deployed-hook verification receipt becomes available for the exact source.
+questions: [RQ-15]

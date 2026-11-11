@@ -16,10 +16,15 @@ the [record inventory](#record-inventory) for dispositions, or [questions.md](qu
 for the remaining research questions.
 Install/use instructions are maintained in
 [Exoma's documentation](https://github.com/dammar01/Exoma/tree/main/docs).
-The public corpus contains 135 records. Internal campaign administration, supporting
+The public corpus contains 136 records. Internal campaign administration, supporting
 decisions and deferred experiments are kept as local drafts. Publication scope is separate
 from scientific disposition: existing outcomes, validation and maintainer decisions remain
 in the records. A structural check does not establish scientific completion.
+
+The current runtime pin and its bounded source results are recorded in
+[DEC-086](decisions/DEC-086-exoma-a965cf20-has-identity-specific-staging-evidence.yaml)
+and the [public source-check receipt](../evaluation/exoma-handoff-2026-11-10/README.md#current-runtime-and-source-results).
+DEC-084 remains the historical staging record for `1071c2f`.
 
 ## Current thesis and positioning
 
@@ -303,6 +308,7 @@ the check fails when it is stale. Research questions per record: [questions.md](
 | [DEC-082](decisions/DEC-082-exoma-1-0-0-adds-opencode-and-codex-as-primary-hosts-and-install-writes-by-default.yaml) | Exoma 1.0.0 adds OpenCode and Codex as primary-agent hosts and install writes by default | accepted | implemented | not_validated | 881ef2b |
 | [DEC-083](decisions/DEC-083-exoma-1-0-0-stable-staged-at-64fad04.yaml) | Exoma 1.0.0 stable is staged at 64fad04, closing six unrecorded pin moves since 2888b15 | accepted | implemented | not_validated | 9caa13b |
 | [DEC-084](decisions/DEC-084-exoma-1071c2f-staged-for-post-1-0-0-analysis.yaml) | Exoma 1071c2f is staged for post-1.0.0 analysis; it drops Python 3.10 with the version string unchanged | accepted | implemented | not_validated | 0c5ea79, 8d66976 |
+| [DEC-086](decisions/DEC-086-exoma-a965cf20-has-identity-specific-staging-evidence.yaml) | Exoma a965cf20 has source-specific staging evidence with provider and deployment gaps retained | accepted | implemented | not_validated | e61126f, uncommitted |
 | [EXP-008](experiments/EXP-008-quality-review-of-accepted-real-tasks.yaml) | Correctness and quality review of a sample of real tasks accepted on main (CASE-012) | completed | not_applicable | partially_validated | — |
 | [EXP-011](experiments/EXP-011-hook-launcher-latency-bash-vs-powershell.yaml) | Hook call wall time, bash launcher vs PowerShell 5.1, on Windows | completed | not_applicable | validated | — |
 | [EXP-013](experiments/EXP-013-calibrate-fact-retrieval-on-recorded-tasks.yaml) | Calibrate fact retrieval on recorded tasks | completed | not_applicable | validated | — |

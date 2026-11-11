@@ -7,7 +7,7 @@ what_exists: |
   Records are schema-checked YAML (DEC-011); since DEC-017 research questions are records too,
   and a version-2 record names the questions it serves, checked both ways by
   tools/maintain/check_research.py.
-records: [DEC-011, DEC-017, DEC-019, DEC-026, DEC-027, DEC-036, DEC-038, DEC-047, DEC-077, DEC-083, DEC-084]
+records: [DEC-011, DEC-017, DEC-019, DEC-026, DEC-027, DEC-036, DEC-038, DEC-047, DEC-077, DEC-083, DEC-084, DEC-086]
 decision:
   date: 2026-10-03
   method: critical_interview
@@ -24,3 +24,8 @@ notes: |
   maintainer found the research records decisive for the day's DEC-072 decision, wants them kept
   light, and finds a rule's reason with an agent's help rather than unaided. The existing decision
   stands.
+
+  Public evidence update 2026-11-11: DEC-086 records the current a965cf20 runtime pin's
+  reported native source results separately from DEC-084's historical 1071c2f staging.
+  Its public receipt retains the provider-E2E and deployed-hook verification gaps;
+  this publication does not change the question's existing maintainer decision.

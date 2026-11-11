@@ -19,9 +19,11 @@ Start with the page that matches your task:
 Staging a candidate Exoma commit here: [RELEASE.md](../RELEASE.md). The runtime's release
 history up to 3.9.0: [CHANGELOG.md](../CHANGELOG.md).
 
-The [Exoma regression handoff](evaluation/exoma-handoff-2026-11-10/README.md) preserves the
-public parser/gate recheck and synthetic fixtures; it does not establish a later
-runtime fix or real-task effectiveness.
+The [Exoma regression handoff](evaluation/exoma-handoff-2026-11-10/README.md) separates
+historical parser/gate probes from reported native source results for the current
+`a965cf20` pin. Its public receipt records the 16-test portable result and native
+suite outcomes; real-provider E2E and deployed hooks on that SHA remain unverified
+by those records. It does not establish real-task effectiveness.
 
 Internal campaign administration, review packets and deferred experiments remain local
 research drafts. The public record retains sanitized findings, methods and their limits.

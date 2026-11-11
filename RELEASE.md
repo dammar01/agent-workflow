@@ -12,6 +12,12 @@ skipping one visible.
 resolved to. That pin is the only place the runtime under study is chosen: the suites, the
 harnesses and the staging run all import or invoke that Exoma, never a copy in this tree.
 
+Current evidence: [DEC-086](docs/research/decisions/DEC-086-exoma-a965cf20-has-identity-specific-staging-evidence.yaml)
+and the [source-check summary and receipt](docs/evaluation/exoma-handoff-2026-11-10/README.md#current-runtime-and-source-results)
+identify `a965cf20bce03015cdf0f56952eb6c45e30cbfa4`. Native source results are
+reported; real-provider E2E and deployed-hook verification on that SHA are not
+established by the receipt. DEC-084's results concern the historical `1071c2f` pin.
+
 ## Staging a candidate
 
 1. **Candidate is green in Exoma.** The commit is on Exoma `main` and its CI (including the

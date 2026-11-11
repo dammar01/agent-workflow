@@ -11,7 +11,7 @@ separate boundaries:
 | [real-use-benchmark.md](real-use-benchmark.md) | Real coding tasks from one developer's sessions on nine private projects, graded by what reached `main` | Acceptance, later edits, prompts, timestamp-derived session activity, final context and a token-difference proxy; no causal effect or measured human-time saving |
 | [observed-usage.md](observed-usage.md) | Uncontrolled telemetry from one machine | Recorded delegate and digest payload sizes; historical and current badge formulas are distinguished |
 | [metrics.md](metrics.md) | The calculation contract: every figure's ID, version, method, denominator and missing-data rule | How a figure on the other pages was computed, and whether two figures measure the same thing |
-| [Exoma regression handoff](exoma-handoff-2026-11-10/README.md) | Historical installed-source parser/gate rechecks and portable regression fixtures | Counterexamples in the inspected source; neither a native Exoma integration result nor real-task effectiveness |
+| [Exoma regression handoff](exoma-handoff-2026-11-10/README.md) | Historical installed-source probes, portable fixtures and a sanitized current-pin source receipt (DEC-086) | Reported P01-P12/G01-G04 16/16 and named native suite outcomes on `a965cf20`; no current-pin provider E2E, deployed-hook verification or real-task effectiveness established |
 | [Research inventory](../research/README.md#record-inventory) and [questions](../research/questions.md) | Public record dispositions, accepted bounded results and unanswered questions | Experiment outcome, implementation validation and RQ answers remain separate |
 
 ## Current evidence boundary
