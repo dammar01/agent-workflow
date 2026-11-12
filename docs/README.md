@@ -19,8 +19,15 @@ Start with the page that matches your task:
 Staging a candidate Exoma commit here: [RELEASE.md](../RELEASE.md). The runtime's release
 history up to 3.9.0: [CHANGELOG.md](../CHANGELOG.md).
 
+The current research pin is Exoma `1.0.2` at `38fb1df`. The
+[2026-11-12 staging receipt](evaluation/exoma-staging-2026-11-12/README.md) records its
+technical acceptance and a subsequent installed-host recheck: both doctor and the
+installation check report READY. Its later live-session record confirms an active
+Codex preflight hook, a successful delegated documentation review and a runtime-run check. The
+complete formal plan/approval/execute/verify lifecycle remains unverified.
+
 The [Exoma regression handoff](evaluation/exoma-handoff-2026-11-10/README.md) separates
-historical parser/gate probes from reported native source results for the current
+historical parser/gate probes from reported native source results for the earlier
 `a965cf20` pin. Its public receipt records the 16-test portable result and native
 suite outcomes; real-provider E2E and deployed hooks on that SHA remain unverified
 by those records. It does not establish real-task effectiveness.

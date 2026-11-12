@@ -15,8 +15,15 @@ harnesses and the staging run all import or invoke that Exoma, never a copy in t
 Current candidate: `38fb1df4f7d053d7cad1abe1a38e0f0cb9707b41` (Exoma `1.0.2`).
 The [2026-11-12 staging receipt](docs/evaluation/exoma-staging-2026-11-12/README.md)
 records seven passing default suites, research checks, candidate bundle integrity,
-successful Exoma CI and a real Codex E2E run. Installed host drift and deployed-host
-acceptance remain separate and unresolved. The pin and receipt are uncommitted.
+successful Exoma CI and a real Codex E2E run. The pin and receipt were committed in
+`066dbfdeefdcab3303f904e183275c7f21f6dc7b`. A subsequent
+[installed-host recheck](docs/evaluation/exoma-staging-2026-11-12/README.md#installed-host-recheck-2026-11-12)
+reports Exoma `1.0.2`, doctor READY and installation READY, including the installed
+Codex auto-review context. The later
+[live-session observations](docs/evaluation/exoma-staging-2026-11-12/README.md#live-session-observations-2026-11-12)
+confirm an active Codex preflight hook, a successful delegated documentation
+review and a runtime-run research check. The complete formal
+plan/approval/execute/verify lifecycle remains unverified.
 [DEC-086](docs/research/decisions/DEC-086-exoma-a965cf20-has-identity-specific-staging-evidence.yaml)
 preserves source results for `a965cf20`; DEC-084 concerns the historical `1071c2f` pin.
 

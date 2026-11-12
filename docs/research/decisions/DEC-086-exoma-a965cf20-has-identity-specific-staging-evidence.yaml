@@ -48,7 +48,7 @@ evidence_notes: |
   .github/workflows/ci.yml and tests/run.py; portable regressions are separate.
 implementation:
   version: Exoma a965cf20 (version string 1.0.0)
-  commits: [e61126fb0068b0f287a62edc76b5e425d394218c, uncommitted]
+  commits: [e61126fb0068b0f287a62edc76b5e425d394218c, c311f7a0bfce8a03b919efcf33a7c855bcfb773e]
   components:
     - pyproject.toml and uv.lock (existing exact runtime pin)
     - docs/evaluation/exoma-handoff-2026-11-10/README.md

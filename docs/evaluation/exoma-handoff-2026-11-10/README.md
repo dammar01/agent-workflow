@@ -9,7 +9,7 @@ declare another research package closed.
   native suite with 12 parser and four gate checks.
 - [recheck-results.json](recheck-results.json): historical installed-source probes,
   source hashes and separate reviewer/runtime telemetry aggregates.
-- [a965cf20-results.json](a965cf20-results.json): sanitized current-pin source results,
+- [a965cf20-results.json](a965cf20-results.json): sanitized source results for that checkpoint,
   suite commands, P/G case mapping, output hashes and verification limits.
 
 ## Current runtime and source results

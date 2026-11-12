@@ -110,8 +110,12 @@ agent. Full staging requires matching manifest/lock/installed Git metadata and c
 required stages; skips, timeouts and failed processes cannot establish acceptance. Reports
 cover delegated exploration and local sweep, with host approval and deployment explicitly
 separate. The [2026-11-12 staging receipt](docs/evaluation/exoma-staging-2026-11-12/README.md)
-records the current `38fb1df` pin, passing checks and real Codex E2E, with installed-host
-drift retained. The earlier [engineering checkpoint](docs/evaluation/README.md#engineering-readiness-checkpoint-2026-11-11)
+records the current `38fb1df` pin, passing checks and real Codex E2E. Its subsequent
+installed-host recheck reports Exoma `1.0.2`, doctor READY and installation READY.
+Later live-session observations confirm an active Codex preflight hook and a successful
+delegated documentation review with a runtime-run research check; the complete formal
+plan/approval/execute/verify lifecycle remains unverified. The earlier
+[engineering checkpoint](docs/evaluation/README.md#engineering-readiness-checkpoint-2026-11-11)
 records the harness implementation boundary.
 
 Using the runtime in a project (install, commands, configuration, security per provider):

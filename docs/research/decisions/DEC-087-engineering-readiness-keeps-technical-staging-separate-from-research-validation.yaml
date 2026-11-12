@@ -54,7 +54,7 @@ evidence_notes: |
   remain separate so benign stderr warnings do not corrupt JSON acceptance.
 implementation:
   version: agent-workflow staging against Exoma a965cf20 (version string 1.0.0)
-  commits: [uncommitted]
+  commits: [066dbfdeefdcab3303f904e183275c7f21f6dc7b]
   components:
     - tools/e2e/e2e.py, e2e_support.py and e2e_delegated.py
     - tests/checks/e2e.py, tests/run.py and tests/checks/harnesses.py
@@ -86,7 +86,6 @@ limitations:
   - Synthetic process cleanup does not prove cleanup of all detached runtime workers.
   - Real-provider acceptance and genuine host approval/deployment remain separate checks.
   - No historical scientific outcome, validation status or RQ answer is upgraded.
-  - The implementation commit is uncommitted until the separately authorized commit exists.
 revisit_when:
   - Pin or internal process-launch APIs change.
   - A full run can skip required work yet return pass.
