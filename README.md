@@ -33,9 +33,26 @@ change lands there. This repository holds what studies it:
 | [tools/e2e/](tools/e2e/) | The staging run: real delegated calls against the pinned Exoma |
 | [tests/](tests/) | Default record and active-harness checks against the pin |
 
-Exoma began as a fork of agent-workflow 3.9.0. Code flows one way from there: this
+Exoma began as a fork of agent-workflow 3.9.0. Runtime source ownership flows one way: this
 repository depends on Exoma ([pyproject.toml](pyproject.toml) pins one commit) and carries no
-copy of the runtime. A failure found here is fixed in Exoma.
+copy of the runtime. A runtime failure found here is fixed in Exoma; a defect in a research
+or staging harness is fixed here.
+
+## Development and research relationship
+
+Exoma evolves from practical needs, engineering discoveries and opportunities for
+improvement. A relevant, technically feasible idea may be explored, prototyped or
+implemented directly, with effectiveness and limitations evaluated afterward. When the
+concept, applicability, expected benefit or risk is unclear, it may first be investigated
+through `agent-workflow`.
+
+These routes are equally valid, iterative and may overlap. Implementation generates
+research questions, and research informs implementation. **The purpose of agent-workflow
+is to help understand, evaluate and learn from what Exoma implements. Its research agenda
+does not determine what Exoma is allowed to implement or require formal research validation
+before development.** The full policy is in [the charter](docs/research/CHARTER.md#development-and-research-relationship).
+Engineering rationale, technical acceptance and honest evidence remain necessary for the
+claims made at each stage.
 
 ---
 
@@ -79,9 +96,9 @@ coding agent better.
 
 ```bash
 uv sync                                        # the pinned Exoma plus PyYAML
-uv run python tests/run.py                     # default record and active-harness checks
+uv run python tests/run.py                     # record, harness and offline staging regressions
 uv run python tools/maintain/check_research.py --git
-uv run python tools/e2e/e2e.py --full --provider codex --model <id>  # staging: spends quota
+uv run python -I tools/e2e/e2e.py --full --provider codex --model <id> --report-json staging-report.json
 ```
 
 Replace `<id>` with a model supported by the selected provider. Staging a candidate Exoma
@@ -89,7 +106,13 @@ commit, including other providers, step by step: [RELEASE.md](RELEASE.md).
 [ci.yml](.github/workflows/ci.yml) runs the record check and the suites on Linux and Windows
 against the pinned commit, spending no provider quota;
 [e2e-full.yml](.github/workflows/e2e-full.yml) is manual because it calls a real secondary
-agent.
+agent. Full staging requires matching manifest/lock/installed Git metadata and completed
+required stages; skips, timeouts and failed processes cannot establish acceptance. Reports
+cover delegated exploration and local sweep, with host approval and deployment explicitly
+separate. The [2026-11-12 staging receipt](docs/evaluation/exoma-staging-2026-11-12/README.md)
+records the current `38fb1df` pin, passing checks and real Codex E2E, with installed-host
+drift retained. The earlier [engineering checkpoint](docs/evaluation/README.md#engineering-readiness-checkpoint-2026-11-11)
+records the harness implementation boundary.
 
 Using the runtime in a project (install, commands, configuration, security per provider):
 [Exoma's documentation](https://github.com/dammar01/Exoma/tree/main/docs).

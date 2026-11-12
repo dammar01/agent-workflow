@@ -3,6 +3,40 @@
 Adopted by the maintainer on 2026-10-05 as the research boundary of `agent-workflow`. It sets
 the direction; [`CONTRACT.md`](CONTRACT.md) still governs how evidence is recorded.
 
+## Development and Research Relationship
+
+Clarified by the maintainer on 2026-11-11 in
+[DEC-087](decisions/DEC-087-engineering-readiness-keeps-technical-staging-separate-from-research-validation.yaml).
+
+Exoma should evolve continuously based on practical needs, engineering discoveries, and
+opportunities for improvement. Its development must not be constrained by the research
+agenda or require formal research validation before new ideas can be implemented.
+
+Relevant findings from research papers, emerging concepts, or engineering observations
+may follow either of two paths:
+
+1. **Direct Implementation:** When a finding has clear relevance and sufficient technical
+   feasibility, it may be explored, prototyped, or implemented directly in Exoma. Its
+   effectiveness and limitations can be evaluated afterward through usage, testing, and
+   further experimentation.
+2. **Research and Evaluation:** When the underlying concept, applicability, expected
+   benefits, or potential risks are still unclear, it may first be investigated through
+   agent-workflow. This can involve theoretical analysis, hypothesis formulation,
+   experiments, and comparative evaluation before deciding whether and how it should be
+   adopted.
+
+These paths are not mutually exclusive or strictly sequential. Implementation may
+generate new research questions, while research may inspire new implementations. Findings
+from both environments should continuously inform each other.
+
+**The purpose of agent-workflow is not to control what Exoma is allowed to implement,
+but to help understand, evaluate, and learn from what Exoma implements.**
+
+The research-scope rules below determine inclusion in this repository's research program.
+They do not veto Exoma product development. An engineering decision still needs a problem,
+technical rationale, relevant authorization and technical acceptance; claims of
+effectiveness require evidence appropriate to the claim.
+
 The charter numbers its own questions `CQ1`–`CQ6` and its hypothesis `CH1`. They are not record
 IDs: a research question record is `RQ-NN` and a hypothesis record `H-NNN`
 ([questions.md](questions.md), CONTRACT.md §16). `CQ1` is RQ-16, not RQ-01. Where the charter's
@@ -310,7 +344,7 @@ The project specifically studies:
 
 > **whether and when composing additional agentic components produces sufficient marginal value to justify its resource and coordination cost.**
 
-Therefore:
+For inclusion as research infrastructure here:
 
 * adding more specialized agents is valid only when it enables a measurable experiment;
 * implementing broader agent capabilities is not sufficient justification;
@@ -332,13 +366,14 @@ The following are **not** primary goals of the project:
 6. Maximizing raw benchmark score without considering resource expenditure.
 7. Adding infrastructure solely because another agent framework already has it.
 
-A new subsystem must therefore be justified by its relationship to the research questions.
+A new research subsystem here must therefore be justified by its relationship to the
+research questions. This restriction does not govern Exoma's product-feature choices.
 
 ---
 
 ## 8. Research Decision Rule for New Features
 
-Before adding a subsystem, answer:
+Before adding a subsystem to this research program, answer:
 
 ### Problem
 
@@ -374,6 +409,8 @@ What implementation and operational complexity does the feature introduce?
 Can the current architecture already support the experiment without adding the feature?
 
 A feature that cannot answer these questions should be considered **out of research scope**, even when it improves product capability.
+It may still be implemented in Exoma on engineering grounds; a later observation may
+motivate a new research question.
 
 ---
 
@@ -392,6 +429,10 @@ The mechanism has been exercised in real usage or controlled execution.
 ### Validated
 
 A controlled experiment provides sufficient evidence for the stated claim.
+This describes validation of a research claim. A `DEC` may instead meet the bounded
+direct-use criteria in CONTRACT.md §14; that decision status does not establish causal
+effectiveness or generalisation. Implemented, technical-test results and scientific
+validation remain distinct.
 
 These states must never be conflated.
 
@@ -529,7 +570,7 @@ When modifying `agent-workflow`, treat this document as the research boundary.
 * add memory, DAG, specialization, or autonomy without a measurable research purpose;
 * increase architectural complexity without improving experimental validity.
 
-### Before proposing a major architectural addition, explicitly state:
+### Before proposing major research infrastructure or claiming an addition is research-driven, explicitly state:
 
 ```text
 Research Question:

@@ -7,7 +7,7 @@ what_exists: |
   Records are schema-checked YAML (DEC-011); since DEC-017 research questions are records too,
   and a version-2 record names the questions it serves, checked both ways by
   tools/maintain/check_research.py.
-records: [DEC-011, DEC-017, DEC-019, DEC-026, DEC-027, DEC-036, DEC-038, DEC-047, DEC-077, DEC-083, DEC-084, DEC-086]
+records: [DEC-011, DEC-017, DEC-019, DEC-026, DEC-027, DEC-036, DEC-038, DEC-047, DEC-077, DEC-083, DEC-084, DEC-086, DEC-087]
 decision:
   date: 2026-10-03
   method: critical_interview
@@ -29,3 +29,8 @@ notes: |
   reported native source results separately from DEC-084's historical 1071c2f staging.
   Its public receipt retains the provider-E2E and deployed-hook verification gaps;
   this publication does not change the question's existing maintainer decision.
+
+  Engineering checkpoint 2026-11-11: DEC-087 records staging-harness refusals and
+  local regression evidence separately from live provider/host and scientific
+  validation. It clarifies two development routes without changing this answered
+  status, the historical maintainer decision or the record-link contract.

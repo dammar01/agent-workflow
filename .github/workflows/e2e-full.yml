@@ -17,6 +17,14 @@ on:
       model:
         description: 'Model id the provider CLI accepts (the shipped seed leaves it unset)'
         required: true
+      setup_timeout:
+        description: 'Seconds per setup process (engineering limit, not measured latency)'
+        required: false
+        default: '120'
+      delegated_timeout:
+        description: 'Seconds per delegated runner process'
+        required: false
+        default: '900'
       runner:
         description: 'Runner label. GitHub-hosted runners have no provider CLI installed — use a self-hosted runner that does.'
         required: false
@@ -47,4 +55,24 @@ jobs:
         run: uv run python -m exoma --command doctor --work-dir . --pretty
 
       - name: End-to-end including delegated calls
-        run: uv run python tools/e2e/e2e.py --full --session "${{ inputs.session }}" --provider "${{ inputs.provider }}" --model "${{ inputs.model }}"
+        shell: python
+        env:
+          STAGING_SESSION: ${{ inputs.session }}
+          STAGING_PROVIDER: ${{ inputs.provider }}
+          STAGING_MODEL: ${{ inputs.model }}
+          STAGING_SETUP_TIMEOUT: ${{ inputs.setup_timeout }}
+          STAGING_DELEGATED_TIMEOUT: ${{ inputs.delegated_timeout }}
+        run: |
+          import os
+          import subprocess
+          import sys
+          result = subprocess.run([
+              "uv", "run", "python", "-I", "tools/e2e/e2e.py", "--full",
+              "--session", os.environ["STAGING_SESSION"],
+              "--provider", os.environ["STAGING_PROVIDER"],
+              "--model", os.environ["STAGING_MODEL"],
+              "--setup-timeout", os.environ["STAGING_SETUP_TIMEOUT"],
+              "--delegated-timeout", os.environ["STAGING_DELEGATED_TIMEOUT"],
+              "--report-json", "staging-report.json",
+          ])
+          sys.exit(result.returncode)

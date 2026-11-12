@@ -14,24 +14,25 @@ declare another research package closed.
 
 ## Current runtime and source results
 
-The research harness currently selects Exoma
+At this source-check checkpoint, the research harness selected Exoma
 `a965cf20bce03015cdf0f56952eb6c45e30cbfa4` through
 [pyproject.toml](../../../pyproject.toml) and [uv.lock](../../../uv.lock).
 [DEC-086](../../research/decisions/DEC-086-exoma-a965cf20-has-identity-specific-staging-evidence.yaml)
 records the evidence for this source separately from
 [DEC-084](../../research/decisions/DEC-084-exoma-1071c2f-staged-for-post-1-0-0-analysis.yaml),
-whose staging and provider results belong to `1071c2f`.
+whose staging and provider results belong to `1071c2f`. The latest pin and its
+separate provider results are in the [2026-11-12 staging receipt](../exoma-staging-2026-11-12/README.md).
 
 | Evidence layer | Status for `a965cf20` | Boundary |
 | --- | --- | --- |
-| Research-harness CI | The workflow installs the locked pin and runs schema checks plus the six default suites listed below | Coverage definition; no remote run log or CI conclusion is newly verified here |
+| Research-harness CI | The workflow installs the locked pin and runs schema checks plus the default suites; the source receipt's six-suite boundary is described below | Coverage definition; no remote run log or CI conclusion is newly verified here |
 | Portable P01-P12 / G01-G04 | Private execution records report 16 tests, zero failures on 2026-11-10; aggregate result and case-to-method mapping are now in the public receipt | Windows, unmodified source, Claude policy only; individual raw test output remains private |
 | Native Exoma integration suites | `codex-host`, `execution-chain`, `verify-reuse`, `metrics-contract`: exit 0 | Designed source/fixture checks, separate from this repository's default suites |
 | `verify-runtime-tests` | Initial exit 1; fixture recheck exit 0 | `AGENT_HOME` hid the temporary-home fixture; recheck used disposable `HOME`/`USERPROFILE` without that override and changed no source or assertions |
 | Real-provider E2E | Not established for this SHA by the available receipt | DEC-084's provider results concern `1071c2f`; passing source suites do not establish a later provider run |
 | Deployed hooks | Not directly verified by the available receipt | Policy/source and isolated integration tests do not establish installed-hook parity, host trust/loading or live approval behavior |
 
-The [ordinary CI workflow](../../../.github/workflows/ci.yml) runs
+At this source receipt's checkpoint, the [ordinary CI workflow](../../../.github/workflows/ci.yml) ran
 `check_research.py --git` and `tests/run.py --keep-going --record .` on Linux and
 Windows with Python 3.13. Its six default suites are `harnesses`, `research`,
 `research-closure`, `fact-replay`, `real-use` and `blind-sample`.
@@ -39,6 +40,12 @@ Windows with Python 3.13. Its six default suites are `harnesses`, `research`,
 suite, and [real-provider E2E](../../../.github/workflows/e2e-full.yml) is a
 separate manual workflow. A successful ordinary CI run therefore has a narrower
 claim than completion of every staging gate.
+
+Subsequent harness work on 2026-11-11 adds the quota-free `e2e` suite to the default
+registry ([DEC-087](../../research/decisions/DEC-087-engineering-readiness-keeps-technical-staging-separate-from-research-validation.yaml)).
+The current seven-suite definition is in `tests/run.py`. That local harness change does not
+rerun the historical source receipt, inherit provider results or establish deployed-hook
+verification. Current layers are tracked in the [engineering checkpoint](../README.md#engineering-readiness-checkpoint-2026-11-11).
 
 The public receipt restates existing private execution records; publication on
 2026-11-11 is not a new runtime run. It retains the original source-check receipt

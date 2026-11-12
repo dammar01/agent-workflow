@@ -5,6 +5,12 @@ This contract defines how significant changes to `agent-workflow` must be docume
 The goal is to preserve the reasoning and evidence behind project evolution without
 requiring private conversation logs or confidential project data.
 
+This is a local documentation and evidence contract. The charter's
+[development and research relationship](CHARTER.md#development-and-research-relationship)
+allows Exoma to implement improvements directly or investigate them here first.
+Its product development does not wait for this repository's research agenda or formal
+validation. This contract governs records and claims, not permission to implement Exoma.
+
 ## 1. Scope
 
 A research record is required for changes that affect:
@@ -95,31 +101,41 @@ remembered observations.
 Reconstructed history must be marked as reconstructed when certainty is limited. Missing
 provenance must not be fabricated.
 
-## 11. Default development flow
+## 11. Development routes
 
-For significant changes the default sequence is: problem, research or literature (when
-relevant), synthesis (when multiple sources are involved), hypothesis or decision,
-implementation, validation, observation or experiment result, and finally an update to the
-record. Not every change requires every stage.
+Two equally valid routes may overlap and repeat:
+
+- **Direct implementation:** a practical problem or discovery, a technically feasible
+  engineering decision, a prototype or implementation, then testing, usage and evaluation.
+- **Research and evaluation first:** an uncertain concept or benefit, relevant literature
+  or analysis, hypotheses and experiments as needed, then a decision whether and how to
+  implement it.
+
+Implementation can generate questions; research can revise an implementation. Literature,
+hypotheses and formal experiments are used where relevant, not as mandatory prerequisites
+for every change. Record the actual provenance and sequence; never manufacture a research
+origin after the fact. A significant change can remain `implemented/not_validated`.
 
 ## 12. New mechanisms
 
 The runtime already has many subsystems, and infrastructure can grow faster than
 capability. A harness that becomes too complex becomes the engineering problem itself.
 
-Before adding a subsystem, mechanism, or record type, the change record answers:
+Before adding a subsystem, mechanism, or record type here, state the engineering rationale;
+the change record preserves it:
 
 1. What problem does this solve?
-2. What measurable benefit is expected?
+2. What benefit is expected, and how could it be evaluated?
 3. What complexity does it add?
 4. Can an existing mechanism solve the same problem?
 
-"Build first, justify later" is not accepted for significant changes.
+An explicit engineering rationale is required when making a significant change. It is
+not a requirement to complete formal research validation before prototyping or coding.
 
-The research charter ([CHARTER.md](CHARTER.md) §8 and §12) adds the research side of the same
-test: which research question and measurable variable the mechanism serves, which experiment
-it enables, and why an existing mechanism cannot. A mechanism that answers none of them is out
-of research scope, even when it improves the product.
+For additions to this research program or proposals claimed as research-driven,
+[CHARTER.md](CHARTER.md) §8 and §12 also ask which question and variable the mechanism serves,
+which experiment it enables and why existing mechanisms cannot. Being out of that research
+scope does not prohibit implementation in Exoma for practical engineering reasons.
 
 ## 13. Completion rule
 
@@ -268,8 +284,10 @@ suite and in CI, together with the rules the schema cannot express:
   `tools/maintain/check_research.py`), so a new record written at an old version is refused.
   Drafts and `RQ` records are always the current version.
 - Every version-2-or-later `DEC`, `H`, `EXP`, `CASE` and `SYN` names the research
-  question(s) it serves under `questions`: a record that serves no question has no reason to
-  change the project. The links hold both ways: an `RQ`'s `records` are tracked records, each
+   question(s) it serves under `questions` for traceability within this research corpus.
+   A question may arise before or after implementation; this field is not permission to
+   change Exoma or a requirement that the question already be answered. The links hold both
+   ways: an `RQ`'s `records` are tracked records, each
   of which (from version 2) names the `RQ` back, and a tracked record's `RQ` lists it. An
   `answered` `RQ` lists at least one `validated` record and carries a `decision` (§14); an
   `unanswered` one may list none yet. Version-1 records carry no `questions` and are linked

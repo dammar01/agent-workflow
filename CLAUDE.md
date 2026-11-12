@@ -3,17 +3,26 @@
 Applies only when developing this repository. This repository is research and staging;
 the runtime it studies is Exoma (https://github.com/dammar01/Exoma), pinned by commit in
 `pyproject.toml`. It carries no copy of the runtime: a runtime change, or a failure found
-while staging, is made in Exoma, never patched here. Nothing here ships to user projects.
+while staging, is made in Exoma, never patched here. Research/staging harness defects are
+fixed here. Nothing here ships to user projects.
+
+Exoma may implement relevant, technically feasible improvements directly or investigate
+them here first. Both routes may overlap and inform each other; formal research validation
+is not a prerequisite for Exoma development. The research agenda does not decide which
+features Exoma may implement. See CHARTER.md "Development and research relationship".
 
 ## Research boundary
 
 `docs/research/CHARTER.md` is the research boundary: agent delegation is studied as resource
 allocation (when one more delegated execution is still worth its tokens, latency, human
 intervention and coordination), not as maximizing agents, autonomy or feature parity with
-another harness. Before proposing a major architectural addition, state the fields of its §12
+another harness. For a major addition to this repository's research infrastructure, or a
+proposal claimed to be research-driven, state the fields of its §12
 (research question, hypothesis, variable changed, experiment enabled, expected measurement,
 why existing mechanisms are insufficient, complexity introduced). A change that cannot answer
-them is not research-driven development.
+them is not research-driven development. This is a local research-inclusion rule; it does
+not prohibit a useful Exoma product change. Direct engineering changes still state their
+problem, technical feasibility, expected benefit, complexity and alternatives.
 
 ## Research and decision records
 

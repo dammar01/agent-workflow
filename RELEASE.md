@@ -12,11 +12,13 @@ skipping one visible.
 resolved to. That pin is the only place the runtime under study is chosen: the suites, the
 harnesses and the staging run all import or invoke that Exoma, never a copy in this tree.
 
-Current evidence: [DEC-086](docs/research/decisions/DEC-086-exoma-a965cf20-has-identity-specific-staging-evidence.yaml)
-and the [source-check summary and receipt](docs/evaluation/exoma-handoff-2026-11-10/README.md#current-runtime-and-source-results)
-identify `a965cf20bce03015cdf0f56952eb6c45e30cbfa4`. Native source results are
-reported; real-provider E2E and deployed-hook verification on that SHA are not
-established by the receipt. DEC-084's results concern the historical `1071c2f` pin.
+Current candidate: `38fb1df4f7d053d7cad1abe1a38e0f0cb9707b41` (Exoma `1.0.2`).
+The [2026-11-12 staging receipt](docs/evaluation/exoma-staging-2026-11-12/README.md)
+records seven passing default suites, research checks, candidate bundle integrity,
+successful Exoma CI and a real Codex E2E run. Installed host drift and deployed-host
+acceptance remain separate and unresolved. The pin and receipt are uncommitted.
+[DEC-086](docs/research/decisions/DEC-086-exoma-a965cf20-has-identity-specific-staging-evidence.yaml)
+preserves source results for `a965cf20`; DEC-084 concerns the historical `1071c2f` pin.
 
 ## Staging a candidate
 
@@ -46,7 +48,7 @@ established by the receipt. DEC-084's results concern the historical `1071c2f` p
 4. **Delegated end-to-end run.** Real provider, real quota:
 
    ```
-   uv run python tools/e2e/e2e.py --full --provider <opencode|codex|agy|claude> --model <id>
+   uv run python -I tools/e2e/e2e.py --full --provider <opencode|codex|agy|claude> --model <id> --report-json staging-report.json
    ```
 
    One provider is the gate; running every provider the pin ships is recommended, since a
@@ -54,7 +56,7 @@ established by the receipt. DEC-084's results concern the historical `1071c2f` p
    provider left without one fails before any call:
 
    ```
-   uv run python tools/e2e/e2e.py --full --all --model opencode=<id>,codex=<id>,agy=<id>,claude=<id>
+   uv run python -I tools/e2e/e2e.py --full --all --model opencode=<id>,codex=<id>,agy=<id>,claude=<id> --report-json staging-report.json
    ```
 
    The model is required: the seed Exoma ships leaves it unset, and the run refuses before
@@ -63,8 +65,29 @@ established by the receipt. DEC-084's results concern the historical `1071c2f` p
    Skipping it means the candidate never ran a real delegated call here — say so in the
    report back to Exoma rather than leaving it implied.
 
+   `-I` avoids inheriting a caller's `PYTHONPATH` or user-site package. The harness still
+   requires the manifest, lock and loaded installation metadata to name the same Git pin
+   before dispatch. This is source-identity metadata, not a byte-level package audit.
+   Every requested provider/model is checked before any dispatch.
+
+   Full success requires git setup, init, provider selection, delegated `explore` and
+   local `sweep` for each requested provider. A skipped/missing required stage, malformed
+   payload, nonzero process or timeout fails the run. Cached evidence does not satisfy
+   the delegated check. Without `--full` the output is informational `not_run` and spends
+   no quota; it is not provider acceptance.
+
+   `--setup-timeout` defaults to 120 seconds per setup process and
+   `--delegated-timeout` to 900 seconds per runner process. These configurable engineering
+   limits are not measured latency claims. A timeout bounds the owned process tree;
+   cleanup of detached runtime jobs is not independently established.
+
+   The optional JSON receipt names expected/observed pin, interpreter/package location,
+   requested stages, attempted outcomes, exit codes, timeout categories and coverage
+   limits. It does not export inherited environment or raw provider output.
+
 5. **Report back.** A failure is fixed in Exoma and the candidate is re-staged from step 1.
-   Nothing is patched inside this repository to make a candidate pass. When everything
+   Runtime defects are fixed in Exoma; harness defects are fixed here and the checks
+   rerun. The installed dependency is never patched to make a candidate pass. When everything
    passes, commit the moved pin; Exoma then tags.
 
 ## Experiments and the pin
@@ -81,3 +104,24 @@ records `observed` or `not_validated`, provided their disposition says so honest
 `.github/workflows/ci.yml` runs step 3 on every push and pull request, on Linux and Windows,
 against the commit `uv.lock` records. The delegated run (`.github/workflows/e2e-full.yml`) is
 manual: it exists to spend quota deliberately, not on a schedule.
+
+The seven default suites include quota-free `e2e` staging regressions. The test entry point
+restarts in isolated Python mode so a calling Exoma runtime's `PYTHONPATH` cannot substitute
+its global package for the project's installed dependency. Local passes do not establish
+remote CI outcomes or a real provider run.
+
+## Separate host acceptance
+
+CLI staging covers delegated exploration and local sweep. It does not deliver host events
+or verify the complete plan/approval/execute/verify lifecycle. For the actual host to be
+used, record a separate disposable-project session:
+
+1. Identify the package and installed hook, and observe that the host loaded/trusted it.
+2. Record a plan and observe rejection of execution without approval.
+3. Obtain a genuine user approval event, then observe scoped execution.
+4. Record execute-end and verification outcomes with sanitized evidence references.
+
+A checklist, fixture-written token or portable policy test is not proof of live user
+approval. Runtime/host defects go to Exoma. Host identity and loading not observed remain
+`not_verified`. The [engineering checkpoint](docs/evaluation/README.md#engineering-readiness-checkpoint-2026-11-11)
+keeps these results separate from local regression and scientific evidence.

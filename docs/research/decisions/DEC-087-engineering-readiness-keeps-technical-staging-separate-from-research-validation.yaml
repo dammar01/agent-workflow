@@ -1,0 +1,94 @@
+schema_version: 3
+id: DEC-087
+title: Engineering readiness keeps technical staging separate from research validation
+date: 2026-11-11
+status: accepted
+provenance:
+  type: direct
+  confidence: high
+  basis: Maintainer's two-route development principle and inspection of local staging acceptance.
+
+problem: |
+  Full staging could exit zero after required delegation was skipped, ignored a
+  runner's nonzero exit, and could dispatch one provider before discovering a
+  missing model for another. Imports and unbounded subprocesses did not establish
+  exact-pin acceptance. Research-first wording also obscured the implemented and
+  not_validated state already supported by the schema.
+decision: |
+  Harden this repository's staging harness with all-model preflight, required-stage
+  accounting, process and payload checks, manifest/lock/installed Git identity,
+  bounded launches, and an explicit structured receipt. Add quota-free regressions
+  to default CI. Isolate test imports from the caller runtime's Python path.
+  Clarify that direct engineering implementation and research-first evaluation are
+  equally valid iterative routes. Agent-workflow learns from Exoma and does not
+  determine which product features Exoma may implement.
+rationale: |
+  This supports RQ-15 by making the meaning and limits of evidence traceable.
+  Technical acceptance, genuine host approval, research claims and publication
+  status answer different questions. An engineering rationale may precede coding
+  while evaluation follows implementation. No new schema status or formal research
+  prerequisite is needed; implemented/not_validated already expresses the state.
+alternatives:
+  - option: Keep success based only on failed-row count and payload ok
+    rejected_because: Skips, missing coverage and failed subprocesses could still appear successful.
+  - option: Require all research questions to be answered before Exoma changes
+    rejected_because: Research inclusion and strength of evidence do not determine engineering permission.
+evidence: [DEC-077, DEC-082, DEC-086]
+evidence_notes: |
+  Initial local Windows runtime execution of uv run python tests/run.py --keep-going
+  returned exit 0 on 2026-11-11 for seven default suites, including the isolated
+  quota-free e2e regression suite. Synthetic cases cover full skips, empty coverage,
+  all-model preflight, wrong identity, invalid payloads, process failure, deadlines
+  and owned-descendant cleanup; an unrelated process survives that cleanup.
+  An integration assertion compares the project's installed Git metadata to
+  pyproject.toml and uv.lock. Initial isolated-suite attempts exposed the caller
+  runtime's global PYTHONPATH; its package had no matching installed Git identity.
+  The guard was retained, and the test entry point and child now ignore that
+  inherited path. This is not a provider call or deployed-hook observation.
+  The staging receipt explicitly leaves plan/approval/execute/verify, deployed
+  hooks and scientific validation outside its proof.
+  Follow-up review found that isolating the parent did not isolate child CLI
+  imports. Child launches now also use -I. A regression uses real local init
+  under a synthetic shadow PYTHONPATH and checks the generated runner's verified
+  package/interpreter binding; it does not invoke a provider. Stdout and stderr
+  remain separate so benign stderr warnings do not corrupt JSON acceptance.
+implementation:
+  version: agent-workflow staging against Exoma a965cf20 (version string 1.0.0)
+  commits: [uncommitted]
+  components:
+    - tools/e2e/e2e.py, e2e_support.py and e2e_delegated.py
+    - tests/checks/e2e.py, tests/run.py and tests/checks/harnesses.py
+    - .github/workflows/e2e-full.yml
+    - README.md, CLAUDE.md and RELEASE.md
+    - docs/research/CHARTER.md, CONTRACT.md, questions.md and README.md
+    - docs/evaluation/README.md and exoma-handoff-2026-11-10/README.md
+    - docs/research/questions/RQ-15-research-traceability.yaml and generated inventories
+disposition:
+  implementation_status: implemented
+  validation_status: not_validated
+validation:
+  summary: |
+    Local regression results are technical fixture evidence. Formal runtime
+    verification is tracked separately and does not set this scientific status.
+    No new current-pin real-provider E2E, deployed-hook check, clean repeated
+    maintainer use or causal effectiveness evaluation is claimed.
+trade_offs:
+  better:
+    - Failed or unexecuted required stages cannot establish full staging acceptance.
+    - Exact-pin metadata, technical tests and research limits are reported separately.
+    - Engineering work can proceed with honest pending research evaluation.
+  worse:
+    - Stricter acceptance rejects environments that previously returned a false green.
+    - Staging still depends on internal bounded-launch APIs of the pinned Exoma.
+limitations:
+  - Local execution was on Windows; remote Linux CI was not observed here.
+  - Installed Git metadata does not prove byte-for-byte source or deployed-hook parity.
+  - Synthetic process cleanup does not prove cleanup of all detached runtime workers.
+  - Real-provider acceptance and genuine host approval/deployment remain separate checks.
+  - No historical scientific outcome, validation status or RQ answer is upgraded.
+  - The implementation commit is uncommitted until the separately authorized commit exists.
+revisit_when:
+  - Pin or internal process-launch APIs change.
+  - A full run can skip required work yet return pass.
+  - Exact-pin provider or live-host evidence becomes available.
+questions: [RQ-15]

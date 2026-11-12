@@ -10,14 +10,21 @@ research records, the measurement harnesses, and their fit to the pinned Exoma.
 """
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
+
+# The calling Exoma runtime may prepend its global package to PYTHONPATH. All suites
+# must exercise this interpreter's installed dependency, not the caller's installation.
+if __name__ == "__main__" and not sys.flags.isolated:
+    os.execv(sys.executable, [sys.executable, "-I", str(Path(__file__).resolve()), *sys.argv[1:]])
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from tests.checks.blind_sample import _test_blind_sample  # noqa: E402
+from tests.checks.e2e import _test_e2e_staging  # noqa: E402
 from tests.checks.harnesses import _test_harnesses_import_against_the_pin  # noqa: E402
 from tests.checks.real_use import _test_real_use_verify_tests  # noqa: E402
 from tests.checks.replay import _test_fact_replay  # noqa: E402
@@ -27,6 +34,7 @@ from tests.checks.research_closure import _test_research_closure_harness, _measu
 
 SUITES: dict[str, tuple] = {
     "harnesses": (_test_harnesses_import_against_the_pin, "active research and staging harnesses import against the pinned Exoma"),
+    "e2e": (_test_e2e_staging, "quota-free staging regressions: preflight, required coverage, identity, process status and bounded launch"),
     "research": (_test_research_records_follow_the_schema, "research records are YAML the schema accepts; every rule the check claims is refused on a broken fixture"),
     "research-closure": (_test_research_closure_harness, "closure evidence fails closed for missing, failed or unproven cases"),
     "fact-replay": (_test_fact_replay, "EXP-013 replay: one-token and weighted arms over archived calls, facts learned later kept out, store untouched"),

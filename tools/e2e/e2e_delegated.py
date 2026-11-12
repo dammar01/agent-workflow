@@ -1,121 +1,123 @@
 """Real delegated calls. Opt-in: spends provider quota."""
 
+from pathlib import Path
+import tempfile
+
 from tools.e2e.e2e_support import (
-    FAIL,
-    Path,
-    Report,
-    SKIP,
-    _json_from,
-    _run_cli,
-    os,
-    shutil,
-    subprocess,
-    tempfile,
+    DELEGATED_TIMEOUT, FAIL, PASS, SETUP_TIMEOUT, Report,
+    _json_from, _run_cli, _run_process,
 )
-from exoma.utils.osutil import find_bash  # noqa: E402 - after e2e_support sets EXOMA_HOME
+
+
+def find_bash():
+    from exoma.utils.osutil import find_bash as locate
+    return locate()
+
+
+def _process_ok(report: Report, name: str, code: int | None) -> bool:
+    if code == 0:
+        return True
+    report.stage(
+        name, FAIL, exit_code=code, timed_out=code is None,
+        error_type="timeout" if code is None else "process_failed",
+    )
+    return False
 
 
 def delegated_checks(
-    report: Report, session_id: str, provider: str, model: str | None
+    report: Report, session_id: str, provider: str, model: str | None, *,
+    setup_timeout: float = SETUP_TIMEOUT, delegated_timeout: float = DELEGATED_TIMEOUT,
 ) -> None:
-    """Real provider calls. Minutes and real quota — only via --full."""
-    print(f"\n[DELEGATED] real {provider} — costs quota")
+    """Run required stages; stdout alone never overrides a failed process."""
     from exoma.core.evidence.contract import REQUIRED_FIELDS
 
-    # Every row names its provider, so a multi-provider run reads unambiguously.
     tag = f"{provider}: "
-
-    # The seed Exoma ships leaves the model unset, and an unset model is refused at call
-    # time (model_unset). Refuse here instead, before init and before any quota is spent.
     if not model:
-        report.record(
-            tag + "delegated commands", FAIL, "no model: pass --model (and --provider unless opencode)"
-        )
+        report.stage(tag + "provider", FAIL, executed=False, error_type="model_missing")
         return
 
-    project = Path(tempfile.mkdtemp(prefix="e2e-delegated-project-"))
-    try:
-        subprocess.run(["git", "init", "-q", str(project)], check=True)
-        (project / "app.py").write_text(
-            "def main():\n    return 'ready'\n",
-            encoding="utf-8",
+    with tempfile.TemporaryDirectory(prefix="e2e-delegated-project-") as directory:
+        project = Path(directory)
+        name = tag + "git-init"
+        code, _, _ = _run_process(["git", "init", "-q", str(project)], timeout=setup_timeout)
+        if not _process_ok(report, name, code):
+            return
+        report.stage(name, PASS, exit_code=code)
+        (project / "app.py").write_text("def main():\n    return 'ready'\n", encoding="utf-8")
+
+        name = tag + "init"
+        code, output, _ = _run_cli(
+            "--command", "init", "--work-dir", str(project), "--pretty",
+            timeout=setup_timeout,
         )
-        code, output = _run_cli(
-            "--command", "init", "--work-dir", str(project), "--pretty"
-        )
+        if not _process_ok(report, name, code):
+            return
         script = project / ".workflow" / "run.sh"
-        if code != 0 or not script.exists():
-            report.record(
-                tag + "delegated commands", SKIP, "fresh workflow runner was not generated"
-            )
+        initialized = _json_from(output)
+        if not script.is_file() or not initialized or initialized.get("ok") is not True:
+            report.stage(name, FAIL, exit_code=code, error_type="runner_or_init_payload_missing")
             return
+        report.stage(name, PASS, exit_code=code)
 
-        # Selected the way /.provider applies a choice, so routes follow the model too.
-        code, output = _run_cli(
+        name = tag + "provider"
+        code, output, _ = _run_cli(
             "--command", "provider", "--prompt", f"{provider}|{model}",
-            "--work-dir", str(project), "--pretty",
+            "--work-dir", str(project), "--pretty", timeout=setup_timeout,
         )
-        selected = _json_from(output)
-        if not report.check(
-            f"{tag}provider {provider} with {model} selected",
-            code == 0 and bool(selected) and selected.get("ok") is True,
-            str((selected or {}).get("content") or output.strip())[:200],
-        ):
+        if not _process_ok(report, name, code):
             return
+        selected = _json_from(output)
+        if not selected or selected.get("ok") is not True:
+            report.stage(name, FAIL, exit_code=code, error_type="provider_selection_failed")
+            return
+        report.stage(name, PASS, exit_code=code)
 
-        # bash on every OS (Git Bash on Windows), as the skills call it. No bare `bash`
-        # fallback: on Windows it can be WSL's, and the run would fail for the wrong reason.
         bash = find_bash()
         if not bash:
-            report.record(
-                tag + "delegated commands", FAIL, "no bash found (Git Bash on Windows): the runner cannot start"
-            )
+            report.stage(tag + "explore", FAIL, executed=False, error_type="bash_missing")
             return
 
-        # sweep is local and returns a git-diff report, not delegated evidence.
-        cases = [
+        cases = (
             ("explore", "Sebutkan entry point utama. Maksimal 3 baris.", "evidence"),
             ("sweep", "scan git diff, identify impact", "local-report"),
-        ]
+        )
         for command, task, contract in cases:
-            runner = [bash, str(script)]
-            result = subprocess.run(
-                [*runner, command, task, session_id],
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                cwd=str(project),
+            name = tag + command
+            code, stdout, _ = _run_process(
+                [bash, str(script), command, task, session_id],
+                timeout=delegated_timeout, cwd=project,
             )
-            payload = _json_from(result.stdout or "")
-            if payload is None:
-                report.record(f"{tag}{command} returns JSON", FAIL, "no JSON in output")
+            if not _process_ok(report, name, code):
                 continue
-            if not report.check(
-                f"{tag}{command} returns ok",
-                payload.get("ok") is True,
-                str(payload.get("meta", {}).get("error_type", "")),
-            ):
+            payload = _json_from(stdout)
+            if payload is None or payload.get("ok") is not True:
+                report.stage(name, FAIL, exit_code=code, error_type="invalid_or_failed_payload")
                 continue
-            content = (payload.get("content") or "").lower()
-
+            content = payload.get("content")
+            if not isinstance(content, str):
+                report.stage(name, FAIL, exit_code=code, error_type="content_not_text")
+                continue
+            content = content.lower()
+            checks = []
             if contract == "evidence":
-                report.check(
-                    f"{tag}{command} carries evidence markers",
-                    any(m in content for m in ("[evidence]", "[digest]", "grounded:")),
-                )
+                reused = payload.get("evidence_ref")
+                checks.append(report.check(
+                    name + " is not reused evidence",
+                    not (isinstance(reused, dict) and reused.get("reused") is True),
+                ))
+                checks.append(report.check(
+                    name + " carries evidence markers",
+                    any(marker in content for marker in ("[evidence]", "[digest]", "grounded:")),
+                ))
                 for field in REQUIRED_FIELDS.get(command, ()):
-                    report.check(
-                        f"{tag}{command} has required field '{field}'", field in content
-                    )
+                    checks.append(report.check(name + f" has required field '{field}'", field in content))
             else:
-                report.check(
-                    f"{tag}{command} reports changed files",
-                    any(
-                        k in content
-                        for k in ("changed", "diff", "modified", "no changes")
-                    ),
-                    "local git report, not an evidence block",
-                )
-    finally:
-        shutil.rmtree(project, ignore_errors=True)
+                checks.append(report.check(
+                    name + " reports changed files",
+                    any(word in content for word in ("changed", "diff", "modified", "no changes")),
+                    "local report; does not establish provider execution",
+                ))
+            report.stage(
+                name, PASS if all(checks) else FAIL, exit_code=code,
+                error_type="" if all(checks) else "contract_not_met",
+            )
