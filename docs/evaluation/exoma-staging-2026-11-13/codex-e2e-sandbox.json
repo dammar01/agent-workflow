@@ -1,0 +1,130 @@
+{
+    "schema_version":  1,
+    "timestamp":  "2026-11-13T08:52:46.247443+00:00",
+    "verdict":  "fail",
+    "mode":  "full",
+    "requests":  [
+                     {
+                         "provider":  "codex",
+                         "model":  "gpt-6.1-sol"
+                     }
+                 ],
+    "identity":  {
+                     "interpreter":  "\u003cproject\u003e/.venv/Scripts/python.exe",
+                     "verified":  true,
+                     "expected_pin":  "b39cc7acbaaefc206b997d12aaab061def49ba3a",
+                     "locked_pin":  "b39cc7acbaaefc206b997d12aaab061def49ba3a",
+                     "installed_pin":  "b39cc7acbaaefc206b997d12aaab061def49ba3a",
+                     "installed_version":  "1.0.2",
+                     "package_path":  "\u003cproject\u003e/.venv/Lib/site-packages/exoma/__init__.py",
+                     "distribution_path":  "\u003cproject\u003e/.venv/Lib/site-packages/exoma"
+                 },
+    "limits_seconds":  {
+                           "setup":  120.0,
+                           "delegated":  900.0
+                       },
+    "required_stages":  [
+                            "dependency identity",
+                            "codex: git-init",
+                            "codex: init",
+                            "codex: provider",
+                            "codex: explore",
+                            "codex: sweep"
+                        ],
+    "stages":  {
+                   "dependency identity":  {
+                                               "status":  "PASS",
+                                               "executed":  true,
+                                               "exit_code":  null,
+                                               "timed_out":  false,
+                                               "error_type":  ""
+                                           },
+                   "codex: git-init":  {
+                                           "status":  "PASS",
+                                           "executed":  true,
+                                           "exit_code":  0,
+                                           "timed_out":  false,
+                                           "error_type":  ""
+                                       },
+                   "codex: init":  {
+                                       "status":  "PASS",
+                                       "executed":  true,
+                                       "exit_code":  0,
+                                       "timed_out":  false,
+                                       "error_type":  ""
+                                   },
+                   "codex: provider":  {
+                                           "status":  "PASS",
+                                           "executed":  true,
+                                           "exit_code":  0,
+                                           "timed_out":  false,
+                                           "error_type":  ""
+                                       },
+                   "codex: explore":  {
+                                          "status":  "FAIL",
+                                          "executed":  true,
+                                          "exit_code":  null,
+                                          "timed_out":  true,
+                                          "error_type":  "timeout"
+                                      },
+                   "codex: sweep":  {
+                                        "status":  "PASS",
+                                        "executed":  true,
+                                        "exit_code":  0,
+                                        "timed_out":  false,
+                                        "error_type":  ""
+                                    }
+               },
+    "checks":  [
+                   {
+                       "name":  "dependency identity",
+                       "status":  "PASS",
+                       "detail":  ""
+                   },
+                   {
+                       "name":  "codex: git-init",
+                       "status":  "PASS",
+                       "detail":  ""
+                   },
+                   {
+                       "name":  "codex: init",
+                       "status":  "PASS",
+                       "detail":  ""
+                   },
+                   {
+                       "name":  "codex: provider",
+                       "status":  "PASS",
+                       "detail":  ""
+                   },
+                   {
+                       "name":  "codex: explore",
+                       "status":  "FAIL",
+                       "detail":  "timeout"
+                   },
+                   {
+                       "name":  "codex: sweep reports changed files",
+                       "status":  "PASS",
+                       "detail":  "local report; does not establish provider execution"
+                   },
+                   {
+                       "name":  "codex: sweep",
+                       "status":  "PASS",
+                       "detail":  ""
+                   }
+               ],
+    "coverage":  {
+                     "delegated_commands":  [
+
+                                            ],
+                     "local_commands":  [
+                                            "sweep"
+                                        ],
+                     "plan_approval_execute_verify":  "not_run",
+                     "deployed_hooks":  "not_verified",
+                     "scientific_validation":  "not_assessed",
+                     "command_lists":  "Accepted stages only; failed or timed-out attempts remain in stages.",
+                     "identity_limit":  "Git pin and installed metadata, not byte-for-byte package or hook verification.",
+                     "cleanup_limit":  "Owned process tree only; detached runtime jobs are not independently verified."
+                 },
+    "sanitization":  "Absolute interpreter/package/distribution paths replaced with \u003cproject\u003e; outcomes unchanged."
+}

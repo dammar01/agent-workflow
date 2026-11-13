@@ -10,7 +10,7 @@ requires-python = ">=3.11"
 # The runtime under study. Staging a candidate means moving this pin to its commit
 # (RELEASE.md); a failure found here is fixed in Exoma, never patched in this repository.
 dependencies = [
-    "exoma @ git+https://github.com/dammar01/Exoma.git@38fb1df4f7d053d7cad1abe1a38e0f0cb9707b41",
+    "exoma @ git+https://github.com/dammar01/Exoma.git@b39cc7acbaaefc206b997d12aaab061def49ba3a",
 ]
 
 [dependency-groups]

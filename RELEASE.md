@@ -12,7 +12,11 @@ skipping one visible.
 resolved to. That pin is the only place the runtime under study is chosen: the suites, the
 harnesses and the staging run all import or invoke that Exoma, never a copy in this tree.
 
-Current candidate: `38fb1df4f7d053d7cad1abe1a38e0f0cb9707b41` (Exoma `1.0.2`).
+Current candidate: `b39cc7acbaaefc206b997d12aaab061def49ba3a` (Exoma `1.0.2`).
+The [2026-11-13 staging receipt](docs/evaluation/exoma-staging-2026-11-13/README.md)
+records checks against this exact pin and any remaining staging limits.
+
+Previous candidate: `38fb1df4f7d053d7cad1abe1a38e0f0cb9707b41` (Exoma `1.0.2`).
 The [2026-11-12 staging receipt](docs/evaluation/exoma-staging-2026-11-12/README.md)
 records seven passing default suites, research checks, candidate bundle integrity,
 successful Exoma CI and a real Codex E2E run. The pin and receipt were committed in
