@@ -98,6 +98,8 @@ of agents is optimal. It is an
 engineering exploration of harness architecture, not a proven research result.
 
 Open questions: [questions.md](questions.md). Period summaries: [logs/](logs/).
+For the maintainer's November direction on reusing task experience in Exoma, see the
+[2026-11-22 research log](logs/2026-11-22.md).
 
 ## Research model
 
