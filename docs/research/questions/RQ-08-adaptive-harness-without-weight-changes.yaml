@@ -4,17 +4,20 @@ question: "Can an adaptive harness improve future coding-agent behavior without 
 date: 2026-09-29
 status: unanswered
 what_exists: |
-  Stateful orchestration and memory (facts) exist; experience does not.
+  Exoma stores selected browser-verification observations by origin and can retrieve
+  them for a later verification. Their effect on agent decisions and outcomes remains
+  unevaluated. General-purpose strategy learning remains open.
 records: []
 notes: |
   Converted from the questions.md table on 2026-09-29 (DEC-017); the question was first
-  recorded before 3.7.3.
+  recorded before agent-workflow 3.7.3.
 
-  Stateful orchestration is not the same as learning from experience, and memory is not
-  experience. Memory: "The repository follows pattern X." Experience: "On task X, strategy Y
-  was tried and failed because of Z; strategy W worked." Experience carries state, action,
-  context, outcome, and a causal interpretation. The fact store holds memory; no
-  representation of experience exists yet.
+  The original question distinguished repository facts from accounts of an action, its
+  context and its outcome. At the research pin (Exoma 1.0.2, b39cc7a), a browser run can
+  record a successful selector and offer it during a later verification on the same origin.
+  Retrieval establishes availability. Showing that it changed a decision requires a
+  later task trace. Measuring an improvement also requires a comparable baseline.
+  Source at the pin: https://github.com/dammar01/Exoma/blob/b39cc7acbaaefc206b997d12aaab061def49ba3a/src/exoma/core/evidence/e2e/knowledge.py
 
   Draft records: SYN-002 (draft).
 

@@ -17,14 +17,19 @@ Start with the page that matches your task:
 | **Runtime** | Exactly what does Exoma do, and how is it installed and used? | Anyone using or changing the runtime | [Exoma docs](https://github.com/dammar01/Exoma/tree/main/docs) |
 
 Staging a candidate Exoma commit here: [RELEASE.md](../RELEASE.md). The runtime's release
-history up to 3.9.0: [CHANGELOG.md](../CHANGELOG.md).
+history through agent-workflow 3.9.0: [CHANGELOG.md](../CHANGELOG.md).
 
-The current research pin is Exoma `1.0.2` at `38fb1df`. The
-[2026-11-12 staging receipt](evaluation/exoma-staging-2026-11-12/README.md) records its
-technical acceptance and a subsequent installed-host recheck: both doctor and the
-installation check report READY. Its later live-session record confirms an active
-Codex preflight hook, a successful delegated documentation review and a runtime-run check. The
-complete formal plan/approval/execute/verify lifecycle remains unverified.
+The research pin is Exoma `1.0.2` at `b39cc7a`. The Windows Codex CLI retry passed all
+11 checks after the initial attempt timed out. The receipt left the candidate's presence
+on Exoma `main` unverified. [13 November staging receipt](evaluation/exoma-staging-2026-11-13/README.md).
+
+Exoma subsequently released 1.2.1 at `c837561`. Staging that release here would require a
+new candidate and receipt under the companion's staging procedure. [Exoma 1.2.1](https://github.com/dammar01/Exoma/releases/tag/v1.2.1) · [Staging procedure](../RELEASE.md).
+
+The previous pin, `38fb1df`, has separate installed-host READY results and live observations
+of the Codex preflight hook and a delegated documentation review with a runtime-run check.
+The complete formal plan/approval/execute/verify lifecycle remains unverified.
+[12 November staging receipt](evaluation/exoma-staging-2026-11-12/README.md).
 
 The [Exoma regression handoff](evaluation/exoma-handoff-2026-11-10/README.md) separates
 historical parser/gate probes from reported native source results for the earlier

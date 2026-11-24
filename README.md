@@ -63,7 +63,7 @@ still worth its tokens, latency, human intervention, and coordination. The bound
 [docs/research/CHARTER.md](docs/research/CHARTER.md).
 
 Measured on the maintainer's real use: 97 coding tasks from 167 Claude Code sessions on nine
-private projects (Laravel, Next.js and Python codebases), on historical releases 3.6.0 and
+private projects (Laravel, Next.js and Python codebases), on historical agent-workflow releases 3.6.0 and
 3.7.3. A task is solved when the code its session left behind entered `main`, and clean when the
 developer did not change that code again within 24 hours.
 
@@ -109,12 +109,15 @@ against the pinned commit, spending no provider quota;
 agent. Full staging requires matching manifest/lock/installed Git metadata and completed
 required stages; skips, timeouts and failed processes cannot establish acceptance. Reports
 cover delegated exploration and local sweep, with host approval and deployment explicitly
-separate. The [2026-11-12 staging receipt](docs/evaluation/exoma-staging-2026-11-12/README.md)
-records the current `38fb1df` pin, passing checks and real Codex E2E. Its subsequent
-installed-host recheck reports Exoma `1.0.2`, doctor READY and installation READY.
-Later live-session observations confirm an active Codex preflight hook and a successful
-delegated documentation review with a runtime-run research check; the complete formal
-plan/approval/execute/verify lifecycle remains unverified. The earlier
+separate. This repository pins Exoma `1.0.2` at `b39cc7a`. The Windows Codex CLI retry
+passed all 11 checks after the initial attempt timed out. The receipt left the candidate's
+presence on Exoma `main` unverified. [13 November staging receipt](docs/evaluation/exoma-staging-2026-11-13/README.md).
+
+The installed-host READY checks, observed Codex preflight hook and delegated documentation
+review belong to the previous pin, `38fb1df`. The complete formal approval and execution
+lifecycle remains unverified. [12 November staging receipt](docs/evaluation/exoma-staging-2026-11-12/README.md).
+
+The earlier
 [engineering checkpoint](docs/evaluation/README.md#engineering-readiness-checkpoint-2026-11-11)
 records the harness implementation boundary.
 

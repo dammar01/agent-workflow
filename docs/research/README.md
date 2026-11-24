@@ -21,13 +21,14 @@ decisions and deferred experiments are kept as local drafts. Publication scope i
 from scientific disposition: existing outcomes, validation and maintainer decisions remain
 in the records. A structural check does not establish scientific completion.
 
-The current runtime pin `38fb1df` and its technical staging results are recorded in
-the [2026-11-12 staging receipt](../evaluation/exoma-staging-2026-11-12/README.md).
-Its [installed-host recheck](../evaluation/exoma-staging-2026-11-12/README.md#installed-host-recheck-2026-11-12)
-confirms installed Exoma `1.0.2`, doctor READY and installation READY. The later
-live-session observations record an active Codex preflight hook and successful
-delegated documentation review with a runtime-run research check; the complete
+The current runtime pin is Exoma `1.0.2` at `b39cc7a`. The Windows Codex CLI retry
+passed all 11 checks after the first attempt timed out. The receipt left the candidate's
+presence on Exoma `main` unverified. [13 November staging receipt](../evaluation/exoma-staging-2026-11-13/README.md).
+
+The installed-host READY checks and live observations of the Codex preflight hook
+and delegated documentation review belong to the previous pin, `38fb1df`. The complete
 formal plan/approval/execute/verify lifecycle remains unverified.
+[12 November staging receipt](../evaluation/exoma-staging-2026-11-12/README.md).
 [DEC-086](decisions/DEC-086-exoma-a965cf20-has-identity-specific-staging-evidence.yaml)
 and the [public source-check receipt](../evaluation/exoma-handoff-2026-11-10/README.md#current-runtime-and-source-results)
 preserve bounded source results for `a965cf20`. DEC-084 remains the historical
